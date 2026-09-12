@@ -487,7 +487,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Hammer and fence gate self-tests" bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
@@ -511,6 +511,11 @@ run_required_gate "Undeclared imports" bun run gate:undeclared-imports
 # entry is wrong, which no census of declarations resolves.
 run_required_gate "Client graph" bun run gate:client-graph
 run_required_gate "Core layering" bun run gate:core-layering
+# One prepare per statement against the vendor's OWN DDL: the `actor_id` read
+# over `assistant_messages` that failed every hosted workspace on 2026-09-11
+# is this class, and a unit suite seeding from Kinu's copy of the DDL cannot
+# see it.
+run_required_gate "Vendor schema" bun run gate:vendor-schema
 run_required_gate "Built but unwired" bun run gate:wired
 # The test corpus's own quality ratchet: a NEW coupled test, by the five axes
 # a test review judges on. Beside the wired gate because they hold two sides of
