@@ -167,9 +167,10 @@ const AfterSchema = v.object({
  * Wait for the next page and report what it moved.
  *
  * The anchor is a row the reader is looking at, chosen BEFORE anything happens
- * so the prepend cannot pick it. `scroll` is how the page is asked for: a
- * reader's flick to the growing edge, or nothing at all for the first page,
- * which the hook requests itself the moment the container mounts.
+ * so the prepend cannot pick it. `scroll` is how the page is asked for — a
+ * reader's flick to the growing edge, which is the only gesture that asks for
+ * one: the hook requests a page when the view comes within PREFETCH_THRESHOLD
+ * of the edge it grows at, never on its own.
  *
  * Two things can move the anchor: the test's own scroll, and the hook.
  * Scrolling from `scrollTop` to 0 carries every row DOWN the viewport by
@@ -209,11 +210,12 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
     // Content moves down the viewport by however far the scroll went up.
     carriedDownPx = before.scrollTop;
   }
-
   // A landed page is one whose rows are RENDERED and whose walk is asleep. Not
-  // one that was asked for: the first page is requested by the hook the moment
-  // the container mounts, so a request count taken here has already counted it,
-  // and waiting for a second one waits for a page a correct hook never asks for.
+  // one that was asked for: the first page is requested by the scroll the
+  // scenario already drove, so a request count taken here has already counted
+  // it, and waiting for a second one waits for a page a correct hook never
+  // asks for.
+
   await untilProbe(page, `state.ids.length > ${before.rows} && state.loading === false`);
   // The page has landed in state; the correction is a layout effect, so let the
   // browser commit a frame before measuring where anything is.
@@ -297,7 +299,7 @@ interface Walk {
   readonly overflowAnchor: string;
   readonly firstRows: number;
   /**
-   * The FIRST page, landing under the reader's eyes with no scroll involved.
+   * The FIRST page, landing under the reader's eyes with the walk already asked.
    *
    * Measured before anything settles, because it is the only prepend that can
    * be measured whatever the hook does. Every later one needs the walk to be
@@ -338,8 +340,9 @@ interface Observed {
 }
 
 async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
-  // Slow on purpose. The first page is requested the moment the container
-  // mounts, so the before-state exists only until the stub answers — at the
+  // Slow on purpose. The first page starts on the reader's gesture below —
+  // the hook asks for a page only inside PREFETCH_THRESHOLD of the growing
+  // edge — so the before-state exists only until the stub answers: at the
   // 400ms default it had already landed by the time the harness finished its
   // second load, and the measurement was of nothing.
   const page = await openFrame(browser, origin, 'latency=3000&depth=5');
@@ -353,6 +356,11 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
 
   try {
     const overflowAnchor = await page.$eval(SCROLL, (el) => getComputedStyle(el).overflowAnchor);
+    // The gesture that asks for the page: the reader's flick to the growing
+    // edge. A seeded transcript that overflows past the prefetch band — this
+    // one's live rows do — is exactly why no mount-time fetch exists to lean
+    // on, so the drive is the trigger the product itself defines.
+    await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
     // Asserted rather than assumed: the live rows alone, with the first page
     // still in flight. A measurement taken after it landed would report zero
     // drift for the trivial reason that nothing moved while we watched.
@@ -384,6 +392,10 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
   const page = await openFrame(browser, origin, 'latency=1200&depth=4');
 
   try {
+    // First page first, on the same edge gesture the walk scenario drives:
+    // the frame's live rows overflow past the prefetch band, so nothing asks
+    // on its own.
+    await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
     await settled(page);
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
     await untilProbe(page, 'state.loading === true');
@@ -406,6 +418,9 @@ async function measureBroken(browser: Browser, origin: string): Promise<Broken> 
   const page = await openFrame(browser, origin, 'latency=100&fail=1&depth=4');
 
   try {
+    // The edge gesture asks for the page — and this stub fails the FIRST
+    // request, so the drive is what produces the error the scenario measures.
+    await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
     await untilProbe(page, 'state.error !== null');
     const failed = await probe(page);
     const boundary = await page.$eval(SCROLL, (el) => el.firstElementChild?.textContent ?? '');
@@ -430,6 +445,8 @@ async function measureWalked(browser: Browser, origin: string): Promise<Walked> 
   const page = await openFrame(browser, origin, 'latency=80&depth=1');
 
   try {
+    // depth=1 still needs the edge gesture to start the walk at all.
+    await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
     await untilProbe(page, 'state.exhausted === true');
 
     return {
