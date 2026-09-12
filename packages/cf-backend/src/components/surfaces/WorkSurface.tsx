@@ -2,7 +2,7 @@
  * Preview identity comes from the existing slate and executor owners. */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  GaugeIcon, SparkleIcon,
+  CaretRightIcon, GaugeIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
@@ -66,6 +66,8 @@ export interface WorkSurfaceProps {
   activePlanActors?: readonly string[];
   onReviewActor?: (name: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
+  /** Hide the inspector column. Present only where the column can collapse. */
+  onCollapse?: () => void;
   // Preview and actor-owned plans
   pinnedPorts: PinnedPort[];
   previewError: string | null;
@@ -122,14 +124,39 @@ export interface WorkSurfaceProps {
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
   const strip = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const focus = props.previewFocus;
+  // A preview arriving on its own never steals the surface: it raises a
+  // "Preview ready" chip on the surface already open, and only an explicit
+  // click navigates. `previewFocus` arrives as `slate:<id>` / `preview:<…>`
+  // while the strip speaks `slate:<id>` / `preview:<executor>:<port>`.
+  const [dismissedPreview, setDismissedPreview] = useState<string | null>(null);
 
-    if (focus?.startsWith("slate:")) onSurface(`slate:${focus.slice(6)}`);
-    else if (focus?.startsWith("preview:")) onSurface(`preview:${focus.slice(8)}`);
-  }, [props.previewFocus, onSurface]);
+  // SAFETY: use-kinu constructs previewFocus as `slate:${added.id}` in applySlates and
+  // `preview:${added}` (an `${executor}:${port}` pair) in refreshExposedPorts, and the strip
+  // below maps those same shapes back to surfaces via slateSurface and `preview:${executor}:${port}`.
+  // Re-adding the stripped prefix reconstructs the strip's own surface id, not a guessed string.
+  const focusSurface = props.previewFocus?.startsWith("slate:")
+    ? (`${SLATE_PREFIX}${props.previewFocus.slice(6)}` as SurfaceKind)
+    : props.previewFocus?.startsWith("preview:")
+      ? (`preview:${props.previewFocus.slice(8)}` as SurfaceKind)
+      : null;
+
+  const previewReady = focusSurface !== null && focusSurface !== surface && props.previewFocus !== dismissedPreview;
+
+  const readyPreviewTitle = focusSurface === null ? null
+    : focusSurface.startsWith(SLATE_PREFIX)
+      ? (props.slates?.find((slate) => slateSurface(slate.id) === focusSurface)?.title ?? focusSurface.slice(SLATE_PREFIX.length))
+      : (props.pinnedPorts.find((port) => `preview:${port.executor}:${port.port}` === focusSurface)?.name
+        ?? focusSurface.slice("preview:".length).replace(":", " :"));
+
+  const openReadyPreview = useCallback(() => {
+    if (focusSurface === null) return;
+    setDismissedPreview(props.previewFocus ?? null);
+    onSurface(focusSurface);
+  }, [focusSurface, onSurface, props.previewFocus]);
+
   useEffect(() => { if (props.planFocus) onSurface("Work"); }, [props.planFocus, onSurface]);
   const [hasDiffs, setHasDiffs] = useState(false);
+
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
   const openPort = surface.startsWith("preview:") ? ports.find(port => surface === `preview:${port.executor}:${port.port}`) : undefined;
   const previewSelected = surface.startsWith(SLATE_PREFIX) || surface.startsWith("preview:");
@@ -223,6 +250,19 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
+        {previewReady && (
+          <button
+            type="button"
+            onClick={openReadyPreview}
+            data-preview-ready
+            title={readyPreviewTitle ?? "A preview is ready"}
+            aria-label={readyPreviewTitle ? `Preview ready: ${readyPreviewTitle}` : "Preview ready"}
+            className="my-auto mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2.5 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated"
+          >
+            <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden="true" />
+            Preview ready
+          </button>
+        )}
         <button
           onClick={() => onSurface(ACTIVITY_SURFACE)}
           aria-label="Activity"
@@ -230,6 +270,18 @@ export function WorkSurface(props: WorkSurfaceProps) {
           className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>
+        {props.onCollapse && (
+          <button
+            type="button"
+            onClick={props.onCollapse}
+            data-inspector-collapse
+            aria-label="Hide inspector"
+            title="Hide inspector"
+            className={`${tabCls} px-2 p-text-3`}
+          >
+            <CaretRightIcon size={14} />
+          </button>
+        )}
       </div>
 
       <div className={`flex-1 min-h-0 ${surface === "Diffs" ? "hidden" : previewSelected ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6"}`}>
