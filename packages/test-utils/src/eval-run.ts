@@ -54,9 +54,9 @@ import { compareRunEventOrder } from './eval-target';
  *
  * `product` is the model a new workspace runs on when nobody picks one —
  * imported from core rather than spelled here, so a change to the product's
- * default moves the arm with it. It is the arm `gate:trajectory` runs before a
- * publish, because a red on any other model is a red on a model users do not
- * have.
+ * default moves the arm with it. It is the arm `gate:trajectory` runs on the
+ * build a deploy just shipped, because a red on any other model is a red on a
+ * model users do not have.
  */
 export const EVAL_MODELS = {
   flash: '@cf/deepseek-ai/deepseek-v4-flash-0731',

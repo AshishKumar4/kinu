@@ -28,7 +28,7 @@ Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable sk
 The owner is a Cloudflare employee; Workers, DOs, R2, Containers, Sandboxes, Workers AI and inference are free here. Never defer, cap, or refuse a run, bench, probe, deploy, or measurement on cost, and never call one "paid". Two things stay: the 10 MB gzip bundle cap is a platform limit and is measured (`bunx wrangler deploy --dry-run` after a fresh `bunx vite build`; record the figure with its sha in the deploy record), and the `agents` tool's `budget_usd`/`budget_tokens`/`budget_label` are a product feature. No migrations, cutovers, or compatibility periods: a schema change is a reset deployment, a rename moves every caller in one commit, a deprecated path is deleted.
 
 ## Deploy
-- One environment: https://kinu.run. No staging, no environment flag in any test or gate. `scripts/deploy.sh`: gates → build → CLI archive → upload → smoke → first-run tier → infra verify. `GET /api/health` reports `{version, sha, builtAt}`; check it after every deploy. Startup limit is 1 s; measure, do not cite.
+- One environment: https://kinu.run. No staging, no environment flag in any test or gate. `scripts/deploy.sh`: gates → build → CLI archive → upload → smoke → first-run and trajectory tiers → infra verify. `GET /api/health` reports `{version, sha, builtAt}`; check it after every deploy. Startup limit is 1 s; measure, do not cite.
 - The eval identity (`DEV_USER_EMAIL` + `DEV_IDENTITY_SECRET`) lives on the deployment; evals act as `eval-service`, never a person's session, with the eval workspace prefix and teardown.
 
 ## Commit Messages

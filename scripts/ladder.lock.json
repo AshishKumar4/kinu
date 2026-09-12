@@ -1,5 +1,5 @@
 {
-  "reason": "gate:vendor-schema joins the commit tier beside schema-drift",
+  "reason": "gate:trajectory measures the build it shipped, after publish",
   "tiers": {
     "commit": {
       "seconds": 82.24,

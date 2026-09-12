@@ -112,7 +112,6 @@ const REQUIRED_GATES = [
   "bun run verify:lean",
   "bun run gate:hammer",
   "bun run gate:infra",
-  "bun run gate:trajectory",
 ] as const;
 
 /**
@@ -126,11 +125,13 @@ const REQUIRED_GATES = [
  * and adding one to that list would turn a correct pipeline red.
  *
  * What IS asserted about these is structural and stronger for it: they are in
- * the parse of deploy.sh, they sit after the smoke test in the file, and each
- * runs in a wave of its own.
+ * the parse of deploy.sh, they sit after the smoke test in the file, and they
+ * share ONE wave — both measure the build that just shipped, and neither
+ * perturbs what the other asserts.
  */
 const POST_DEPLOY_GATES = [
   "bun run gate:first-run",
+  "bun run gate:trajectory",
 ] as const;
 
 afterEach(() => {
@@ -311,18 +312,14 @@ exit 87
 describe("deploy gate", () => {
   // WHY THESE ARE SET PROPERTIES AND NOT AN ORDERED COMPARE.
   //
-  // deploy.sh runs the middle 55 gates concurrently, so the order they reach the
+  // deploy.sh runs the middle gates concurrently, so the order they reach the
   // event log is scheduling noise. `events == REQUIRED_GATES` — or, per failing
   // gate, `events == REQUIRED_GATES.slice(0, n + 1)` — reads a total order off
   // that log and pins the noise.
   //
   // Every property a total order stands in for is asserted directly, and one
-  // more besides:
-  //   - every declared gate RUNS (set equality, so a dropped gate still fails);
-  //   - every SERIAL_GATE sits in its own wave at the position it declares;
-  //   - a failing gate stops the pipeline: no build mutation, and the run is
-  //     strictly shorter than a whole run;
-  //   - nothing mutates before the gates finish.
+  //   - every SERIAL_GATE that runs pre-publish sits in its own wave at the
+  //     position it declares;
   test("runs every declared gate before the first build mutation", () => {
     const run = runDeploy();
 
@@ -332,7 +329,7 @@ describe("deploy gate", () => {
     expect(run.buildEnvironment).toBe("root");
   });
 
-  test("the serial gates run alone, and everything else runs concurrently", () => {
+  test("the pre-publish serial gates run alone, and everything else runs concurrently", () => {
     // STRUCTURAL, over the waves deploy.sh declares, NOT the order in the stub
     // log. Reading the order off that log cannot see a missing barrier: comment
     // the preflight barrier out and preflight is still queue index 0, so the
@@ -341,32 +338,42 @@ describe("deploy gate", () => {
     const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
     const alone = waves.filter((wave) => wave.length === 1).flat();
 
-    expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
-    // SIX waves: preflight, one concurrent source block, the hammer,
-    // infrastructure, the trajectory tier on the production build, and — after
-    // the upload and the smoke test — the first-run tier. The hammer earned its
-    // own barrier by being the one gate whose subject is contention — it
-    // starves nproc/2 threads on purpose, so anything beside it would be
-    // measured on a machine this gate is deliberately loading. Barriers around
-    // every source gate would satisfy `alone` and make the pipeline serial, so
-    // the middle size is pinned.
+    const required: readonly string[] = REQUIRED_GATES;
+    const postDeploy: readonly string[] = POST_DEPLOY_GATES;
+    const serialPrePublish = Object.keys(SERIAL_GATES).filter((gate) => required.includes(gate));
+    // The post-publish tiers are declared serial too — SERIAL_GATES holds
+    // every gate that stays clear of the pre-publish waves — but they share one
+    // wave: both measure the build that just shipped and neither perturbs the
+    // other's assertions, so "runs alone" is asserted only over the
+    // pre-publish members.
+    expect(alone.sort()).toEqual(serialPrePublish.sort());
+    // FIVE waves: preflight, one concurrent source block, the hammer,
+    // infrastructure, and — after the upload and the smoke test — one wave
+    // holding both post-publish tiers. The hammer earned its own barrier by
+    // being the one gate whose subject is contention — it starves nproc/2
+    // threads on purpose, so anything beside it would be measured on a machine
+    // this gate is deliberately loading. Barriers around every source gate
+    // would satisfy `alone` and make the pipeline serial, so the middle size
+    // is pinned.
     // DERIVED from the two lists above rather than written as a number: a
     // literal here has to be edited every time a gate is added, and a number
     // nobody can derive gets edited without being read. The property is the
-    // same either way, because a gate that leaves the middle wave has to appear
-    // in `SERIAL_GATES` to satisfy the assertion above it.
-    // The last two waves are the only ones that run against a DEPLOYED build —
-    // the trajectory tier against the one serving now, before the publish, and
-    // the first-run tier against the one just published — and each is alone
-    // for the reason SERIAL_GATES states: both create workspaces on the account
-    // a sibling gate authenticates against, and one links real machines to it.
-    expect(waves.length).toBe(6);
+    // same either way, because a gate that leaves the middle wave has to be
+    // named in `SERIAL_GATES` and stay out of `REQUIRED_GATES` to satisfy the
+    // assertions around it.
+    // The last wave is the only one that runs against a DEPLOYED build — the
+    // first-run and trajectory tiers against the one just published. Until
+    // 2026-09-12 the trajectory tier ran alone, last before the build, where
+    // its only subject was the PREVIOUS build: it could refuse a regression
+    // but never a repair, and that day it refused the deploy carrying the fix
+    // it was red on. A red here is a red on what users have now.
+    expect(waves.length).toBe(5);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
-    expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length + 1);
+    expect(waves[1]?.length).toBe(REQUIRED_GATES.length - serialPrePublish.length);
     expect(waves[2]).toEqual(["bun run gate:hammer"]);
     expect(waves[3]).toEqual(["bun run gate:infra"]);
-    expect(waves[4]).toEqual(["bun run gate:trajectory"]);
-    expect(waves[5]).toEqual([...POST_DEPLOY_GATES]);
+    expect(waves[4]).toEqual([...postDeploy]);
+    expect(waves[4]).toContain("bun run gate:trajectory");
   });
 
   // The Worker version is what a persisted error names, so it has to name the
@@ -483,13 +490,15 @@ describe("deploy gate", () => {
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
 
     expect(gates[0]).toBe("bun scripts/preflight.ts");
-    expect(gates.at(-1)).toBe("bun run gate:trajectory");
+    // The fixture's build stub fails on purpose, so the last gate to RUN is
+    // the last pre-publish one — the post-publish wave is unreachable here.
+    expect(gates.at(-1)).toBe("bun run gate:infra");
   });
 
   // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
   // default is not a decision anybody made about this test. One deploy run per
-  // gate, each running every earlier gate's stub: 57 gates is ~3,200 process
-  // spawns.
+  // gate, each running every earlier gate's stub: the per-gate count below is
+  // ~3,200 process spawns.
   test("every gate fails closed even when the former skip variable is set", () => {
     const last = REQUIRED_GATES.at(-1);
     // WHICH WAVE EACH DECLARED GATE IS IN, BY POSITION. deploy.sh spells one
@@ -710,14 +719,16 @@ describe("deploy gate", () => {
     const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
     expect(waves[infraWave]).toEqual(['bun run gate:infra']);
     // THE LAST SOURCE-AND-ACCOUNT WAVE BEFORE THE UPLOAD, which is what the
-    // property has always meant. One wave follows it before the build — the
-    // trajectory tier, which spends live turns on the account this gate has
-    // just proved — and the first-run tier runs after the deploy, so everything
-    // past the trajectory wave is post-deploy by construction.
+    // property has always meant. Nothing follows it before the build — the
+    // trajectory tier moved after the publish on 2026-09-12, beside first-run,
+    // because a pre-publish live gate can only measure the previous build and
+    // refused the deploy carrying its fix — so everything past this wave is
+    // post-deploy by construction.
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     const preDeployWaves = deployWaves(source.slice(0, source.indexOf('Step 2: Building Kinu')));
-    expect(infraWave).toBe(preDeployWaves.length - 2);
-    expect(preDeployWaves.at(-1)).toEqual(['bun run gate:trajectory']);
+    expect(infraWave).toBe(preDeployWaves.length - 1);
+    expect(preDeployWaves.at(-1)).toEqual(['bun run gate:infra']);
+    expect(waves.at(-1)).toContain('bun run gate:trajectory');
     expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
       'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
     );
