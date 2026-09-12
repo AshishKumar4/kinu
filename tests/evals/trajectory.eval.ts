@@ -111,8 +111,11 @@ const SUITE = 'Trajectory Evals';
 const REPO_ROOT = join(import.meta.dirname, '../..');
 
 /** Which arm this process is — the same split the four sibling arms declare, so
- *  a tier switch reaches this family too. */
-const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+ *  a tier switch reaches this family too, plus the one arm only this family
+ *  runs: `product`, the deployment's own default model, which is what
+ *  `scripts/trajectory-tier.sh` asks for before a publish. */
+const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro'
+  : process.env.KINU_EVAL_TIER === 'product' ? 'product' : 'flash';
 
 /**
  * WHERE this run's agent lives, resolved once, and the model it PINS.

@@ -30,7 +30,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { dirname, join } from 'node:path';
 import { recordNoModelEpisode, recordUnmeasuredEpisode, recordWorkspaceSpend, type LiveModelSpend } from './live-model';
 import {
-  BUILTIN_TOOLS, classifyToolFailure, minimumPairsForSignificance, requiredPairs,
+  BUILTIN_TOOLS, classifyToolFailure, DEFAULT_WORKERS_AI_MODEL_ID, minimumPairsForSignificance, requiredPairs,
   type ActorHandle, type RunEvent, type SqlExecutor, type WorkspaceSpend, type ToolOutcome,
 } from '@kinu.run/core';
 import { gitEnv } from './git';
@@ -51,10 +51,17 @@ import { compareRunEventOrder } from './eval-target';
  * pro for a small number of runs that establish the upper bound. Declared as a
  * property of a run so a record says which regime produced it, because a 40-pair
  * flash number and a 4-pair pro number invite completely different readings.
+ *
+ * `product` is the model a new workspace runs on when nobody picks one —
+ * imported from core rather than spelled here, so a change to the product's
+ * default moves the arm with it. It is the arm `gate:trajectory` runs before a
+ * publish, because a red on any other model is a red on a model users do not
+ * have.
  */
 export const EVAL_MODELS = {
   flash: '@cf/deepseek-ai/deepseek-v4-flash-0731',
   pro: '@cf/deepseek-ai/deepseek-v4-pro-0813',
+  product: DEFAULT_WORKERS_AI_MODEL_ID,
 } as const satisfies Record<string, string>;
 
 export type EvalTier = keyof typeof EVAL_MODELS;
