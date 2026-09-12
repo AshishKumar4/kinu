@@ -58,7 +58,8 @@ import type { LanguageModel } from 'ai';
 import type { EvalCase, JsonValue, LLMProviderConfig, RunEvent } from '../../packages/core/src/index';
 import { JsonValueSchema, minimumPairsForSignificance, parseCorpus, ToolOutcomeSchema } from '../../packages/core/src/index';
 import {
-  AdoptedSpendMeter, EVAL_MODELS, FULL_TOOL_SURFACE, caseKey, findResumableEvalDir,
+  AdoptedSpendMeter, EVAL_MODELS, FULL_TOOL_SURFACE, caseKey, createObservedModelAccumulator,
+  findResumableEvalDir,
   formatAdoptedSpend, formatCaseCensus, hardTaskCases,
   hardTaskFor, liveChatModel, liveModelTarget, openEvalProgress, preRegister,
   publishRunRecord, reportLiveModelSpend, TASK_OUTCOME, UNCONFIGURED_LLM,
@@ -232,6 +233,12 @@ mkdirSync(TRANSCRIPTS, { recursive: true });
 const progress = openEvalProgress(TRANSCRIPTS, RUN_SIGNATURE);
 
 const opened: Database[] = [];
+
+/** Serving models this process's episodes reported, one `step_finish` row at a
+ *  time. The publish-time ledger check: a resumed run's prior-process episodes
+ *  are gone with their scratch stores, so this covers what this process drove
+ *  — null when it drove nothing, never agreement by default. */
+const observedModels = createObservedModelAccumulator();
 
 const observationByKey = new Map<string, EvalObservation>();
 
@@ -548,6 +555,9 @@ function publishBehaviourRecord(): void {
     family: 'behaviour',
     tier: TIER,
     modelId: LLM.model,
+    // The ledger check, off the live forward above — null when this process
+    // drove no episode far enough to report a serving model.
+    modelObserved: observedModels.observed,
     repeats: REPEATS,
     seed: SEED,
     arm: ARM,
@@ -697,6 +707,7 @@ describeEval('Agent behaviour over the run-event ledger', {
             const delta = activityDelta(event.event);
 
             if (delta) progress.markActivity(key, delta);
+            observedModels.note([event.event]);
           },
         });
 

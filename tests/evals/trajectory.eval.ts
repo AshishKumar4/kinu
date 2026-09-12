@@ -86,7 +86,8 @@ import {
   type EvalBudget, type LLMProviderConfig, type RunEvent,
 } from '../../packages/core/src/index';
 import {
-  budgetRow, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents, measuredToolErrorRate,
+  budgetRow, createObservedModelAccumulator, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents,
+  measuredToolErrorRate,
   outcomeRow, outputCapRow, projectRunEventProvenance, stepBoundEvidence,
   publishRunRecord, reportLiveModelSpend, retainEpisodeTranscript, withEpisodeEvidence,
   subgoalOutcome, subgoalsOutcome, TASK_OUTCOME,
@@ -166,6 +167,10 @@ const TRANSCRIPTS = join(
 );
 
 const observations: EvalObservation[] = [];
+
+/** Serving models the episodes reported, noted before each workspace is torn
+ *  down (teardown DELETES it). Null when no episode reported a serving model. */
+const observedModels = createObservedModelAccumulator();
 
 /** What one trajectory case is. The turns are DATA so the credential-free tests
  *  can assert properties of the corpus — every case multi-turn, every case
@@ -564,6 +569,7 @@ afterAll(() => {
   publishRunRecord({
     family: 'trajectory', tier: TIER, modelId: LLM?.model ?? EVAL_MODELS[TIER],
     repeats: 1, seed: 1, arm: ARM, declaredTasks: DECLARED, observations, spend,
+    modelObserved: observedModels.observed,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
 });
@@ -913,6 +919,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         for (const turn of rest) await session.prompt(turn);
 
         const { events, history } = await collect();
+        observedModels.note(events);
         const totals = ledgerTotalsFromEvents(events);
 
         // The precondition, upstream of the observation: a trajectory that

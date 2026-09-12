@@ -182,6 +182,9 @@ describe('a run that attempted nothing writes no record at all', () => {
   // so the guard covers every family that has one and every family that gets one.
   const inputs = (transcripts: string, observations: readonly EvalObservation[]) => ({
     family: 'behaviour', tier: 'flash' as const, modelId: EVAL_MODELS.flash,
+    // Synthetic observations carry no ledger, so there is no serving model to
+    // check the claim against — the record states that rather than agreeing.
+    modelObserved: null,
     repeats: 1, seed: 1,
     arm: { evolution: true, settle: 'none', tools: FULL_TOOL_SURFACE },
     declaredTasks: ['ws-inventory'], observations,
