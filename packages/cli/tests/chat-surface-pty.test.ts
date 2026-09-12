@@ -27,9 +27,9 @@ describe('the chat surface on a real terminal, fresh install', () => {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
         { send: 'draft one' },
-        { sleep: 1 },
+        { wait: 'draft one', timeout: 1 },
         { send: '\r' },
-        { sleep: 3 },
+        { wait: 'agent prose reply', timeout: 3 },
       ],
     });
 

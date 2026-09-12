@@ -1195,7 +1195,7 @@ async function renderOverlayFrame(showOverlay: boolean) {
 async function renderSettled(renderOnce: () => Promise<void>) {
   for (let i = 0; i < 10; i++) {
     await renderOnce();
-    await Bun.sleep(30);
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
 

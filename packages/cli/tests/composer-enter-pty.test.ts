@@ -26,9 +26,9 @@ function enterSubmits(label: string, enterBytes: string) {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
         { send: 'draft one' },
-        { sleep: 1 },
+        { wait: 'draft one', timeout: 1 },
         { send: enterBytes },
-        { sleep: 3 },
+        { wait: 'agent prose reply', timeout: 3 },
       ],
     });
 
@@ -45,11 +45,10 @@ describe('the composer on a real terminal', () => {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
         { send: 'draft one' },
-        { sleep: 1 },
+        { wait: 'draft one', timeout: 1 },
         { send: '\u001B[13;2u' },
-        { sleep: 1 },
         { send: 'line two' },
-        { sleep: 2 },
+        { wait: 'line two', timeout: 3 },
       ],
     });
 
