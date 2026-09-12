@@ -272,6 +272,41 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
   });
 
+  test('a pinned model is the model the next turn\'s request names', async () => {
+    // The composer's picker writes through the setModel RPC and the turn must
+    // run on what it wrote — not on the account default the role's tier names.
+    // Since account profiles the resolution read only the owner's catalog, so
+    // every pinned workspace turned on the default while status named the pin.
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    agent.harnessInstallCatalog({
+      tiers: { default: { model: 'workers-ai/account-default' } },
+      availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
+    });
+
+    // The same RPC the picker uses, not a config write beside it.
+    const pinned = await agent.setModel('workers-ai/pinned-model');
+    expect(pinned).toEqual({ ok: true, spec: 'workers-ai/pinned-model' });
+
+    const config = await agent.beforeTurn({
+      system: 'sys',
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: {} satisfies ToolSet,
+      model: 'harness-model',
+      continuation: false,
+      body: {},
+    });
+
+    expect(agent.observeResolvedTurnProfile()?.tier).toEqual({
+      id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
+      reasoningEffort: 'medium',
+    });
+    // The request handed to the SDK is that resolution's model: the memoized
+    // instance the backend resolves the pinned spec to, not the default's.
+    const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
+    expect(request.success && request.output.model).toBe(agent.getModel());
+  });
+
   test('hosted heads run on the registered workspace identity, never a self-named filesystem', async () => {
     // The old failure this replaces: the root's split seeded the child with
     // the REGISTERED workspace, never the splitter's own DO name — the file

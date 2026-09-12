@@ -1372,6 +1372,46 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(firstTurn.turn.assistantResponse).toBe('from b');
   });
 
+  test('a pinned model is the model the next turn runs on, not the account default', async () => {
+    // The mirror of the cf turn-pipeline pin: the same setModel setter the
+    // picker path uses, then one turn. Without the resolver override the turn
+    // runs on the account default tier's model and answers 'from a'.
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
+      resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
+      listProviders: async () => [],
+      listModels: async () => ({
+        models: [
+          { provider: 'local', id: 'a', label: 'a', capabilities: ['streaming'] },
+          { provider: 'local', id: 'b', label: 'b', capabilities: ['streaming'] },
+        ],
+        failures: [],
+      }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'local/a' } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' },
+      version: 1,
+      digest: profileCatalogDigest(catalog),
+      catalog,
+    };
+
+    const { session, events } = setupWithResolver(resolver, {
+      profileAuthority: () => envelope,
+    });
+
+    expect(session.setModel('local/b')).toEqual({ ok: true, spec: 'local/b' });
+    await session.send('hello');
+    const turn = events.find((event) => event.type === 'turn-end');
+
+    if (!turn || turn.type !== 'turn-end') throw new Error('turn-end event was not emitted');
+    expect(turn.turn.assistantResponse).toBe('from b');
+  });
+
   test('tier reasoning effort merges with prompt-cache options', async () => {
     let providerOptions: LanguageModelV2CallOptions['providerOptions'];
     const base = fakeModel('reasoned');
