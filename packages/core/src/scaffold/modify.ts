@@ -15,14 +15,9 @@ import {
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
 import { parsePathologyTag } from '../evolution/pathology';
 import { getCurrentScaffoldVersion, readScaffoldVersion } from './shadow';
+import type { ModifyResult } from '../types/scaffold';
 
-/** Outcome of one scaffold proposal through the 4-gate pipeline. */
-export interface ModifyResult {
-  ok: boolean;
-  version?: number;
-  error?: string;
-  stage?: number;
-}
+export type { ModifyResult } from '../types/scaffold';
 
 export interface ModifyScaffoldOpts {
   /** The archive version this proposal branches from (DGM stepping stone).

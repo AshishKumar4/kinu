@@ -59,13 +59,13 @@ import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
 import { RunEventRecorder } from '../events/recorder';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 
+export type { ScaffoldArchiveEntry, ScaffoldStatus } from '../types/scaffold';
+
 /** One turn's contribution of trial evidence. Kept after the queue row is
  *  consumed: `dropQueuedShadowTrial` deletes that row the moment the trial is
  *  scored, so `ON CONFLICT(actor_id, id) DO NOTHING` stops protecting anything
  *  and a replayed queueing would have the same turn scored twice. */
 const TRIAL_SCOPE = 'shadow_trial';
-
-export type ScaffoldStatus = 'current' | 'pending' | 'rolled_back' | 'historical';
 
 export interface ShadowEvaluationRow {
   id: string;
@@ -422,7 +422,6 @@ export function dropQueuedShadowTrial(sql: SqlExecutor, actor: ActorHandle, id: 
   recordEffectDone(sql, actor, TRIAL_SCOPE, id);
   void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId} AND id = ${id}`;
 }
-
 
 /** Discard every queued trial that is not for `keepVersion`. A trial is
  *  evidence about ONE candidate: once that candidate is promoted or rolled

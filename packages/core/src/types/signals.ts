@@ -11,7 +11,7 @@
 // it and never picks a mechanism — starting a turn is simply what "next step"
 // means when no turn is running.
 
-import type { AdvisorSeverity } from '../advisor/review';
+import type { AdvisorSeverity } from './advisor';
 import type { JsonObject } from '../utils/json';
 
 /** Why a queued signal never became a turn: 'preempted' = a newer turn

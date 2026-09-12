@@ -34,12 +34,11 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import { stableStringify } from '../safety/argument-digest';
+import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../types/advisor';
 
-/** How strongly a note asks to be weighed. ORDERED: a floor is a comparison of
- *  positions in this array, so inserting a severity in the middle re-ranks it. */
-export const ADVISOR_SEVERITIES = ['nit', 'concern', 'blocker'] as const;
-
-export type AdvisorSeverity = (typeof ADVISOR_SEVERITIES)[number];
+export {
+  ADVISOR_SEVERITIES, DEFAULT_ADVISOR_MIN_SEVERITY, type AdvisorSeverity,
+} from '../types/advisor';
 
 export function isAdvisorSeverity<Value>(value: Value): value is Value & AdvisorSeverity {
   return ADVISOR_SEVERITIES.some((severity) => severity === value);
@@ -88,15 +87,6 @@ export const ADVISOR_CLASS_LABEL = {
   'missed-capability': 'a capability it had and did not use',
   dissatisfaction: 'the user said they were unhappy',
 } as const satisfies Readonly<Record<AdvisorNoteClass, string>>;
-
-/**
- * The default floor for reaching the conversation.
- *
- * `concern` keeps the conversation quiet by default. A `nit` is still recorded,
- * as a Changelog row, so the owner can read what the advisor thought without
- * the agent being told about it.
- */
-export const DEFAULT_ADVISOR_MIN_SEVERITY: AdvisorSeverity = 'concern';
 
 /** The `kinuEvent` an advisor signal carries: its provenance in the run log,
  *  and what makes the chat render it as a card instead of a user bubble. */
