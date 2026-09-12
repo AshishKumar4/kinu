@@ -329,7 +329,7 @@ aborts it, its mission governor declines the next request, or an opt-in
 are read between steps, so none interrupts one: a node runs in the isolate that
 ran the search, as its own logical actor of the one workspace, and the search
 records the cut on the node's own report under the cancel reason. There is no
-node facet and no node-loop host — the loop runs in one place, so the cut is
+node isolate and no node-loop host — the loop runs in one place, so the cut is
 observed in one place.
 
 Three tool-using nodes still ran at 1,216,358 / 1,310,061 / 1,336,833 ms across
@@ -473,13 +473,13 @@ is an *Accepted and ignored* measurement.
 
 ## Isolation
 
-A host-provisioned facet owns its home in one global view, mode `0o755`, and its
-tmp, mode `0o700`. Both are owned by the facet's own uid. The kind rides in the
+A host-provisioned actor owns its home in one global view, mode `0o755`, and its
+tmp, mode `0o700`. Both are owned by the actor's own uid. The kind rides in the
 name: `/home/node-<id>`, `/home/sub-<slug>`, `/home/head-<id>`, so one namespace
-holds every facet kind. `agentHomeLayout` is the one table that says so, and
+holds every hosted kind. `agentHomeLayout` is the one table that says so, and
 one provisioner applies it on both backends through the uid-0 `SqliteVFS` view:
-the hosted backend runs it on the object that owns the workspace, which every
-facet asks for its home over one hop.
+the hosted backend runs it on the object that owns the workspace, in the same
+isolate every hosted actor runs in.
 
 Both backends report `private-home`. Both credential both planes, and both are
 required. A node reaches the tree with commands and with file tools. A file plane
@@ -492,7 +492,7 @@ node inside the same session (`nimbusSessionFiles(box, cred)` →
 `execution/nimbus-agent-files.ts`), with `withHostedNodeExecution` for its
 commands. `NodeAgentDeps.runtimeForWorkspace` is where a backend hands that
 runtime back; `runNodeAgent` uses it for a loop that runs in this isolate, and a
-hosted facet rebuilds the same thing from `HostedNodeHome`.
+hosted actor rebuilds the same thing from `HostedNodeHome`.
 
 The hosted program is the session's own `node`, and the protocol is strict JSON:
 the request travels in one environment variable, the answer comes back on stdout
@@ -518,7 +518,7 @@ reset that retains the node home and private temporary files.
 The main agent keeps `HOME=/home/user` and uses `TMPDIR=/tmp/main`.
 Workspace boot provisions its temporary directory before commands run.
 A bare `/tmp` resolves to each agent's own temporary directory on both
-backends. Hosted facets ask the workspace owner to register their mappings.
+backends. Hosted actors ask the workspace owner to register their mappings.
 Boot restores these mappings after a reset.
 
 Measured 2026-09-10, `bun scripts/workspace-planes-probe.ts` reads four
@@ -529,7 +529,7 @@ generation returns the same values without copying files.
 
 `shared-origin-plane` remains the honest state of a runtime with no provisioner:
 a harness runtime, or a plane bound to a physical directory, which has no
-principal registry. A directory-bound facet still runs its commands with `HOME`
+principal registry. A directory-bound actor still runs its commands with `HOME`
 and `TMPDIR` in its own scratch under the workspace state, and the tree stays
 shared. Grader and merge-back need the home, hence `0o755` and not `0o700`. One
 view preserves the user's repository. Exactly two isolation states exist;

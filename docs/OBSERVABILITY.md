@@ -79,8 +79,9 @@ AND THE DISCRIMINATOR IS THE ACTOR, which is the more useful half.
 `SPAN_ATTR_SELF_PATH` is the SDK's `[...parentPath, {className, name}]` — a
 DURABLE OBJECT path. With one object per workspace it is constant for every span
 the workspace emits, so it separates no two forks. Nor can a Durable
-Object id: a facet's id resolves to the root's `durableObjectId`
-(`do.facet.id_is_root_namespace`). What distinguishes two forks' spans is the
+Object id: an old SDK facet's id resolved to the root's `durableObjectId`
+(`do.facet.id_is_root_namespace`), and every logical actor shares the root's
+`ctx.id` outright. What distinguishes two actors' spans is the
 ACTOR the span was opened under, which every hosted actor carries.
 
 | Root | Phases |
@@ -89,7 +90,7 @@ ACTOR the span was opened under, which every hosted actor carries.
 
 - `alarm.tick`. Its phases distinguish a slow alarm from slow email reconcile.
 - `rpc.swarm.arbitrate`. Waiting and never asking otherwise look alike.
-- `rpc.head.record_step`. A slow journal write looks like a quiet facet.
+- `rpc.head.record_step`. A slow journal write looks like a quiet head.
 
 The workspace object hosts heads, nodes and MCTS branches itself, through the
 orchestrator `tracing` getter and
@@ -106,8 +107,8 @@ with an `end()`. `beforeToolCall` and `afterToolCall` repeat the gap. Both
 become spans when one `runChat` function replaces the three loops.
 
 `SpanOpenAttributes` requires `isolateGen` and `selfPath` (`obs/tracer.ts:44`).
-Only CF Agents supply them. Use `selfPath`, not `ctx.id`: two deployed facets
-with distinct ids reported under one root `durableObjectId`.
+Only CF Agents supply them. Use `selfPath`, not `ctx.id`: two hosted actors
+share the root's `ctx.id` and would report identically.
 
 `tracing.invocation` ends context at `alarm()` and revokes `TracedInvocation`.
 Escaped work throws `KinuError('unsupported')`. The arming turn may be minutes

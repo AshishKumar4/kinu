@@ -214,9 +214,9 @@ kinu import ~/backups/jarvis.kinu.jsonl --name jarvis-restored
 ```
 
 Cloud and local exports use the same archive format, but their coverage must
-be distinguished. The current cloud root export does not traverse separate
-facet databases, so it does not establish a complete backup of retained child
-histories. `import` restores an archive as a local workspace. The web backup
+be distinguished. The cloud export covers every retained actor: child
+actors are logical actors whose rows live in the workspace's one SQLite,
+keyed by `actor_id`. `import` restores an archive as a local workspace. The web backup
 action uses the same declared export boundary; inspect it before deleting data.
 
 Exporting a cloud workspace needs an interactive session (`kinu auth`). A

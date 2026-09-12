@@ -68,7 +68,7 @@ It also does not turn the earlier agent-core architecture investigation into a w
 | **Agent loop** | The code and configuration that drive model steps, tool use and completion. Kinu currently uses the term **scaffold** for versioned loop source. |
 | **Capability binding** | A specific operation surface supplied to code under an actor's effective authority. Possessing a workspace address does not grant every capability. |
 | **Slate** | An authored client/server project that presents a live UI and can compose admitted capabilities. It is not a JSON widget vocabulary. |
-| **SDK facet** | A Cloudflare Agents hosting mechanism Kinu used before the one-store cutover. It is not automatically an agent-core Facet contract. |
+| **SDK facet** | A Cloudflare Agents hosting mechanism Kinu used before the one-store cutover. It is not automatically an agent-core Facet contract, and no facet class remains: every non-root kind is a logical actor of the workspace object. |
 | **Workspace fork** | A new workspace ownership boundary created from a defined snapshot. |
 | **Context fork** | A new actor context derived from a particular parent context revision. It does not imply a new workspace or copied file plane. |
 
@@ -277,7 +277,7 @@ This is the source inventory for the reviewed revision, not a proposed schema an
 
 | Family | Current records | Physical owner and significance |
 |---|---|---|
-| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | The agents SDK session tables inside the workspace's one SQLite, keyed by actor. Messages carry session and ancestry fields. Kinu currently returns the SDK default session unchanged. |
+| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | The agents SDK session tables inside the workspace's one SQLite. `assistant_messages` is the vendor's shape with no actor column — the root actor's transcript by construction (Think's session belongs to the workspace object); a child actor's default chat is the plain `messages` store. Messages carry session and ancestry fields. Kinu currently returns the SDK default session unchanged. |
 | Local conversation/search | `messages`, `conversation_fts`, `conversation_fts_state` | Current actor database. The search index is derived; it is not another authoritative conversation. Hosted readers select the pane store when present. |
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |

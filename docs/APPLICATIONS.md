@@ -141,14 +141,14 @@ next turn without a restart. It also survives a restart.
    configured checks and retains a rollback version.
 3. Crafted tools have a lifecycle: exponential moving score, relevance decay,
    retirement rules.
-4. Hosted nodes run as facets. Each has private shell and
-   scaffold state over the workspace's canonical files.
+4. Hosted nodes run as logical actors of the workspace object. Each has a
+   private shell and scaffold state over the workspace's canonical files.
 
 ## 5. Current limitations
 
 ### Hiring is not measured
 
-A workspace hires durable `SubordinateAgent` facets through the `agents` tool.
+A workspace hires durable subordinate actors through the `agents` tool.
 Each runs its own turn loop over shared files, and the same surface reaches
 your other workspaces. Swarm candidates are measured (`objective`, the verifier
 registry). Hires are not. Three questions are unmeasured. Does decomposition beat
