@@ -25,16 +25,30 @@ export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
-/** The `effort` parameter per model, from the effort guide's level table and
- *  its supported-models list (read 2026-09-10):
- *  https://platform.claude.com/docs/en/build-with-claude/effort. `xhigh` is
- *  narrower than `max`, and a model off the supported list takes no effort. */
+/** The `effort` parameter per model, from the effort guide's supported-models
+ *  list and its per-level availability (read 2026-09-11):
+ *  https://platform.claude.com/docs/en/build-with-claude/effort. Keyed by
+ *  model name; a dated snapshot resolves through `modelFamilyId`. A model off
+ *  the supported list takes no effort. */
+const FIVE: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+const FOUR: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'max'];
+
 const ANTHROPIC_REASONING_EFFORTS = {
-  'claude-opus-4-7':   ['low', 'medium', 'high', 'xhigh', 'max'],
-  'claude-opus-4-6':   ['low', 'medium', 'high', 'max'],
-  'claude-sonnet-4-6': ['low', 'medium', 'high', 'max'],
-  'claude-sonnet-4-5': [],
-  'claude-haiku-4-5':  [],
+  'claude-fable-5-1':     FIVE,
+  'claude-mythos-5-1':    FIVE,
+  'claude-fable-5':       FIVE,
+  'claude-mythos-5':      FIVE,
+  'claude-mythos-preview': FOUR,
+  'claude-opus-5':        FIVE,
+  'claude-opus-4-8':      FIVE,
+  'claude-opus-4-7':      FIVE,
+  'claude-opus-4-6':      FOUR,
+  'claude-opus-4-5':      ['low', 'medium', 'high'],
+  'claude-sonnet-5':      FIVE,
+  'claude-sonnet-4-6':    FOUR,
+  'claude-sonnet-4-5':    [],
+  'claude-haiku-4-5':     [],
 } satisfies Record<string, readonly ReasoningEffort[]>;
 
 const FALLBACK_MODELS: ModelInfo[] = [

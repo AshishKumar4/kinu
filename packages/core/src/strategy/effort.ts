@@ -16,7 +16,7 @@ import type { ReasoningEffort } from '../providers/reasoning-effort';
 // The vocabulary itself is a provider fact and lives at the platform layer;
 // this module owns the per-stage POLICY over it.
 export {
-  REASONING_EFFORTS, CHAT_COMPLETIONS_REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
+  REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
   type ReasoningEffort,
 } from '../providers/reasoning-effort';
 

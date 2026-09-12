@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import { diagnostics, renderThrownChain } from '../obs/index';
-import { CHAT_COMPLETIONS_REASONING_EFFORTS, type ReasoningEffort } from './reasoning-effort';
+import { reasoningEffortsFor, type ReasoningEffort } from './reasoning-effort';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 
@@ -262,8 +262,7 @@ function modelInfoFromModelsDev(
 
   const cost = pricingFromModelsDev(model.cost);
 
-  const reasoningEfforts = declaredEfforts?.[id]
-    ?? (model.reasoning === true ? CHAT_COMPLETIONS_REASONING_EFFORTS : []);
+  const reasoningEfforts = reasoningEffortsFor(id, model.reasoning === true, declaredEfforts);
 
   return {
     id,
