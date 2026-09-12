@@ -61,6 +61,17 @@ export const LANDING_PROFILE: UserProfile = {
 
 /* ── The checkout workspace: a Build turn, mid-fix ─────────────────────── */
 
+// The frame's disclosure, shared with the persists card below it: one string,
+// two places, no drift.
+export const CHECKOUT_FRAME_CAPTION = 'Example UI and sample data, not a live workspace.';
+
+// The tool the run kept, as the changelog records it. Purpose words match the
+// gallery's coupon_replay description, so the card states the thing verbatim.
+export const CHECKOUT_RETAINED_TOOL = {
+  name: 'coupon_replay',
+  purpose: 'Replay a checkout against a coupon code and diff the response.',
+} as const;
+
 export const CHECKOUT_MESSAGES: UIMessage[] = [
   {
     id: 'landing-checkout-user',
@@ -71,13 +82,15 @@ export const CHECKOUT_MESSAGES: UIMessage[] = [
     id: 'landing-checkout-agent',
     role: 'assistant',
     parts: [
-      { type: 'reasoning', text: 'The coupon path goes through /api/cart/apply. I should reproduce first, then inspect the handler and migration.' },
+      { type: 'text', text: 'Fixed the SAVE20 coupon 500 — migration 0042 patched, 14 tests green.' },
       { type: 'tool-run', toolCallId: 'landing-run', state: 'output-available', input: { runtime: 'sandbox', command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: 'HTTP 500' },
       { type: 'tool-execute_tools', toolCallId: 'landing-query', state: 'output-available', input: { code: '// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons`;\nreturn rows;' }, output: '[{"code":"SAVE20","kind":null,"value":20}]' },
-      { type: 'text', text: "Tuesday's migration backfilled `kind` for fixed coupons only. I will patch the migration, add a regression test, and run the focused suite." },
       { type: 'tool-file', toolCallId: 'landing-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
       { type: 'tool-file', toolCallId: 'landing-edit', state: 'output-error', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{}, {}] }, errorText: 'old_text not found or not unique' },
+      { type: 'tool-file', toolCallId: 'landing-reread', state: 'output-available', input: { action: 'read', path: 'packages/checkout/migrations/0042_coupon_kind.sql' }, output: '…' },
+      { type: 'tool-file', toolCallId: 'landing-patch', state: 'output-available', input: { action: 'edit', path: 'packages/checkout/migrations/0042_coupon_kind.sql', edits: [{ old_text: "WHERE kind = 'fixed'", new_text: 'WHERE kind IS NULL' }] }, output: 'ok' },
       { type: 'tool-file', toolCallId: 'landing-write', state: 'output-available', input: { action: 'write', path: 'packages/checkout/tests/coupon-kind.test.ts' }, output: 'ok' },
+      { type: 'tool-run', toolCallId: 'landing-tests', state: 'output-available', input: { runtime: 'sandbox', command: 'bun test packages/checkout --filter coupon' }, output: '14 passed' },
       { type: 'tool-tasks', toolCallId: 'landing-task', state: 'output-available', input: { action: 'update', id: 't4', status: 'done' }, output: 'ok' },
     ],
   },

@@ -1,10 +1,11 @@
 import { startTransition, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
+  CaretLeftIcon,
   ClockIcon, WarningCircleIcon, DesktopTowerIcon, PaperclipIcon,
   ClockCounterClockwiseIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
@@ -23,7 +24,7 @@ import { useConversationUiState, usePlanGatedMode } from "@/hooks/use-conversati
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
-import { touchWorkspace } from "@/lib/user-api";
+import { getProfile, touchWorkspace } from "@/lib/user-api";
 import { describeError } from "@/hooks/use-async-resource";
 import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -41,7 +42,7 @@ import { SubordinateTabs, agentTitle, workspaceTitle } from "@/components/Subord
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@/lib/protocol";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -636,6 +637,52 @@ function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): Compos
   return [notice];
 }
 
+/** Inspector defaults: a 340px opening inside the 320-360px design band, with
+ *  a 280px pixel floor so a wide display can keep it compact. */
+const INSPECTOR_DEFAULT_PX = 340;
+
+const INSPECTOR_MIN_PX = 280;
+
+/** Persisted widths apply only where the desktop inspector exists. */
+const INSPECTOR_WIDE_QUERY = "(min-width: 900px)";
+
+interface InspectorPrefs { readonly widthPx: number; readonly collapsed: boolean }
+
+/** Stored as `<widthPx>:<0|1>` beside the theme choice, keyed by account. */
+function readInspectorPrefs(account: string | null): InspectorPrefs | null {
+  if (account === null) return null;
+
+  const raw = localStorage.getItem(`kinu.inspector.${account}`);
+
+  if (raw === null) return null;
+
+  const [widthText, collapsedText] = raw.split(":");
+  const width = Number(widthText);
+
+  if (!Number.isFinite(width)) return null;
+
+  return { widthPx: Math.max(INSPECTOR_MIN_PX, Math.round(width)), collapsed: collapsedText === "1" };
+}
+
+function writeInspectorPrefs(account: string, prefs: InspectorPrefs): void {
+  localStorage.setItem(`kinu.inspector.${account}`, `${String(prefs.widthPx)}:${prefs.collapsed ? "1" : "0"}`);
+}
+
+let profileEmailCache: Promise<string | null> | null = null;
+
+function profileEmail(): Promise<string | null> {
+  const cached = (profileEmailCache ??= getProfile().then(
+    (profile) => profile?.email ?? null,
+    () => {
+      diagnostics.event("inspector.profile_unreadable");
+
+      return null;
+    },
+  ));
+
+  return cached;
+}
+
 export default function WorkspacePage() {
   const { agentId, subName } = useParams();
   const location = useLocation();
@@ -724,6 +771,180 @@ export default function WorkspacePage() {
 
     return () => media.removeEventListener("change", sync);
   }, []);
+
+  const [widePanels, setWidePanels] = useState(
+    () => globalThis.window === undefined || globalThis.window.matchMedia(INSPECTOR_WIDE_QUERY).matches,
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia(INSPECTOR_WIDE_QUERY);
+    const sync = () => setWidePanels(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  // The inspector's explicit width and collapsed state, keyed by account. The
+  // account arrives after first paint; the stored layout applies once it does.
+  const [accountKey, setAccountKey] = useState<string | null>(
+    () => localStorage.getItem("kinu.inspector.account"),
+  );
+
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const inspectorRef = usePanelRef();
+  const inspectorTouchedRef = useRef(false);
+  // Mount-time size reports are the default layout announcing itself, not the
+  // user choosing anything — nothing persists until the stored layout has had
+  // its chance (or a live drag proves intent first).
+  const inspectorSettledRef = useRef(false);
+  // The library's first onResize report is its mount announcement — the group
+  // has completed a measured layout pass. Until it lands, an imperative
+  // resize can be overwritten by the group's own first-pass default layout.
+  const inspectorMeasuredRef = useRef(false);
+  const accountKeyRef = useRef(accountKey);
+  accountKeyRef.current = accountKey;
+  const widePanelsRef = useRef(widePanels);
+  widePanelsRef.current = widePanels;
+  const inspectorCollapsedRef = useRef(inspectorCollapsed);
+  inspectorCollapsedRef.current = inspectorCollapsed;
+
+  useEffect(() => {
+    let live = true;
+
+    startTransition(async () => {
+      const email = await profileEmail();
+
+      if (!live || email === null) return;
+
+      setAccountKey((prev) => {
+        if (prev === email) return prev;
+
+        localStorage.setItem("kinu.inspector.account", email);
+
+        return email;
+      });
+    });
+
+    return () => { live = false; };
+  }, []);
+
+  const persistInspector = useCallback((widthPx: number, collapsed: boolean) => {
+    const account = accountKeyRef.current;
+
+    if (account === null || !widePanelsRef.current || !inspectorSettledRef.current) return;
+    writeInspectorPrefs(account, { widthPx, collapsed });
+  }, []);
+
+  // Stored layout lands once the account is known, and never over a live drag.
+  // A layout effect, not a passive one: the panel ref attaches at commit, so
+  // this is the first effect that can see it — a passive effect ran before the
+  // ref existed, returned early, and never re-ran.
+  useLayoutEffect(() => {
+    if (!desktopPanels || !widePanels || accountKey === null || inspectorTouchedRef.current) return;
+    const stored = readInspectorPrefs(accountKey);
+
+    if (stored === null) {
+      inspectorSettledRef.current = true;
+
+      return;
+    }
+
+    // The panel registers with its group after commit; an apply that runs too
+    // early is silently dropped and the default layout then reports itself.
+    // Re-assert (bounded, and never over a live drag) until a read-back shows
+    // the stored size actually holding.
+    let frame = 0;
+    let attempts = 0;
+
+    const apply = () => {
+      if (inspectorTouchedRef.current) {
+        inspectorSettledRef.current = true;
+
+        return;
+      }
+
+      const panel = inspectorRef.current;
+
+      if (panel === null) {
+        frame = requestAnimationFrame(apply);
+
+        return;
+      }
+
+      // Wait for the library's first measured report: a group that registered
+      // before it could measure applies its DEFAULT layout on that pass, which
+      // would overwrite a resize issued blind. The report's arrival means the
+      // pass has run. Bounded: a panel registered without its onResize prop
+      // reports nothing, and it must not spin forever.
+      if (!inspectorMeasuredRef.current && attempts < 30) {
+        attempts += 1;
+        frame = requestAnimationFrame(apply);
+
+        return;
+      }
+
+      if (stored.collapsed) {
+        inspectorCollapsedRef.current = true;
+        setInspectorCollapsed(true);
+        panel.collapse();
+      } else {
+        panel.resize(stored.widthPx);
+      }
+
+      attempts += 1;
+
+      const holding = stored.collapsed
+        ? panel.isCollapsed()
+        : Math.abs(panel.getSize().inPixels - stored.widthPx) <= 3;
+
+      if (holding || attempts >= 30) inspectorSettledRef.current = true;
+      else frame = requestAnimationFrame(apply);
+    };
+
+    apply();
+
+    return () => cancelAnimationFrame(frame);
+  }, [desktopPanels, widePanels, accountKey, inspectorRef]);
+
+  const collapseInspector = useCallback(() => {
+    inspectorTouchedRef.current = true;
+    inspectorSettledRef.current = true;
+    const panel = inspectorRef.current;
+    const width = panel?.getSize().inPixels ?? INSPECTOR_DEFAULT_PX;
+    inspectorCollapsedRef.current = true;
+    setInspectorCollapsed(true);
+    persistInspector(Math.max(INSPECTOR_MIN_PX, Math.round(width)), true);
+    panel?.collapse();
+  }, [inspectorRef, persistInspector]);
+
+  const expandInspector = useCallback(() => {
+    inspectorTouchedRef.current = true;
+    const panel = inspectorRef.current;
+    const width = Math.max(INSPECTOR_MIN_PX, Math.round(panel?.getSize().inPixels ?? INSPECTOR_DEFAULT_PX));
+    inspectorCollapsedRef.current = false;
+    setInspectorCollapsed(false);
+    persistInspector(width, false);
+    panel?.expand();
+  }, [inspectorRef, persistInspector]);
+
+  const onInspectorResize = useCallback((size: { inPixels: number }, _id: string | number | undefined, prevSize: { inPixels: number } | undefined) => {
+    // Every report means the group completed a measured pass; the apply loop
+    // above waits for exactly that before issuing its imperative size.
+    inspectorMeasuredRef.current = true;
+    // The mount report (`prevPanelSize === undefined`) announces the DEFAULT
+    // layout, not a user choice: it must not veto a pending restore or write
+    // the default over the stored size.
+
+    if (prevSize === undefined) return;
+
+    if (!widePanelsRef.current || accountKeyRef.current === null) return;
+    inspectorTouchedRef.current = true;
+    inspectorSettledRef.current = true;
+    const collapsed = inspectorCollapsedRef.current || size.inPixels < 1;
+    persistInspector(Math.max(INSPECTOR_MIN_PX, Math.round(size.inPixels)), collapsed);
+  }, [persistInspector]);
+
 
   // Plan decisions use the selected actor; previews remain workspace-scoped.
   const subordinateReview = subName !== undefined
@@ -1177,7 +1398,7 @@ export default function WorkspacePage() {
         <button type="button" onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'}
           className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
       </div>
-      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="flex-1">
+      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }}>
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
         <Panel
           {...(desktopPanels
@@ -1372,16 +1593,37 @@ export default function WorkspacePage() {
           </div>
         </Panel>
 
-        {desktopPanels && <PanelResizeHandle className="z-[2] -ml-[3px] w-[5px] shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--c-accent-subtle)]" />}
+        {desktopPanels && (
+          <PanelResizeHandle
+            aria-label="Resize the inspector; press Enter to hide or show it"
+            title="Drag to resize the inspector · Enter hides or shows it"
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.defaultPrevented) return;
 
-        {/* The mock keeps the inspector at 430px and lets chat take the
-            remainder. It can still be dragged; resizing the window preserves
-            the inspector's useful reading width instead of a 42/58 ratio. */}
+              if (inspectorCollapsedRef.current) expandInspector();
+              else collapseInspector();
+            }}
+            onDoubleClick={() => {
+              inspectorTouchedRef.current = true;
+              persistInspector(INSPECTOR_DEFAULT_PX, false);
+              inspectorCollapsedRef.current = false;
+              setInspectorCollapsed(false);
+              inspectorRef.current?.resize(INSPECTOR_DEFAULT_PX);
+            }}
+            className="group z-[2] -ml-[5px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none focus:outline-none"
+          >
+            <span aria-hidden="true" className="mx-auto block h-full w-[3px] bg-transparent transition-colors group-hover:bg-[var(--c-accent)]/60 group-focus-visible:bg-[var(--c-accent)] group-data-[separator=hover]:bg-[var(--c-accent)]/60 group-data-[separator=active]:bg-[var(--c-accent)] group-data-[separator=focus]:bg-[var(--c-accent)]" />
+          </PanelResizeHandle>
+        )}
+
         <Panel
           {...(desktopPanels
-            ? { minSize: "28%", defaultSize: "430px" }
+            ? { minSize: `${String(INSPECTOR_MIN_PX)}px`, defaultSize: `${String(INSPECTOR_DEFAULT_PX)}px`, collapsible: true, collapsedSize: "0px" }
             : { minSize: "0%", defaultSize: mobilePane === 'workspace' ? "100%" : "0%" })}
           groupResizeBehavior="preserve-pixel-size"
+          panelRef={desktopPanels ? inspectorRef : undefined}
+          onResize={desktopPanels ? onInspectorResize : undefined}
+          className={desktopPanels && inspectorCollapsed ? "overflow-hidden" : undefined}
         >
           <WorkSurface
             surface={surface}
@@ -1392,6 +1634,7 @@ export default function WorkspacePage() {
             activePlanActors={state.subordinates.filter(actor => actor.status !== "dismissed").map(actor => actor.name)}
             onReviewActor={async name => { await navigate(`/workspace/${agentId}/agents/${encodeURIComponent(name)}`); }}
             onSurface={setSurface}
+            onCollapse={desktopPanels && !inspectorCollapsed ? collapseInspector : undefined}
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             onRefreshPorts={state.refreshExposedPorts}
@@ -1422,6 +1665,18 @@ export default function WorkspacePage() {
             rpc={state.rpc}
           />
         </Panel>
+        {desktopPanels && inspectorCollapsed && (
+          <button
+            type="button"
+            onClick={expandInspector}
+            aria-label="Show inspector"
+            title="Show inspector"
+            data-inspector-expand
+            className="absolute right-0 top-1/2 z-[3] flex h-16 w-5 -translate-y-1/2 items-center justify-center rounded-l-md border border-r-0 p-border p-elevated p-text-3 shadow-sm transition-colors hover:p-text hover:p-accent-subtle focus-visible:outline-2"
+          >
+            <CaretLeftIcon size={12} weight="bold" />
+          </button>
+        )}
 
       </PanelGroup>
       </>
