@@ -35,7 +35,7 @@ import {
   createDeviceTunnelExecutor, createInlineExecutor, createNimbusExecutor,
   createParentExecutor, createSandboxExecutor,
   DefaultExecutionRouter,
-  type ExecutorProvider, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
+  type ExecutorProvider, type SandboxHandle, type ToolFailureCensus, ToolOutcomeSchema, failedToolOutcome,
 } from '../src/index';
 import {
   classifyErrorCode, createRecordingLogger, ERROR_CODES, KinuError,
@@ -626,6 +626,44 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(census.byKey).toEqual([['run·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
   }, 10_000);
+
+  test('sandbox: a classified not-ready refusal is asked once, never folded into the retry loop', async () => {
+    // The caller-side answer the CF adapter mints for a devbox that is still
+    // restoring: `unavailable` is the verdict, already classified — and the
+    // reason CAN carry the platform's own transient text ('no container
+    // instance' is a marker string). `withSandboxRetry` reads prose, so
+    // without the narrow KinuError guard this refusal would be attempted
+    // three times and land identically anyway; the measurable property is
+    // the attempt count.
+    let readinessCalls = 0;
+
+    // The adapter throws this BEFORE the command exists, on the `exec` call —
+    // the member `withSandboxRetry` wraps — so the retry's own view is exactly
+    // what production hands it.
+    const notReady = (): SandboxHandle => ({
+      ...sandboxHandleLifecycle,
+      exec: async () => {
+        readinessCalls += 1;
+        throw new KinuError('unavailable',
+          'this devbox has no attached work directory: there is no container instance '
+          + 'that can be provided to this durable object. A retry is already under '
+          + 'way; operations are refused until it lands.');
+      },
+      readFile: async () => ({}), writeFile: async () => {}, listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {}, exposePort: async () => ({ url: '', port: 0 }),
+      unexposePort: async () => {}, getExposedPorts: async () => [],
+    });
+
+    const refusal = await createSandboxExecutor(notReady()).tools.exec.execute('bun test');
+
+    expect(refusal).toMatchObject({ reason: 'unavailable' });
+    expect(readinessCalls).toBe(1);
+
+    const census = censusOf(await escalate(createSandboxExecutor(notReady())));
+
+    expect(census.byKey).toEqual([['run·unavailable', 1]]);
+    expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
+  });
 
   test('sandbox: a transport fault is NOT a platform gap', async () => {
     // The contrast that makes the case above mean something. Pooling the two under one
