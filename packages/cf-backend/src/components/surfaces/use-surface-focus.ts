@@ -3,9 +3,9 @@
  * steals the surface — it raises a "Preview ready" chip where the reader
  * already is, and only an explicit intent navigates.
  *
- * The decisions are pure seams — `focusSurfaceOf`, `readyChipSurface`,
- * `readyChipTitle` and `dismissalAfter` — so the policy runs under `bun test`
- * without React; the hook below is the `useState` shell over them.
+ * `useSurfaceFocus` is the whole surface: the strip mounts it, and the unit
+ * test drives it through React's static renderer — the hook holds no
+ * effects, so nothing is skipped.
  */
 
 import { useCallback, useState } from "react";
@@ -26,7 +26,7 @@ import type { SurfaceKind } from "./WorkSurface";
  * via slateSurface and `preview:${executor}:${port}`. Re-adding the stripped
  * prefix reconstructs the strip's own surface id, not a guessed string.
  */
-export function focusSurfaceOf(previewFocus: string | null | undefined): SurfaceKind | null {
+function focusSurfaceOf(previewFocus: string | null | undefined): SurfaceKind | null {
   return previewFocus?.startsWith("slate:")
     ? `${SLATE_PREFIX}${previewFocus.slice(6)}`
     : previewFocus?.startsWith("preview:")
@@ -39,7 +39,7 @@ export function focusSurfaceOf(previewFocus: string | null | undefined): Surface
  * arrival already on screen chips nothing, and a dismissed arrival stays
  * down until a different previewFocus arrives.
  */
-export function readyChipSurface(
+function readyChipSurface(
   previewFocus: string | null | undefined,
   surface: SurfaceKind,
   dismissed: string | null,
@@ -51,7 +51,7 @@ export function readyChipSurface(
 
 /** The chip's human name for its target: the Slate's title, the pinned
  *  port's name, or the raw id tail when neither list knows it. */
-export function readyChipTitle(
+function readyChipTitle(
   target: SurfaceKind,
   slates: readonly SlateSummary[] | undefined,
   pinnedPorts: readonly PinnedPort[],
@@ -69,7 +69,7 @@ export function readyChipTitle(
  * anywhere else leaves the dismissal alone, so an arrival survives the
  * reader looking at something else first.
  */
-export function dismissalAfter(
+function dismissalAfter(
   previewFocus: string | null | undefined,
   target: SurfaceKind,
   dismissed: string | null,

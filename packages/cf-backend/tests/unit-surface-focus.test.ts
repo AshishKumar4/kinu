@@ -1,18 +1,15 @@
 /**
- * The surface-focus policy without the React shell: a passive previewFocus
- * arrival raises the ready chip where the reader is, an explicit navigate
- * consumes it only when it lands on the surface the arrival named, and a
- * dismissal survives until a different arrival. `useSurfaceFocus` itself is
- * one `useState` over these seams; the strip chrome is covered by the browser
- * rows in scripts/chat-and-files-ux.test.ts and scripts/slate-preview-ux.test.ts.
+ * The surface strip's focus policy, exercised through the hook the strip
+ * mounts: a passive previewFocus arrival raises the ready chip where the
+ * reader is, an explicit navigate consumes it only when it lands on the
+ * surface the arrival named, and a dismissal survives until a different
+ * arrival. The strip chrome is covered by the browser rows in
+ * scripts/chat-and-files-ux.test.ts and scripts/slate-preview-ux.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import {
-  focusSurfaceOf, readyChipSurface, readyChipTitle, dismissalAfter, useSurfaceFocus,
-  type SurfaceFocus,
-} from '../src/components/surfaces/use-surface-focus';
+import { useSurfaceFocus, type SurfaceFocus } from '../src/components/surfaces/use-surface-focus';
 import type { SurfaceKind } from '../src/components/surfaces/WorkSurface';
 import type { SlateSummary } from '@kinu.run/core';
 import type { PinnedPreviewPort as PinnedPort } from '../src/lib/preview-ports';
@@ -22,127 +19,239 @@ const slate = (id: string, title: string): SlateSummary => ({ id, title, binding
 const port = (executor: string, portNumber: number, name: string): PinnedPort =>
   ({ executor, port: portNumber, url: `http://localhost:${String(portNumber)}`, name });
 
-describe('focusSurfaceOf', () => {
-  test('a slate arrival names its strip surface; a port arrival names its preview tab', () => {
-    expect(focusSurfaceOf('slate:abc')).toBe('slate:abc');
-    expect(focusSurfaceOf('preview:workspace:3000')).toBe('preview:workspace:3000');
-    expect(focusSurfaceOf(null)).toBeNull();
-    expect(focusSurfaceOf('something-else')).toBeNull();
-  });
-});
+/** What one render pass leaves behind: the data attributes that pass put on
+ *  the strip element, and the hook's own return for a step to call into. */
+interface Pass {
+  readonly attrs: string;
+  readonly focus: SurfaceFocus;
+}
 
-describe('the ready chip', () => {
-  test('a passive arrival chips while another surface is open', () => {
-    expect(readyChipSurface('slate:abc', 'Work', null)).toBe('slate:abc');
+/** The props the page would hand down on the next pass — the surface the
+ *  reader is on, and the latest arrival. */
+interface StripProps {
+  surface: SurfaceKind;
+  previewFocus: string | null;
+}
+
+interface Controls {
+  /** The page re-rendered: hand the hook new props. */
+  setProps(next: Partial<StripProps>): void;
+}
+
+interface Mounted {
+  readonly passes: Pass[];
+  readonly html: string;
+}
+
+/** The strip as the hook hands it over, rendered through the real hook.
+ *  `renderToStaticMarkup` runs `useState`, `useMemo` and every dependency the
+ *  strip passes; it skips effects, and `useSurfaceFocus` holds none. Each
+ *  step in `steps` runs once per render pass — one `navigate`/`dismissChip`
+ *  call is a same-component state update, and `controls.setProps` is the
+ *  parent re-render, so a step sequence plays back the same event order the
+ *  strip would see. The hook's return is what the strip element carries as
+ *  data-* attributes. */
+function mount(input: {
+  surface: SurfaceKind;
+  previewFocus?: string | null;
+  slates?: SlateSummary[];
+  pinnedPorts?: PinnedPort[];
+  onSurface?: (surface: SurfaceKind) => void;
+  steps?: readonly ((focus: SurfaceFocus, controls: Controls) => void)[];
+}): Mounted {
+  const passes: Pass[] = [];
+
+  function Strip() {
+    const [props, setProps] = useState<StripProps>({
+      surface: input.surface,
+      previewFocus: input.previewFocus ?? null,
+    });
+
+    const focus = useSurfaceFocus({
+      surface: props.surface,
+      previewFocus: props.previewFocus,
+      slates: input.slates,
+      pinnedPorts: input.pinnedPorts ?? [],
+      onSurface: input.onSurface ?? (() => {}),
+    });
+
+    const attrs = `data-surface="${focus.surface}" `
+      + `data-chip-surface="${focus.readyChip?.surface ?? ''}" `
+      + `data-chip-title="${focus.readyChip?.title ?? ''}"`;
+
+    passes.push({ attrs, focus });
+    input.steps?.[passes.length - 1]?.(focus, {
+      setProps: (next) => { setProps((prev) => ({ ...prev, ...next })); },
+    });
+
+    return createElement('div', {
+      'data-surface': focus.surface,
+      'data-chip-surface': focus.readyChip?.surface ?? '',
+      'data-chip-title': focus.readyChip?.title ?? '',
+    });
+  }
+
+  const html = renderToStaticMarkup(createElement(Strip));
+
+  if (input.steps !== undefined && passes.length < input.steps.length) {
+    throw new Error(`a scripted step never ran: ${String(passes.length)} pass(es) for ${String(input.steps.length)} step(s)`);
+  }
+
+  return { passes, html };
+}
+
+describe('a passive arrival, through the strip', () => {
+  test('a slate arrival chips the surface it names; a port arrival chips its preview tab', () => {
+    expect(mount({ surface: 'Work', previewFocus: 'slate:abc' }).html)
+      .toContain('data-chip-surface="slate:abc"');
+    expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000' }).html)
+      .toContain('data-chip-surface="preview:workspace:3000"');
+    // Nothing arrived, and an arrival in no shape the strip speaks: no chip.
+    expect(mount({ surface: 'Work' }).html).toContain('data-chip-surface=""');
+    expect(mount({ surface: 'Work', previewFocus: 'something-else' }).html)
+      .toContain('data-chip-surface=""');
   });
 
   test('an arrival already on screen chips nothing', () => {
-    expect(readyChipSurface('slate:abc', 'slate:abc', null)).toBeNull();
-  });
-
-  test('a dismissed arrival stays down; a different arrival raises it again', () => {
-    expect(readyChipSurface('slate:abc', 'Work', 'slate:abc')).toBeNull();
-    expect(readyChipSurface('slate:def', 'Work', 'slate:abc')).toBe('slate:def');
+    expect(mount({ surface: 'slate:abc', previewFocus: 'slate:abc' }).html)
+      .toContain('data-chip-surface=""');
   });
 
   test('the chip titles the slate by name and the port by its pinned name', () => {
     const slates = [slate('abc', 'Dashboard')];
     const ports = [port('workspace', 3000, 'Arrived app')];
 
-    expect(readyChipTitle('slate:abc', slates, ports)).toBe('Dashboard');
-    expect(readyChipTitle('preview:workspace:3000', slates, ports)).toBe('Arrived app');
+    expect(mount({ surface: 'Work', previewFocus: 'slate:abc', slates }).html)
+      .toContain('data-chip-title="Dashboard"');
+    expect(mount({ surface: 'Work', previewFocus: 'preview:workspace:3000', pinnedPorts: ports }).html)
+      .toContain('data-chip-title="Arrived app"');
     // An arrival nobody listed still gets its id tail, not a blank chip.
-    expect(readyChipTitle('slate:xyz', slates, ports)).toBe('xyz');
+    expect(mount({ surface: 'Work', previewFocus: 'slate:xyz', slates }).html)
+      .toContain('data-chip-title="xyz"');
   });
 });
 
-describe('navigating consumes the arrival', () => {
-  test('landing on the surface the arrival named dismisses it', () => {
-    expect(dismissalAfter('slate:abc', 'slate:abc', null)).toBe('slate:abc');
-    expect(readyChipSurface('slate:abc', 'slate:abc', 'slate:abc')).toBeNull();
-  });
+describe('dismissal, through the strip', () => {
+  test('dismissChip puts the current arrival down without navigating', () => {
+    const seen: SurfaceKind[] = [];
 
-  test('landing anywhere else leaves the arrival live — the chip is still owed', () => {
-    expect(dismissalAfter('slate:abc', 'Files', null)).toBeNull();
-    expect(readyChipSurface('slate:abc', 'Files', null)).toBe('slate:abc');
-  });
-
-  test('an earlier dismissal is untouched by unrelated navigation', () => {
-    expect(dismissalAfter('slate:def', 'Files', 'slate:abc')).toBe('slate:abc');
-  });
-});
-
-/** A static render captures the hook's return; effects do not run, and the
- *  decisions under test do not live in them. */
-function capture(input: {
-  surface: SurfaceKind;
-  previewFocus?: string | null;
-  slates?: SlateSummary[];
-  pinnedPorts?: PinnedPort[];
-  onSurface: (surface: SurfaceKind) => void;
-}): SurfaceFocus {
-  let captured: SurfaceFocus | undefined;
-
-  function Probe() {
-    captured = useSurfaceFocus({
-      surface: input.surface,
-      previewFocus: input.previewFocus ?? null,
-      slates: input.slates,
-      pinnedPorts: input.pinnedPorts ?? [],
-      onSurface: input.onSurface,
-    });
-
-    return null;
-  }
-
-  renderToStaticMarkup(createElement(Probe));
-
-  if (captured === undefined) throw new Error('the hook never produced a value');
-
-  return captured;
-}
-
-describe('useSurfaceFocus', () => {
-  test('a passive arrival surfaces a chip on the surface already open', () => {
-    const focus = capture({
+    const { passes } = mount({
       surface: 'Work',
       previewFocus: 'slate:abc',
-      slates: [slate('abc', 'Dashboard')],
-      onSurface: () => {},
+      onSurface: (next) => { seen.push(next); },
+      steps: [(focus) => { focus.dismissChip(); }],
     });
 
-    expect(focus.surface).toBe('Work');
-    expect(focus.readyChip).toEqual({ surface: 'slate:abc', title: 'Dashboard' });
+    expect(passes).toHaveLength(2);
+    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
+    expect(seen).toEqual([]);
   });
 
+  test('a dismissed arrival stays down; a different arrival raises it again', () => {
+    // The dismissal is keyed to the arrival value: 'slate:abc' stays down
+    // across a parent re-render, and a 'slate:def' arrival chips.
+    const { passes } = mount({
+      surface: 'Work',
+      previewFocus: 'slate:abc',
+      steps: [
+        (focus) => { focus.dismissChip(); },
+        (_focus, controls) => { controls.setProps({ previewFocus: 'slate:def' }); },
+      ],
+    });
+
+    expect(passes).toHaveLength(3);
+    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
+    expect(passes[2]?.attrs).toContain('data-chip-surface="slate:def"');
+  });
+});
+
+describe('navigating consumes the arrival, through the strip', () => {
   test('explicit navigate goes to the surface it was given', () => {
     const seen: SurfaceKind[] = [];
 
-    const focus = capture({
+    mount({
       surface: 'Work',
       previewFocus: 'preview:workspace:3000',
       pinnedPorts: [port('workspace', 3000, 'Arrived app')],
       onSurface: (next) => { seen.push(next); },
+      steps: [(focus) => { focus.navigate('preview:workspace:3000'); }],
     });
 
-    focus.navigate('preview:workspace:3000');
     expect(seen).toEqual(['preview:workspace:3000']);
+  });
+
+  test('landing on the surface the arrival named consumes it — the chip is gone', () => {
+    const seen: SurfaceKind[] = [];
+
+    const { passes } = mount({
+      surface: 'Work',
+      previewFocus: 'slate:abc',
+      onSurface: (next) => { seen.push(next); },
+      steps: [(focus) => { focus.navigate('slate:abc'); }],
+    });
+
+    expect(passes).toHaveLength(2);
+    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
+    expect(seen).toEqual(['slate:abc']);
+  });
+
+  test('landing anywhere else leaves the arrival live — the chip is still owed', () => {
+    const { passes } = mount({
+      surface: 'Work',
+      previewFocus: 'slate:abc',
+      steps: [
+        (focus, controls) => {
+          focus.navigate('Files');
+          controls.setProps({ surface: 'Files' });
+        },
+      ],
+    });
+
+    expect(passes).toHaveLength(2);
+    expect(passes[1]?.attrs).toContain('data-surface="Files"');
+    expect(passes[1]?.attrs).toContain('data-chip-surface="slate:abc"');
+  });
+
+  test('an earlier dismissal is untouched by unrelated navigation', () => {
+    // Dismiss 'slate:abc', navigate elsewhere while a different arrival is
+    // live, then come back to the first arrival: it stays down.
+    const { passes } = mount({
+      surface: 'Work',
+      previewFocus: 'slate:abc',
+      steps: [
+        (focus) => { focus.dismissChip(); },
+        (focus, controls) => {
+          focus.navigate('Files');
+          controls.setProps({ previewFocus: 'slate:def', surface: 'Files' });
+        },
+        (_focus, controls) => { controls.setProps({ previewFocus: 'slate:abc' }); },
+      ],
+    });
+
+    expect(passes).toHaveLength(4);
+    expect(passes[2]?.attrs).toContain('data-chip-surface="slate:def"');
+    expect(passes[3]?.attrs).toContain('data-chip-surface=""');
   });
 
   test('the chip click is the same navigate: onto the surface it announced', () => {
     const seen: SurfaceKind[] = [];
 
-    const focus = capture({
+    const { passes } = mount({
       surface: 'Work',
       previewFocus: 'preview:workspace:3000',
       pinnedPorts: [port('workspace', 3000, 'Arrived app')],
       onSurface: (next) => { seen.push(next); },
+      steps: [
+        (focus) => {
+          const chip = focus.readyChip;
+
+          if (chip === null) throw new Error('a passive arrival owed a chip');
+          focus.navigate(chip.surface);
+        },
+      ],
     });
 
-    const chip = focus.readyChip;
-
-    if (chip === null) throw new Error('a passive arrival owed a chip');
-    focus.navigate(chip.surface);
     expect(seen).toEqual(['preview:workspace:3000']);
+    expect(passes[1]?.attrs).toContain('data-chip-surface=""');
   });
 });
