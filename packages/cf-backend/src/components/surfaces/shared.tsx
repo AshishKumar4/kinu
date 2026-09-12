@@ -9,8 +9,8 @@ import { Loader } from "@cloudflare/kumo";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { MAX_LINES_PER_FILE, type DiffLine } from "@kinu.run/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { MAX_LINES_PER_FILE, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
@@ -350,4 +350,53 @@ export function ConversationStartBoundary({
   }
 
   return exhausted && !streaming ? empty : pending;
+}
+
+/** A crafted tool's live row, as `getToolDescriptions` reports it. */
+export interface CraftedToolDetail {
+  name: string;
+  description: string;
+  qualityScore: number;
+  usageCount: number;
+}
+
+/** A digest entry with its tool row joined in. Absent on facts, on unknown
+ *  tools, and when the list failed to load — the card then shows what the
+ *  entry row itself holds, never a guess. */
+export interface ChangelogEntryView extends ChangelogEntry {
+  toolDetail?: CraftedToolDetail;
+}
+
+/** A tool entry's name, from its `tool:<name>:<at>` id. */
+export function changelogToolName(entry: ChangelogEntry): string | null {
+  if (entry.kind !== 'tool') return null;
+  const rest = entry.id.startsWith('tool:') ? entry.id.slice('tool:'.length) : entry.id;
+  const at = rest.lastIndexOf(':');
+  const name = (at < 0 ? rest : rest.slice(0, at)).trim();
+
+  return name === '' ? null : name;
+}
+
+/** A fact entry's key, from its `fact:<key>` id. */
+export function changelogFactKey(entry: ChangelogEntry): string | null {
+  if (entry.kind !== 'fact' || !entry.id.startsWith('fact:')) return null;
+  const key = entry.id.slice('fact:'.length);
+
+  return key === '' ? null : key;
+}
+
+/** Join tool entries to the live tool list by name. Facts pass through:
+ *  their row already carries everything the card shows. */
+export function withToolDetails(
+  entries: readonly ChangelogEntry[],
+  tools: readonly CraftedToolDetail[],
+): ChangelogEntryView[] {
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+
+  return entries.map((entry) => {
+    const name = changelogToolName(entry);
+    const detail = name !== null ? byName.get(name) : undefined;
+
+    return detail === undefined ? { ...entry } : { ...entry, toolDetail: detail };
+  });
 }

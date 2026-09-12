@@ -866,9 +866,17 @@ const MESSAGES: UIMessage[] = [
       // fallback (name + its one string argument, no invented annotation),
       // and long enough to exercise the row's truncation + hover title.
       {
-        type: "dynamic-tool", toolCallId: "t11", toolName: "gh__search_pull_requests", state: "output-available",
+        type: "dynamic-tool", toolCallId: "t11", toolName: "mcp_gh_search_pull_requests", state: "output-available",
         input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
         output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+      },
+      // A crafted tool the workspace taught itself, called by name: the
+      // completed turn's result line attributes it ("Used the … tool") from
+      // the part alone — builtins and `mcp_`-prefixed tools never attribute.
+      {
+        type: "dynamic-tool", toolCallId: "t12", toolName: "bisect_migration", state: "output-available",
+        input: { migration: "packages/checkout/migrations/0042_coupon_kind.sql", column: "kind" },
+        output: "0042_coupon_kind.sql changed kind from fixed-only to nullable",
       },
       { type: "text", text: "CI didn't answer — retrying after the migration lands. PR #212 is already up for review." },
     ],
@@ -2006,6 +2014,14 @@ const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
 
   if (method === "getGepaRun") return rpcResult(GEPA_DETAIL).json<T>();
+
+  // The world model the Agent surface photographs: keyed facts with the
+  // source and timestamp the rows carry, so the frame shows what the card
+  // shows them from.
+  if (method === "getFacts") return rpcResult([
+    { key: "test.command", value: "bun test", confidence: 0.9, source: "project configuration", lastObservedAt: NOW - 50e5 },
+    { key: "checkout.coupon_kind", value: "nullable since Tuesday", confidence: 1, source: "migration 0042", lastObservedAt: NOW - 26e5 },
+  ]).json<T>();
 
   return stubRpc<T>(method, args);
 };
@@ -3871,6 +3887,16 @@ const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
 
   if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
 
+  // The live tool list the journal joins tool entries to: the crafted rows
+  // the CHANGELOG digest names, with the EMA scores their cards show.
+  if (method === "getToolDescriptions") return rpcResult({
+    builtIn: [], executors: [],
+    crafted: [
+      { name: "bisect_migration", description: "Walk a migration's revisions to find the one that changed a column's shape.", exposure: "codemode", wired: true, qualityScore: 0.82, usageCount: 14 },
+      { name: "coupon_replay", description: "Replay a checkout against a coupon code and diff the response.", exposure: "codemode", wired: true, qualityScore: 0.61, usageCount: 3 },
+    ],
+  }).json<T>();
+
   return stubRpc<T>(method, args);
 };
 
@@ -4693,7 +4719,7 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
     parts: [
       { type: "text", text: "An MCP tool with no known summarizer contract — the honest fallback (name + its one argument), and long enough to test truncation." },
       {
-        type: "dynamic-tool", toolCallId: "tc4", toolName: "gh__search_pull_requests", state: "output-available",
+        type: "dynamic-tool", toolCallId: "tc4", toolName: "mcp_gh_search_pull_requests", state: "output-available",
         input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
         output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
       },
