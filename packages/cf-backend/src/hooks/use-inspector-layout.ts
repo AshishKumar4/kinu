@@ -208,6 +208,22 @@ export function useInspectorLayout(input: {
   // The group has committed a layout at least once, so imperative writes land.
   const groupMeasuredRef = useRef(false);
 
+  // The target of the hook's own in-flight imperative write. The next
+  // emission after a write is that write's commit report — even when the
+  // library constrains it short of what was asked — so it adopts the actual
+  // layout without persisting: the intent was already stored by `claim`, or
+  // never needed storing (a policy move). The marker is airtight because a
+  // write the hook issues always spans more than the library's rounding
+  // quantum (3-decimal flex; the hook never writes inside ±3px), so its
+  // emission is guaranteed and the marker cannot strand onto a later
+  // gesture. A same-frame user race reads against the requested direction
+  // and falls through to the gesture path when it disagrees.
+  const writeMarkerRef = useRef<InspectorTarget | null>(null);
+  // The desktop/mobile mode the measurement flag belongs to: the group's key
+  // follows the mode, so each swap remounts it and the next emission is a
+  // fresh announcement again.
+  const groupModeRef = useRef(desktopPanels);
+
   const persistWidth = useCallback((nextWidth: number) => {
     if (account === null || !widePanels) return;
     localStorage.setItem(`kinu.inspector.${account}`, String(nextWidth));
@@ -219,12 +235,47 @@ export function useInspectorLayout(input: {
   }, [account, workspace, widePanels]);
 
 
+  // A layout the user now owns: expected so its emission reads as an echo,
+  // reflected into state, persisted as theirs.
+  const claim = useCallback((target: InspectorTarget) => {
+    userDecidedRef.current = workspace ?? null;
+    expectedLayoutRef.current = target;
+    setCollapsed(target.collapsed);
+    setWidthPx(target.widthPx);
+    persistWidth(target.widthPx);
+    persistChoice(!target.collapsed);
+  }, [workspace, persistWidth, persistChoice]);
+  // The one place imperative writes leave the hook: the target is remembered
+  // so its own commit report is recognizable past any constraint. Claim
+  // (which persists) and issue (which marks) stay paired at every call site.
+
+  const issueWrite = useCallback((target: InspectorTarget) => {
+    const panel = panelRef.current;
+
+    if (panel === null) return;
+
+    writeMarkerRef.current = target;
+
+    if (target.collapsed) panel.collapse();
+    else panel.resize(target.widthPx);
+  }, [panelRef]);
+
   // The workspace's layout, decided and applied in one place: on mount, on a
   // workspace switch, when the account key lands, and on the signal that
   // opens a policy-closed column once on the workspace's behalf. A gesture
   // the user already made wins outright. The signal open is a
   // once-per-workspace latch; a stored choice ends the policy's say entirely.
   useLayoutEffect(() => {
+    // The group's key follows the desktop/mobile mode: each swap remounts
+    // it, so measurement, the parked slot and any write marker belong to
+    // the previous tree.
+    if (groupModeRef.current !== desktopPanels) {
+      groupModeRef.current = desktopPanels;
+      groupMeasuredRef.current = false;
+      pendingDecisionRef.current = null;
+      writeMarkerRef.current = null;
+    }
+
     if (!desktopPanels || !widePanels || userDecidedRef.current === workspace) return;
 
     const target = readDecision(account, workspace,
@@ -255,34 +306,24 @@ export function useInspectorLayout(input: {
     setCollapsed(target.collapsed);
     setWidthPx(target.widthPx);
     setReady(true);
-
-    if (target.collapsed) panelRef.current.collapse();
-    else panelRef.current.resize(target.widthPx);
-  }, [account, workspace, worthShowing, desktopPanels, widePanels, panelRef]);
-
-  // A layout the user now owns: expected so its emission reads as an echo,
-  // reflected into this column's state, persisted as theirs.
-  const claim = useCallback((target: InspectorTarget) => {
-    userDecidedRef.current = workspace ?? null;
-    expectedLayoutRef.current = target;
-    setCollapsed(target.collapsed);
-    setWidthPx(target.widthPx);
-    persistWidth(target.widthPx);
-    persistChoice(!target.collapsed);
-  }, [workspace, persistWidth, persistChoice]);
+    issueWrite(target);
+  }, [account, workspace, worthShowing, desktopPanels, widePanels, panelRef, issueWrite]);
 
   const collapse = useCallback(() => {
     const width = panelRef.current?.getSize().inPixels ?? 0;
     const rounded = width >= 1 ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : widthPx;
+    const target = { collapsed: true, widthPx: rounded };
 
-    claim({ collapsed: true, widthPx: rounded });
-    panelRef.current?.collapse();
-  }, [panelRef, widthPx, claim]);
+    claim(target);
+    issueWrite(target);
+  }, [panelRef, widthPx, claim, issueWrite]);
 
   const expand = useCallback(() => {
-    claim({ collapsed: false, widthPx });
-    panelRef.current?.resize(widthPx);
-  }, [panelRef, widthPx, claim]);
+    const target = { collapsed: false, widthPx };
+
+    claim(target);
+    issueWrite(target);
+  }, [widthPx, claim, issueWrite]);
 
   const toggleCollapsed = useCallback(() => {
     if (collapsed) expand();
@@ -290,36 +331,46 @@ export function useInspectorLayout(input: {
   }, [collapsed, collapse, expand]);
 
   const resetToDefault = useCallback(() => {
-    claim({ collapsed: false, widthPx: INSPECTOR_DEFAULT_PX });
-    panelRef.current?.resize(INSPECTOR_DEFAULT_PX);
-  }, [panelRef, claim]);
+    const target = { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX };
 
-  // Every committed layout reports here exactly once — echo, or gesture.
+    claim(target);
+    issueWrite(target);
+  }, [claim, issueWrite]);
+
+  // Every committed layout reports here exactly once. The first per group
+  // tree is the mount announcing itself — possibly constrained short of the
+  // decided layout — so it is adopted, never persisted. Later reports are
+  // the hook's own write (the marker names it, direction-checked against a
+  // same-frame user race), an exact echo, or a user gesture.
   const onLayoutChanged = useCallback((layout: Layout) => {
     if (!desktopPanels) return;
 
+    const first = !groupMeasuredRef.current;
     groupMeasuredRef.current = true;
 
     const share = layout[INSPECTOR_PANEL_ID];
     const collapsedNow = share !== undefined && share <= 0;
 
     const now: InspectorTarget = {
+      // A collapsed report carries no width of its own: the remembered
+      // expansion width is the last open one, never zero.
       collapsed: collapsedNow,
-      widthPx: collapsedNow ? 0 : Math.max(INSPECTOR_MIN_PX, committedWidthPx(
+      widthPx: collapsedNow ? widthPx : Math.max(INSPECTOR_MIN_PX, committedWidthPx(
         layout, groupElementRef.current,
         () => Math.round(panelRef.current?.getSize().inPixels ?? 0),
       )),
     };
 
-    const expected = expectedLayoutRef.current;
-
-    if (expected !== null && matchesLayout(expected, now)) {
+    if (first) {
+      expectedLayoutRef.current = now;
       setCollapsed(now.collapsed);
 
       if (!now.collapsed) setWidthPx(now.widthPx);
 
-      // The first pass landed: a decision parked for it applies now, once —
-      // the single write the unmeasured group could not take.
+      setReady(true);
+
+      // A decision parked for this pass applies now, once — the single write
+      // the unmeasured group could not take.
       const pending = pendingDecisionRef.current;
       pendingDecisionRef.current = null;
 
@@ -328,10 +379,33 @@ export function useInspectorLayout(input: {
         setCollapsed(pending.collapsed);
         setWidthPx(pending.widthPx);
         setReady(true);
-
-        if (pending.collapsed) panelRef.current?.collapse();
-        else panelRef.current?.resize(pending.widthPx);
+        issueWrite(pending);
       }
+
+      return;
+    }
+
+    const marker = writeMarkerRef.current;
+    writeMarkerRef.current = null;
+
+    if (marker !== null && (marker.collapsed ? now.collapsed : !now.collapsed)) {
+      // Our own write reporting back, possibly constrained: adopt what
+      // landed. The intent was already persisted by `claim` (or never needs
+      // storing, for a policy move), so nothing writes here.
+      expectedLayoutRef.current = now;
+      setCollapsed(now.collapsed);
+
+      if (!now.collapsed) setWidthPx(now.widthPx);
+
+      return;
+    }
+
+    const expected = expectedLayoutRef.current;
+
+    if (expected !== null && matchesLayout(expected, now)) {
+      setCollapsed(now.collapsed);
+
+      if (!now.collapsed) setWidthPx(now.widthPx);
 
       return;
     }
@@ -340,7 +414,7 @@ export function useInspectorLayout(input: {
     pendingDecisionRef.current = null;
     claim(now);
     setReady(true);
-  }, [desktopPanels, panelRef, claim]);
+  }, [desktopPanels, panelRef, widthPx, claim, issueWrite]);
 
   const panelProps: InspectorPanelProps = desktopPanels
     ? {
