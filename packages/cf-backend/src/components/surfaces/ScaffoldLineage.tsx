@@ -42,7 +42,7 @@ function statusTone(status: string): string {
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
   return (
     <div className="rounded-md border p-border overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border text-[11px] p-text-3">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
         <span>v{diff.previousVersion ?? "∅"} → v{diff.version}</span>
         <span className="p-success">+{diff.added}</span>
         <span className="p-danger">−{diff.removed}</span>
@@ -65,7 +65,7 @@ function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
         <span className="p-danger">{s.currentWins} regressions</span>
         <span className="p-text-3">{s.ties} ties · win-rate {(s.winRate * 100).toFixed(0)}%</span>
       </div>
-      <div className="rounded-md border p-border overflow-hidden text-[11px]">
+      <div className="rounded-md border p-border overflow-hidden p-row-text">
         {verdict.trials.map((t) => (
           <div key={t.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
             <span className={`shrink-0 size-1.5 rounded-full ${t.winner === "pending" ? "p-dot-success" : t.winner === "current" ? "p-dot-danger" : "p-dot-neutral"}`} />
@@ -155,7 +155,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   return (
     <section className="space-y-1.5">
       <div className="flex items-baseline gap-2">
-        <span className="text-[10px] uppercase tracking-normal p-text-3">Versions</span>
+        <span className="p-eyebrow">Versions</span>
         <Badge variant="secondary">live v{currentVersion}</Badge>
       </div>
       {lineage.status === "error" && versions.length === 0 ? (
@@ -172,9 +172,9 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               <button key={v.version} onClick={() => select(v.version)}
                 className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
                 <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${statusTone(v.status)}`}>{v.status}</span>
-                <span className="text-[11px] p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
-                <span className="text-[10px] p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
+                <span className={`p-t-status px-1.5 py-0.5 rounded-full shrink-0 ${statusTone(v.status)}`}>{v.status}</span>
+                <span className="p-row-text p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
+                <span className="p-meta p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
               </button>
             ))}
           </div>
@@ -205,7 +205,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
                 {previewOut && (
-                  <pre className="text-[11px] font-mono p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
+                  <pre className="p-t-code p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
                 )}
               </div>
 
@@ -222,7 +222,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
               )}
-              {decideErr && <div className="text-[11px] p-danger">{decideErr}</div>}
+              {decideErr && <div className="p-t-status p-danger">{decideErr}</div>}
             </div>
           )}
         </div>

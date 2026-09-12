@@ -145,7 +145,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
         ><XIcon size={12} /></button>
       </div>
       {(error || connectionStatus !== "connected") && (
-        <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 text-[10px] truncate ${error || connectionStatus === "error" ? "p-danger" : "p-text-3"}`} title={error ?? undefined}>
+        <div role={error || connectionStatus === "error" ? "alert" : "status"} className={`px-1 pt-1 p-meta truncate ${error || connectionStatus === "error" ? "p-danger" : "p-text-3"}`} title={error ?? undefined}>
           {error ?? (connectionStatus === "connecting" ? "Connecting…" : connectionStatus === "disconnected" ? "Reconnecting…" : "Could not connect")}
         </div>
       )}
@@ -271,7 +271,7 @@ export default function Sidebar() {
 
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto pt-2 pb-3">
-        <div className="px-5 pb-2 pt-4 font-mono text-[9px] tracking-[.18em] uppercase p-text-4">
+        <div className="px-5 pb-2 pt-4 p-eyebrow">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
         {workspaces.length === 0 && !listError && (
@@ -327,8 +327,8 @@ export default function Sidebar() {
                                 ? <span className="block size-1.5 rounded-full p-dot-accent" />
                                 : null}
                         </span>
-                        <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${a.displayName.trim() ? '' : 'italic p-text-3'}`}>{shown}</span>
-                        {age && <span className="w-[30px] shrink-0 text-right text-[10.5px] tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
+                        <span className={`min-w-0 flex-1 truncate p-row-text ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${a.displayName.trim() ? '' : 'italic p-text-3'}`}>{shown}</span>
+                        {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <Link
                         to={`/settings/${a.name}`}
@@ -364,12 +364,12 @@ export default function Sidebar() {
                         title={agentTitle(sub.displayName)}
                       >
                         <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
-                        <span className={`min-w-0 flex-1 truncate text-[12.5px] ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</span>
+                        <span className={`min-w-0 flex-1 truncate p-row-text ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</span>
                       </NavLink>
                     ))}
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
-                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-accent"
+                      className="w-full rounded-lg px-2.5 py-[5px] text-left p-t-control p-text-4 transition-colors hover:p-accent"
                     >
                       + New agent
                     </button>
@@ -379,7 +379,7 @@ export default function Sidebar() {
                   <div className="ml-[21px] mt-0.5 border-l p-border pl-2.5">
                     <button
                       onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
-                      className="w-full rounded-lg px-2.5 py-[5px] text-left text-[11.5px] p-text-4 transition-colors hover:p-accent"
+                      className="w-full rounded-lg px-2.5 py-[5px] text-left p-t-control p-text-4 transition-colors hover:p-accent"
                     >
                       + New agent
                     </button>
@@ -398,10 +398,11 @@ export default function Sidebar() {
           onClick={() => setShowUserMenu((v) => !v)}
           className="flex w-full min-w-0 items-center gap-2.5 text-left"
         >
+          {/* Avatar initial: sized to the fixed 26px circle, not the scale. */}
           <div className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-[#2A2018] text-[12px] font-semibold text-[var(--c-accent)]">
             {profile?.email?.[0]?.toUpperCase() ?? '?'}
           </div>
-          <span className="min-w-0 flex-1 truncate text-[13px] p-text-4">
+          <span className="min-w-0 flex-1 truncate p-t-control p-text-4">
             {profile?.email ?? (profileFailed ? 'Profile unavailable' : 'loading…')}
           </span>
           <GearIcon size={14} className="shrink-0 p-text-4 transition-colors hover:p-accent" />

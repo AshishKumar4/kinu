@@ -112,22 +112,22 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           weight={job.status === "running" ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="text-[13px] leading-[18px] font-medium p-text">{job.kind}</span>
-            <code className="text-[10px] p-text-3">{job.id.replace(/^bgjob-/, "").slice(0, 8)}</code>
+            <span className="p-row-text font-medium p-text">{job.kind}</span>
+            <code className="p-annotation p-text-3">{job.id.replace(/^bgjob-/, "").slice(0, 8)}</code>
           </div>
-          <div className="text-[10.5px] leading-[15px] p-text-3">
+          <div className="p-meta p-text-3">
             {m.label} · started {timeAgo(job.createdAt)}{job.settledAt ? ` · settled ${timeAgo(job.settledAt)}` : ""}
           </div>
           {interrupted && (
-            <div className="text-[10.5px] leading-[15px] p-warning">{interrupted}</div>
+            <div className="p-t-status p-warning">{interrupted}</div>
           )}
           {job.retriedBy && (
-            <div className="mt-1 font-mono text-[10px] p-accent">
+            <div className="mt-1 p-annotation p-accent">
               Retried as {job.retriedBy.replace(/^bgjob-/, "").slice(0, 8)}
             </div>
           )}
-          {detail && <div className="text-[11.5px] leading-[16px] p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">{detail}</div>}
-          {err && <div className="text-[10px] p-danger mt-1">{err}</div>}
+          {detail && <div className="p-annotation p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words">{detail}</div>}
+          {err && <div className="p-t-status p-danger mt-1">{err}</div>}
         </div>
         <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
           {job.status === "running" ? (

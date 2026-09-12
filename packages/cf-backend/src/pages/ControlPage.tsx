@@ -262,8 +262,8 @@ function UserDetailView(
                   <span className="font-mono text-xs">{w.name}</span>,
                   w.displayName, when(w.createdAt), when(w.lastSeenAt),
                   w.removedAt === null
-                    ? <span className="p-success text-[11px]">live</span>
-                    : <span className="p-text-3 text-[11px]">removed {when(w.removedAt)}</span>,
+                    ? <span className="p-success p-t-status">live</span>
+                    : <span className="p-text-3 p-t-status">removed {when(w.removedAt)}</span>,
                 ],
               }))}
               empty="This account owns no workspaces."
@@ -326,8 +326,8 @@ function WorkspacesView(
                   w.email.length > 0 ? w.email : <span className="p-text-3">unknown</span>,
                   w.displayName, when(w.lastSeenAt),
                   w.removedAt === null
-                    ? <span className="p-success text-[11px]">live</span>
-                    : <span className="p-text-3 text-[11px]">removed</span>,
+                    ? <span className="p-success p-t-status">live</span>
+                    : <span className="p-text-3 p-t-status">removed</span>,
                 ],
               }))}
               empty="No workspaces in the index yet."
@@ -369,7 +369,7 @@ function IncidentsView(): ReactNode {
                 when(i.openedAt),
                 <span className="tabular-nums">{i.failures}</span>,
                 i.alertedAt === null
-                  ? <span className="p-accent text-[11px]">alert owed</span>
+                  ? <span className="p-accent p-t-status">alert owed</span>
                   : when(i.alertedAt),
                 <span className="p-text-2 text-xs">{i.detail}</span>,
               ],
@@ -408,8 +408,8 @@ function FeedbackView(): ReactNode {
                   <span className="font-mono text-xs">{f.route}</span>,
                   f.workspace ?? <span className="p-text-3">—</span>,
                   f.objectKey === null
-                    ? <span className="p-text-3 text-[11px]">note only</span>
-                    : <span className="text-[11px] tabular-nums">{bytes(f.bytes)}</span>,
+                    ? <span className="p-text-3 p-t-status">note only</span>
+                    : <span className="p-meta tabular-nums">{bytes(f.bytes)}</span>,
                   <span className="p-text-2 text-xs whitespace-pre-wrap">{f.note}</span>,
                 ],
               }))}
@@ -470,7 +470,7 @@ function MetricsView(): ReactNode {
           <div className="grid gap-3 md:grid-cols-2">
             {Object.entries(metrics.panels).map(([name, panel]) => (
               <section key={name} className="p-card p-4 space-y-2">
-                <div className="text-[11px] uppercase tracking-wide p-text-3">{name}</div>
+                <div className="p-eyebrow">{name}</div>
                 {panel.status === 'ok' ? (
                   <MetricTable rows={panel.rows} />
                 ) : panel.status === 'unconfigured' ? (
@@ -540,8 +540,8 @@ function AuditView(): ReactNode {
                   when(a.at), a.actorEmail,
                   <span className="font-mono text-xs">{a.operation}</span>,
                   <span className="font-mono text-xs">{a.target}</span>,
-                  <span className={a.outcome === 'ok' ? 'p-success text-[11px]'
-                    : a.outcome === 'denied' ? 'p-accent text-[11px]' : 'p-danger text-[11px]'}>
+                  <span className={a.outcome === 'ok' ? 'p-success p-t-status'
+                    : a.outcome === 'denied' ? 'p-accent p-t-status' : 'p-danger p-t-status'}>
                     {a.outcome}
                   </span>,
                   <span className="p-text-2 text-xs">{a.detail}</span>,

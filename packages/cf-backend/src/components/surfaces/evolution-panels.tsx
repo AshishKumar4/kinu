@@ -66,8 +66,8 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
           <button key={r.runId} onClick={() => open(r.runId)}
             className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "p-card-hover"}`}>
             <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "running" ? "p-dot-warning" : "p-dot-neutral"}`} />
-            <span className="text-[11px] p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
-            <span className="text-[10px] p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
+            <span className="p-row-text p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
+            <span className="p-meta p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
           </button>
         ))}
       </div>
@@ -78,7 +78,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
           : <div className="flex justify-center py-4"><Loader size="sm" /></div>
       ) : (
         <div className="space-y-2">
-          <div className="text-[11px] p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
+          <div className="p-meta p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
           {/* Candidate aggregate-score bars; Pareto-front + winner highlighted. */}
           <div className="space-y-1">
             {loadedDetail.candidates.map((c) => {
@@ -90,7 +90,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
               const ci = scoreInterval(Object.values(c.scores));
 
               return (
-                <div key={c.id} className="flex items-center gap-2 text-[10px]">
+                <div key={c.id} className="flex items-center gap-2 p-meta">
                   <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
                   <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
                     <div className={`h-full ${isWinner ? "p-dot-success" : onPareto ? "p-dot-info" : "p-dot-neutral"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
@@ -126,7 +126,7 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
   return (
     <span className="flex flex-col leading-tight">
       <span className={className}>{value.toFixed(3)}</span>
-      <span className="text-[9px] p-text-3 tabular-nums">95% CI {interval.lo.toFixed(2)}–{interval.hi.toFixed(2)}</span>
+      <span className="p-meta p-text-3 tabular-nums">95% CI {interval.lo.toFixed(2)}–{interval.hi.toFixed(2)}</span>
     </span>
   );
 }
@@ -208,21 +208,21 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
 
       <section className="space-y-1.5">
         <div className="flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-normal p-text-3">Mean score over time</div>
-          <div className="text-[10px] p-text-3">floor {DEFAULT_QUALITY_THRESHOLD.toFixed(2)}</div>
+          <div className="p-eyebrow">Mean score over time</div>
+          <div className="p-meta p-text-3">floor {DEFAULT_QUALITY_THRESHOLD.toFixed(2)}</div>
         </div>
         <QualitySparkline points={chrono} threshold={DEFAULT_QUALITY_THRESHOLD} />
       </section>
 
       <section className="space-y-1.5">
-        <div className="text-[10px] uppercase tracking-normal p-text-3">Recent runs</div>
+        <div className="p-eyebrow">Recent runs</div>
         <div className="space-y-1">
           {rows.map((r, i) => {
             const prev = rows[i + 1]; // next-oldest
             const evolved = prev != null && prev.scaffoldVersion !== r.scaffoldVersion;
 
             return (
-              <div key={r.id} className="flex items-center gap-2 text-[10px]">
+              <div key={r.id} className="flex items-center gap-2 p-meta">
                 <span className="p-text-3 shrink-0 w-16 truncate">{new Date(r.ranAt).toLocaleDateString()}</span>
                 {r.scaffoldVersion != null && (
                   <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
@@ -265,8 +265,8 @@ function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibrati
   return (
     <section className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
-        <div className="text-[10px] uppercase tracking-normal p-text-3">K_align · corrections per 100 turns</div>
-        <div className={`text-[10px] ${trend.className}`}>
+        <div className="p-eyebrow">K_align · corrections per 100 turns</div>
+        <div className={`p-t-status ${trend.className}`}>
           {trend.label}{k.deltaPer100 !== null ? ` (${k.deltaPer100 > 0 ? "+" : ""}${k.deltaPer100.toFixed(1)})` : ""}
         </div>
       </div>
@@ -278,7 +278,7 @@ function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibrati
       <div className="space-y-1">
         {k.segments.map((s) => (
           <div key={`${s.scaffoldVersion ?? "none"}-${s.firstAt}`}
-            className={`flex items-center gap-2 text-[10px] ${s.rate.reliable ? "" : "opacity-50"}`}
+            className={`flex items-center gap-2 p-meta ${s.rate.reliable ? "" : "opacity-50"}`}
             title={s.rate.reliable ? undefined : "interval too wide to read as a rate"}>
             <span className="shrink-0 font-mono p-text-3 w-8">v{s.scaffoldVersion ?? "?"}</span>
             <span className="shrink-0 p-text-3 w-12 tabular-nums">n={s.turns}</span>
@@ -293,7 +293,7 @@ function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibrati
           </div>
         ))}
       </div>
-      <div className="text-[10px] p-text-3">{k.note}</div>
+      <div className="p-meta p-text-3">{k.note}</div>
       <CalibrationNote report={calibration} />
     </section>
   );
@@ -310,7 +310,7 @@ function CalibrationNote({ report }: { report: CalibrationReport }) {
     const reason = report.gap === null ? "Uncalibrated" : sentenceCase(describeCalibrationGap(report.gap));
 
     return (
-      <div className="text-[10px] p-text-3">
+      <div className="p-meta p-text-3">
         <span className="p-warning">{reason}.</span>
         {" The classifier counted this rate. "}
         Check about 100 turns by hand with <span className="font-mono">kinu label export</span>.
@@ -322,7 +322,7 @@ function CalibrationNote({ report }: { report: CalibrationReport }) {
   const { corrected, bias } = report.overall;
 
   return (
-    <div className="text-[10px] p-text-3">
+    <div className="p-meta p-text-3">
       Corrected: <span className="font-mono p-text tabular-nums">{per100(corrected.mean)}</span>
       {` per 100 (95% CI ${per100(corrected.lo)}–${per100(corrected.hi)}), `}
       {`${bias >= 0 ? "+" : ""}${per100(bias)} off what the classifier said · `}

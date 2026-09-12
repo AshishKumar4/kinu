@@ -24,6 +24,7 @@ export interface KinuLogoProps {
 }
 
 export function KinuLogo({ className, compact = false }: KinuLogoProps): ReactElement {
+  // Brand lockup: the wordmark's 18/20px serif pairing is the logo, not UI type.
   return (
     <span className={`inline-flex items-center gap-[9px] font-serif ${compact ? 'text-[18px]' : 'text-[20px]'}${className ? ` ${className}` : ''}`}>
       <KinuMark size={compact ? 17 : 20} />

@@ -135,9 +135,9 @@ export function Notice(
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }): ReactNode {
   return (
     <div className="p-card p-4">
-      <div className="text-[11px] uppercase tracking-wide p-text-3">{label}</div>
+      <div className="p-eyebrow">{label}</div>
       <div className="text-2xl p-display tabular-nums mt-1">{value}</div>
-      {hint !== undefined && <div className="text-[11px] p-text-3 mt-1">{hint}</div>}
+      {hint !== undefined && <div className="p-meta p-text-3 mt-1">{hint}</div>}
     </div>
   );
 }

@@ -273,6 +273,7 @@ export default function SettingsPage() {
               <ArrowLeftIcon size={12} /> Back to chat
             </Link>
             <p className="p-eyebrow">Workspace</p>
+            {/* Page title in the display face at 26px: above the workbench scale by design. */}
             <h1 className="p-display mt-1 text-[26px] leading-8">Workspace settings</h1>
             <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
               <span className="font-mono">{agentId}</span>
@@ -642,7 +643,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                 </div>
                 {opened && (
                   <>
-                    <pre className="text-[11px] leading-[16px] p-text-2 whitespace-pre-wrap break-words
+                    <pre className="p-t-code p-text-2 whitespace-pre-wrap break-words
                       max-h-64 overflow-auto rounded-sm px-2 py-1.5 p-card-hover">{opened.preview}</pre>
                     <div className="p-meta p-text-3 font-mono break-all">{opened.digest}</div>
                   </>

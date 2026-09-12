@@ -103,14 +103,14 @@ function TaskHeader({ task }: { task: string }) {
   return (
     <div className="shrink-0 border-b p-border px-4 py-2.5 p-recessed">
       <div className="flex items-start gap-2">
-        <div className="text-[10px] uppercase tracking-normal p-text-3 pt-0.5 shrink-0">Task</div>
+        <div className="p-eyebrow pt-0.5 shrink-0">Task</div>
         <div className="min-w-0 flex-1">
-          <div className={`text-[12px] p-text-2 leading-relaxed whitespace-pre-wrap break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
+          <div className={`p-row-text p-text-2 whitespace-pre-wrap break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
             {task}
           </div>
           {long && (
             <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
-              className="mt-1 inline-flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors cursor-pointer">
+              className="mt-1 inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text transition-colors cursor-pointer">
               {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
               {expanded ? "collapse" : "expand"}
             </button>
@@ -147,12 +147,12 @@ function SearchPath({ view, onSelect }: {
 
         return (
           <span key={crumb.id} className="flex items-center gap-1 shrink-0">
-            {index > 0 && <span className="p-text-3 text-[10px]">/</span>}
+            {index > 0 && <span className="p-text-3 p-meta">/</span>}
             {here ? (
-              <span className="text-[10px] font-medium p-text max-w-[14rem] truncate" title={label}>{label}</span>
+              <span className="p-t-control p-text max-w-[14rem] truncate" title={label}>{label}</span>
             ) : (
               <button onClick={() => onSelect(crumb.id)} title={label}
-                className="text-[10px] p-text-3 hover:p-text transition-colors max-w-[10rem] truncate cursor-pointer">
+                className="p-t-control p-text-3 hover:p-text transition-colors max-w-[10rem] truncate cursor-pointer">
                 {label}
               </button>
             )}
@@ -181,17 +181,17 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
       {view.errorMessage && (
         <div className="shrink-0 border-b p-border border-l-2 px-4 py-3"
           style={{ background: "var(--c-danger-tint)", borderLeftColor: "var(--c-danger)" }}>
-          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-normal p-danger">
+          <div className="flex items-center gap-1.5 p-t-status uppercase tracking-normal p-danger">
             <WarningCircleIcon size={11} weight="fill" />
             {view.status === "aborted" ? "Stopped" : "Failed"}
           </div>
-          <div className="mt-1 text-[12px] p-text-2 leading-relaxed break-words">{view.errorMessage}</div>
+          <div className="mt-1 p-row-text p-text-2 break-words">{view.errorMessage}</div>
         </div>
       )}
       {view.answer && (
         <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-elevated"
           style={{ borderLeftColor: "var(--c-accent)" }}>
-          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-normal p-accent">
+          <div className="flex items-center gap-1.5 p-t-status uppercase tracking-normal p-accent">
             <CheckCircleIcon size={11} weight="fill" />
             {view.origin === "head" ? "Report" : "Proposal"}
           </div>
@@ -205,7 +205,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           below an empty-state this scrolled out of sight entirely. */}
       {view.codeUsed && (
         <div className="shrink-0 border-b p-border px-4 py-2.5">
-          <div className="text-[10px] uppercase tracking-normal p-text-3">Code draft</div>
+          <div className="p-eyebrow">Code draft</div>
           <div className="max-h-40 overflow-auto"><CodeBlock className="language-js">{view.codeUsed}</CodeBlock></div>
         </div>
       )}
@@ -231,7 +231,7 @@ function EmptyTrace({ view }: { view: NodeTranscriptView }) {
 
   if (view.status === "running") {
     return (
-      <div className="flex items-center gap-2 py-8 justify-center text-[12px] p-text-2">
+      <div className="flex items-center gap-2 py-8 justify-center p-t-status p-text-2">
         <Loader size="sm" />
         {view.lastStepAt === null
           ? "Working. This branch has not finished its first step."
@@ -325,15 +325,15 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
         <span className={`size-1.5 rounded-full shrink-0 ${statusDot(view.status)} ${live ? "p-dot-pulse" : ""}`} />
-        <span className="text-[10px] uppercase tracking-normal p-text-3 shrink-0">{view.status}</span>
+        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{view.status}</span>
         <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
         <SearchPath view={view} onSelect={onSelect} />
       </div>
 
       <TaskHeader task={view.task} />
       {view.rationale && (
-        <div className="shrink-0 border-b p-border px-4 py-2 text-[11px] p-text-3 leading-relaxed break-words">
-          <span className="uppercase tracking-normal text-[10px]">Why this branch</span> · {view.rationale}
+        <div className="shrink-0 border-b p-border px-4 py-2 p-row-text p-text-3 break-words">
+          <span className="p-eyebrow">Why this branch</span> · {view.rationale}
         </div>
       )}
       <Outcome view={view} />
@@ -373,7 +373,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
             <DetailSection title="Decisions">
               <div className="space-y-1">
                 {view.decisions.map((decision, index) => (
-                  <div key={index} className="rounded-md p-fill border p-border p-2 text-[11px]">
+                  <div key={index} className="rounded-md p-fill border p-border p-2 p-row-text">
                     <div className="p-text-2">{decision.question}</div>
                     <div className="p-accent mt-0.5">→ {decision.choice}</div>
                     {decision.rationale && <div className="p-text-3 mt-0.5">{decision.rationale}</div>}
@@ -646,7 +646,7 @@ export function NodeTranscript({ selection, trees, rpc, headActivity, headDeltas
           pending={pending} />
       )
         : resource.status === "loading" ? (
-          <div className="flex-1 flex items-center justify-center gap-2 text-[12px] p-text-2">
+          <div className="flex-1 flex items-center justify-center gap-2 p-t-status p-text-2">
             <Loader size="sm" />Reading the branch…
           </div>
         ) : resource.status === "ready" ? (

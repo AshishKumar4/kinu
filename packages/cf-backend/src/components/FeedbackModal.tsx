@@ -422,7 +422,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
                 <Button type="button" size="sm" variant="ghost" onClick={take} data-feedback-retake>
                   <ArrowCounterClockwiseIcon size={14} /> Retake
                 </Button>
-                <span className="ml-auto text-[11px] p-text-3" data-feedback-shot-meta={String(shot.capture.redacted)}>
+                <span className="ml-auto p-meta p-text-3" data-feedback-shot-meta={String(shot.capture.redacted)}>
                   {shot.capture.width}×{shot.capture.height}
                   {shot.capture.redacted > 0
                     ? ` · ${String(shot.capture.redacted)} field${shot.capture.redacted === 1 ? "" : "s"} hidden`
@@ -437,7 +437,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
                 className="block w-full cursor-crosshair rounded-md border p-border touch-none"
                 data-feedback-canvas
               />
-              <p className="text-[11px] p-text-3">
+              <p className="p-meta p-text-3">
                 Drag on the image to {tool === "hide" ? "cover something" : "draw a box"}.
               </p>
             </div>
@@ -450,7 +450,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
           </p>
         )}
 
-        <p className="text-[11px] p-text-3" data-feedback-consent>
+        <p className="p-meta p-text-3" data-feedback-consent>
           Sending shares your note, the page address, your account email, and the screenshot if you
           include one. Your browser blacks out password fields before upload. Use
           <span className="p-text-2">Hide</span> for anything else.

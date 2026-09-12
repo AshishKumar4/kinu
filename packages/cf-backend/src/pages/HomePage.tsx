@@ -43,8 +43,9 @@ export default function HomePage() {
         <header className="col-span-full mb-3">
           <div className="mb-3.5 flex items-center gap-2.5">
             <KinuMark size={22} />
-            <span className="font-mono text-[10px] uppercase tracking-[.2em] p-text-4">New workspace</span>
+            <span className="p-eyebrow">New workspace</span>
           </div>
+          {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
           <h1 className="font-serif text-[clamp(38px,4vw,46px)] font-medium leading-[1.12] tracking-[-.015em] p-text">
             What is this workspace for?
           </h1>
@@ -52,7 +53,7 @@ export default function HomePage() {
 
         <form onSubmit={submit} className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-input-bg)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow]">
           <div className="px-6 pt-5">
-            <label htmlFor="workspace-mission" className="block text-[12.5px] font-semibold p-text-3">
+            <label htmlFor="workspace-mission" className="block p-t-status p-text-3">
               {MISSION_LABEL}
             </label>
             <textarea
@@ -69,7 +70,7 @@ export default function HomePage() {
               rows={6}
               autoFocus
               disabled={busy}
-              className="block min-h-[168px] w-full resize-none bg-transparent pb-4 pt-3 text-[15px] leading-[1.7] p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
+              className="block min-h-[168px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
             />
           </div>
           {hasModels === false && (
@@ -81,13 +82,13 @@ export default function HomePage() {
             <div className="mx-6 mb-4 rounded-md px-3 py-2 text-xs p-notice-danger">{err}</div>
           )}
           <div className="flex flex-col items-start gap-4 px-6 pb-5 sm:flex-row sm:items-center sm:justify-between">
-            <p className="max-w-[390px] text-[11.5px] leading-[1.5] p-text-4">
+            <p className="max-w-[390px] p-meta p-text-4">
               {MISSION_HELP}
             </p>
             <FilledButton
               type="submit"
               disabled={busy || !mission.trim() || hasModels === false}
-              className="!h-10 !rounded-full px-5 text-[13px]"
+              className="!h-10 !rounded-full px-5 p-t-control"
             >
               {busy && <Loader size="sm" />}
               Create workspace
@@ -98,10 +99,10 @@ export default function HomePage() {
         <aside className="order-3 min-w-0 lg:order-none">
           <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
             <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
-            <Link to="/user/settings" className="block py-[5px] text-[13px] p-accent">
+            <Link to="/user/settings" className="block py-[5px] p-t-control p-accent">
               Model providers →
             </Link>
-            <a href="/install" className="block py-[5px] text-[13px] p-accent">
+            <a href="/install" className="block py-[5px] p-t-control p-accent">
               Install the CLI →
             </a>
           </div>
@@ -110,15 +111,15 @@ export default function HomePage() {
         {(listFailed || workspaces.length > 0) && (
           <section aria-label="Recent workspaces" className="order-2 min-w-0 lg:order-none">
             <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
-              <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Recent</span>
-              {listFailed && <span className="text-[11px] p-warning">could not load</span>}
+              <span className="p-eyebrow">Recent</span>
+              {listFailed && <span className="p-t-status p-warning">could not load</span>}
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
               {workspaces.slice(0, 5).map((agent, index) => (
                 <Link
                   key={agent.name}
                   to={`/workspace/${agent.name}`}
-                  className={`flex items-center justify-between gap-3 px-[18px] py-3 text-[13.5px] p-text transition-colors hover:p-accent hover:p-elevated ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}
+                  className={`flex items-center justify-between gap-3 px-[18px] py-3 p-row-text p-text transition-colors hover:p-accent hover:p-elevated ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}
                 >
                   <span className="truncate">{agent.displayName || agent.name}</span>
                   <span aria-hidden="true" className="p-text-4">→</span>

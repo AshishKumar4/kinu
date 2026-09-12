@@ -52,7 +52,7 @@ interface SubordinateTabsProps {
 
 function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   if (subordinate.status === "awaiting_input") {
-    return <span className="rounded-sm px-1.5 py-0.5 text-[9px] font-medium p-badge-warning">input</span>;
+    return <span className="rounded-sm px-1.5 py-0.5 p-badge-warning">input</span>;
   }
 
   return (

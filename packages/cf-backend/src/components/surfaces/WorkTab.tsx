@@ -204,7 +204,7 @@ export function WorkTab({
               </div>
             )}
             {openTasks.length === 0 && runningJobs.length === 0 && (
-              <p className="text-[12.5px] leading-[1.6] p-text-3">
+              <p className="p-row-text p-text-3">
                 Nothing in flight. A multi-step plan or a tool call over 30 seconds lands here.
               </p>
             )}
@@ -220,7 +220,7 @@ export function WorkTab({
             {FILTERS.map((chip) => (
               <button key={chip.id} type="button" onClick={() => setFilter(chip.id)}
                 aria-pressed={filter === chip.id}
-                className={`px-2.5 py-0.5 text-[11px] rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent font-semibold" : "p-text-3 hover:p-accent"}`}>
+                className={`px-2.5 py-0.5 p-t-control rounded-full transition-colors ${filter === chip.id ? "bg-[rgba(224,164,88,.1)] p-accent" : "p-text-3 hover:p-accent"}`}>
                 {chip.label}
               </button>
             ))}
@@ -418,10 +418,10 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
       <div className="flex items-start gap-2">
         <ShieldWarningIcon size={14} className="p-accent shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] leading-[18px] p-text">
+          <div className="p-row-text p-text">
             {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
           </div>
-          <div className="text-[11px] leading-[16px] p-text-3 mt-0.5">
+          <div className="p-meta p-text-3 mt-0.5">
             These checks are queued. Approve them so the agent can run them when it resumes.
           </div>
         </div>
@@ -434,18 +434,18 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
             <input type="checkbox" className="mt-0.5 shrink-0" checked={chosen.has(action.id)}
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
-              <code className="block text-[11px] p-text break-all whitespace-pre-wrap">{action.detail}</code>
+              <code className="block p-t-code p-text break-all whitespace-pre-wrap">{action.detail}</code>
               {/* Which machine, before you authorise it. The read model puts it
                   in the title precisely because it is half the decision, so
                   this card never drops the title on the floor. */}
-              <span className="block text-[10px] p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
+              <span className="block p-meta p-text-3 mt-0.5">{action.title} · queued {timeAgo(action.at)}</span>
             </span>
           </label>
         ))}
       </div>
 
-      {state.error && <div className="text-[10px] p-danger">{state.error}</div>}
-      {decidedLine && <div className="text-[10px] p-text-3">{decidedLine}</div>}
+      {state.error && <div className="p-t-status p-danger">{state.error}</div>}
+      {decidedLine && <div className="p-t-status p-text-3">{decidedLine}</div>}
 
       <div className="flex items-center gap-1.5 flex-wrap">
         <FilledButton disabled={state.busy || chosen.size === 0}
@@ -478,11 +478,11 @@ function PendingRow(
 
   const content = (
     <div className="min-w-0">
-      <div className="text-[13px] leading-[18px] p-text">{action.title}</div>
+      <div className="p-row-text p-text">{action.title}</div>
       {action.detail && (
-        <div className="mt-0.5 line-clamp-2 break-words text-[11.5px] leading-[16px] p-text-3">{action.detail}</div>
+        <div className="mt-0.5 line-clamp-2 break-words p-meta p-text-3">{action.detail}</div>
       )}
-      <div className="mt-0.5 text-[10.5px] leading-[15px] p-text-3">
+      <div className="mt-0.5 p-meta p-text-3">
         {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
       </div>
     </div>
