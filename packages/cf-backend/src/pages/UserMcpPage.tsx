@@ -178,11 +178,11 @@ export default function UserMcpPage() {
                       </td>
                       <td className="px-4 py-3 p-text-2 text-xs">{s.transport}</td>
                       <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 rounded-sm px-2 py-0.5 text-[11px] ${badge.classes}`}>
+                        <span className={`inline-flex items-center gap-1 rounded-sm px-2 py-0.5 ${badge.classes}`}>
                           <badge.Icon size={10} /> {badge.label}
                         </span>
                         {s.error && (
-                          <div className="text-[11px] p-danger mt-1 max-w-[260px] truncate" title={s.error}>
+                          <div className="p-t-status p-danger mt-1 max-w-[260px] truncate" title={s.error}>
                             {s.error}
                           </div>
                         )}

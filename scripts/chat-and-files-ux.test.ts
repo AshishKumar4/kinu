@@ -2328,3 +2328,31 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
     });
   }, 120_000);
 });
+
+describe('the workbench type scale, as the browser computes it', () => {
+  test('assistant prose reads at 16px and tool-row labels at 13px', async () => {
+    const sizes = await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 1600 });
+      await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('.prose-chat');
+      await page.waitForSelector('[data-tool-state] strong');
+
+      const measured = await page.evaluate(() => ({
+        prose: getComputedStyle(document.querySelector('.prose-chat')!).fontSize,
+        toolLabel: getComputedStyle(document.querySelector('[data-tool-state] strong')!).fontSize,
+      }));
+
+      await page.close();
+
+      return measured;
+    });
+
+    // The scale's two load-bearing rungs: chat prose at the root size, dense
+    // tool rows one step down. Both moved here from miniaturised literals
+    // (0.906rem prose, 11px tool titles), so either regression reads here.
+    expect(sizes.prose).toBe('16px');
+    expect(sizes.toolLabel).toBe('13px');
+  }, 120_000);
+});

@@ -295,7 +295,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
 
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 text-[10px] p-text-3">
+      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
         <span className="font-mono">{executor}</span>
         <span>·</span>
         <span>{state === "connected" ? "interactive shell" : state}</span>
@@ -449,7 +449,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
 
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 text-[10px] p-text-3">
+      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
         <span className="font-mono">{executor}</span>
         <span>·</span>
         <span>{state === "connected" ? "interactive shell" : state}</span>
@@ -604,7 +604,7 @@ function LineTerminal(
       {/* The mode this pane is in. It never explains what an environment
           cannot do: a device PTY is being built, and a label about a missing
           primitive would be wrong the day it lands. */}
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 text-[10px] p-text-3">
+      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
         <span className="font-mono">{executor}</span>
         <span>·</span>
         <span>{LINE_MODE_LABEL}</span>

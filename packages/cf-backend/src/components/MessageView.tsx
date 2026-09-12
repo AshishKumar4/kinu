@@ -104,7 +104,7 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   return (
     // The mock's thought: a dim block ruled off the column by a 2px dashed
     // line, the first words inline, the affordance the word "expand" in gold.
-    <div className={`border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 text-[12.5px] leading-[1.7] p-text-4`}>
+    <div className={`border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 p-row-text p-text-4`}>
       <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
         <span className={live ? "p-shimmer" : ""}>Thinking</span>
         {!expanded && <span className={live ? "p-shimmer-text opacity-80" : "opacity-80"}> · {text.slice(0, 120)}</span>}
@@ -246,19 +246,19 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
         {prominent ? (
           <span className="min-w-0">
             <span className="flex min-w-0 items-center gap-2">
-              <strong className="truncate text-[12.5px] font-semibold p-text">{description || toolLabel(toolName)}</strong>
-              {runtime && <span className="shrink-0 rounded-full p-fill px-2 py-0.5 font-mono text-[9.5px] p-text-3">{runtime}</span>}
+              <strong className="truncate p-row-text font-semibold p-text">{description || toolLabel(toolName)}</strong>
+              {runtime && <span className="shrink-0 rounded-full p-fill px-2 py-0.5 p-annotation p-text-3">{runtime}</span>}
             </span>
-            <span className="mt-0.5 block truncate font-mono text-[11px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+            <span className="mt-0.5 block truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
           </span>
         ) : (
           <span className="flex min-w-0 items-baseline gap-2">
-            <strong className="min-w-0 truncate text-[11.5px] font-medium p-text-2">{description || toolLabel(toolName)}</strong>
-            <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
-            {runtime && <span className="shrink-0 font-mono text-[9.5px] p-text-4">{runtime}</span>}
+            <strong className="min-w-0 truncate p-row-text font-medium p-text-2">{description || toolLabel(toolName)}</strong>
+            <span className="min-w-0 flex-1 truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+            {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
           </span>
         )}
-        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold ${isRunning ? "p-accent-subtle p-accent" : failed ? "p-badge-danger" : "p-badge-success"}`}>
+        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${isRunning ? "p-accent-subtle p-accent" : failed ? "p-badge-danger" : "p-badge-success"}`}>
           {isRunning
             ? <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>
             : failed
@@ -291,7 +291,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           {errorText && (
             <div>
               <div className="p-eyebrow mb-1 p-danger">Error</div>
-              <pre className="text-[12px] font-mono p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{errorText}</pre>
+              <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{errorText}</pre>
             </div>
           )}
           {/* execute_tools is the agent's primary doing-mechanism: render the
@@ -315,7 +315,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           {output != null && (
             <div>
               <div className="p-eyebrow mb-1">Output</div>
-              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(redactPayload(output))}</pre>
+              <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(redactPayload(output))}</pre>
             </div>
           )}
         </div>
@@ -402,9 +402,9 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
     <div data-tool-group data-tool-count={parts.length} data-tool-mutations={mutationCount} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
       <div className="flex flex-wrap items-center gap-2 border-b p-border p-sidebar px-3.5 py-2">
         <LightningIcon size={13} className="p-accent" weight="fill" />
-        <span className="text-[11.5px] font-semibold p-text-2">Agent activity</span>
-        <span className="font-mono text-[10px] p-text-4">{parts.length} call{parts.length === 1 ? "" : "s"}</span>
-        {mutationCount > 0 && <span className="rounded-full p-accent-subtle px-2 py-0.5 text-[9.5px] font-semibold p-accent">{mutationCount} change{mutationCount === 1 ? "" : "s"}</span>}
+        <span className="p-row-text font-semibold p-text-2">Agent activity</span>
+        <span className="p-annotation p-text-4">{parts.length} call{parts.length === 1 ? "" : "s"}</span>
+        {mutationCount > 0 && <span className="rounded-full p-accent-subtle px-2 py-0.5 p-t-status p-accent">{mutationCount} change{mutationCount === 1 ? "" : "s"}</span>}
         {failedCount > 0 && <span className="ml-auto p-badge-danger px-2 py-0.5">{failedCount} failed</span>}
       </div>
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
@@ -416,7 +416,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
           onClick={() => setShowAll((current) => !current)}
           aria-expanded={showAll}
           data-tool-group-toggle
-          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left text-[11px] font-medium p-accent"
+          className="w-full border-t border-dashed border-[var(--c-dash)] px-4 py-2 text-left p-t-control p-accent"
         >
           {showAll ? "Collapse activity" : `Show ${hiddenCount} more call${hiddenCount === 1 ? "" : "s"}`}
         </button>
@@ -475,9 +475,9 @@ function BackgroundEventCard({ kind, status, state }: { kind: string; status: st
   return (
     <div className="animate-fade-in">
       <div className="flex w-full items-baseline gap-2.5 rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <span className="shrink-0 text-[11px] font-semibold p-accent">System</span>
-        <div className="min-w-0 flex-1 text-[12.5px] leading-[1.6] p-text-2 opacity-80">
-          Background <span className="font-mono text-[11px]">{kind}</span> task {meta.verb}
+        <span className="shrink-0 p-t-status p-accent">System</span>
+        <div className="min-w-0 flex-1 p-row-text p-text-2 opacity-80">
+          Background <span className="p-annotation">{kind}</span> task {meta.verb}
           <span className="ml-1 inline-flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
         </div>
         <meta.Icon size={12} className={`shrink-0 ${meta.tone}`} weight="fill" />
@@ -497,7 +497,7 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
       onClick={() => setExpanded(!expanded)}
       className="w-full rounded-md px-2 py-2 text-left transition-colors hover:p-elevated"
     >
-      <div className="flex items-center gap-1.5 text-[11px]">
+      <div className="flex items-center gap-1.5 p-row-text">
         <span className="shrink-0 font-medium p-text-2">{eventVariantLabel(event.variant)}</span>
         <span className="min-w-0 truncate p-text-3">{eventSourceLabel(event.source)}</span>
         {event.replyExpected && (
@@ -509,7 +509,7 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
           {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
         </span>
       </div>
-      <div className={`mt-0.5 text-[12px] leading-[1.6] p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+      <div className={`mt-0.5 p-row-text p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
         {event.brief}
       </div>
     </button>
@@ -528,7 +528,7 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
       {/* The mock's System notice: a full-width gold-tinted row in the
           transcript measure, not a small card floating in its centre. */}
       <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
-        <div className="flex items-baseline gap-2.5 text-[11px]">
+        <div className="flex items-baseline gap-2.5 p-row-text">
           <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-4" : "p-accent"}`} weight="fill" />
           <span className="shrink-0 font-semibold p-accent">System</span>
           <span className="p-text-3"><ShownCaption state={state} /></span>
@@ -538,7 +538,7 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
           {events.length > 0
             ? events.map((event, i) => <DrainedEventRow key={i} event={event} />)
             /* Format drift: show what the agent was given rather than nothing. */
-            : <div className="text-[12.5px] leading-[1.6] p-text-2 opacity-80 whitespace-pre-wrap break-words">{text}</div>}
+            : <div className="p-row-text p-text-2 opacity-80 whitespace-pre-wrap break-words">{text}</div>}
         </div>
       </div>
     </div>
@@ -556,7 +556,7 @@ function DeferredApprovalCard({ decision, count, state }: {
 
   return (
     <div className="flex justify-center animate-fade-in py-1">
-      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
         <Icon size={13} className={approved ? "p-success" : "p-text-3"} weight="fill" />
         <span>
           You <span className="font-medium p-text">{approved ? "approved" : "denied"}</span>{" "}
@@ -575,7 +575,7 @@ function DeferredApprovalCard({ decision, count, state }: {
 function WorkspaceCreatedCard({ state }: { state: CardState }) {
   return (
     <div className="flex justify-center animate-fade-in py-1">
-      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
         <SparkleIcon size={13} className="p-accent" weight="fill" />
         <span>Workspace created. The agent starts its mission.</span>
         <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
@@ -605,7 +605,7 @@ function SystemEventCard({ event, text, state }: {
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
-          className="w-full flex items-baseline gap-2.5 text-left text-[11px]"
+          className="w-full flex items-baseline gap-2.5 text-left p-row-text"
           aria-expanded={expanded}
         >
           <GearSixIcon size={11} className="shrink-0 p-accent" weight="fill" />
@@ -616,7 +616,7 @@ function SystemEventCard({ event, text, state }: {
             {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
           </span>
         </button>
-        <div className={`mt-1 text-[12.5px] leading-[1.6] p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
+        <div className={`mt-1 p-row-text p-text-2 opacity-80 ${expanded ? "whitespace-pre-wrap break-words" : "truncate"}`}>
           {text}
         </div>
       </div>
@@ -644,13 +644,13 @@ function AdvisorCard({ severity, text, state }: {
   return (
     <div className="flex justify-center animate-fade-in py-1" data-advisor-severity={severity}>
       <div className={`w-full max-w-[85%] rounded-xl px-3 py-2 ${tone.panel}`}>
-        <div className="flex items-center gap-1.5 text-[10px] p-text-3">
+        <div className="flex items-center gap-1.5 p-meta p-text-3">
           <EyeIcon size={11} className={`shrink-0 ${tone.icon}`} weight="fill" />
           <span className="font-medium p-text-2">Advisor</span>
-          <span className={`px-1.5 text-[10px] ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[severity]}</span>
+          <span className={`px-1.5 ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[severity]}</span>
           <ShownCaption state={state} />
         </div>
-        <div className="mt-1 text-[11px] p-text-2 whitespace-pre-wrap break-words">{text}</div>
+        <div className="mt-1 p-row-text p-text-2 whitespace-pre-wrap break-words">{text}</div>
       </div>
     </div>
   );
@@ -691,7 +691,7 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
  *  it through the column; text with ordinary break opportunities wraps exactly
  *  as it always did. */
 const USER_BUBBLE_CLASS =
-  "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-body whitespace-pre-wrap wrap-anywhere";
+  "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-t-chat whitespace-pre-wrap wrap-anywhere";
 
 /**
  * A steer as the thread draws it — the SAME bubble a user message gets, because
@@ -714,7 +714,7 @@ export function SteerBubble({ steer, onFork }: {
         {onFork && steer.state === "landed" && (
           <button
             onClick={() => onFork(steer.id)}
-            className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+            className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
             title="Fork from here"
           >
             <GitBranchIcon size={12} />
@@ -731,7 +731,7 @@ export function SteerBubble({ steer, onFork }: {
  *  assistant's work reads like a rendering bug rather than the steer it is. */
 function SteeredMark({ state }: { state: "queued" | "landed" }) {
   return (
-    <span className="mt-1 inline-flex items-center gap-1 text-[10px] p-text-3">
+    <span className="mt-1 inline-flex items-center gap-1 p-meta p-text-3">
       <ArrowBendUpRightIcon size={10} weight="bold" />
       {state === "queued" ? "queued for the next step" : "steered mid-turn"}
     </span>
@@ -815,7 +815,7 @@ export const MessageView = memo(function MessageView({
           {canFork && (
             <button
               onClick={() => onFork!(message.id)}
-              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
               title="Fork from here"
             >
               <GitBranchIcon size={12} />
@@ -824,7 +824,7 @@ export const MessageView = memo(function MessageView({
           {!isLive && onRestoreFiles && message.id && (
             <button
               onClick={() => onRestoreFiles(message.id)}
-              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
               title="Restore files to before this turn"
             >
               <ClockCounterClockwiseIcon size={12} />
@@ -860,7 +860,7 @@ export const MessageView = memo(function MessageView({
               {s === forkSegment && canFork && (
                 <button
                   onClick={() => onFork!(message.id)}
-                  className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+                  className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
                   title="Fork from here"
                 >
                   <GitBranchIcon size={12} />
@@ -962,7 +962,7 @@ function MessageFeedback({
         type="button"
         onClick={() => toggle('positive')}
         disabled={busy}
-        className={`text-[11px] p-1 rounded-sm p-card-hover transition-colors ${
+        className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
           current === 'positive' ? 'p-text' : 'p-text-3'
         }`}
         title="Mark this response helpful. Feeds evolution scoring."
@@ -971,12 +971,12 @@ function MessageFeedback({
         type="button"
         onClick={() => toggle('negative')}
         disabled={busy}
-        className={`text-[11px] p-1 rounded-sm p-card-hover transition-colors ${
+        className={`p-t-control p-1 rounded-sm p-card-hover transition-colors ${
           current === 'negative' ? 'p-text' : 'p-text-3'
         }`}
         title="Mark this response poor. Feeds evolution scoring."
       >👎</button>
-      {failed && <span className="text-[10px] p-danger">Could not save. Try again.</span>}
+      {failed && <span className="p-t-status p-danger">Could not save. Try again.</span>}
     </div>
   );
 }

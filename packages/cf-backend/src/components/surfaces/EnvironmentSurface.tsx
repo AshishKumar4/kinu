@@ -178,8 +178,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         <>
           <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border shrink-0">
             <TerminalIcon size={12} className="p-text-3" />
-            <span className="text-[10px] p-text-3">Terminal ·</span>
-            <span className="text-[10px] p-text-3 font-mono">{executorLabel(selectedMount.name)}</span>
+            <span className="p-meta p-text-3">Terminal ·</span>
+            <span className="p-annotation p-text-3">{executorLabel(selectedMount.name)}</span>
           </div>
           <div className="flex-1 min-h-0">
             {selectedExec ? (
@@ -227,19 +227,19 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <CircleIcon size={7} weight="fill" className={`shrink-0 ${status.dotClass}`} />
-        <span className={`text-[12.5px] font-medium truncate ${mount.live ? "p-text" : "p-text-3"}`}>{title}</span>
+        <span className={`p-row-text font-medium truncate ${mount.live ? "p-text" : "p-text-3"}`}>{title}</span>
         {executor === "laptop" && exec?.label && (
-          <span className="text-[10px] p-text-4 shrink-0">{executorLabel("laptop")}</span>
+          <span className="p-meta p-text-4 shrink-0">{executorLabel("laptop")}</span>
         )}
         {mount.policy.readOnly && (
           <span title="read-only" className="shrink-0 flex"><LockSimpleIcon size={11} className="p-text-3" /></span>
         )}
-        <span data-env-status className="ml-auto text-[10px] p-text-3 shrink-0">{status.word}</span>
+        <span data-env-status className="ml-auto p-t-status p-text-3 shrink-0">{status.word}</span>
       </div>
-      <div data-env-durability className="text-[10px] p-text-3">
+      <div data-env-durability className="p-meta p-text-3">
         {mount.live ? CONSISTENCY_HINT[mount.policy.consistency] : mount.reason ?? exec?.reason ?? "not available on this deployment"}
       </div>
-      <p className="text-[11px] p-text-2 leading-snug">
+      <p className="p-meta p-text-2">
         {executorDescription(executor)}
       </p>
       <div className="flex items-center gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
@@ -247,7 +247,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
           <button
             data-env-files
             onClick={() => onOpenFiles(filesRoot)}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] p-text-2 p-fill hover:p-text"
+            className="flex items-center gap-1 px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
             title={`Browse ${title}'s files at ${filesRoot}`}
           ><FolderOpenIcon size={12} />Files</button>
         )}
@@ -255,7 +255,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
           <button
             data-env-terminal
             onClick={onSelect}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] p-text-2 p-fill hover:p-text"
+            className="flex items-center gap-1 px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
             title={`Open ${title}'s terminal`}
           ><TerminalIcon size={12} />Terminal</button>
         )}
@@ -263,7 +263,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
           <button
             data-env-connect
             onClick={onConnectDevice}
-            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] p-accent p-fill hover:opacity-90"
+            className="flex items-center gap-1 px-2 py-1 rounded-md p-t-control p-accent p-fill hover:opacity-90"
             title="Link a machine to your account"
           ><PlugIcon size={12} />Connect</button>
         )}

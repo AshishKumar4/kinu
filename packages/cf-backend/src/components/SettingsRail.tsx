@@ -52,7 +52,7 @@ export function SettingsSectionHead({ section }: { section: SettingsSection }) {
 
   return (
     <header className="mb-5">
-      <h2 className="p-heading text-[19px] leading-6 p-text">{label}</h2>
+      <h2 className="p-heading p-title p-text">{label}</h2>
       <p className="mt-1 p-row-text p-text-3">{about}</p>
     </header>
   );
@@ -83,7 +83,7 @@ export function SettingsRail({ active }: { active: SettingsSection }) {
             to={{ hash: `#${id}` }}
             data-settings-section={id}
             aria-current={current ? "true" : undefined}
-            className={`${tabCls} ${current ? "p-tab-active" : ""} lg:mb-0 lg:rounded-md lg:border-b-0 lg:px-3 lg:py-2 lg:text-[13px] ${
+            className={`${tabCls} ${current ? "p-tab-active" : ""} lg:mb-0 lg:rounded-md lg:border-b-0 lg:px-3 lg:py-2 ${
               current
                 ? "lg:bg-[var(--c-accent-subtle)] lg:text-[var(--c-accent-fg)]"
                 : "lg:text-[var(--c-text-2)] lg:hover:bg-[var(--c-neutral-tint)] lg:hover:text-[var(--c-text)]"

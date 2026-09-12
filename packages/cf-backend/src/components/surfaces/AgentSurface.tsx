@@ -80,7 +80,7 @@ function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wi
   return (
     <>
       <span
-        className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-mono ${
+        className={`inline-flex items-center rounded-full px-1.5 py-0.5 p-t-status ${
           wired ? (exposure === "native" ? "p-badge-neutral" : "p-accent-subtle p-accent") : "p-badge-neutral p-text-3"
         }`}
         title={reach}
@@ -140,7 +140,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
             twice — and recovering "the rest" would mean splitting a string
             whose shape belongs to the model, not to this component. */}
         {open
-          ? <span className="p-meta p-text-2 whitespace-pre-line leading-[18px]">{tool.description}</span>
+          ? <span className="p-meta p-text-2 whitespace-pre-line">{tool.description}</span>
           : <span className="p-row-text p-text-2">{tool.summary}</span>}
       </button>
       {tool.learned && <div className="px-3 pb-2.5"><ScoreBar value={tool.qualityScore} /></div>}
@@ -201,7 +201,7 @@ export function AgentSurface(
             ]).map(([l, v]) => (
               <div key={l} className={`grid grid-cols-[96px_minmax(0,1fr)] gap-3.5 py-2.5 border-b border-dashed border-[var(--c-dash)] last:border-0 items-baseline ${l === "Model" ? "font-mono" : ""}`}>
                 <span className="text-xs p-text-4">{l}</span>
-                <span className={`text-[13px] p-text-2 min-w-0 break-words ${l === "Model" ? "text-[11px] p-text-3" : "text-right"}`}>{v}</span>
+                <span className={`p-row-text p-text-2 min-w-0 break-words ${l === "Model" ? "p-annotation p-text-3" : "text-right"}`}>{v}</span>
               </div>
             ))}
           </div>
@@ -221,7 +221,7 @@ export function AgentSurface(
               <div className="flex items-center gap-2 mb-3">
                 <DatabaseIcon size={13} className="p-accent" />
                 <span className="text-xs font-mono p-accent">memory/MEMORY.md</span>
-                <span className="text-[10px] p-text-3 ml-auto">{memoryContent.length} chars</span>
+                <span className="p-meta p-text-3 ml-auto">{memoryContent.length} chars</span>
               </div>
               <div className="prose-chat p-text max-h-[500px] overflow-y-auto">
                 <MarkdownContent content={memoryContent} />
@@ -235,7 +235,7 @@ export function AgentSurface(
             <EmptyState icon={<MagnifyingGlassIcon size={28} />} title="No results" />
           ) : memory.map((entry, i) => (
             <div key={i} className="p-card p-3">
-              <span className="text-[11px] font-mono p-accent">{entry.updatedAt}</span>
+              <span className="p-annotation p-accent">{entry.updatedAt}</span>
               <p className="text-xs p-text-2 line-clamp-4 whitespace-pre-wrap mt-1 leading-relaxed">{entry.content}</p>
             </div>
           ))}
@@ -257,7 +257,7 @@ export function AgentSurface(
               <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0">
                 <span className="font-mono p-accent shrink-0">{f.key}</span>
                 <span className="p-text-2 truncate flex-1 text-right">{v.is(v.string(), f.value) ? f.value : JSON.stringify(f.value)}</span>
-                {f.confidence < 1 && <span className="text-[10px] p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
+                {f.confidence < 1 && <span className="p-meta p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
               </div>
             ))}
           </div>
@@ -304,8 +304,8 @@ export function AgentSurface(
 function EvolutionBlock({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <div className="text-[10px] uppercase tracking-normal p-text-3">{title}</div>
-      <p className="text-[10px] p-text-3 leading-relaxed">{hint}</p>
+      <div className="p-eyebrow">{title}</div>
+      <p className="p-meta p-text-3">{hint}</p>
       {children}
     </section>
   );
@@ -334,12 +334,12 @@ function SubordinatesCard({ rpc, workspaceName }: { rpc: Rpc; workspaceName: str
             <div key={sub.name} className="flex items-center gap-2.5 px-4 py-3">
               <span className={`size-1.5 shrink-0 rounded-full ${sub.status === "working" ? "p-dot-success p-dot-pulse" : sub.status === "awaiting_input" ? "p-dot-warning" : "bg-[var(--c-fill)] border p-border"}`} />
               <div className="min-w-0 flex-1">
-                <div className={`truncate text-[13px] ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</div>
-                <div className="truncate text-[11px] p-text-4">{sub.role}{sub.currentTask ? ` · ${sub.currentTask}` : ""}</div>
+                <div className={`truncate p-row-text ${sub.displayName ? "p-text-2" : "italic p-text-3"}`}>{agentTitle(sub.displayName)}</div>
+                <div className="truncate p-meta p-text-4">{sub.role}{sub.currentTask ? ` · ${sub.currentTask}` : ""}</div>
               </div>
               <Link
                 to={`/workspace/${workspaceName}/agents/${sub.name}`}
-                className="shrink-0 text-[11.5px] font-semibold p-accent"
+                className="shrink-0 p-t-control p-accent"
               >Message</Link>
             </div>
           ))}
