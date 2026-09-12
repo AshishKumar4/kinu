@@ -14,7 +14,7 @@
  * diff state, which is per-entry anyway.
  */
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { ComponentType } from "react";
+import type { ComponentType, ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
   GitBranchIcon, PackageIcon, BrainIcon,
@@ -22,15 +22,29 @@ import {
   NotePencilIcon, ArrowsClockwiseIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@kinu.run/core";
+import type { ChangelogEntryKind, DiffLine } from "@kinu.run/core";
+import * as v from "valibot";
 import type { Rpc } from "@/lib/protocol";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines, timeAgo, CodeBlock } from "./shared";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import {
+  DiffLines, timeAgo, CodeBlock,
+  changelogFactKey, changelogToolName, withToolDetails,
+  type ChangelogEntryView, type CraftedToolDetail,
+} from "./shared";
 
-export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
+export interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
+
+const CraftedToolListSchema = v.looseObject({
+  crafted: v.optional(v.array(v.looseObject({
+    name: v.string(),
+    description: v.optional(v.string()),
+    qualityScore: v.optional(v.number()),
+    usageCount: v.optional(v.number()),
+  }))),
+});
 
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
 
@@ -70,7 +84,33 @@ const changelogRevalidate = (): number => CHANGELOG_REVALIDATE_MS;
  * modal. `onSeen` zeroes the tab badge upstream.
  */
 export function useChangelog(rpc: Rpc, onSeen?: () => void) {
-  const load = useCallback(() => rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]), [rpc]);
+  const load = useCallback(async (): Promise<ChangelogView> => {
+    const view = await rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]);
+    // Enrichment, not the load: a tool list that fails or misshapes leaves
+    // the entries as their rows hold them. That absence is a value — the
+    // digest already arrived — not a fault to fail the journal over.
+    let tools: CraftedToolDetail[] = [];
+
+    try {
+      const parsed = v.safeParse(CraftedToolListSchema, await rpc<unknown>("getToolDescriptions", []));
+
+      if (parsed.success) {
+        tools = (parsed.output.crafted ?? []).map((tool) => ({
+          name: tool.name, description: tool.description ?? '',
+          qualityScore: tool.qualityScore ?? 0.5, usageCount: tool.usageCount ?? 0,
+        }));
+      }
+    } catch (cause) {
+      diagnostics.failure('changelog.tool_list_unavailable', toKinuError({
+        doing: 'enriching changelog tool entries with the live tool list',
+        cause, otherwise: 'unavailable',
+      }));
+      tools = [];
+    }
+
+    return { ...view, entries: withToolDetails(view.entries, tools) };
+  }, [rpc]);
+
   const { resource, reload } = useAsyncResource(load, changelogRevalidate);
   const view = lastValue(resource);
 
@@ -116,8 +156,72 @@ export function ChangelogFailure(
   </div>;
 }
 
+/** One labelled field of a retained memory or tool: the label column is fixed
+ *  so the values align down the card. */
+function EntryField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 text-[11px] leading-relaxed">
+      <span className="p-text-4">{label}</span>
+      <span className="p-text-2 min-w-0 break-words">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * What a retained memory or tool IS, from its row. A fact's row holds its
+ * key, its stored record, and a revert while it is in effect; a tool's row
+ * holds its name and its stamped evidence, joined to the live tool list for
+ * purpose and score. No Edit or Remove: no UI RPC exposes either, so none is
+ * offered (the revert path is the entry's own `revert`, rendered by the card).
+ */
+function EntryFacts({ entry }: { entry: ChangelogEntryView }) {
+  const when = new Date(entry.at);
+  const whenText = isNaN(when.getTime()) ? null : when.toLocaleString();
+
+  if (entry.kind === 'fact') {
+    const key = changelogFactKey(entry);
+    // A fact row in the digest is live: the builder lists agent_facts, and a
+    // forgotten fact is gone rather than marked. `revert` present therefore
+    // reads applied; a staged decision reads proposed.
+    const status = entry.decision ? 'proposed' : entry.revert ? 'applied' : null;
+
+    return (
+      <div className="space-y-1">
+        {key !== null && <EntryField label="Key"><span className="font-mono">{key}</span></EntryField>}
+        <EntryField label="Stored"><span className="font-mono whitespace-pre-wrap break-words">{entry.evidence || entry.summary}</span></EntryField>
+        <EntryField label="Scope">this workspace</EntryField>
+        {status !== null && <EntryField label="Status">{status}</EntryField>}
+        {whenText !== null && <EntryField label="When"><span title={when.toISOString()}>{whenText}</span></EntryField>}
+      </div>
+    );
+  }
+
+  if (entry.kind === 'tool') {
+    const name = changelogToolName(entry);
+    const detail = entry.toolDetail;
+
+    return (
+      <div className="space-y-1">
+        {name !== null && <EntryField label="Tool"><span className="font-mono">{name}</span></EntryField>}
+        {detail ? (
+          <>
+            {detail.description !== '' && <EntryField label="Purpose">{detail.description}</EntryField>}
+            <EntryField label="Score">EMA {detail.qualityScore.toFixed(2)} over {detail.usageCount} use{detail.usageCount === 1 ? '' : 's'}</EntryField>
+            <EntryField label="Scope">this workspace</EntryField>
+          </>
+        ) : (
+          <EntryField label="Stored"><span className="font-mono whitespace-pre-wrap break-words">{entry.evidence || entry.summary}</span></EntryField>
+        )}
+        {whenText !== null && <EntryField label="Updated"><span title={when.toISOString()}>{whenText}</span></EntryField>}
+      </div>
+    );
+  }
+
+  return null;
+}
+
 export interface ChangelogEntryCardProps {
-  entry: ChangelogEntry;
+  entry: ChangelogEntryView;
   /** Render inside the journal's shared grouped-row container. */
   grouped?: boolean;
   /** Entries newer than this were unseen when the surface opened. */
@@ -180,7 +284,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
 
   const Icon = KIND_ICON[entry.kind];
   const fresh = entry.at > seenAt;
-  const hasDetails = Boolean(entry.evidence || entry.items?.length);
+  const hasDetails = Boolean(entry.evidence || entry.items?.length || entry.kind === 'fact' || entry.kind === 'tool');
   const detailsId = `changelog-details-${encodeURIComponent(entry.id)}`;
 
   const headline = (
@@ -236,13 +340,16 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       {hasDetails && (
         <div id={detailsId} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded}
           className="mt-2 ml-6 border-t p-border pt-2">
-          {entry.evidence && (
+          {(entry.kind === 'fact' || entry.kind === 'tool') && (
+            <div className="mb-2"><EntryFacts entry={entry} /></div>
+          )}
+          {entry.evidence && entry.kind !== 'fact' && entry.kind !== 'tool' && (
             <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
           )}
           {entry.items && entry.items.length > 0 && (
-            <ul className={`${entry.evidence ? "mt-2" : ""} space-y-1.5`}>
+            <ul className={`${entry.evidence && entry.kind !== 'fact' && entry.kind !== 'tool' ? "mt-2" : ""} space-y-1.5`}>
               {entry.items.map((item) => (
                 <SubEntry key={item.id} entry={item} rpc={rpc} onReverted={onReverted} />
               ))}
@@ -385,7 +492,7 @@ function StagedSkillDecision(
 }
 
 /** A grouped entry's members — same actions, no icon or diff of their own. */
-function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc; onReverted: () => void }) {
+function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntryView; rpc: Rpc; onReverted: () => void }) {
   const [kept, setKept] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
@@ -411,7 +518,9 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text-2 leading-relaxed">{entry.summary}</div>
-          {entry.evidence && (
+          {(entry.kind === 'fact' || entry.kind === 'tool') ? (
+            <div className="mt-1"><EntryFacts entry={entry} /></div>
+          ) : entry.evidence && (
             <div className="mt-1 p-annotation p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
