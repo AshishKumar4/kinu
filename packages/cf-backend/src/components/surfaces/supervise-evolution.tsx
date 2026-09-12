@@ -1,12 +1,9 @@
 /**
  * The Supervise altitude's Evolution content: the self-changes the workspace's
- * changelog records, and the decision whether they exist.
- *
- * The gate is the changelog's own classification. A scaffold edit, a kept
- * lesson, a promoted proposal lands as a `scaffold | tool | fact | gepa |
- * prompt_section | refinement` entry — an actual self-change. `outcomes` and
- * `replay` entries are measurements a closed window leaves behind, so a digest
- * of only those renders NOTHING: no heading, no card, no empty state.
+ * changelog records. The digest read itself decides what counts — the page
+ * asks for `changesOnly`, so the kinds that are measurements (`outcomes`,
+ * `replay`) never arrive: a window that closed quietly renders NOTHING — no
+ * heading, no card, no empty state.
  */
 import { Badge } from "@cloudflare/kumo";
 import { SparkleIcon } from "@phosphor-icons/react";
@@ -18,18 +15,6 @@ export const EvolutionEntrySchema = v.object({
 });
 
 export type EvolutionEntry = v.InferOutput<typeof EvolutionEntrySchema>;
-
-const CHANGE_KINDS = {
-  scaffold: true, tool: true, fact: true, gepa: true, prompt_section: true, refinement: true,
-} satisfies Record<string, true>;
-
-/** The entries that ARE evolution: change-bearing kinds only, so a window that
- *  closed quietly — the digest's `outcomes`/`replay` measurement rows — never
- *  keeps the section alive. The page calls it on the loaded digest before the
- *  section is mounted at all. */
-export function evolutionChanges(entries: readonly EvolutionEntry[]): EvolutionEntry[] {
-  return entries.filter((entry) => entry.kind in CHANGE_KINDS);
-}
 
 /** The loaded changes, newest first. An empty list mounts nothing — a digest
  *  of only bookkeeping must not leave a heading behind. */

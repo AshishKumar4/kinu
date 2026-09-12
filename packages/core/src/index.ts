@@ -1342,7 +1342,6 @@ export {
   boundRunEventQuery,
   RUN_EVENT_LIMIT_DEFAULT,
   RUN_EVENT_LIMIT_MAX,
-  cacheHitRate,
   summarizeSteps,
   CACHE_HIT_EMA_ALPHA,
   SPEND_SOURCES,

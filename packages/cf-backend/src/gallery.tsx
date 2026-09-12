@@ -54,7 +54,12 @@
  *                                  machine reports in
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=supervisefresh → the same view before any evolution has
- *                                  happened: the Evolution block is absent
+ *                                  happened: the Evolution block is absent and
+ *                                  the jobs read fails, until the browser gate
+ *                                  dispatches `gallery:supervise-evolve` and
+ *                                  `gallery:supervise-jobs-heal`;
+ *                                  `gallery:supervise-evolution-fail` arms a
+ *                                  one-shot failure on the next digest read
  *   /gallery.html?frame=settings → the per-agent Settings page
  *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
  *                                  competition, in Column C's actual width
@@ -137,6 +142,7 @@ import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
+import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/pages/UserMcpPage";
 import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
@@ -4402,11 +4408,29 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
 
 /** What the Evolution block gates on: one entry per kind the changelog can
  *  carry here, so the section only exists because a change already happened.
- *  `supervisefresh` answers the empty digest instead and the block is absent. */
-const SUPERVISE_CHANGELOG = {
+ *  `supervisefresh` answers the empty digest instead and the block is absent —
+ *  until `gallery:supervise-evolve`, the window event the browser gate uses to
+ *  land one change on a live page. The same event pair drives the jobs read:
+ *  `supervisefresh` starts with `listBackgroundJobs` failing and
+ *  `gallery:supervise-jobs-heal` repairs it, so a broken read and its retry
+ *  are photographable too; `gallery:supervise-evolution-fail` makes the next
+ *  digest read throw ONCE, so a refresh failure over last-good entries is
+ *  observable too. The `changesOnly` flag is answered the way the real
+ *  read answers it — measurement kinds filtered before the limit — because a
+ *  fixture that ignored it would photograph a section that cannot exist. */
+const SuperviseChangelogArgsSchema = v.object({
+  limit: v.optional(v.number()),
+  changesOnly: v.optional(v.boolean()),
+});
+
+interface SuperviseChangelogDigest {
+  seenAt: number; unseenCount: number; entries: EvolutionEntry[];
+}
+
+const SUPERVISE_CHANGELOG: SuperviseChangelogDigest = {
   seenAt: NOW - 30e5, unseenCount: 2,
   entries: [
-    { id: "cl_s1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8,
+    { id: "cl_s1", kind: "scaffold", at: NOW - 10e5,
       summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
       evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie" },
     { id: "cl_s2", kind: "outcomes", at: NOW - 20e5,
@@ -4418,10 +4442,45 @@ const SUPERVISE_CHANGELOG = {
   ],
 };
 
+const SUPERVISE_EMPTY_CHANGELOG: SuperviseChangelogDigest = { seenAt: NOW, unseenCount: 0, entries: [] };
+
+/** What `supervisefresh` answers after `gallery:supervise-evolve`: the ONE
+ *  change that landed on the live page — the real `changesOnly` read answers
+ *  exactly this, the newest change inside the limit. */
+const SUPERVISE_EVOLVED_CHANGELOG: SuperviseChangelogDigest = {
+  seenAt: NOW, unseenCount: 1,
+  entries: [
+    { id: "cl_e1", kind: "scaffold", at: NOW - 5 * 60e3,
+      summary: "I improved how I work (won 4 of 6 trial runs)",
+      evidence: "Promoted scaffold v9 — session reflection · shadow 4W-1L-1T" },
+  ],
+};
+
 const superviseRpc =
-  (changelog: typeof SUPERVISE_CHANGELOG): Rpc =>
+  (state: { current: { evolved: boolean; jobsHealthy: boolean; evolutionFailNext: boolean } },
+    evolvedAtStart: boolean): Rpc =>
   async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "getEvolutionChangelog") return rpcResult(changelog).json<T>();
+    if (method === "getEvolutionChangelog") {
+      // One armed failure, consumed by whichever read reaches it first — the
+      // gate needs the failure to land over last-good entries, not to persist.
+      if (state.current.evolutionFailNext) {
+        state.current.evolutionFailNext = false;
+
+        throw new Error("evolution digest fixture failed");
+      }
+
+      const request = v.parse(SuperviseChangelogArgsSchema, args?.[0] ?? {});
+
+      const changelog = evolvedAtStart
+        ? SUPERVISE_CHANGELOG
+        : state.current.evolved ? SUPERVISE_EVOLVED_CHANGELOG : SUPERVISE_EMPTY_CHANGELOG;
+
+      const entries = request.changesOnly === true
+        ? changelog.entries.filter((entry) => entry.kind !== "outcomes" && entry.kind !== "replay")
+        : changelog.entries;
+
+      return rpcResult({ ...changelog, entries }).json<T>();
+    }
 
     if (method === "getRunSummaries") {
       const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
@@ -4436,17 +4495,44 @@ const superviseRpc =
 
     if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
 
-    if (method === "listBackgroundJobs") return rpcResult(SUPERVISE_JOBS).json<T>();
+    if (method === "listBackgroundJobs") {
+      if (!state.current.jobsHealthy) throw new Error("jobs fixture failed");
+
+      return rpcResult(SUPERVISE_JOBS).json<T>();
+    }
 
     return stubRpc<T>(method, args);
   };
 
 function SuperviseFrame({ evolved = true }: { evolved?: boolean }) {
+  // What the two window events flip. The fresh frame starts with an empty
+  // digest AND a failing jobs read so both transitions are observable on the
+  // page's own revalidation cadence — the evolved frame stays healthy
+  // throughout, its digest already populated.
+  const state = useRef({ evolved, jobsHealthy: evolved, evolutionFailNext: false });
+  useEffect(() => {
+    const evolve = () => { state.current.evolved = true; };
+
+    const heal = () => { state.current.jobsHealthy = true; };
+
+    const failEvolution = () => { state.current.evolutionFailNext = true; };
+
+    window.addEventListener("gallery:supervise-evolve", evolve);
+    window.addEventListener("gallery:supervise-jobs-heal", heal);
+    window.addEventListener("gallery:supervise-evolution-fail", failEvolution);
+
+    return () => {
+      window.removeEventListener("gallery:supervise-evolve", evolve);
+      window.removeEventListener("gallery:supervise-jobs-heal", heal);
+      window.removeEventListener("gallery:supervise-evolution-fail", failEvolution);
+    };
+  }, []);
+
+  const rpc = useMemo(() => superviseRpc(state, evolved), [evolved]);
+
   return (
     <div className="p-bg p-text min-h-screen">
-      <SupervisePage rpc={superviseRpc(
-        evolved ? SUPERVISE_CHANGELOG : { seenAt: NOW, unseenCount: 0, entries: [] },
-      )} />
+      <SupervisePage rpc={rpc} />
     </div>
   );
 }
