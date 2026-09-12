@@ -227,9 +227,9 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       // may not open one (see getLocalStatus).
       memorySize: 0,
       createdAt: status.createdAt ?? 0,
-      conversationCount: actor && tableExists(db, 'messages')
+      conversationCount: actor && tableExists(db, 'actor_messages')
         ? get<{ c: number }>(
-          db, `SELECT COUNT(DISTINCT session_id) AS c FROM messages WHERE actor_id = ?`, actor.actorId,
+          db, `SELECT COUNT(DISTINCT session_id) AS c FROM actor_messages WHERE actor_id = ?`, actor.actorId,
         )?.c ?? 0
         : 0,
       model: status.model,
@@ -1088,9 +1088,9 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       // the database read-only.
       memorySize: 0,
       createdAt: row.createdAt,
-      conversationCount: tableExists(db, 'messages')
+      conversationCount: tableExists(db, 'actor_messages')
         ? get<{ c: number }>(db,
-          `SELECT COUNT(DISTINCT session_id) AS c FROM messages WHERE actor_id = ?`, actorId)?.c ?? 0
+          `SELECT COUNT(DISTINCT session_id) AS c FROM actor_messages WHERE actor_id = ?`, actorId)?.c ?? 0
         : 0,
       model: config?.getModel() ?? null,
       reasoningEffort: config?.getReasoningEffort() ?? null,
@@ -1138,8 +1138,8 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
     craftedToolCount: tableExists(db, 'crafted_tools')
       ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM crafted_tools`)?.c ?? 0
       : 0,
-    messageCount: actor && tableExists(db, 'messages')
-      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM messages WHERE actor_id = ?`, actor.actorId)?.c ?? 0
+    messageCount: actor && tableExists(db, 'actor_messages')
+      ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM actor_messages WHERE actor_id = ?`, actor.actorId)?.c ?? 0
       : 0,
     model: tableExists(db, 'actor_config')
       ? openWorkspaceMainActor(makeSql(db)).config.getModel()

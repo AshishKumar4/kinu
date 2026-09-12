@@ -2,7 +2,7 @@
  * The wake guard for the SDK's transcript store.
  *
  * Every conversational reader in core selects `assistant_messages` where it
- * exists and plain `messages` where it does not (`hasPaneStore`), so an SDK
+ * exists and plain `actor_messages` where it does not (`hasPaneStore`), so an SDK
  * that moves the transcript out of that table does not make a hosted workspace
  * fail — it makes fork, archive, search, the eval split and inherited context
  * read an empty default chat. `@cloudflare/think`'s `brisk-chats-branch`

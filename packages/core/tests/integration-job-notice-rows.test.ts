@@ -300,14 +300,14 @@ describe('a settled background job announces itself once, and not as the owner',
   });
 
   test('the plain mirror carries the stamp at rest, and the paged read serves it', () => {
-    // The CLI backend has no assistant_messages — its `messages` table IS the
+    // The CLI backend has no assistant_messages — its `actor_messages` table IS the
     // transcript. A notice written there must state its authorship in the row
     // itself, not lean on the id-prefix fallback that reads rows predating
     // stamps; and the paged read must serve what the row states.
     const ws = evictedWorkspace();
     const sql = makeSql(ws.db);
     void sql`
-      INSERT INTO messages (actor_id, id, session_id, role, content, metadata)
+      INSERT INTO actor_messages (actor_id, id, session_id, role, content, metadata)
       VALUES (${ws.actor.actorId},
               ${`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${backgroundJobWakeTrigger(JOB)}`},
               ${'default'}, ${'user'},

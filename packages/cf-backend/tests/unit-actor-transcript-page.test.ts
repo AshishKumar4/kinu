@@ -29,7 +29,7 @@ interface Root {
 /**
  * `n` turns of conversation, oldest first, in one actor's partition.
  *
- * Written through the production `messages` columns, including `actor_id`: a
+ * Written through the production `actor_messages` columns, including `actor_id`: a
  * seed without the predicate column would put every fixture row in every
  * actor's conversation, which is exactly the leak this shape exists to catch.
  * `created_at` intentionally repeats across rows, because several messages of
@@ -41,7 +41,7 @@ function seed(sql: SqlExecutor, actorId: string, n: number): string[] {
   for (let i = 1; i <= n; i++) {
     const id = `m${i}`;
     ids.push(id);
-    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actorId}, ${id}, 'default', ${i % 2 === 0 ? 'assistant' : 'user'}, ${`message ${i}`}, ${i})`;
   }
 

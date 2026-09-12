@@ -580,7 +580,7 @@
     "text",
     "updated_at"
   ],
-  "messages@packages/core/src/identity/schema.ts": [
+  "actor_messages@packages/core/src/identity/schema.ts": [
     "actor_id",
     "id",
     "session_id",

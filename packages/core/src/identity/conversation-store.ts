@@ -2,9 +2,9 @@
  * The conversation store — the transcript as a DAG, and the one place that
  * decides which SQLite table owns the default chat.
  *
- * The transcript has always been a tree. `messages.parent_id` has existed since
+ * The transcript has always been a tree. `actor_messages.parent_id` has existed since
  * the schema's first commit (`identity/schema.ts`, whose own comment calls it a
- * "simplified session tree") and is indexed by `idx_msg_parent`; on the
+ * "simplified session tree") and is indexed by `idx_actor_messages_parent`; on the
  * Cloudflare backend the SDK's own store — `assistant_messages`, written by
  * `agents`' `AgentSessionProvider` — carries the same edges, defaults a missing
  * parent to the latest leaf so no message is ever edgeless, and already exposes
@@ -24,7 +24,7 @@
  *  2. One copy of a conversation, or none. Every reader goes through THIS
  *     module, and each workspace carries its default chat in exactly ONE
  *     store. A second copy — a post-turn reconciler projecting the pane's
- *     newest-leaf ancestry into plain `messages` rows — leaves an interrupted
+ *     newest-leaf ancestry into plain `actor_messages` rows — leaves an interrupted
  *     turn, or a sibling branch off an older node, unprojected until the next
  *     pass, invisible to status counts, paging, search and outcome
  *     attribution.
@@ -46,7 +46,7 @@ import { tolerate } from '../obs/index';
  */
 export const SESSION_TREE_MAX_DEPTH = 10_000;
 
-/** The chat session every conversational read and write uses. `messages` also
+/** The chat session every conversational read and write uses. `actor_messages` also
  *  holds `session_id = 'mcts'` rows written by the durable MCTS session writer,
  *  which are a different tree and are never touched here. */
 export const CHAT_SESSION_ID = 'default';
@@ -76,7 +76,7 @@ export interface ChatPaneRow {
  * Which store owns this workspace's default chat.
  *
  * The SDK's pane store where it exists (it is the one the chat pane renders,
- * so it is the one whose ids the user can point at), plain `messages`
+ * so it is the one whose ids the user can point at), plain `actor_messages`
  * otherwise — the CLI has no second store and writes its own edges. Asked as a
  * question against `sqlite_master`, never discovered by catching: a missing
  * table is a normal state of a workspace that has not run a hosted turn, while
@@ -88,7 +88,7 @@ export interface ChatPaneRow {
  *
  *   - A cloud archive imported into a LOCAL workspace arrives carrying the
  *     pane schema and rows; {@link normalizeImportedConversation} projects
- *     them into `messages` and drops the pane, so a local database never
+ *     them into `actor_messages` and drops the pane, so a local database never
  *     carries a second store.
  *   - A fork whose snapshot carries rich rows lands in the destination the
  *     caller DECLARES (`writeForkSnapshot`'s `targetAuthority`); hosted
@@ -134,7 +134,7 @@ export function forkPointExists(sql: SqlExecutor, actor: ActorHandle, messageId:
   }
 
   return sql<{ name: string }>`
-    SELECT id AS name FROM messages
+    SELECT id AS name FROM actor_messages
     WHERE actor_id = ${actor.actorId} AND id = ${messageId} AND session_id = ${CHAT_SESSION_ID} LIMIT 1
   `.length > 0;
 }
@@ -225,11 +225,11 @@ export function ancestryIds(sql: SqlExecutor, actor: ActorHandle, messageId: str
     authority: 'plain',
     ids: sql<{ id: string }>`
       WITH RECURSIVE ancestry(id, parent_id, depth) AS (
-        SELECT id, parent_id, 0 FROM messages
+        SELECT id, parent_id, 0 FROM actor_messages
         WHERE actor_id = ${actorId} AND id = ${messageId} AND session_id = ${CHAT_SESSION_ID}
         UNION ALL
         SELECT m.id, m.parent_id, a.depth + 1
-        FROM messages m JOIN ancestry a ON m.id = a.parent_id
+        FROM actor_messages m JOIN ancestry a ON m.id = a.parent_id
         WHERE m.actor_id = ${actorId} AND m.session_id = ${CHAT_SESSION_ID}
           AND a.depth < ${SESSION_TREE_MAX_DEPTH}
       )
@@ -253,7 +253,7 @@ export function messageRowById(sql: SqlExecutor, actor: ActorHandle, id: string)
   actor.assertCurrent();
 
   return sql<SessionTreeNode>`
-    SELECT id, parent_id, role, content, created_at FROM messages
+    SELECT id, parent_id, role, content, created_at FROM actor_messages
     WHERE actor_id = ${actor.actorId} AND id = ${id} AND session_id = ${CHAT_SESSION_ID} LIMIT 1
   `[0];
 }
@@ -274,7 +274,7 @@ function rowsForIds<R>(ids: string[], read: (id: string) => R | undefined): R[] 
  *
  * A node lives in whichever store owns this backend's default chat, so the
  * lookup is "the store that has it, SDK's first". Non-default trees (`mcts`,
- * local peers) always live in `messages`; they have no ids that collide with
+ * local peers) always live in `actor_messages`; they have no ids that collide with
  * the pane's, so the rich-first probe cannot answer for them by accident.
  *
  * Empty when the id is in neither, which is the only honest answer and the one a
@@ -304,7 +304,7 @@ export interface ForkChainRow {
 
 /** The ancestry as a fork carries it across a process boundary. */
 export interface ForkAncestry {
-  /** The chain for the plain `messages` table, root first, with `content` null
+  /** The chain for the plain `actor_messages` table, root first, with `content` null
    *  wherever {@link ForkAncestry.pane} carries the same id: the plain row is a
    *  flattened projection of the rich one, so carrying both ships one
    *  conversation twice — 14.4 MiB beside 20.5 MiB for a real long session. */
@@ -370,7 +370,7 @@ export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number 
   if (usesPaneStore(sql, actor)) return sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`[0]?.c ?? 0;
 
   return sql<{ c: number }>`
-    SELECT COUNT(*) AS c FROM messages
+    SELECT COUNT(*) AS c FROM actor_messages
     WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID}`[0]?.c ?? 0;
 }
 
@@ -379,7 +379,7 @@ interface StoredTranscriptRow {
   role: string;
   /** Raw stored content: the pane's serialized UI message, or plain text. */
   content: string;
-  /** Provenance column — exists on `messages` only. */
+  /** Provenance column — exists on `actor_messages` only. */
   metadata?: string | null;
   created_at: string | number;
 }
@@ -463,17 +463,17 @@ export function conversationPageRows(
   const from = after === null
     ? null
     : anchorRowid(sql`
-        SELECT rowid AS seek FROM messages
+        SELECT rowid AS seek FROM actor_messages
         WHERE actor_id = ${actorId} AND id = ${after} AND session_id = ${CHAT_SESSION_ID}`);
 
   return mapPage(seekPage(from === null
     ? sql<StoredTranscriptRow>`
-      SELECT id, role, content, metadata, created_at FROM messages
+      SELECT id, role, content, metadata, created_at FROM actor_messages
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID}
         AND role IN ('user', 'assistant', 'system')
       ORDER BY rowid DESC LIMIT ${over}`
     : sql<StoredTranscriptRow>`
-      SELECT id, role, content, metadata, created_at FROM messages
+      SELECT id, role, content, metadata, created_at FROM actor_messages
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID}
         AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
       ORDER BY rowid DESC LIMIT ${over}`,
@@ -498,7 +498,7 @@ export interface ConversationTurnPair {
  * The request/response pair behind a turn id — what outcome attribution, take
  * picks and explicit feedback grade a turn from.
  *
- * The default-chat arm reads the authority; the `messages` arm exists for the
+ * The default-chat arm reads the authority; the `actor_messages` arm exists for the
  * NON-default trees (`mcts`, local peers) whose turn ids never enter the pane
  * store. Where the pane owns the backend there is no third place a default-chat
  * turn can live, so no fallback into stale mirror rows happens.
@@ -595,7 +595,7 @@ export function conversationTurnPair(
       }>`
         SELECT m.session_id AS sessionId, m.content AS responseRaw,
                u.content AS requestRaw, u.created_at AS startedAt, m.created_at AS endedAt
-        FROM messages m LEFT JOIN messages u ON u.actor_id = m.actor_id AND u.id = m.parent_id
+        FROM actor_messages m LEFT JOIN actor_messages u ON u.actor_id = m.actor_id AND u.id = m.parent_id
         WHERE m.actor_id = ${actorId} AND m.id = ${messageId}
           AND m.session_id <> ${CHAT_SESSION_ID} LIMIT 1`
     : sql<{
@@ -604,7 +604,7 @@ export function conversationTurnPair(
       }>`
         SELECT m.session_id AS sessionId, m.content AS responseRaw,
                u.content AS requestRaw, u.created_at AS startedAt, m.created_at AS endedAt
-        FROM messages m LEFT JOIN messages u ON u.actor_id = m.actor_id AND u.id = m.parent_id
+        FROM actor_messages m LEFT JOIN actor_messages u ON u.actor_id = m.actor_id AND u.id = m.parent_id
         WHERE m.actor_id = ${actorId} AND m.id = ${messageId} LIMIT 1`)[0];
 
   if (!row) return undefined;
@@ -632,7 +632,7 @@ export function conversationTurnPair(
  * the `metadata` column, and a row with neither resolves by its id prefix.
  *
  * `sessionId` scopes the plain store, where several conversations share one
- * `messages` table; the pane holds the default chat only, so it needs none.
+ * `actor_messages` table; the pane holds the default chat only, so it needs none.
  */
 export function operatorMessageAdmitted(
   sql: SqlExecutor,
@@ -646,7 +646,7 @@ export function operatorMessageAdmitted(
   }
 
   return sql<{ id: string; metadata: string | null }>`
-    SELECT id, metadata FROM messages
+    SELECT id, metadata FROM actor_messages
     WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId} AND role = 'user'`
     .some((row) => turnAuthor({ id: row.id, metadata: storedStamp(row.metadata) }) === 'operator');
 }
@@ -666,7 +666,7 @@ function storedStamp(metadata: string | null): JsonObject | undefined {
  * Land a cloud import on the LOCAL authority.
  *
  * A cloud export carries the pane store; a local workspace's default chat
- * lives in `messages` alone. Run once over an imported database before it is
+ * lives in `actor_messages` alone. Run once over an imported database before it is
  * exposed: every pane row is projected into the plain store (text flattened,
  * ms stamps) and the pane schema is removed — so "does assistant_messages
  * exist" keeps meaning exactly one thing everywhere else. Returns how many
@@ -683,7 +683,7 @@ export function normalizeImportedConversation(sql: SqlExecutor, actor: ActorHand
 
   for (const row of rows) {
     void sql`
-      INSERT OR IGNORE INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${row.id}, ${CHAT_SESSION_ID}, ${row.parent_id}, ${row.role},
               ${uiMessageText(row.content)}, ${paneStampMs(row.created_at)})
     `;

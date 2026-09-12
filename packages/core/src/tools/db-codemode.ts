@@ -11,7 +11,7 @@
  * asks for (§9.2): "A keyword filter or caller-supplied actor ID is not
  * sufficient authority." There is no keyword filter here because there are no
  * keywords to filter — a name that is not in the catalogue resolves to nothing,
- * so `messages`, `workspace_capability` and `sqlite_master` are not denied by a
+ * so `actor_messages`, `workspace_capability` and `sqlite_master` are not denied by a
  * list, they are unreachable by construction.
  *
  * The three walls, in the order an attempt meets them:

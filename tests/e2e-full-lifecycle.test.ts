@@ -124,9 +124,9 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
     VALUES (${rt.actor.actorId}, ${id}, ${'e2e-full'}, ${'user'}, ${userMessage})`;
-  void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+  void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
     VALUES (${rt.actor.actorId}, ${crypto.randomUUID()}, ${'e2e-full'}, ${id}, ${'assistant'}, ${responseText})`;
 
   return {
@@ -195,7 +195,7 @@ describe('E2E Full Lifecycle', () => {
       .map(t => t.name);
 
     expect(tables).toContain('workspace_identity');
-    expect(tables).toContain('messages');
+    expect(tables).toContain('actor_messages');
     expect(tables).toContain('inodes');
     expect(tables).toContain('search_nodes');
     expect(tables).toContain('scaffold_versions');
@@ -334,7 +334,7 @@ describe('E2E Full Lifecycle', () => {
     expect(info.scaffoldVersion).toBeGreaterThanOrEqual(0);
 
     // Messages survived (at minimum: turns that completed × 2 messages each)
-    const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
+    const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM actor_messages').get()?.c ?? 0;
     expect(msgCount).toBeGreaterThanOrEqual(2); // at least 1 turn completed
     expect(storedMemoryFact(db2, await rt2.memory.read('memory/MEMORY.md')),
       'the memory note did not survive the close and reopen — neither memory/MEMORY.md nor '
@@ -387,7 +387,7 @@ describe('E2E Full Lifecycle', () => {
     for (const f of vfsFiles) console.log(`    ${f.path} (${f.size} bytes)`);
 
     const messages = db.query<{ role: string; preview: string }, []>(
-      'SELECT role, substr(content, 1, 80) as preview FROM messages ORDER BY created_at',
+      'SELECT role, substr(content, 1, 80) as preview FROM actor_messages ORDER BY created_at',
     ).all();
 
     console.log(`\n  Messages (${messages.length}):`);
@@ -400,7 +400,7 @@ describe('E2E Full Lifecycle', () => {
     // persistence claim, not a second copy of step 1. A bare `length > 0`
     // stood here and passed over any store that opened at all.
     for (const table of [
-      'workspace_identity', 'messages', 'inodes', 'search_nodes',
+      'workspace_identity', 'actor_messages', 'inodes', 'search_nodes',
       'scaffold_versions', 'crafted_tools', 'fibers',
     ]) {
       expect(tables).toContain(table);

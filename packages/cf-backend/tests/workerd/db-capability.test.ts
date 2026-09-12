@@ -153,11 +153,11 @@ describe('the db capability on Durable Object SQLite', () => {
     const run = await probe('attack').program(`
       // Probe the host's own tables, then do the work that is allowed
       const reached = {};
-      for (const target of ['messages', 'workspace_actors', 'workspace_identity', 'agent_data_tables', 'run_events', 'sqlite_master']) {
+      for (const target of ['actor_messages', 'workspace_actors', 'workspace_identity', 'agent_data_tables', 'run_events', 'sqlite_master']) {
         reached[target] = (await db.select(target)).reason;
       }
       reached.dropHost = (await db.dropTable('workspace_actors')).reason;
-      reached.injection = (await db.createTable({ name: 'x; DROP TABLE messages', scope: 'actor', columns: [{ name: 'k', type: 'text' }] })).reason;
+      reached.injection = (await db.createTable({ name: 'x; DROP TABLE actor_messages', scope: 'actor', columns: [{ name: 'k', type: 'text' }] })).reason;
       reached.actorColumn = (await db.createTable({ name: 'sneaky', scope: 'actor', columns: [{ name: 'actor_id', type: 'text' }] })).reason;
       ${LEDGER}
       await db.insert('ledger', [{ key: 'allowed' }]);
@@ -166,7 +166,7 @@ describe('the db capability on Durable Object SQLite', () => {
 
     expect(resultOf(run.answer)).toEqual({
       reached: {
-        messages: 'missing',
+        actor_messages: 'missing',
         workspace_actors: 'missing',
         workspace_identity: 'missing',
         agent_data_tables: 'missing',
@@ -181,7 +181,7 @@ describe('the db capability on Durable Object SQLite', () => {
 
     // Every host table the program reached for is still there, and no table was
     // created under an injected name.
-    for (const name of ['messages', 'workspace_actors', 'workspace_identity', 'agent_data_tables', 'run_events']) {
+    for (const name of ['actor_messages', 'workspace_actors', 'workspace_identity', 'agent_data_tables', 'run_events']) {
       expect(run.tables).toContain(name);
     }
 

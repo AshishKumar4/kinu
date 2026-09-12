@@ -83,7 +83,7 @@ export function inheritedContextFromHistory(
 
 /**
  * The recent durable conversation of one actor as inherited context, off the
- * plain `messages` store.
+ * plain `actor_messages` store.
  *
  * The SAME cap and the SAME disclosure the cloud backend's row digest applies:
  * the newest {@link INHERITED_CONTEXT_CAP} user/assistant rows of the session,
@@ -102,7 +102,7 @@ export function inheritedContextFromConversation(
   const rows = sql<Row>`
     SELECT id, role, content, created_at
     FROM (
-      SELECT id, role, content, created_at, rowid AS seq FROM messages
+      SELECT id, role, content, created_at, rowid AS seq FROM actor_messages
       WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId}
         AND role IN ('user', 'assistant')
       ORDER BY created_at DESC, rowid DESC
@@ -110,7 +110,7 @@ export function inheritedContextFromConversation(
     ) tail
     ORDER BY created_at ASC, seq ASC`;
 
-  const total = sql<{ n: number }>`SELECT COUNT(*) AS n FROM messages
+  const total = sql<{ n: number }>`SELECT COUNT(*) AS n FROM actor_messages
     WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId}
       AND role IN ('user', 'assistant')`[0]?.n ?? rows.length;
 

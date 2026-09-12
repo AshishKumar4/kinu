@@ -1,5 +1,5 @@
 // Behavior tests for ConversationSearchStore, the zero-LLM transcript reader
-// over the canonical `messages` table (the store both backends persist to).
+// over the root's `assistant_messages` and each actor's `actor_messages` store.
 import { describe, test, expect } from 'bun:test';
 import { createTestSql, testActorHandle, type TestSql } from '@kinu.run/test-utils';
 import { ConversationSearchStore, initAllTables } from '../src/index';
@@ -10,11 +10,9 @@ interface Fixture { sql: TestSql['sql']; store: ConversationSearchStore }
 /**
  * The one actor every fixture in this file binds.
  *
- * BOTH stores key on (actor_id, id) — the pane is vendor-shaped, not
- * vendor-owned — and the store reads only its own actor's rows, so the seeded
- * transcript and the store under test have to name the same actor: stated once
- * here rather than repeated at each seed, because a seed that drifted from the
- * handle would read as an empty index rather than as a mismatch.
+ * `actor_messages` keys on (actor_id, id); the vendor-owned pane belongs to
+ * the root and carries no actor column. The plain transcript and its reader
+ * must name the same actor, or the index would look empty.
  */
 const ACTOR_ID = 'actor-search';
 
@@ -23,7 +21,7 @@ let nextRow = 0;
 function insert(sql: TestSql['sql'], sessionId: string, role: string, content: string, createdAt?: number): string {
   const id = `m-${++nextRow}-${sessionId}`;
   const ts = createdAt ?? 1_000_000 + nextRow * 1000;
-  void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+  void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${ACTOR_ID}, ${id}, ${sessionId}, ${role}, ${content}, ${ts})`;
 
   return id;
@@ -35,30 +33,6 @@ function setup(): Fixture {
 
   return { sql, store: new ConversationSearchStore(sql, testActorHandle(sql, { actorId: ACTOR_ID })) };
 }
-
-describe('a workspace created before the index carried actor_id', () => {
-  // The 2026-08-28 shape. `CREATE TABLE IF NOT EXISTS` never alters it, so
-  // every workspace from before 0f6899cff (2026-09-08) still holds this table
-  // and the first `SELECT actor_id …` threw `no such column` on the product:
-  // "Couldn't open this workspace. SQL query failed: no such column: actor_id".
-  test('opens, rebuilding the derived index rather than throwing', () => {
-    const { sql, execRaw } = createTestSql();
-    initAllTables(execRaw, sql);
-    execRaw(`CREATE TABLE conversation_fts_state (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      regime TEXT NOT NULL,
-      rev INTEGER NOT NULL DEFAULT 0,
-      synced_rev INTEGER NOT NULL DEFAULT -1
-    )`);
-    void sql`INSERT INTO conversation_fts_state (id, regime, rev, synced_rev) VALUES (1, 'plain', 3, 3)`;
-    insert(sql, 's1', 'user', 'the old workspace still searches');
-    const store = new ConversationSearchStore(sql, testActorHandle(sql, { actorId: ACTOR_ID }));
-
-    expect(store.search('workspace').map((hit) => hit.messageId)).toHaveLength(1);
-    expect(sql<{ sql: string }>`SELECT sql FROM sqlite_master WHERE name = 'conversation_fts_state'`[0]?.sql)
-      .toContain('actor_id');
-  });
-});
 
 describe('ConversationSearchStore.search', () => {
   test('backfills messages persisted before the index existed', () => {
@@ -251,12 +225,11 @@ describe('ConversationSearchStore.browse', () => {
     expect(conversations[1]!.preview).toBe('old kickoff question');
   });
 
-  test('reads non-default previews from messages when pane owns default chat', () => {
+  test('reads non-default previews from actor_messages when pane owns default chat', () => {
     const { sql, execRaw } = createTestSql();
     initAllTables(execRaw, sql);
-    // The pane store exactly as production creates it, `actor_id` included:
-    // the browse read predicates the owner, so a pane column-set of this
-    // fixture's own invention would answer a question no workspace is asked.
+    // The vendor's pane shape has no actor column; the plain rows below
+    // belong to ACTOR_ID and remain independent of the root's pane.
     execRaw(SDK_SESSION_DDL);
     void sql`INSERT INTO assistant_messages
       (id, session_id, parent_id, role, content, created_at)

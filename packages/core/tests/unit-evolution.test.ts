@@ -356,7 +356,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   /**
    * A SIBLING's thumbs must not grade this actor's turn.
    *
-   * The defect this exists for: a message id is minted PER ACTOR — `messages`
+   * The defect this exists for: a message id is minted PER ACTOR — `actor_messages`
    * is `PRIMARY KEY (actor_id, id)` precisely because two actors of one
    * workspace really do hold the same id — so a `turn_feedback` keyed
    * `message_id TEXT PRIMARY KEY`, written with `ON CONFLICT(message_id) DO
@@ -474,9 +474,9 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+    void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
       VALUES (${rt.actor.actorId}, 'u1', 'default', 'user', 'the task')`;
-    void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
       VALUES (${rt.actor.actorId}, 'a1', 'default', 'u1', 'assistant', 'the answer')`;
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['a1'], text: 'late-corroborated lesson', source: 'turn_reflection', status: 'provisional',
