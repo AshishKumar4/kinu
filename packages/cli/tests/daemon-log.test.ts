@@ -3,21 +3,15 @@
 // inherited stdout fd keeps writing to the live file (which is why rotation is
 // copy-truncate rather than rename), and `daemon logs` still shows history
 // from before the roll.
-import { appendFileSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { appendFileSync, closeSync, openSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs';
+
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { appendDaemonLog, readDaemonLogTail, rotateDaemonLogIfNeeded } from '../src/daemon-log';
 
-const dirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function makeLog(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-daemon-log-'));
-  dirs.push(dir);
+  const dir = scratchDir('daemon-log');
 
   return join(dir, 'daemon.log');
 }

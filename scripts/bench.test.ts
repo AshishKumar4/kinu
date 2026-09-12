@@ -1,8 +1,9 @@
 // Credential-free verification of the bench runner: the isolation, seal, and
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
-import { describe, test, expect, afterAll } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
+import { scratchDir } from '../packages/test-utils/src/scratch';
+import { describe, test, expect } from 'bun:test';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import * as v from 'valibot';
@@ -30,18 +31,11 @@ import { buildPilotReport, validatePilotReport } from './bench-pilot';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
-const scratch: string[] = [];
-
 function tempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  scratch.push(dir);
+  const dir = scratchDir(prefix);
 
   return dir;
 }
-
-afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
-});
 
 describe('parseArgv', () => {
   test('reads the command, valued flags, and bare flags', () => {
@@ -323,8 +317,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
   // operator ran a benchmark here first.
   const durableDir = (prefix: string): string => {
     mkdirSync(join(REPO_ROOT, ARTIFACT_DIRNAME), { recursive: true });
-    const dir = mkdtempSync(join(REPO_ROOT, ARTIFACT_DIRNAME, prefix));
-    scratch.push(dir);
+    const dir = scratchDir(prefix, join(REPO_ROOT, ARTIFACT_DIRNAME));
 
     return dir;
   };
@@ -604,8 +597,7 @@ describe('createAttemptSandbox', () => {
     // Copying bench-artifacts/ into the sandbox would hand a solver the held-out
     // answers by a route that excluding tests/bench does not cover.
     const runRoot = tempDir('bench-seal-artifacts-');
-    const leak = mkdtempSync(join(REPO_ROOT, ARTIFACT_DIRNAME, 'seal-probe-'));
-    scratch.push(leak);
+    const leak = scratchDir('seal-probe', join(REPO_ROOT, ARTIFACT_DIRNAME));
     writeFileSync(join(leak, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
     const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a7', prepare });
     expect(existsSync(join(REPO_ROOT, ARTIFACT_DIRNAME))).toBe(true);

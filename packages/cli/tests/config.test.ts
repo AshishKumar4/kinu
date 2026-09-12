@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema,
   ProfileCatalogEnvelopeSchema, parseJsonValue,
@@ -13,12 +14,6 @@ import {
   readWorkspaceDisplayName, readWorkspaceIdentityId,
 } from "../src/config";
 import * as v from 'valibot';
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("CLI config safety", () => {
   test("validates local agent names", () => {
@@ -46,9 +41,8 @@ describe("CLI config safety", () => {
   });
 
   test("honors KINU_HOME before falling back to the OS home", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-home-"));
-    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-config-"));
-    tempDirs.push(home, kinuHome);
+    const home = scratchDir("cli-home");
+    const kinuHome = scratchDir("cli-config");
 
     const script = "import { AGENT_HOME } from './packages/cli/src/config.ts'; console.log(AGENT_HOME);";
 
@@ -108,8 +102,7 @@ describe("CLI config safety", () => {
     // for such a file, so both readers below failed with "unable to open
     // database file" while opening readonly — and `kinu create` exited 1 after
     // publishing the workspace, having already renamed it into place.
-    const dir = mkdtempSync(join(tmpdir(), "kinu-cli-wal-read-"));
-    tempDirs.push(dir);
+    const dir = scratchDir("cli-wal-read");
     const dbPath = join(dir, "agent.db");
     const db = new Database(dbPath, { create: true });
     db.exec("PRAGMA journal_mode = WAL");
@@ -261,8 +254,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
   });
 
   test("requireLLMConfig still names the fixes when an endpoint is mandatory", () => {
-    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-llm-req-"));
-    tempDirs.push(kinuHome);
+    const kinuHome = scratchDir("cli-llm-req");
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
 
     const script = `
@@ -298,8 +290,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
  *  import) with the provider/cloud env scrubbed, returning the config or
  *  { error } as JSON. */
 function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}): JsonValue {
-  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-llm-"));
-  tempDirs.push(kinuHome);
+  const kinuHome = scratchDir("cli-llm");
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
 
   const script = `
@@ -332,8 +323,7 @@ function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}
 }
 
 function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
-  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-auth-"));
-  tempDirs.push(kinuHome);
+  const kinuHome = scratchDir("cli-auth");
   writeFileSync(
     join(kinuHome, "config.json"),
     JSON.stringify({ accessToken: "ptc_test", tokenExpiresAt }),
@@ -370,8 +360,7 @@ interface NameCheck {
  *  so the config write lands nowhere real. Order: five agentDir cases, then
  *  five upsertAgentConfig alias cases. */
 function runNameChecks(): NameCheck[] {
-  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-names-"));
-  tempDirs.push(kinuHome);
+  const kinuHome = scratchDir("cli-names");
 
   const script = `
     import { agentDir, upsertAgentConfig } from './packages/cli/src/config.ts';
@@ -426,8 +415,7 @@ const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.ob
 });
 
 function runPreferenceWrite(): PreferenceWriteResult {
-  const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-preferences-"));
-  tempDirs.push(kinuHome);
+  const kinuHome = scratchDir("cli-preferences");
 
   const script = `
     import { writeFileSync } from 'node:fs';
@@ -467,8 +455,7 @@ describe("a logout the server could not be told about", () => {
   const TOKEN = `ptc_${"0".repeat(32)}_abcdefghijklmnopqrstuvwxyz`;
 
   function logoutHome(origin: string): string {
-    const home = mkdtempSync(join(tmpdir(), "kinu-logout-home-"));
-    tempDirs.push(home);
+    const home = scratchDir("logout-home");
     writeFileSync(
       join(home, "config.json"),
       JSON.stringify({ origin, accessToken: TOKEN, tokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }),

@@ -7,18 +7,19 @@
 // `branch-worker.ts`, which resolves a real provider and talks HTTP to the
 // capturing endpoint below, so the request a branch actually put on the wire and
 // the reply envelope it actually sent are both observable.
+import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect, afterAll, mock } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+
 import { Database } from 'bun:sqlite';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createBranchSpawner } from '../src/branch-process';
 
-const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-test-'));
+const dir = scratchDir('branch-test');
 
 // The spawner keeps its ChildProcess private (`activeBranches`), so the
 // parent-side reply policy cannot be reached without the handle. This wraps
@@ -57,7 +58,7 @@ function forkedChild(): ChildProcess {
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { initActorStateSchema } from '@kinu.run/core';
 
-const parentDbPath = `${dir}.db`;
+const parentDbPath = join(dir, 'parent.db');
 
 const parentDb = new Database(parentDbPath, { create: true });
 
@@ -67,8 +68,6 @@ initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
   parentDb.close();
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(parentDbPath, { force: true });
 });
 
 const replySchema = v.object({

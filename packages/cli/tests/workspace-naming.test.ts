@@ -17,9 +17,10 @@
  * generator was already correct when the owner hit this; what was wrong was
  * what the surface and the prompt did with its absence.
  */
-import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdirSync, rmSync } from 'node:fs';
+
 import { dirname, join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -53,7 +54,7 @@ import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model
 //
 // Dynamic because the offer has to be in place before the import: a static one
 // is hoisted above the assignment.
-const OFFERED_HOME = mkdtempSync(join(tmpdir(), 'kinu-naming-home-'));
+const OFFERED_HOME = scratchDir('naming-home');
 
 const inheritedHome = process.env.KINU_HOME;
 
@@ -65,8 +66,6 @@ const { upsertAgentConfig, AGENT_HOME } = await import('../src/config');
 
 if (inheritedHome === undefined) delete process.env.KINU_HOME;
 else process.env.KINU_HOME = inheritedHome;
-
-afterAll(() => rmSync(OFFERED_HOME, { recursive: true, force: true }));
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -87,10 +86,8 @@ const TITLE = 'Audit the OAuth callback flow';
  *  show this" is a claim about the actual string a person was shown. */
 const SLUG = workspaceSlug('4166c321-1a4e-4e20-9f15-9a7f159a4e20');
 
-const tempRoots: string[] = [];
-
 afterEach(() => {
-  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+  rmSync(join(AGENT_HOME, SLUG), { recursive: true, force: true });
 });
 
 /** Every system prompt any actor was handed, in call order. */
@@ -193,13 +190,9 @@ function makeHost(model: LanguageModel, refs: readonly HostedAgentRef[]): LocalA
   return new LocalAgentHost(options);
 }
 
-/** The physical project the agent's plane is bound to, plus the workspace
- *  directory this test leaves behind under the shared home. */
+/** The physical project the agent's plane is bound to. */
 function makeProject(): string {
-  const project = mkdtempSync(join(tmpdir(), 'kinu-naming-project-'));
-  tempRoots.push(project, join(AGENT_HOME, SLUG));
-
-  return project;
+  return scratchDir('naming-project');
 }
 
 /** Resolves when the workspace announces the title it just took. That

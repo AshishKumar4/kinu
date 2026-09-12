@@ -272,7 +272,7 @@ exit 87
       KINU_DEPLOY_KILL: killGate,
       // Always explicit. The gate runner creates its log directory under TMPDIR,
       // and one test points it somewhere that cannot exist.
-      TMPDIR: temporaryRoot ?? tmpdir(),
+      TMPDIR: temporaryRoot ?? fixture,
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,

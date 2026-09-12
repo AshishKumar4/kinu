@@ -33,10 +33,11 @@
  *   is reported as a failing test that names the ReferenceError.
  */
 
+import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
+
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as v from 'valibot';
@@ -72,35 +73,31 @@ const ObservedSchema = v.object({
 type Observed = v.InferOutput<typeof ObservedSchema>;
 
 function observeAfterLoading(specifier: string): Observed {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-init-order-'));
+  const dir = scratchDir('init-order');
 
-  try {
-    const probe = join(dir, 'probe.mjs');
-    // The first import is the whole experiment; the two below it read constants
-    // out of an already-populated registry and cannot change the order.
-    writeFileSync(
-      probe,
-      [
-        `import ${JSON.stringify(srcUrl(specifier))};`,
-        `import { HEAD_BUILTIN_TOOLS } from ${JSON.stringify(srcUrl('heads/types.ts'))};`,
-        `import { NODE_BUILTIN_TOOLS } from ${JSON.stringify(srcUrl('strategy/node-agent.ts'))};`,
-        'process.stdout.write(JSON.stringify({',
-        '  head: [...HEAD_BUILTIN_TOOLS],',
-        '  node: [...NODE_BUILTIN_TOOLS],',
-        '}));',
-        '',
-      ].join('\n'),
-    );
-    const run = spawnSync('bun', [probe], { encoding: 'utf8', cwd: here });
-    expect(
-      run.status,
-      `importing ${specifier} first did not initialise cleanly (exit ${run.status}):\n${run.stderr}`,
-    ).toBe(0);
+  const probe = join(dir, 'probe.mjs');
+  // The first import is the whole experiment; the two below it read constants
+  // out of an already-populated registry and cannot change the order.
+  writeFileSync(
+    probe,
+    [
+      `import ${JSON.stringify(srcUrl(specifier))};`,
+      `import { HEAD_BUILTIN_TOOLS } from ${JSON.stringify(srcUrl('heads/types.ts'))};`,
+      `import { NODE_BUILTIN_TOOLS } from ${JSON.stringify(srcUrl('strategy/node-agent.ts'))};`,
+      'process.stdout.write(JSON.stringify({',
+      '  head: [...HEAD_BUILTIN_TOOLS],',
+      '  node: [...NODE_BUILTIN_TOOLS],',
+      '}));',
+      '',
+    ].join('\n'),
+  );
+  const run = spawnSync('bun', [probe], { encoding: 'utf8', cwd: here });
+  expect(
+    run.status,
+    `importing ${specifier} first did not initialise cleanly (exit ${run.status}):\n${run.stderr}`,
+  ).toBe(0);
 
-    return v.parse(ObservedSchema, JSON.parse(run.stdout));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  return v.parse(ObservedSchema, JSON.parse(run.stdout));
 }
 
 describe('module initialisation order', () => {

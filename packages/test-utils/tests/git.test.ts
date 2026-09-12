@@ -1,19 +1,13 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../src/scratch';
+import { describe, expect, test } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 
 import { git, gitEnv, initRepo } from '../src/git';
 
-const scratch: string[] = [];
-
-afterEach(() => {
-  for (const directory of scratch.splice(0)) rmSync(directory, { recursive: true, force: true });
-});
-
 const repo = (): string => {
-  const directory = mkdtempSync(join(tmpdir(), 'kinu-git-fixture-'));
-  scratch.push(directory);
+  const directory = scratchDir('git-fixture');
   initRepo(directory);
 
   return directory;

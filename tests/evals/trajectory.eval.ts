@@ -77,7 +77,7 @@
  * nothing.
  */
 import { tmpdir } from 'node:os';
-import { rmSync } from 'node:fs';
+
 import { join, posix } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import * as v from 'valibot';
@@ -709,26 +709,22 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       { role: 'assistant', text: 'FAIL' }, { role: 'assistant', text: 'PASS' },
     ] };
 
-    try {
-      await Bun.write(join(root, 'broken.test.ts'), BROKEN_TEST);
-      await Bun.write(join(root, 'broken.ts'), BROKEN_SOURCE + '// a + b is not the implementation\n');
-      const broken = await entry.verify(input);
-      expect(broken.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(false);
-      await Bun.write(join(root, 'broken.ts'), 'export const add = (a: number, b: number) => a - -b;\n');
-      const fixed = await entry.verify(input);
-      expect(fixed.every((subgoal) => subgoal.reached)).toBe(true);
+    await Bun.write(join(root, 'broken.test.ts'), BROKEN_TEST);
+    await Bun.write(join(root, 'broken.ts'), BROKEN_SOURCE + '// a + b is not the implementation\n');
+    const broken = await entry.verify(input);
+    expect(broken.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(false);
+    await Bun.write(join(root, 'broken.ts'), 'export const add = (a: number, b: number) => a - -b;\n');
+    const fixed = await entry.verify(input);
+    expect(fixed.every((subgoal) => subgoal.reached)).toBe(true);
 
-      const unrelated = events.map((event): RunEvent => event.type === 'tool_call_end'
-        ? { ...event, args: { command: event.runId === 'first' ? 'false' : 'true' } } : event);
+    const unrelated = events.map((event): RunEvent => event.type === 'tool_call_end'
+      ? { ...event, args: { command: event.runId === 'first' ? 'false' : 'true' } } : event);
 
-      const notTested = await entry.verify({ ...input, events: unrelated });
-      expect(notTested.find((subgoal) => subgoal.what === 'failure-observed')?.reached).toBe(false);
-      expect(notTested.find((subgoal) => subgoal.what === 'recovery-took')?.reached).toBe(false);
-      expect(notTested.find((subgoal) => subgoal.what === 'reported-truthfully')?.reached).toBe(false);
-      expect(notTested.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const notTested = await entry.verify({ ...input, events: unrelated });
+    expect(notTested.find((subgoal) => subgoal.what === 'failure-observed')?.reached).toBe(false);
+    expect(notTested.find((subgoal) => subgoal.what === 'recovery-took')?.reached).toBe(false);
+    expect(notTested.find((subgoal) => subgoal.what === 'reported-truthfully')?.reached).toBe(false);
+    expect(notTested.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(true);
   });
 
   test('memory persists across turns only when both turns use the tool', async () => {

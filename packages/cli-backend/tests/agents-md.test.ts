@@ -8,10 +8,11 @@
 // symlink out of the tree cannot pipe `/etc/passwd` into a prompt. Trust: the
 // bytes that survive are classified by the owner's approval resolver, which is
 // what decides whether they can be placed as system instructions at all.
-import { describe, test, expect, afterEach } from 'bun:test';
-import { chmodSync, mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, test, expect } from 'bun:test';
+import { chmodSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+
 import {
   CHARS_PER_TOKEN, renderAgentsMdSection, stepContextLimit,
   type InstructionTrustResolver, type ModelWindow,
@@ -35,18 +36,11 @@ const APPROVED: InstructionTrustResolver = () => 'approved';
 /** Nobody approved anything: the standing answer for a file with no decision. */
 const UNVERIFIED: InstructionTrustResolver = () => 'unverified';
 
-const roots: string[] = [];
-
 function makeTree(): string {
-  const root = mkdtempSync(join(tmpdir(), 'kinu-agentsmd-'));
-  roots.push(root);
+  const root = scratchDir('agentsmd');
 
   return root;
 }
-
-afterEach(() => {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
 
 describe('discoverAgentsMd', () => {
   test('collects the walk-up chain ordered root-most first, nearest last', () => {
@@ -352,7 +346,7 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
     // The reason must not leak the path outside the tree — that content is
     // exactly what this directory may not speak for.
     const root = makeTree();
-    const outside = join(mkdtempSync(join(tmpdir(), 'kinu-outside-')), 'secret.md');
+    const outside = join(scratchDir('outside'), 'secret.md');
     writeFileSync(outside, 'SECRET-BYTES');
     const path = join(root, 'AGENTS.md');
     symlinkSync(outside, path);
@@ -370,7 +364,7 @@ describe('discoverAgentsMd — containment survives a post-admission swap', () =
     const root = makeTree();
     const path = join(root, 'AGENTS.md');
     const target = join(root, 'shared.md');
-    const outside = join(mkdtempSync(join(tmpdir(), 'kinu-agentsmd-outside-')), 'poison.md');
+    const outside = join(scratchDir('agentsmd-outside'), 'poison.md');
     writeFileSync(target, 'reviewed in-tree instructions');
     writeFileSync(outside, 'OUTSIDE-POISON-MUST-NEVER-REACH-THE-PROMPT');
     symlinkSync(target, path);

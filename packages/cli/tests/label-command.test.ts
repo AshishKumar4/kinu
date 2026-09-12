@@ -7,22 +7,19 @@
  * No model is involved — the ledger is written the way the classifier would
  * have written it.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-
-const tempDirs: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('test-project');
 
   return dir;
 }
@@ -30,10 +27,6 @@ function newProjectDir(): string {
 const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function runCli(home: string, args: string[]) {
   const result = Bun.spawnSync({
@@ -61,8 +54,7 @@ interface World {
 /** A workspace whose classifier catches only 65% of real corrections and
  *  falsely flags 4% of the good turns — a bias no telemetry can see. */
 function seedWorkspace(name: string, size = 600): World {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-label-'));
-  tempDirs.push(home);
+  const home = scratchDir('label');
   mkdirSync(join(home, name), { recursive: true });
   const db = new Database(join(home, name, 'agent.db'));
   const sql = makeSql(db);

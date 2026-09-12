@@ -24,7 +24,7 @@
  * and destroy the thing they asked for.
  */
 
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
@@ -65,7 +65,6 @@ afterEach(() => {
       if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), 'esrch');
     }
 
-    rmSync(home, { recursive: true, force: true });
   }
 });
 
