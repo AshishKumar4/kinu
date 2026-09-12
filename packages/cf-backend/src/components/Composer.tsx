@@ -23,14 +23,15 @@
  * that early-returns while streaming leaves someone typing at a working agent
  * with nothing happening and nothing said about it.
  */
-import { useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
   StopIcon, GitBranchIcon, ArrowBendUpRightIcon,
-  WarningCircleIcon, InfoIcon, CheckCircleIcon,
+  WarningCircleIcon, InfoIcon, CheckCircleIcon, FileIcon, XIcon,
 } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import type { WorkspaceNotice } from "@/hooks/use-kinu";
 
 const CHAT_MODES = ["build", "plan"] as const;
 
@@ -49,7 +50,11 @@ export type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" |
 export interface ComposerNotice {
   id: string;
   tone: NoticeTone;
-  text: string;
+  /** The emphasized lead line; the notice may carry a title with no body. */
+  title?: string;
+  text?: string;
+  /** Raw technical string, shown only inside the "Technical details" disclosure. */
+  detail?: string;
   /** The way out. A notice reporting a failure should almost always have one. */
   action?: { label: string; icon?: ReactNode; onClick: () => void };
   onDismiss?: () => void;
@@ -67,17 +72,45 @@ const NOTICE_TONE = {
 
 /** A status row: what happened, and the way out of it. */
 function Notice({ notice }: { notice: ComposerNotice }) {
-  const { tone, text, action, onDismiss } = notice;
+  const { tone, title, text, detail, action, onDismiss } = notice;
   const { cls, icon } = NOTICE_TONE[tone];
+  const [expanded, setExpanded] = useState(false);
+  // SSR has no layout, so the first guess is by length (two lines ≈ 2×60
+  // chars) and the client corrects it: a fixed count lies in a resizable
+  // chat column, where the same text overflows at one width and fits at
+  // another. Either way the clamp never silently stands alone.
+  const [overflows, setOverflows] = useState(() => (text?.length ?? 0) > 2 * 60);
+  const textRef = useRef<HTMLSpanElement>(null);
+
+  useLayoutEffect(() => {
+    const el = textRef.current;
+
+    if (el) setOverflows(el.scrollHeight > el.clientHeight);
+  }, [text]);
 
   return (
     <div className={`flex items-start gap-2 px-2.5 py-1.5 p-meta ${cls}`}
       role={tone === "danger" ? "alert" : "status"}>
       <span className="mt-px shrink-0">{icon}</span>
-      {/* Wraps to two lines rather than truncating: in a narrow chat column a
-          single-line clamp cut "Couldn't refresh live data for MCTS." down to
-          "Co…", which is a silence wearing the costume of a status. */}
-      <span className="min-w-0 flex-1 line-clamp-2" title={text}>{text}</span>
+      {/* Two lines rather than one: in a narrow chat column a single-line
+          clamp cut "Couldn't refresh live data for MCTS." down to "Co…",
+          which is a silence wearing the costume of a status. */}
+      <span className="min-w-0 flex-1">
+        {title && <span className="block font-medium">{title}</span>}
+        {text && <span ref={textRef} className={`block ${expanded ? "" : "line-clamp-2"}`} title={text}>{text}</span>}
+        {text && overflows && (
+          <button type="button" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}
+            className="mt-0.5 cursor-pointer p-meta p-text-3 underline decoration-dotted underline-offset-2 hover:p-text-2 focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] focus-visible:outline-none">
+            {expanded ? "Show less" : "Expand"}
+          </button>
+        )}
+        {detail && (
+          <details className="mt-0.5">
+            <summary className="cursor-pointer underline decoration-dotted underline-offset-2">Technical details</summary>
+            <pre className="mt-1 max-h-32 overflow-auto font-mono whitespace-pre-wrap break-all">{detail}</pre>
+          </details>
+        )}
+      </span>
       {action && (
         <button type="button" onClick={action.onClick}
           className="p-btn-quiet inline-flex shrink-0 cursor-pointer items-center gap-1 px-2 py-0.5">
@@ -95,6 +128,30 @@ function Notice({ notice }: { notice: ComposerNotice }) {
 }
 
 /**
+ * The workspace load failure as the composer's status row.
+ *
+ * A blocking notice (the essential read failed) renders `danger`; a partial
+ * one (an optional read failed) renders `warning`. Neither disables the
+ * composer — that decision belongs to the socket, not to a stale tool list —
+ * so this mapping carries no `disabled` of its own.
+ */
+export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void): ComposerNotice {
+  const mapped: ComposerNotice = {
+    id: "load",
+    tone: notice.severity === "blocking" ? "danger" : "warning",
+    title: notice.title,
+  };
+
+  if (notice.scope !== "") mapped.text = notice.scope;
+
+  if (notice.detail !== "") mapped.detail = notice.detail;
+
+  if (notice.retry !== null) mapped.action = { label: notice.retry, onClick: onRetry };
+
+  return mapped;
+}
+
+/**
  * Auto ⇄ Plan. Kept as a two-item segment rather than the single toggle the
  * owner's own composer uses, because Plan here is a mechanical trust boundary
  * (`submit_plan` exists only on a Plan turn) rather than a label: a lone chip
@@ -107,10 +164,28 @@ function Notice({ notice }: { notice: ComposerNotice }) {
  * (`WorkMode = 'plan' | 'build'` in core): the label is what the system calls
  * this to a person, and it must not disagree with the rest of the product.
  */
+const MODE_CAPTION = "Auto acts within the permissions you granted. Plan submits a plan for your review before anything is written.";
+
+const MODE_CAPTION_KEY = "kinu.modeCaptionSeen";
+
 function ModeSegment({ value, onChange, locked, disabled }: {
   value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean; disabled: boolean;
 }) {
+  // Seen once the mode has been switched once; kept beside the theme choice,
+  // not in agent state, because it is one person's UI, not the workspace's.
+  const [captionSeen, setCaptionSeen] = useState(() => localStorage.getItem(MODE_CAPTION_KEY) !== null);
+
+  const handleChange = (next: ChatMode) => {
+    if (!captionSeen) {
+      localStorage.setItem(MODE_CAPTION_KEY, "1");
+      setCaptionSeen(true);
+    }
+
+    onChange(next);
+  };
+
   return (
+    <div className="flex min-w-0 shrink-0 flex-col gap-1">
     <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Turn mode">
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";
@@ -126,7 +201,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
           <button
             key={mode}
             type="button"
-            onClick={() => onChange(mode)}
+            onClick={() => handleChange(mode)}
             disabled={disabled || (locked && mode === "build")}
             aria-pressed={selected}
             title={title}
@@ -140,6 +215,10 @@ function ModeSegment({ value, onChange, locked, disabled }: {
           </button>
         );
       })}
+    </div>
+    {/* Plan refuses writes, edits and shell runs but permits reads, memory,
+        tasks and web — a boundary, not read-only, so the caption says neither. */}
+    {!captionSeen && <p className="max-w-64 p-meta p-text-3">{MODE_CAPTION}</p>}
     </div>
   );
 }
@@ -210,6 +289,11 @@ export interface ComposerProps {
     parts: readonly FileUIPart[];
     onAdd: (files: FileList | null | undefined) => void;
     onRemove: (index: number) => void;
+    /** Names of uploads that failed to read. They stay listed as failed —
+     *  dropping them would send a message missing what the user attached —
+     *  and Send stays disabled until each is removed. */
+    failed?: readonly string[];
+    onRemoveFailed?: (index: number) => void;
   };
   /** The model selector, passed in because it is a connected component and this
    *  one has to stay renderable without a socket. */
@@ -233,7 +317,12 @@ export function Composer({
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
+  const hasFailedAttachment = (attachments?.failed?.length ?? 0) > 0;
   const canBranch = Boolean(onBranch) && streaming && !empty && mode?.value !== "plan";
+  const [stopping, setStopping] = useState(false);
+  // The runtime sends no stopped event, so the streaming flag going false is
+  // the only confirmation a stop landed.
+  useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
   // While a turn runs the primary action STEERS it. Enter has to reach the same
   // thing the button does — an Enter that silently does nothing is the defect
   // this replaces, and the composer was in exactly that state whenever the
@@ -278,11 +367,26 @@ export function Composer({
       )}
 
       <div className="p-composer">
-        {attachments && attachments.parts.length > 0 && (
+        {attachments && (attachments.parts.length > 0 || hasFailedAttachment) && (
           <div className="flex flex-wrap gap-1.5 px-3 pt-3">
             {attachments.parts.map((part, i) => (
               <AttachmentChip key={`${part.filename ?? "file"}-${i}`} part={part}
                 onRemove={() => attachments.onRemove(i)} />
+            ))}
+            {(attachments.failed ?? []).map((name, i) => (
+              <span key={`failed-${name}-${i}`}
+                className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2"
+                title={`Couldn't attach ${name}`}>
+                <FileIcon size={13} className="shrink-0 p-text-3" />
+                <span className="truncate font-mono">{name}</span>
+                <span className="shrink-0 font-medium p-warning">failed</span>
+                {attachments.onRemoveFailed && (
+                  <button type="button" onClick={() => attachments.onRemoveFailed?.(i)} aria-label={`Remove ${name}`}
+                    className="p-btn-ghost cursor-pointer p-0.5">
+                    <XIcon size={11} />
+                  </button>
+                )}
+              </span>
             ))}
           </div>
         )}
@@ -354,12 +458,12 @@ export function Composer({
               deciding, and a hover title is not available then. */}
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             {streaming && (
-              <button type="button" onClick={onStop}
+              <button type="button" onClick={() => { setStopping(true); onStop(); }}
                 className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
                 aria-label="Stop this turn"
                 title="Stop this turn. Queued messages run next.">
                 <StopIcon size={14} weight="fill" />
-                <span className="hidden @[30rem]:inline p-meta">Stop</span>
+                <span className="hidden @[30rem]:inline p-meta">{stopping ? "Stopping…" : "Stop"}</span>
               </button>
             )}
             {canBranch && (
@@ -379,7 +483,7 @@ export function Composer({
                   <ArrowBendUpRightIcon size={14} weight="bold" />
                   Steer
                 </button>
-              : <button type="button" onClick={onSend} disabled={empty || disabled}
+              : <button type="button" onClick={onSend} disabled={empty || disabled || hasFailedAttachment}
                   className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
                   aria-label="Send">
                   Send

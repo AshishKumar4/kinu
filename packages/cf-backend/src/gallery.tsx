@@ -4950,7 +4950,10 @@ function AgentPanel(
     <section className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
       <div className="p-eyebrow">{label}</div>
       <GalleryComposer notices={banner
-        ? [{ id: "load", tone: "danger", text: banner, action: { label: "Retry", onClick: () => {} } }]
+        ? [{ id: "load", tone: banner.severity === "blocking" ? "danger" : "warning",
+             title: banner.title, text: banner.scope === "" ? undefined : banner.scope,
+             detail: banner.detail === "" ? undefined : banner.detail,
+             action: banner.retry === null ? undefined : { label: banner.retry, onClick: () => {} } }]
         : []} />
       <AgentSurface
         snapshot={snapshot} tools={tools} memory={[]} memoryContent={memoryContent}
