@@ -56,9 +56,94 @@ import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { CommandRegistry } from '@nimbus-sh/core/substrate/lifo/commands/registry.js';
 import type { Command } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
+import * as v from 'valibot';
 import type { ExecutorCapability } from '../execution/types';
 import { WORKSPACE_ROOT } from './workspace-path';
-import { renderThrownChain } from '../obs/index';
+import { KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
+import type { JsonValue } from '../utils/json';
+
+/**
+ * The refusal a workspace shell's "command not found" is worth.
+ *
+ * Both shells that stand in as `workspace` end up here: the embedded one
+ * (`createWorkspace`'s bundle, checked against its live command registry) and
+ * the hosted session box (checked against the runtimes the box can install).
+ * The substrate's own wording is `<name>: command not found` at exit 127 —
+ * truthful, but it names nothing to DO, and the 2026-09-12 trajectory run
+ * watched an agent burn two turns discovering `bun` lives only in the sandbox
+ * container. This refusal names the absent command and the two real exits:
+ * `runtime: 'sandbox'`, and `nimbus install <name>` when this workspace's
+ * runtime catalog can actually produce that bin.
+ *
+ * `cataloged` is supplied per call rather than captured: installed runtimes
+ * re-register their bins into the live registry mid-session, so a catalog read
+ * once at composition would go stale while the workspace lives on.
+ */
+export async function workspaceCommandNotFound(
+  outcome: { stdout: string; stderr: string; exitCode: number; refusal?: Refusal },
+  cataloged: (bin: string) => boolean | Promise<boolean>,
+): Promise<typeof outcome> {
+  if (outcome.refusal !== undefined || outcome.exitCode !== 127) return outcome;
+
+  const missing = /^\s*([^\s:]+): command not found$/m.exec(outcome.stderr)?.[1];
+
+  if (missing === undefined) return outcome;
+
+  const bin = missing.includes('/') ? missing.slice(missing.lastIndexOf('/') + 1) : missing;
+  const installable = await cataloged(bin);
+
+  return {
+    ...outcome,
+    refusal: refusalOf(new KinuError(
+      'unavailable',
+      `${bin}: no such command in this workspace's shell. `
+        + (installable
+          ? `Run it in the sandbox executor (runtime 'sandbox'), or install it with \`nimbus install ${bin}\`.`
+          : `Run it in the sandbox executor (runtime 'sandbox'), which ships a full toolchain, `
+            + `or install it with \`nimbus install ${bin}\` if a Nimbus runtime provides it.`),
+      { execution: { exitCode: outcome.exitCode } },
+    )),
+  };
+}
+
+/** Parse the shape `runtimes.list()` answers with — `{installed, available}`
+ *  on the SDK handle, a bare `installed` array on hosts that wrap it — into the
+ *  one fact a command-not-found refusal needs: which bins the box's runtime
+ *  catalog can produce. Malformed means none, never a thrown probe. */
+const NimbusRuntimeCatalogSchema = v.union([
+  v.object({
+    installed: v.array(v.object({ name: v.string(), bins: v.array(v.string()) })),
+    available: v.array(v.object({ name: v.string() })),
+  }),
+  v.array(v.object({ name: v.string(), bins: v.array(v.string()) })),
+]);
+
+/** The bins a hosted session box's `runtimes.list()` can put on its PATH:
+ *  installed bins already, plus every bin name the still-available runtime
+ *  manifests declare (the same merge `runtimeEntrypoints` performs for the
+ *  embedded registry — substrate's own table, not a second list). */
+export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string>> {
+  try {
+    const parsed = v.safeParse(NimbusRuntimeCatalogSchema, await list());
+
+    if (!parsed.success) return new Set();
+
+    const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
+    const names = new Set<string>();
+
+    for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
+
+    if (!Array.isArray(parsed.output)) {
+      for (const available of parsed.output.available) names.add(available.name);
+    }
+
+    return names;
+  } catch (error) {
+    void error;
+
+    return new Set();
+  }
+}
 
 /**
  * The capability names a workspace holding `runtimes` may honestly declare.
