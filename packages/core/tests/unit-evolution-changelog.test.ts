@@ -318,6 +318,41 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     expect(buildChangelog(rt.storage.sql, rt.actor, { limit: 1 })).toHaveLength(1);
   });
 
+  test('changesOnly selects before the limit, so a page of bookkeeping cannot hide an older change', async () => {
+    const { rt } = setup();
+    const sql = rt.storage.sql;
+    const actor = rt.actor;
+
+    // The real change sits OLDER than the measurement rows that follow it:
+    // this is the supervisefresh defect — eight bookkeeping entries inside
+    // the limit would push it off the page.
+    const version = await seedScaffoldPending(rt);
+    const now = Date.now();
+
+    for (let index = 0; index < 7; index += 1) {
+      void sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+          VALUES (${actor.actorId}, ${`rpl-${index}`}, ${now + 2 + index}, 6, 4, 2, 0.75, 0.25, ${version}, '[]')`;
+    }
+
+    recordTurnOutcome(sql, actor, {
+      outcome: 'accepted', confidence: 1, source: 'explicit',
+      userMessage: 'ship it', assistantResponse: 'shipped', now: now + 1,
+    });
+
+    // The default page is bookkeeping only — the same rows it returns today,
+    // the change beyond the limit — while the change-only page still finds it.
+    const page = buildChangelog(sql, actor, { limit: 8 });
+    expect(page).toHaveLength(8);
+    expect(page.every((entry) => entry.kind === 'outcomes' || entry.kind === 'replay')).toBe(true);
+
+    const changes = buildChangelog(sql, actor, { limit: 8, changesOnly: true });
+    expect(changes).toHaveLength(1);
+    expect(changes[0].id).toBe(`scaffold:v${version}:pending`);
+
+    // The unseen marker counts the digest unfiltered either way.
+    expect(countUnseenChangelog(sql, actor, 0)).toBe(9);
+  });
+
   test('humanizes scaffold promotion and replay score direction without losing raw detail', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
