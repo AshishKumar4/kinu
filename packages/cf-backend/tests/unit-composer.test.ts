@@ -126,3 +126,53 @@ describe('the mode caption', () => {
     expect(html).toContain('Auto acts within the permissions you granted. Plan submits a plan for your review before anything is written.');
   });
 });
+
+// Overflow is measured by a client layout effect (scrollHeight beats a char
+// count in a resizable column), so SSR asserts the initial markup: collapsed
+// text plus the button for a long notice, no button for a short one.
+const LONG_NOTICE_TEXT = 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. '
+  + 'The provider reset the stream before the turn finished, so the panel below shows the last known snapshot. ';
+
+describe('notice expansion', () => {
+  test('a notice longer than two lines starts collapsed with an Expand button', () => {
+    const html = markupFor([{ id: 'live', tone: 'warning', title: 'Live data is stale.', text: LONG_NOTICE_TEXT }]);
+
+    expect(LONG_NOTICE_TEXT.length).toBeGreaterThan(2 * 60);
+    expect(html).toContain('line-clamp-2');
+    expect(html).toContain('>Expand<');
+  });
+
+  test('a short notice offers no Expand button', () => {
+    const html = markupFor([{ id: 'saved', tone: 'info', text: 'Saved.' }]);
+
+    expect(html).not.toContain('>Expand<');
+  });
+});
+
+describe('a failed attachment', () => {
+  test('it stays in the list marked failed, with a remove control, and Send stays disabled', () => {
+    const html = renderToStaticMarkup(createElement(Composer, {
+      value: 'hello',
+      onValueChange: () => {},
+      onSend: () => {},
+      placeholder: 'Send a message...',
+      disabled: false,
+      streaming: false,
+      onStop: () => {},
+      attachments: {
+        parts: [],
+        onAdd: () => {},
+        onRemove: () => {},
+        failed: ['receipt.pdf'],
+        onRemoveFailed: () => {},
+      },
+    }));
+
+    expect(html).toContain('receipt.pdf');
+    expect(html).toContain('>failed<');
+    expect(html).toContain('aria-label="Remove receipt.pdf"');
+
+    const send = /<button[^>]*aria-label="Send"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(send).toMatch(/(^|\s)disabled(=|\s|>)/);
+  });
+});
