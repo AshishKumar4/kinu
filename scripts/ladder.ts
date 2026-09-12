@@ -1741,21 +1741,21 @@ export const LADDER: readonly Gate[] = [
     // second turn sees the message that started it`) — a red run is the
     // longer one, since each case runs every prompt to completion.
     seconds: 1661,
-    catches: 'an agent that stopped ACTING on the model users have, before the next build goes '
-      + 'up. It runs the trajectory family — five two-turn episodes through the public REST '
+    catches: 'an agent that stopped ACTING on the model users have, measured on the build '
+      + 'this deploy just shipped. It runs the trajectory family — five two-turn episodes through the public REST '
       + 'and socket: write a file then read it back, a correction steered mid-turn, a failed '
       + 'command repaired in turn two — under `KINU_EVAL_TIER=product`, which pins '
       + '`EVAL_MODELS.product`, the id core seeds every new workspace with. Every score is off '
       + 'durable state (file bytes over the files route, `tool_call_end` rows, transcript '
       + 'rows), so an agent that answers an explicit instruction with a survey and a question '
-      + 'reds on `task_outcome` rather than on a judge\'s opinion. It sits LAST in Step 1 on '
-      + 'purpose: the same failure found by `gate:first-run` after the upload is a defect '
-      + 'users already have; found here it holds the publish. And it measures the CURRENT '
-      + 'production build, which is the only build a pre-deploy live gate can measure, so a '
-      + 'red is a red on what users have now.',
-    blind: 'the build about to ship — its subject is production as it stands, so a regression '
-      + 'in THIS tree reaches users and is caught by `gate:first-run` after the upload, not '
-      + 'here; the two are one claim only together. Five trajectories, not the product: a '
+      + 'reds on `task_outcome` rather than on a judge\'s opinion. It sits AFTER the publish, '
+      + 'in first-run\'s wave, on purpose: before the upload its only subject was the build '
+      + 'already serving, and that could refuse a regression — never a repair, because the '
+      + 'repair is the build it has not shipped yet.',
+    blind: 'a build that has not shipped — its subject is the build this deploy just '
+      + 'published, so its red is a deployed red: the bad build is already serving when this '
+      + 'fails, and the tier reports rather than prevents; the two post-publish tiers are one '
+      + 'claim only together. Five trajectories, not the product: a '
       + 'defect on a surface no case names is unmeasured, and every case depends on the '
       + 'model choosing to use the tool it was asked for, so a refusal reads as a broken '
       + 'tool until the retained transcript is opened. One model only, by design: the flash '

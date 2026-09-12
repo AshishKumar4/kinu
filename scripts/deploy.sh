@@ -579,20 +579,10 @@ run_required_gate "Declared infrastructure exists and is bound" bun run gate:inf
 # BARRIER.
 flush_gates
 
-# Alone, and LAST before the build. Everything above proves the source and the
-# account; this proves the AGENT, and it does so before the publish rather than
-# after it: an agent that stopped acting correctly — surveys, asks a question,
-# writes nothing when told exactly what to write — blocks the upload here
-# instead of being discovered by `gate:first-run` on a build users already
-# have. It runs the trajectory family on the product's DEFAULT model against
-# the CURRENT production build, so a red is a red on what users have now, not
-# on a statistics model or a build that does not exist yet. See SERIAL_GATES in
-# scripts/ladder.ts for why nothing runs beside it.
-run_required_gate "Trajectory tier" bun run gate:trajectory
-
-# BARRIER.
-flush_gates
-
+# The agent tiers run AFTER the publish, in Step 4b — where first-run already
+# is. A tier whose subject is the agent on a deployed build can only measure a
+# build that exists, and the only honest one to measure is the one this deploy
+# just shipped.
 
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
@@ -790,7 +780,7 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   exit 1
 fi
 
-# ── Step 4b: The first-run tier ─────────────────────────────────────────────
+# ── Step 4b: The post-publish tiers ─────────────────────────────────────────
 #
 # AGAINST THE DEPLOYED PRODUCT, every deploy. There is one environment, so the
 # worker this tier drives is the one a user meets. It acts as the eval service
@@ -818,16 +808,32 @@ fi
 # did the deploy land at all. Running this against an origin that is not serving
 # would report six product failures for one deployment failure.
 #
-# ALONE, in its own wave, and `SERIAL_GATES` in scripts/ladder.ts carries the
-# reason: it attaches real machines to the account and drives a real browser
-# session as the same identity `gate:infra` authenticates with. Two gates on one
-# account is how a fleet case measures a sibling's daemons.
+# ONE WAVE, EXACTLY THESE TWO, and `SERIAL_GATES` in scripts/ladder.ts carries
+# the per-member reason each stays clear of the pre-publish waves: both drive
+# the account as the same identity `gate:infra` authenticates with — real
+# machines, a real browser, live model turns — so no gate whose subject is
+# this tree runs beside them. The two share a wave because they measure the
+# same thing — the build that just shipped — and neither perturbs what the
+# other asserts: the fleet case counts machines on the account and the
+# trajectory tier links none, and neither gate reads another's workspaces.
 #
-# THE ENQUEUE LINE STAYS AT COLUMN 0. `scripts/ladder.ts` parses these lines
+# THE ENQUEUE LINES STAY AT COLUMN 0. `scripts/ladder.ts` parses these lines
 # with `^run_required_gate`, so an indented one is invisible to `deployGates`/
 # `deployWaves`. Measured: indenting it drops the gate from the parse and leaves
 # `deploy.test.ts` green over a wave it cannot see.
 run_required_gate "First-run tier" bun run gate:first-run
+
+# THE TRAJECTORY TIER, BESIDE FIRST-RUN, AFTER THE PUBLISH. It proves the AGENT
+# on the build that just shipped: five two-turn episodes on the product's
+# default model, scored off durable state. It stood last before the build
+# until today, where it could only measure the PREVIOUS production build —
+# that placement blocks a regression but can never admit a fix, because the
+# fix is the build it has not shipped yet. On 2026-09-12 it went red against
+# 234ed5d7d on the turn-boundary defect caa21e7ca was deploying to repair, and
+# refused the very deploy it existed to clear. A red here is a red on what
+# users have NOW, and the runner says so: the build is live and this tier is
+# red against it.
+run_required_gate "Trajectory tier" bun run gate:trajectory
 
 # BARRIER.
 flush_gates
