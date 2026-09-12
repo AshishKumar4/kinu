@@ -60,7 +60,7 @@ function lastNameToken(name: string): string {
   return last === undefined ? '' : last.toLowerCase();
 }
 
-function looksLikeSecretField(name: string): boolean {
+export function looksLikeSecretField(name: string): boolean {
   for (const p of SECRET_FIELD_PATTERNS) if (p.test(name)) return true;
 
   return SECRET_SUFFIX_TOKENS.has(lastNameToken(name));

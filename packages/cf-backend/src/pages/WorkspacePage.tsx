@@ -16,7 +16,7 @@ import type {
   AlternateTakeSet, FileCheckpointEntry, FileCheckpointListing,
   FileRestoreChange, FileRestorePlan, PlanReview, TakePickOutcome,
 } from "@kinu.run/core";
-import { useKinu } from "@/hooks/use-kinu";
+import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanGatedMode } from "@/hooks/use-conversation-ui-state";
@@ -39,7 +39,7 @@ import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle, workspaceTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
-import { Composer } from "@/components/Composer";
+import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
 import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@/lib/protocol";
 import { renderThrownChain } from "@kinu.run/core/obs";
 // The model picker reads /api/user/models (which unions the connected
@@ -591,10 +591,7 @@ function SubordinateChatColumn({
           mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
           notices={[
-            ...(state.error
-              ? [{ id: "load", tone: "danger" as const, text: state.error,
-                   action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }]
-              : []),
+            ...(loadNotices(state.error, state.retryLoad)),
             ...(state.newerDeployedBuild ? [{
               id: "version", tone: "info" as const,
               text: "A new version is ready. Reload this tab to use it.",
@@ -620,6 +617,24 @@ const SIDE_SOURCES = [
 ] as const;
 
 type SideSource = (typeof SIDE_SOURCES)[number]["source"];
+
+/**
+ * The workspace load failure as the composer's status row, with the icon the
+ * mapper cannot own. Empty when there is no failure — the composer renders
+ * nothing for a healthy workspace.
+ */
+function loadNotices(error: WorkspaceNotice | null, onRetry: () => void): ComposerNotice[] {
+  if (error === null) return [];
+  const notice = workspaceLoadNotice(error, onRetry);
+
+  if (error.retry !== null) {
+    notice.action = {
+      label: error.retry, icon: <ArrowsClockwiseIcon size={11} />, onClick: onRetry,
+    };
+  }
+
+  return [notice];
+}
 
 export default function WorkspacePage() {
   const { agentId, subName } = useParams();
@@ -1133,6 +1148,7 @@ export default function WorkspacePage() {
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}
+        waitingOnYou={state.pendingActions.length > 0 || state.pendingConsents.length > 0}
         model={as?.model}
         {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
         altitude={altitude}
@@ -1321,8 +1337,7 @@ export default function WorkspacePage() {
                 }}
                 modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
                 notices={[
-                  ...(state.error ? [{ id: "load", tone: "danger" as const, text: state.error,
-                    action: { label: "Retry", icon: <ArrowsClockwiseIcon size={11} />, onClick: state.retryLoad } }] : []),
+                  ...(loadNotices(state.error, state.retryLoad)),
                   ...(state.newerDeployedBuild ? [{
                     id: "version", tone: "info" as const,
                     text: "A new version is ready. Reload this tab to use it.",

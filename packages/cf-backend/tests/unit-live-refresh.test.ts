@@ -359,9 +359,13 @@ describe('workspace live refresh failures', () => {
       slates: 'offline',
       consents: 'offline',
       plan: 'offline',
-    }, true)).toBe(
-      "Couldn't refresh background jobs, pending actions, MCTS, memory content, tools, executors, slates, device consents, and active plan. Showing last known data. offline",
-    );
+    }, true)).toEqual({
+      severity: 'partial',
+      title: 'Background jobs, pending actions, MCTS, memory content, tools, executors, slates, device consents, and active plan could not be refreshed.',
+      scope: 'The conversation is available. Showing last known data.',
+      detail: 'offline',
+      retry: 'Retry',
+    });
   });
 
   test('a failed refresh retains stale data and reports one actionable error', async () => {
@@ -378,9 +382,13 @@ describe('workspace live refresh failures', () => {
     );
 
     expect(jobs).toEqual(['already visible']);
-    expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh background jobs. Showing last known data. jobs RPC unavailable",
-    );
+    expect(formatWorkspaceError(errors.errors, true)).toEqual({
+      severity: 'partial',
+      title: 'Background jobs could not be refreshed.',
+      scope: 'The conversation is available. Showing last known data.',
+      detail: 'jobs RPC unavailable',
+      retry: 'Retry loading background jobs',
+    });
   });
 
   test('failures consolidate, and each successful retry clears only its source', async () => {
@@ -404,10 +412,13 @@ describe('workspace live refresh failures', () => {
         admission.admit(TEST_ACTOR, 'slates'),
       ),
     ]);
-    expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh tools and slates. Showing last known data. catalog offline",
-    );
-
+    expect(formatWorkspaceError(errors.errors, true)).toEqual({
+      severity: 'partial',
+      title: 'Tools and slates could not be refreshed.',
+      scope: 'The conversation is available. Showing last known data.',
+      detail: 'catalog offline',
+      retry: 'Retry',
+    });
     await refreshLiveResource(
       'tools',
       () => Promise.resolve(['ready']),
@@ -415,10 +426,13 @@ describe('workspace live refresh failures', () => {
       errors.report,
       admission.admit(TEST_ACTOR, 'tools'),
     );
-    expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh slates. Showing last known data. catalog offline",
-    );
-
+    expect(formatWorkspaceError(errors.errors, true)).toEqual({
+      severity: 'partial',
+      title: 'Slates could not be refreshed.',
+      scope: 'The conversation is available. Showing last known data.',
+      detail: 'catalog offline',
+      retry: 'Retry loading slates',
+    });
     await refreshLiveResource(
       'slates',
       () => Promise.resolve(['ready']),
@@ -442,57 +456,111 @@ describe('the workspace banner', () => {
     //   Workspace snapshot failed: Network connection lost. Couldn't refresh
     //   live data for memory content. Showing last known data. Network
     //   connection lost.
-    const line = formatWorkspaceError(
+    const notice = formatWorkspaceError(
       { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
       true,
     );
 
     // The snapshot re-reads memory content itself, so one dropped round trip
     // is one surface with one reason — not the workspace plus each thing in it.
-    expect(line).toBe("Couldn't refresh this workspace. Showing last known data. Network connection lost.");
-    expect(line?.split(CONNECTION_LOST).length).toBe(2);
+    expect(notice).toEqual({
+      severity: 'blocking',
+      title: "Couldn't refresh this workspace.",
+      scope: 'Showing last known data.',
+      detail: CONNECTION_LOST,
+      retry: 'Retry',
+    });
+    expect(notice?.detail.split(CONNECTION_LOST).length).toBe(2);
   });
-
   test('a surface that failed for a reason of its own keeps its name beside the workspace', () => {
     expect(formatWorkspaceError(
       { snapshot: CONNECTION_LOST, memoryContent: 'MEMORY.md is unreadable' },
       true,
-    )).toBe(
-      "Couldn't refresh this workspace and memory content. Showing last known data."
-      + ' Network connection lost. MEMORY.md is unreadable',
-    );
+    )).toEqual({
+      severity: 'blocking',
+      title: "Couldn't refresh this workspace and memory content.",
+      scope: 'Showing last known data.',
+      detail: 'Network connection lost. MEMORY.md is unreadable',
+      retry: 'Retry',
+    });
   });
-
   test('a workspace with nothing on screen says it could not open, never that it is showing stale data', () => {
-    const line = formatWorkspaceError(
+    const notice = formatWorkspaceError(
       { snapshot: CONNECTION_LOST, memoryContent: CONNECTION_LOST },
       false,
     );
 
-    expect(line).toBe("Couldn't open this workspace. Network connection lost.");
-    expect(line).not.toContain('last known data');
+    expect(notice).toEqual({
+      severity: 'blocking',
+      title: "Couldn't open this workspace",
+      scope: 'Nothing has loaded yet.',
+      detail: CONNECTION_LOST,
+      retry: 'Retry',
+    });
+    expect(notice?.scope).not.toContain('last known data');
   });
 
   test('an initial failure and a refresh failure are different claims about the same reason', () => {
     const errors = { snapshot: 'the workspace is asleep' };
-    expect(formatWorkspaceError(errors, false)).toBe("Couldn't open this workspace. the workspace is asleep");
-    expect(formatWorkspaceError(errors, true))
-      .toBe("Couldn't refresh this workspace. Showing last known data. the workspace is asleep");
+    expect(formatWorkspaceError(errors, false)).toMatchObject({
+      severity: 'blocking', title: "Couldn't open this workspace", detail: 'the workspace is asleep',
+    });
+    expect(formatWorkspaceError(errors, true)).toMatchObject({
+      severity: 'blocking', title: "Couldn't refresh this workspace.", detail: 'the workspace is asleep',
+    });
   });
 
   test('a failed action the user asked for keeps its own sentence', () => {
     expect(formatWorkspaceError({ model: "Couldn't switch model: rejected" }, true))
-      .toBe("Couldn't switch model: rejected");
+      .toEqual({
+        severity: 'partial', title: "Couldn't switch model: rejected",
+        scope: '', detail: '', retry: null,
+      });
     expect(formatWorkspaceError({ model: "Couldn't switch model: rejected", jobs: 'offline' }, true))
-      .toBe(
-        "Couldn't switch model: rejected"
-        + " Couldn't refresh background jobs. Showing last known data. offline",
-      );
+      .toEqual({
+        severity: 'partial',
+        title: "Couldn't switch model: rejected Background jobs could not be refreshed.",
+        scope: 'The conversation is available. Showing last known data.',
+        detail: 'offline',
+        retry: 'Retry loading background jobs',
+      });
   });
-
   test('a healthy workspace says nothing at all', () => {
     expect(formatWorkspaceError({}, true)).toBeNull();
     expect(formatWorkspaceError({}, false)).toBeNull();
+  });
+});
+
+describe('resource-scoped workspace notices', () => {
+  test('a failed essential read blocks with the open sentence and a retry', () => {
+    expect(formatWorkspaceError({ snapshot: CONNECTION_LOST }, false)).toEqual({
+      severity: 'blocking',
+      title: "Couldn't open this workspace",
+      scope: 'Nothing has loaded yet.',
+      detail: CONNECTION_LOST,
+      retry: 'Retry',
+    });
+  });
+
+  test('a failed optional read is partial, names only that resource, and never blocks the composer', () => {
+    const notice = formatWorkspaceError({ tools: 'catalog offline' }, true);
+    expect(notice?.severity).toBe('partial');
+    expect(notice?.title).toBe('Tools could not be refreshed.');
+    expect(notice?.scope).toContain('The conversation is available.');
+    expect(notice?.retry).toBe('Retry loading tools');
+  });
+
+  test('the essential read wins when both fail', () => {
+    const notice = formatWorkspaceError({ snapshot: CONNECTION_LOST, tools: 'catalog offline' }, false);
+    expect(notice?.severity).toBe('blocking');
+    expect(notice?.title).toBe("Couldn't open this workspace");
+    expect(notice?.retry).toBe('Retry');
+  });
+
+  test('inline credentials never reach the technical detail', () => {
+    const notice = formatWorkspaceError({ tools: 'provider answered 401 with api_key=sk-live-abc123' }, true);
+    expect(notice?.detail).not.toContain('sk-live-abc123');
+    expect(notice?.detail).toContain('api_key=<redacted>');
   });
 });
 
@@ -533,10 +601,13 @@ describe('loading the workspace snapshot', () => {
     );
 
     expect(outcome).toBe('loaded');
-    expect(formatWorkspaceError(errors.errors, true)).toBe(
-      "Couldn't refresh background jobs. Showing last known data."
-      + ' the jobs table is still unreachable',
-    );
+    expect(formatWorkspaceError(errors.errors, true)).toEqual({
+      severity: 'partial',
+      title: 'Background jobs could not be refreshed.',
+      scope: 'The conversation is available. Showing last known data.',
+      detail: 'the jobs table is still unreachable',
+      retry: 'Retry loading background jobs',
+    });
   });
 
   test('a snapshot cannot clear a failure a newer read of that surface reported', async () => {

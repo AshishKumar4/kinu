@@ -5,10 +5,10 @@
  * Identity lives here because this is the only row present at BOTH altitudes:
  * in Supervise there is no chat header to carry it.
  *
- * Workspace-scoped status rides with it: the live pill, the next-turn model,
- * theme, and Run/Supervise altitude. Settings lives with the workspace row in
- * the Sidebar; anything about one conversation (which tab, clearing its
- * history) stays on the chat column's tab strip.
+ * Workspace-scoped status rides with it: the connection and task indicators,
+ * the next-turn model, theme, and Work/Supervise altitude. Settings lives
+ * with the workspace row in the Sidebar; anything about one conversation
+ * (which tab, clearing its history) stays on the chat column's tab strip.
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { Tabs, type TabsItem } from "@cloudflare/kumo";
@@ -25,13 +25,17 @@ const ALTITUDE_TAB_CLASS = "!my-0.5 !rounded-full !px-[18px] !text-[12.5px] !lea
 const ALTITUDE_TABS = [
   {
     value: "run",
-    label: "Run",
+    label: "Work",
     className: ALTITUDE_TAB_CLASS,
+    // TabsItem has no title prop: the render element carries it, and Base UI
+    // merges its props (children included) onto the tab trigger.
+    render: (props) => <button {...props} title="Work: the current task and its record" aria-description="Work: the current task and its record" />,
   },
   {
     value: "supervise",
     label: "Supervise",
     className: ALTITUDE_TAB_CLASS,
+    render: (props) => <button {...props} title="Supervise: what the agent learned and what needs you" aria-description="Supervise: what the agent learned and what needs you" />,
   },
 ] satisfies TabsItem[];
 
@@ -41,6 +45,8 @@ export interface WorkspaceBarProps {
   connectionStatus: ConnectionStatus;
   /** The agent is mid-turn — the pulse the whole workspace shares. */
   working: boolean;
+  /** An approval the agent cannot proceed without: actions, consents, or both. */
+  waitingOnYou?: boolean;
   /** The resolved model spec for the next turn, when the workspace has one. */
   model?: string;
   /** Present on a forked workspace: a link back to the one it was cut from. */
@@ -60,14 +66,30 @@ function modelChipLabel(spec: string): string {
   return idPart.startsWith("@cf/") ? idPart.slice(4) : idPart;
 }
 
-/** The live pill: one honest word about the socket, tinted by what it means. */
-function LivePill({ status, working }: { status: ConnectionStatus; working: boolean }) {
+/** The socket, dot plus word at every state — a dot alone is hue alone. */
+function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   const tone =
     status === "connected"
-      ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: working ? "p-dot-accent p-dot-pulse" : "p-dot-success", word: working ? "Working" : "Live" }
+      ? { dot: "p-dot-success", word: "Connected" }
       : status === "connecting"
-        ? { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral p-dot-pulse", word: "Connecting" }
-        : { cls: "p-danger border p-border p-fill", dot: "p-dot-danger", word: "Offline" };
+        ? { dot: "p-dot-neutral p-dot-pulse", word: "Connecting" }
+        : { dot: "p-dot-danger", word: "Offline" };
+
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 p-text-3">
+      <span className={`size-1.5 rounded-full ${tone.dot}`} />
+      <span className="text-[11.5px] font-medium">{tone.word}</span>
+    </span>
+  );
+}
+
+// No stopped state: the runtime sends no stopped event, so not-working is only idle.
+function TaskIndicator({ working, waitingOnYou }: { working: boolean; waitingOnYou: boolean }) {
+  const tone = waitingOnYou
+    ? { cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" }
+    : working
+      ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" }
+      : { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
 
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}>
@@ -78,7 +100,7 @@ function LivePill({ status, working }: { status: ConnectionStatus; working: bool
 }
 
 export function WorkspaceBar({
-  title, onRename, connectionStatus, working, model, forkParent,
+  title, onRename, connectionStatus, working, waitingOnYou = false, model, forkParent,
   altitude, onAltitude,
 }: WorkspaceBarProps) {
   const { mode } = useTheme();
@@ -89,7 +111,8 @@ export function WorkspaceBar({
     <div className="@container flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-border p-sidebar px-5 py-2">
       <div className="flex min-w-0 basis-full items-center gap-3 @[30rem]:basis-0 @[30rem]:flex-1">
         <InlineRenameTitle title={title} onRename={onRename} subject="workspace" />
-        <LivePill status={connectionStatus} working={working} />
+        <ConnectionIndicator status={connectionStatus} />
+        <TaskIndicator working={working} waitingOnYou={waitingOnYou} />
         {model && (
           <span
             className="hidden max-w-48 truncate rounded-full border p-border p-fill px-3 py-1 font-mono text-[11px] p-text-4 sm:inline"

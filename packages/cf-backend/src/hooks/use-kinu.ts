@@ -30,7 +30,7 @@ import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../compo
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "../components/head-chat";
-import type { InlineSteer } from "@kinu.run/core";
+import { looksLikeSecretField, type InlineSteer } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
@@ -508,33 +508,86 @@ function collectReadFailures(errors: LiveRefreshErrors) {
 }
 
 /**
- * The one line the workspace banner shows.
+ * The workspace notice, split the way the surface needs it.
+ *
+ * `severity` is which reads failed: the snapshot is the essential one, and a
+ * failed essential read is `blocking` — nothing the workspace shows can be
+ * trusted yet. A failed optional read (tools, memory, executors, presence,
+ * slates, pending actions) is `partial`: the conversation is available and
+ * the composer stays enabled, and only the resource that failed is named.
+ * `retry` is the recovery the notice may offer — the label for `retryLoad`,
+ * which re-reads the snapshot and every live resource — or null when the
+ * failure is a user-initiated action the owner re-issues themselves.
+ */
+export interface WorkspaceNotice {
+  severity: "blocking" | "partial";
+  title: string;
+  scope: string;
+  /** The raw reasons, secret-masked, for the expandable technical region. */
+  detail: string;
+  retry: string | null;
+}
+
+/**
+ * The secret-field policy, for a rendered string rather than a payload.
+ *
+ * `redactPayload` reads field names; an error's text has none, so the only
+ * defensible matches are `name = value` / `name: value` pairs whose name is
+ * secret-shaped by the same list, and the one scheme secret by shape alone
+ * (`Bearer …`). One policy list, two shapes — a second heuristic here would
+ * drift from core's the first time either is extended.
+ */
+function redactErrorText(text: string): string {
+  return text
+    .replace(/([A-Za-z][\w-]*)(\s*[=:]\s*)("([^"\\]|\\.)*"|'[^']*'|\S+)/g,
+      (whole, name: string, sep: string) =>
+        looksLikeSecretField(name) ? `${name}${sep}<redacted>` : whole)
+    .replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
+}
+
+/**
+ * The one notice the workspace shows about its failed reads.
  *
  * `loaded` is whether this workspace has ever produced a snapshot. Until it
- * has there is no last known data, so a failed read is a failed OPEN and the
- * line says that: "Showing last known data" over a workspace that has never
- * shown any is a claim about data the reader cannot see.
+ * has there is no last known data, so a failed essential read is a failed
+ * OPEN and the title says that: "Showing last known data" over a workspace
+ * that has never shown any is a claim about data the reader cannot see.
  *
- * Every read shares one sentence and each distinct reason appears once. One
- *  dropped connection fails the snapshot and every poll in the same instant,
- *  and the line prints that single reason once, not once per surface:
- *
- *   Workspace snapshot failed: Network connection lost. Couldn't refresh live
- *   data for memory content. Showing last known data. Network connection lost.
+ * Every read shares one title and each distinct reason appears once. One
+ * dropped connection fails the snapshot and every poll in the same instant,
+ * and the detail prints that single reason once, not once per surface.
  */
-export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): string | null {
+export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): WorkspaceNotice | null {
+  const action = errors.model ?? errors.memory ?? null;
   const { labels, reasons } = collectReadFailures(errors);
+
+  if (action === null && labels.length === 0) return null;
+
+  const detail = reasons.map(redactErrorText).join(" ");
+  const blocking = errors.snapshot !== undefined;
+
+  if (labels.length === 0) {
+    return { severity: "partial", title: action ?? "", scope: "", detail: "", retry: null };
+  }
+
+  const scope = blocking
+    ? loaded ? "Showing last known data." : "Nothing has loaded yet."
+    : loaded ? "The conversation is available. Showing last known data." : "The conversation is available.";
 
   // The labels are a noun list; the reasons are whatever an RPC rejected with,
   // so they are set down one after another rather than conjoined — "Network
   // connection lost. and MEMORY.md is unreadable" is not a sentence.
-  const read = labels.length === 0
-    ? null
-    : loaded
-      ? `Couldn't refresh ${formatNaturalList(labels)}. Showing last known data. ${reasons.join(" ")}`
-      : `Couldn't open this workspace. ${reasons.join(" ")}`;
+  const list = formatNaturalList(labels);
 
-  return combineErrorMessages(errors.model ?? errors.memory ?? null, read);
+  const readTitle = blocking
+    ? loaded ? `Couldn't refresh ${list}.` : "Couldn't open this workspace"
+    : `${list[0]!.toUpperCase()}${list.slice(1)} could not be ${loaded ? "refreshed" : "loaded"}.`;
+
+  const title = action === null ? readTitle : `${action} ${readTitle}`;
+
+  const retry = !blocking && labels.length === 1 ? `Retry loading ${labels[0]}` : "Retry";
+
+  return { severity: blocking ? "blocking" : "partial", title, scope, detail, retry };
 }
 
 /** What one snapshot load settled as. `superseded` is neither outcome: a newer
@@ -2282,14 +2335,6 @@ function formatNaturalList(values: readonly string[]): string {
   if (values.length === 2) return `${values[0]} and ${values[1]}`;
 
   return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
-}
-
-function combineErrorMessages(primary: string | null, live: string | null): string | null {
-  if (!primary) return live;
-
-  if (!live) return primary;
-
-  return `${primary} ${live}`;
 }
 
 function parseActivePlanReview<Value>(value: Value): PlanReview | null {
