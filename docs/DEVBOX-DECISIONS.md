@@ -211,6 +211,32 @@ was red before the fix. The image and source are pinned in
 `block-lower/upstream.json`; evidence is under
 `bench-artifacts/block-attach/opaque-20260913/`.
 
+D10. Storage commands run from the runtime directory (`291359865`,
+2026-09-13). In `b20260913132854`, first-base reseat ran with cwd
+`/workspace` and unmount failed EBUSY after 2,235 ms. The catch continued;
+the next checkpoint found no base files and compared 4,096 upper blocks
+against zero base blocks. The corrected control `b20260913141100` reseated
+from `/var/tmp/devbox` in 1,575 ms, found the base, matched 4,092 blocks and
+published 69,632 bytes. Failed reseats now refuse the checkpoint, even when
+the base archive is already durable. A Docker row proves the cwd holder,
+reseat, small next delta and exact cold restore.
+
+D11. The block mount type is the measured `fuse` (`4ded56c3b`, 2026-09-13).
+Cloud trace `b20260913141100` showed that type with every source/generation
+comparison true; the old `fuse.devbox-block` assertion alone refused the
+valid composition and drove recovery. The pinned image reports `fuse` in
+Docker too. Exact base, delta, store and boot-token checks remain. The
+conformance corpus is red for a missing mount, wrong type or wrong token,
+and green for the measured mount.
+
+D12. A stale startup row cannot reopen a settled running generation
+(`9f877511e`, 2026-09-13). The SDK can buffer rows that a successful hook
+has deleted. The dense trace below showed one such adoption waiting
+14,814 ms behind an active writer on the shared exec session. Scheduled
+startup now returns when that running generation already has admission;
+unsettled generations still use the same coordinator. The active-caller
+regression is red before the guard and green after it.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
@@ -282,7 +308,28 @@ teardown entries completed and the final object/multipart counts were zero.
 The observations, precise refusals and receipt are under
 `bench-artifacts/block-attach/b20260913131044/` and
 `bench-artifacts/teardown/b20260913131044.json`. O1 stays open on startup
-admission and publication cost, not on opaque-record support.
+admission and publication cost, not on opaque-record support at that revision.
+
+The storage figures are now observed. Clean `4ded56c3b`, run
+`b20260913143908`, restored the C3 changed file in 5,218 ms (5,555 − 337),
+with payloadBytes=0, indexPages=0 and readRequests=0 before the full file
+verification passed. Its delta was 69,632 bytes. The independent dense run
+`b20260913145258` restored the 2 GiB changed file in 3,735 ms (4,032 − 297),
+also with all three attach counters zero; file size and the three saved
+range hashes matched. Its delta was also 69,632 bytes.
+
+The dense run used the same product base plus Worker/SDK await
+instrumentation. Its dirty digest and exact patches are retained; its timing
+is not a clean-tree figure. Neither run measures the later D12 guard. The
+combined verdict is
+`bench-artifacts/block-attach/b20260913145258/verdict.json`. Both runs removed
+their Worker, container application, boxes, bucket and generated config;
+their final residue counts were zero objects and zero multipart uploads.
+
+C3 still made three object attempts: two zero-byte directory/placeholder
+PUTs and the payload write. The payload-size gate passes; the one-attempt
+gate remains red. No attempt was hidden or reclassified to admit the run.
+O1 therefore remains open as a full strategy-admission claim.
 O2. Storage implementation closed by D7. Deployed latency evidence remains
 part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is
