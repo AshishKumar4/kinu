@@ -67,3 +67,31 @@ test('publishing after attach merges retained records and replaces only upper na
   expect(merged.manifest.deleted).toEqual(['gone']);
   expect(merged.retainedFiles?.get('keep')).toBe('/side/.devbox-delta/tree/keep');
 });
+
+test('opaque directory records replace retained descendants and remain opaque on later edits', () => {
+  const retained: DeltaManifest = { v: 2,
+    files: [{ kind: 'whole', p: 'keep', s: 1 }, { kind: 'whole', p: 'dir/stale', s: 1 }],
+    dirs: [{ p: 'dir', mode: 493, uid: 0, gid: 0 }], deleted: ['dir/old'], treplace: [], links: [] };
+
+  const next: DeltaPlan = { manifest: { v: 2, files: [{ kind: 'whole', p: 'dir/new', s: 1 }],
+    dirs: [{ p: 'dir', mode: 493, uid: 0, gid: 0, opaque: true }], deleted: [], treplace: [], links: [] },
+    chunks: new Map(), indexes: new Map() };
+
+  const replaced = mergeDeltaPublication(next, retained, new Map(), '/side');
+  expect(replaced.manifest.files.map(file => file.p)).toEqual(['dir/new', 'keep']);
+  expect(replaced.manifest.deleted).toEqual([]);
+
+  const edited: DeltaPlan = { ...next, manifest: { ...next.manifest,
+    files: [{ kind: 'whole', p: 'dir/later', s: 1 }], dirs: [{ p: 'dir', mode: 448, uid: 1, gid: 1 }] } };
+
+  const merged = mergeDeltaPublication(edited, replaced.manifest, new Map(), '/side');
+  expect(merged.manifest.files.map(file => file.p)).toEqual(['dir/later', 'dir/new', 'keep']);
+  expect(merged.manifest.dirs).toEqual([{ p: 'dir', mode: 448, uid: 1, gid: 1, opaque: true }]);
+
+  const root: DeltaPlan = { ...next, manifest: { ...next.manifest,
+    dirs: [{ p: '', mode: 493, uid: 0, gid: 0, opaque: true }, ...next.manifest.dirs] } };
+
+  expect(mergeDeltaPublication(root, retained, new Map(), '/side').manifest.files.map(file => file.p)).toEqual(['dir/new']);
+  expect(v.safeParse(DeltaManifestSchema, root.manifest).success).toBe(true);
+  expect(v.safeParse(DeltaManifestSchema, { ...root.manifest, dirs: [{ p: '', mode: 493, uid: 0, gid: 0 }] }).success).toBe(false);
+});

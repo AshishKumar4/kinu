@@ -3657,6 +3657,21 @@ describe('the generation lifecycle, against ONE box', () => {
 });
 
 describe('a legacy delta publication carries its fallback evidence', () => {
+  test('unobserved directory opacity refuses publication instead of changing formats', async () => {
+    const record = harness({ state: chainState(), mounts: MOUNTED });
+    const exec = record.ports.exec;
+    record.ports.exec = async command => command.startsWith('# devbox-probe-v1')
+      ? { stdout: '78 ', stderr: 'unsupported opaque xattr value', exitCode: 0 } : await exec(command);
+    const before = record.state?.rev;
+    const priorDelta = record.state?.delta;
+    const outcome = await checkpointOf(record, 'tick');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason).toContain('opaque-directory namespace could not be observed');
+    expect(outcome.reason).toContain('unsupported opaque xattr value');
+    expect(record.state?.rev).toBe(before);
+    expect(record.state?.delta).toEqual(priorDelta);
+  });
+
   for (const reason of ['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed'] as const) {
     test(reason, async () => {
       const record = harness({ state: chainState(), mounts: MOUNTED });

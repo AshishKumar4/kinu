@@ -28,6 +28,24 @@ Metadata path lengths are platform-bounded. Payload reads/copies are zero. This 
 only if H≤cM. It is not a wall-clock guarantee. Resuming services and proving listeners follows
 attachment inside the hook.
 
+Opaque directories are directory records with `opaque:true`; an opaque root
+uses `p:""`. The native publication probe observes `trusted.overlay.opaque`,
+the user-namespace variants and fuse-overlayfs's `.wh..wh..opq` marker.
+Unreadable opacity refuses publication. The package places the marker in
+`delta/tree`, and the block server verifies it before mounting. A mask on
+the higher block directory would also hide this checkpoint's whole files;
+the tree-level mask hides only the older base. Cumulative publication drops
+retained descendants of a replaced opaque directory and preserves its mask
+on later ordinary edits. No lower directory is enumerated.
+
+H still counts directory records, including an opaque root, rather than the
+entries those records hide. On 2026-09-13 the Docker conformance row renamed
+a directory over a removed lower directory, checkpointed, restored, and
+listed exactly the new names. Mixed whole and chunked records remained
+readable with zero payload bytes and index pages at attach; a missing opaque
+marker refused readiness. `BlockLayer.lean` models these precedence rules
+and proves that opacity does not add a second directory record.
+
 ## One necessary format change
 
 V1 embeds over[]. Using the real planner with synthetic hashes, M=1 and one deduplicated chunk, logical

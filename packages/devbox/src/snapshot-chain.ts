@@ -35,6 +35,7 @@ import {
   type DeltaFileHashes,
   type DeltaManifest,
   DeltaManifestSchema,
+  DeltaNamespaceProbeFailed,
   type DeltaProbeEntry,
   buildDeltaAttachOps,
   buildDeltaStageOps,
@@ -1758,10 +1759,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     let probe: DeltaProbeEntry[];
+    const observed = await ports.exec(deltaProbeCommand(upperDir, excludes));
 
     try {
-      probe = parseDeltaProbe((await ports.exec(deltaProbeCommand(upperDir, excludes))).stdout);
+      probe = parseDeltaProbe(observed.stdout);
     } catch (error) {
+      if (error instanceof DeltaNamespaceProbeFailed) throw new Error(`${error.message}: ${observed.stderr}`, { cause: error });
+
       return fallback('upper-probe-failed', `the upper probe did not answer: ${describe({ cause: error })}`);
     }
 
@@ -1788,7 +1792,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       devices.forEach((path, at) => { if (lines[at] === '0,0') whiteouts.add(path); });
     }
 
-    const carried = probe.filter((entry) => entry.type !== 'd' && !whiteouts.has(entry.path)).map((entry) => entry.path);
+    const carried = probe.filter((entry) => entry.type !== 'd' && entry.type !== 'o' && !whiteouts.has(entry.path)).map((entry) => entry.path);
     let baseFacts = new Map<string, DeltaBaseFact | null>();
 
     if (carried.length > 0) {

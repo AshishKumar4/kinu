@@ -15,6 +15,32 @@ import Init.Data.Nat.Log2
 
 namespace Kinu.Storage.BlockLayer
 
+/-- H counts opaque directories as directory records, not their lower children. -/
+inductive NamespaceRecord where
+  | directory (isOpaque : Bool)
+  | deletion
+  | hardlink
+  deriving DecidableEq
+
+def namespaceRecords (_ : NamespaceRecord) : Nat := 1
+
+theorem opacity_keeps_directory_record_count (isOpaque : Bool) :
+    namespaceRecords (.directory isOpaque) = namespaceRecords (.directory false) := rfl
+
+/-- Opacity belongs to the tree lower. A block record still wins, and a whole
+    record in the same checkpoint is not hidden by its own directory mask. -/
+def namespaceLookup {α : Type} (block tree base : Option α) (isOpaque : Bool) : Option α :=
+  block.orElse fun _ => tree.orElse fun _ => if isOpaque then none else base
+
+theorem opaque_hides_base_names {α : Type} (base : Option α) :
+    namespaceLookup none none base true = none := rfl
+
+theorem opaque_preserves_whole_records {α : Type} (value : α) (base : Option α) :
+    namespaceLookup none (some value) base true = some value := rfl
+
+theorem opaque_preserves_chunked_records {α : Type} (value : α) (tree base : Option α) :
+    namespaceLookup (some value) tree base true = some value := rfl
+
 inductive Operation where
   | metadata (work : Nat)
   | payload (bytes : Nat)

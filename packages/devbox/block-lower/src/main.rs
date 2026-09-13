@@ -1,6 +1,7 @@
 mod index;
 mod model;
 mod namespace;
+mod probe;
 mod storage;
 
 use crate::index::invalid;
@@ -13,7 +14,7 @@ use fuser::{
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -242,6 +243,7 @@ fn options() -> io::Result<BTreeMap<String, String>> {
             "--base-source",
             "--delta-source",
             "--stats",
+            "--probe-opaque",
         ]
         .contains(&key.as_str())
         {
@@ -259,6 +261,15 @@ fn options() -> io::Result<BTreeMap<String, String>> {
 
 fn run() -> io::Result<()> {
     let args = options()?;
+    if let Some(root) = args.get("--probe-opaque") {
+        if args.len() != 1 {
+            return Err(invalid("probe does not accept mount arguments"));
+        }
+        let mut input = Vec::new();
+        io::stdin().read_to_end(&mut input)?;
+        io::stdout().write_all(&probe::enrich(Path::new(root), &input)?)?;
+        return Ok(());
+    }
     let get = |key: &str| {
         args.get(key)
             .ok_or_else(|| invalid("missing required argument"))
@@ -286,6 +297,22 @@ fn run() -> io::Result<()> {
         .read_to_end(&mut manifest_bytes)?;
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
     let nodes = model::inodes(&manifest)?;
+    // The mask belongs to the tree lower: masking the higher block directory
+    // would also hide this checkpoint's whole-file records from that tree.
+    for dir in &manifest.dirs {
+        if dir.opaque {
+            let parent = if dir.p.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", dir.p)
+            };
+            let marker =
+                delta_root.required(&format!(".devbox-delta/tree/{parent}.wh..wh..opq"))?;
+            if marker.metadata()?.len() != 0 {
+                return Err(invalid("nonempty opaque marker"));
+            }
+        }
+    }
     let storage = Storage {
         base: Root::open(&base)?,
         delta: delta_root,
@@ -313,6 +340,12 @@ fn run() -> io::Result<()> {
 fn main() {
     if let Err(error) = run() {
         eprintln!("block-lower.start: {error}");
-        std::process::exit(1);
+        std::process::exit(
+            if std::env::args().nth(1).as_deref() == Some("--probe-opaque") {
+                78
+            } else {
+                1
+            },
+        );
     }
 }
