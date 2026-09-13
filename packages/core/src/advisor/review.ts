@@ -35,6 +35,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { diagnostics, tolerate, toKinuError, type ErrorCode } from '../obs/index';
 import { abortableSleep } from '../providers/pacing';
 import { stableStringify } from '../safety/argument-digest';
+import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../types/advisor';
 
@@ -269,14 +270,92 @@ const AdvisorReplySchema = v.object({
   class: v.optional(v.string()),
 });
 
+/**
+ * Credential shapes that must not reach the advisor model verbatim. The deep
+ * lane may resolve to a different vendor than the turn model, so a secret the
+ * turn saw would travel to a second provider inside the review prompt.
+ *
+ * Value shapes, mirrored from `scripts/secret-scan.ts` PATTERNS rather than
+ * imported: scripts run under raw Node and core must not depend on them, and
+ * the scan's benign exemptions do not apply here — a tool result naming a
+ * shape is still shaped like the secret. Each placeholder keeps the shape
+ * class so the advisor can still reason about the call, reusing the redaction
+ * shape the event hub and the release diff marker already write.
+ *
+ * The private-key block comes first: its base64 body is gone before the value
+ * scans run, so a key fragment that happens to read as another shape cannot
+ * survive inside a redacted block. No shape matches, no change: the walk
+ * below returns its input untouched, and a secret-free turn renders
+ * byte-identical.
+ */
+const ADVISOR_PRIVATE_KEY_BLOCK = /-----BEGIN[^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END[^-]*PRIVATE KEY[^-]*-----|-----BEGIN[^-]*PRIVATE KEY[^-]*-----/gu;
+
+const ADVISOR_BEARER_TOKEN = /Bearer\s+[A-Za-z0-9\-._~+/=]{20,}/gu;
+
+const ADVISOR_AWS_ACCESS_KEY = /AKIA[0-9A-Z]{16}/gu;
+
+const ADVISOR_PROVIDER_SECRET = /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/gu;
+
+const ADVISOR_KINU_TOKEN = /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/gu;
+
+
+const AdvisorStringSchema = v.string();
+
+function obfuscateAdvisorString(value: string): string {
+  return value
+    .replace(ADVISOR_PRIVATE_KEY_BLOCK, '[redacted private-key]')
+    .replace(ADVISOR_BEARER_TOKEN, '[redacted bearer]')
+    .replace(ADVISOR_AWS_ACCESS_KEY, '[redacted api-key]')
+    .replace(ADVISOR_PROVIDER_SECRET, '[redacted api-key]')
+    .replace(ADVISOR_KINU_TOKEN, '[redacted kinu-token]');
+}
+
+/** Credential-shaped strings out of a tool payload, rebuilding containers
+ *  only along paths that changed. Strings narrow through the string schema
+ *  rather than `typeof`, the way `redactPayload` narrows with `isJsonObject`. */
+function obfuscateAdvisorSecrets(value: JsonValue): JsonValue {
+  if (v.is(AdvisorStringSchema, value)) return obfuscateAdvisorString(value);
+
+  if (Array.isArray(value)) {
+    let changed = false;
+
+    const next = value.map((entry) => {
+      const obfuscated = obfuscateAdvisorSecrets(entry);
+
+      if (obfuscated !== entry) changed = true;
+
+      return obfuscated;
+    });
+
+    return changed ? next : value;
+  }
+
+  if (!isJsonObject(value)) return value;
+
+  let changed = false;
+  const next: JsonObject = {};
+
+  for (const [field, fieldValue] of Object.entries(value)) {
+    const obfuscated = obfuscateAdvisorSecrets(fieldValue);
+
+    if (obfuscated !== fieldValue) changed = true;
+
+    next[field] = obfuscated;
+  }
+
+  return changed ? next : value;
+}
+
 /** One tool call as the advisor is shown it. Arguments and result are bounded
- *  by the same per-call budget the pattern extractor uses. */
+ *  by the same per-call budget the pattern extractor uses, and
+ *  credential-shaped values are obfuscated first, so a secret the turn saw
+ *  never travels verbatim to the advisor's vendor. */
 function renderToolCall(call: ToolCallRecord): string {
-  const args = evidenceWindow(stableStringify(call.args), EVIDENCE_BUDGETS.patternToolCall);
+  const args = evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.args)), EVIDENCE_BUDGETS.patternToolCall);
 
   const result = call.result === undefined
     ? ''
-    : `\n    → ${evidenceWindow(stableStringify(call.result), EVIDENCE_BUDGETS.patternToolCall)}`;
+    : `\n    → ${evidenceWindow(stableStringify(obfuscateAdvisorSecrets(call.result)), EVIDENCE_BUDGETS.patternToolCall)}`;
 
   const outcome = call.outcome === undefined ? 'unmeasured' : stableStringify(call.outcome);
 

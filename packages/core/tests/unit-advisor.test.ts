@@ -694,3 +694,57 @@ describe('advisor review retries', () => {
     expect(attempts(rec)).toEqual([{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }]);
   });
 });
+
+// ── Secret obfuscation ────────────────────────────────────────────────────
+// The deep lane may resolve to a different vendor than the turn model, so
+// credential-shaped values in tool args and results are obfuscated before
+// they enter the advisor prompt. Every fixture below is assembled at runtime:
+// a real-shaped literal in source is a secret-scan finding
+// (`scripts/secret-scan.ts`) and a push-protection block, so no fixture
+// spells its shape contiguously.
+
+describe('advisor prompt secret obfuscation', () => {
+  const bearer = 'Bearer ' + 't'.repeat(40);
+  const awsKey = 'AK' + 'IA' + '1'.repeat(16);
+  const kinuToken = 'pt' + 'a_' + 'ab12cd34';
+  const providerKey = 'sk' + '-ant-' + 'x'.repeat(24);
+  const privateKey = '-----BE' + 'GIN RSA PRIVATE KEY-----\nMIIB fake body\n-----END RSA PRIVATE KEY-----';
+
+  test('tool args and results carrying credentials reach the prompt obfuscated, by shape class', () => {
+    const prompt = buildAdvisorPrompt(aTurn({
+      toolCalls: [{
+        name: 'run',
+        args: { command: 'deploy', token: bearer, key: providerKey },
+        result: `deployed with ${awsKey} as ${kinuToken}\n${privateKey}`,
+      }],
+    }));
+
+    expect(prompt).not.toContain(bearer);
+    expect(prompt).not.toContain(awsKey);
+    expect(prompt).not.toContain(kinuToken);
+    expect(prompt).not.toContain(providerKey);
+    expect(prompt).not.toContain(privateKey);
+    expect(prompt).toContain('[redacted bearer]');
+    expect(prompt).toContain('[redacted api-key]');
+    expect(prompt).toContain('[redacted kinu-token]');
+    expect(prompt).toContain('[redacted private-key]');
+  });
+
+  test('secret-free values pass through verbatim, including lookalikes', () => {
+    const commit = 'deadbeef'.repeat(5);
+
+    const prompt = buildAdvisorPrompt(aTurn({
+      toolCalls: [{
+        name: 'run',
+        args: { command: 'kinu rotate', commit, hint: 'pass a Bearer token along' },
+        result: 'exit 1',
+      }],
+    }));
+
+    expect(prompt).toContain('kinu rotate');
+    expect(prompt).toContain(commit);
+    expect(prompt).toContain('Bearer token');
+    expect(prompt).toContain('exit 1');
+    expect(prompt).not.toContain('[redacted');
+  });
+});
