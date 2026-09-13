@@ -45,9 +45,13 @@ const MessageContentSchema = v.union([v.string(), v.array(v.unknown())]);
 
 type MessageContent = v.InferOutput<typeof MessageContentSchema>;
 
+// `content: null` is valid OpenAI wire for an assistant row whose only
+// content is tool_calls — the exact shape the tool-call-only lane sends.
+const NullableMessageContentSchema = v.union([v.null(), MessageContentSchema]);
+
 const OutboundMessageSchema = v.object({
   role: v.optional(v.string()),
-  content: v.optional(MessageContentSchema),
+  content: v.optional(NullableMessageContentSchema),
   tool_calls: v.optional(v.array(v.object({
     id: v.string(),
     function: v.object({ name: v.string() }),
@@ -68,8 +72,8 @@ type SseDelta =
   | { role: string }
   | { tool_calls: ReadonlyArray<{ index: number; id: string; type: string; function: { name: string; arguments: string } }> };
 
-function textOf(content: MessageContent | undefined): string {
-  if (content === undefined) return '';
+function textOf(content: MessageContent | null | undefined): string {
+  if (content === undefined || content === null) return '';
 
   if (Array.isArray(content)) {
     return content.flatMap((p) => {
@@ -181,10 +185,6 @@ async function toolBody(body: OutboundBody): Promise<Response> {
   const encoder = new TextEncoder();
 
   if (!sawToolResult) {
-    // The narration is load-bearing, not flavor: a first step with a tool
-    // call and no text is skipped silently (empty persisted assistant,
-    // `signal.preempted`, no diagnostics), so the fake narrates
-    // before acting exactly as real models do.
     const chunks = [
       sseChunk({ content: 'I will read that fixture file.' }),
       sseChunk({
@@ -267,12 +267,70 @@ async function errorBody(body: OutboundBody): Promise<Response> {
 }
 
 
+/** The tool-call-only lane: a first step that carries the tool call and
+ * NOTHING else — valid OpenAI wire (no leading text delta), the shape
+ * real act-first models answer with. The step after the tool result answers
+ * with text, exactly as the narrated tools lane does. The assistant row this
+ * round-trips into the next request legally carries `content: null`, which is
+ * why `OutboundMessageSchema` accepts it explicitly. */
+async function toolCallOnlyBody(body: OutboundBody): Promise<Response> {
+  const messages = body.messages ?? [];
+  const encoder = new TextEncoder();
+
+  if (messages.some((m) => m.role === 'tool')) {
+    const chunks = [
+      sseChunk({ content: 'echo:tool-answered' }),
+      sseChunk({ role: 'assistant' }, 'stop'),
+      sseDone(),
+    ];
+
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const c of chunks) controller.enqueue(encoder.encode(c));
+
+          controller.close();
+        },
+      }),
+      { headers: { 'content-type': 'text/event-stream' } },
+    );
+  }
+
+  const chunks = [
+    sseChunk({
+      tool_calls: [{
+        index: 0,
+        id: 'call_probe_only_1',
+        type: 'function',
+        function: {
+          name: 'file',
+          arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }),
+        },
+      }],
+    }),
+    sseChunk({ role: 'assistant' }, 'tool_calls'),
+    sseDone(),
+  ];
+
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(encoder.encode(c));
+
+        controller.close();
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
+}
+
 async function modelsBody(): Promise<Response> {
   return Response.json({
     data: [
       { id: 'probe' },
       { id: 'probe-early-done' },
       { id: 'probe-tools' },
+      { id: 'probe-tools-only' },
       { id: 'probe-error' },
     ],
   });
@@ -317,6 +375,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
         case 'probe': return echoBody(body);
         case 'probe-early-done': return earlyDoneBody();
         case 'probe-tools': return toolBody(body);
+        case 'probe-tools-only': return toolCallOnlyBody(body);
         case 'probe-error': return errorBody(body);
         default: throw new Error(`fake-models: unknown model ${JSON.stringify(body.model)}`);
       }
