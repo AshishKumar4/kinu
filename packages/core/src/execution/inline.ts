@@ -23,7 +23,7 @@ import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
-import { commandResult, COMMAND_RESULT_TYPE, refusalText } from './exec-result';
+import { commandResult } from './exec-result';
 import { diagnostics, ERROR_CODES, KinuError, refusalOf, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
@@ -177,7 +177,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const p = parseInput(StringSchema, { value: args[0] });
 
         if (p === undefined) {
-          return refusalText(new KinuError('bad_input', 'workspace.readFile: path must be a string'));
+          return refusalOf(new KinuError('bad_input', 'workspace.readFile: path must be a string'));
         }
 
         const content = await vfs.readFile(p, { encoding: 'utf8' });
@@ -287,7 +287,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const query = parseInput(StringSchema, { value: args[0] });
 
         if (query === undefined) {
-          return refusalText(new KinuError('bad_input', 'workspace.searchMemory: query must be a string'));
+          return refusalOf(new KinuError('bad_input', 'workspace.searchMemory: query must be a string'));
         }
 
         const results = await memory.search(query, 10);
@@ -304,7 +304,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const content = parseInput(StringSchema, { value: args[0] });
 
         return content === undefined
-          ? refusalText(new KinuError('bad_input', 'workspace.saveNote: content must be a string'))
+          ? refusalOf(new KinuError('bad_input', 'workspace.saveNote: content must be a string'))
           : appendMemoryNote(memory, content);
       },
     },
@@ -502,11 +502,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    * the remaining reasons are the shared runtime failure codes.
    */
   type Refusal = {
+    success: false;
     reason: 'empty_anchor' | 'not_found' | 'ambiguous' | 'overlap' | 'no_change'
-      | 'unread' | 'stale' | ${ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ')};
+      | 'unread' | 'stale' | ${ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ')} | null;
     error: string;
+    execution?: { exitCode: number };
   };
-  function readFile(path: string): Promise<string>;
+  function readFile(path: string): Promise<string | Refusal>;
   function writeFile(path: string, content: string): Promise<string | Refusal>;
   /**
    * Replace exact text inside a file — old_text must occur exactly once,
@@ -528,9 +530,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    * variables, and a working directory that persists across calls. Runtime,
    * process, and port support is declared by this provider's capabilities.
    */
-  function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
-  function searchMemory(query: string): Promise<string>;
-  function saveNote(content: string): Promise<string>;
+  function exec(command: string): Promise<string | Refusal>;
+  function searchMemory(query: string): Promise<string | Refusal>;
+  function saveNote(content: string): Promise<string | Refusal>;
   /** Returns Array<{name, description, qualityScore}> of crafted tools. */
   function listTools(): Promise<Array<{ name: string; description: string; qualityScore: number }>>;
   /**
@@ -542,7 +544,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    */
   function createTool(
     name: string, description: string, code: string
-  ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>;
+  ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
   ${slate === undefined ? '' : `/**
    * Prefer a slate for dashboards, live-data views and workspace UI; use a full app
    * toolchain when the user asks for a standalone, ship-ready web application.
@@ -552,8 +554,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    * Binding = {kind:'namespace',namespace:string,members?:string[]}
    *         | {kind:'rpc',methods:string[]} // read models: ${SLATE_READ_MODELS.join(', ')}
    *         | {kind:'mcp',server:string,tools?:string[]}
-   *         | {kind:'app',id:string}.
+   *         | {kind:'app',id:string}
+   *         | {kind:'tool',name:string} // native or crafted: env.NAME.call(input)
+   *         | {kind:'memory'|'tasks'|'web',members?:string[]} // the codemode projections.
    * A binding passes YOUR capability into env.NAME.member(...args), gated exactly as your own call.
+   * Tool and projection failures resolve to {success:false,reason,error}; successes are unchanged.
+   * A slate cannot bind agent or agents: live apps do not delegate or steer their caller.
    * Serve UI from fetch; app calls POST a JSON argument array to /<method> and receive JSON.
    * Call workspace.slate({op:"preview",id}) directly to compile and boot the Worker.
    * This does not use workspace node; no node import precheck or commit is needed.
@@ -563,14 +569,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
    * fork copies a committed version; restore changes source, not deployment history.
    */
   type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
-  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number } } | ({ ok: false } & Refusal)>;
+  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number } } | Refusal>;
   function slate(input:
     | { op: 'list' }
     | { op: 'commit' | 'history'; id: string }
     | { op: 'call'; id: string; method: string; args?: SlateValue[] }
     | { op: 'fork'; version: string }
     | { op: 'restore'; id: string; version: string }
-  ): Promise<{ ok: true; value: SlateValue } | ({ ok: false } & Refusal)>;
+  ): Promise<{ ok: true; value: SlateValue } | Refusal>;
 `}
 }`;
 

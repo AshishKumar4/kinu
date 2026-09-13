@@ -71,6 +71,8 @@ export function resolveSlateChain(input: {
 
 export type SlateBindingRoute =
   | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[] }
+  | { readonly kind: 'codemode'; readonly namespace: 'memory' | 'tasks' | 'web'; readonly member: string; readonly args: readonly JsonValue[] }
+  | { readonly kind: 'tool'; readonly name: string; readonly input: JsonObject }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject }
   | {
@@ -98,7 +100,28 @@ export function routeSlateBindingCall(input: {
   const { member, args } = request;
 
   switch (binding.kind) {
+    case 'tool': {
+      if (member !== 'call') throw new KinuError('denied', `${name} offers call(input) for tools.${binding.name}`);
+      const argumentsObject = args.length === 0 ? {} : args[0];
+
+      if (args.length > 1 || !isJsonObject(argumentsObject)) throw new KinuError('bad_input', `${name}.call takes one JSON object of arguments`);
+
+      return { kind: 'tool', name: binding.name, input: argumentsObject };
+    }
+
+    case 'memory':
+    case 'tasks':
+    case 'web':
+      if (binding.members !== undefined && !binding.members.includes(member)) {
+        throw new KinuError('denied', `${name} does not offer ${binding.kind}.${member}`);
+      }
+
+      return { kind: 'codemode', namespace: binding.kind, member, args };
     case 'namespace':
+      if (binding.namespace === 'agents' || binding.namespace === 'agent') {
+        throw new KinuError('denied', 'A slate cannot delegate or control its calling agent');
+      }
+
       if (binding.members !== undefined && !binding.members.includes(member)) {
         throw new KinuError('denied', `${name} does not offer ${binding.namespace}.${member}`);
       }

@@ -30,7 +30,9 @@ import {
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
   withCodemodeProgram, craftedFailureFunctions,
+  codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing,
 } from "@kinu.run/core";
+import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude,
 } from "./codemode-sandbox";
@@ -66,6 +68,8 @@ export interface ExecuteToolsFactoryOptions {
    * a device request changes every time a call detaches.
    */
   deviceRequests?: () => DeviceRequestChannel | undefined;
+  /** The caller's current reach, applied to every namespace and native binding. */
+  reach?: ToolSurfaceNarrowing;
 }
 
 /**
@@ -99,6 +103,8 @@ export interface ExecuteToolsFactory {
    *  declaration lists every tool in `native` except `execute_tools` itself,
    *  and every crafted tool the store holds at this moment. */
   toolFor(native: ToolSet): Tool;
+  /** A slate calls the same native function or crafted source as tools.<name>. */
+  callTool(native: ToolSet, name: string, input: JsonObject): Promise<JsonValue | undefined>;
 }
 
 export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): ExecuteToolsFactory {
@@ -140,7 +146,42 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
   });
 
   return {
+    async callTool(native, name, input) {
+      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
+        const functions = nativeToolFunctions(toolsInWorkMode(currentWorkMode(), native));
+        const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
+
+        if (entry !== undefined) {
+          if (options.reach !== undefined && !options.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+
+          return entry.execute(input);
+        }
+
+        if (name === 'execute_tools' || (options.reach !== undefined && !options.reach.allowsTool(name) && !options.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
+          throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+        }
+
+        if (!selectInjectableCraftedTools(rt.craftStore, sql).some((tool) => tool.name === name)) {
+          throw new KinuError('missing', `tools has no member ${name}`);
+        }
+
+        const execute = this.toolFor(native).execute;
+
+        if (execute === undefined) throw new KinuError('unavailable', 'The codemode executor is not callable');
+
+        const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), await execute({
+          code: `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`,
+        }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [] }));
+
+        return result.result;
+      });
+
+      return call(input);
+    },
     toolFor(native) {
+      const reachable = options.reach === undefined ? native
+        : Object.fromEntries(Object.entries(native).filter(([name]) => options.reach?.allowsTool(name)));
+
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
         const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
@@ -154,8 +195,8 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
         // every crafted tool and discard the result each build.
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
-          tools: nativeToolFunctions(toolsInWorkMode(mode, native)),
-          types: renderToolsDeclaration(native, crafted),
+          tools: nativeToolFunctions(toolsInWorkMode(mode, reachable)),
+          types: renderToolsDeclaration(reachable, crafted),
           positionalArgs: true,
         };
 
@@ -171,7 +212,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
           // `{{types}}` is the token createCodeTool substitutes the assembled
           // namespace declarations into.
           description: renderExecuteToolsDescription('{{types}}'),
-          tools: providersInWorkMode(mode, providers),
+          tools: providersInWorkMode(mode, options.reach?.narrowProviders(providers) ?? providers),
           executor: {
             // Per call: the crafted set is re-read so a tool saved a program ago
             // is callable now, and the `tools` prelude is rebuilt from the same

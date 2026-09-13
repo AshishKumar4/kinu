@@ -582,7 +582,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
-  renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions,
+  renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';

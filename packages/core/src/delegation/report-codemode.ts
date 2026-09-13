@@ -12,6 +12,7 @@ import {
 } from '../events/hub/types';
 import { TOOL_REACH } from '../tools/registry';
 import { branchableToolCall } from '../tools/outcome';
+import { KinuError } from '../obs';
 
 /** Positional args arrive untyped from the sandbox; narrowing them is this
  *  surface's only job. Which statuses exist, what an empty body is refused
@@ -61,14 +62,14 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
           const positional = v.safeParse(PositionalSchema, [args[0], args[1]]);
 
           if (!positional.success) {
-            return { error: 'report.send requires a status and content, both strings' };
+            throw new KinuError('bad_input', 'report.send requires a status and content, both strings');
           }
 
           const [status, content] = positional.output;
           const handoff = v.safeParse(HandoffSchema, args[2]);
 
           if (!handoff.success) {
-            return { error: `report.send's third argument is an optional object of string arrays, with any of: ${SUBORDINATE_REPORT_HANDOFF_FIELDS.join(', ')}` };
+            throw new KinuError('bad_input', `report.send's third argument is an optional object of string arrays, with any of: ${SUBORDINATE_REPORT_HANDOFF_FIELDS.join(', ')}`);
           }
 
           return await dispatchReport(deps(), { status, content, ...handoff.output });
