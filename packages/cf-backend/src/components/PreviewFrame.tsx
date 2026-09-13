@@ -7,7 +7,7 @@
  * or a fixed-height wrapper for the inline chat card).
  */
 import { CopyButton } from "@/components/ui/CopyButton";
-import { PREVIEW_SANDBOX, isPreviewUrl } from "@/lib/preview-origin";
+import { PREVIEW_SANDBOX, isPreviewUrl } from "@kinu.run/core";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 
 /** URL-only header shared with the signed-out sample, which cannot host an iframe. */

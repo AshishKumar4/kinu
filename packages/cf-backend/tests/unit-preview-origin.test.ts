@@ -19,7 +19,7 @@ import {
   isPreviewUrl,
   isPreviewHostRequest,
   previewHostSuffix,
-} from '../src/lib/preview-origin';
+} from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
@@ -32,7 +32,7 @@ import {
 } from '../src/nimbus-route';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { makeKv } from './helpers/kv';
-import { sandboxPreviewExposures } from '../src/lib/preview-exposures';
+import { sandboxPreviewExposures } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import type { SandboxOptions } from '@cloudflare/sandbox';

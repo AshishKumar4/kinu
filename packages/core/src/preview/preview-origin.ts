@@ -1,6 +1,15 @@
 import { parseWorkspacePreviewLabel } from './nimbus-preview-host';
 import * as v from 'valibot';
 
+/** The one DOM surface this module reads, declared locally: the file compiles
+ *  under the Worker's DOM libs, under core's default lib set, and under the
+ *  workerd-test project where `document` does not exist at all. Absence is the
+ *  domain value — a server-side caller has no meta tag to read. */
+declare const document: {
+  querySelector(selectors: string): { content: string } | null;
+} | undefined;
+
+
 /**
  * Where previewed apps are served, and what they are allowed to do.
  *
@@ -82,8 +91,8 @@ export function previewSuffixMetaName(): string {
 }
 
 function browserPreviewHostSuffix(): string | null {
-  if (globalThis.document === undefined) return null;
-  const configured = globalThis.document.querySelector<HTMLMetaElement>(`meta[name="${PREVIEW_SUFFIX_META}"]`)?.content;
+  if (document === undefined) return null;
+  const configured = document.querySelector(`meta[name="${PREVIEW_SUFFIX_META}"]`)?.content;
 
   return previewHostSuffix({ PREVIEW_HOST_SUFFIX: configured });
 }

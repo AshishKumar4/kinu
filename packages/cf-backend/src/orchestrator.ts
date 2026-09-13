@@ -265,7 +265,8 @@ import {
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
+import { sandboxIdForWorkspace } from "./lib/preview-exposures";
+import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
   takesTerminalEffect, branchesTerminalEffect,
@@ -4702,7 +4703,7 @@ export class OrchestratorAgent extends ActorAgent {
     // screenshot, a bookmark — would prove an exposure whose object no longer
     // exists, and answering it would CREATE a fresh empty container object.
     // One write, no enumeration: the watermark outranks every record published
-    // before now (lib/preview-exposures.ts).
+    // before now (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
       await sandboxPreviewExposures(
         this.env.AUTH_KV, sandboxIdForWorkspace(this.name),

@@ -15,7 +15,7 @@ import type { ExecutorInfo } from "@kinu.run/core";
 import type { ToolInfo, MemoryEntry, ForkNode, ExecutorCommandResult, Rpc, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { DiffsSurface } from "./DiffsSurface";
-import type { PinnedPreviewPort as PinnedPort } from "@/lib/preview-ports";
+import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentSurface } from "./AgentSurface";

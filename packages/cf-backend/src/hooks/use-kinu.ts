@@ -35,7 +35,7 @@ import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
-} from "../lib/preview-ports";
+} from "@kinu.run/core";
 import {
   createSessionRecovery,
   fetchDeployedBuildSha,

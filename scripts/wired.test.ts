@@ -502,7 +502,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
   test('is NOT reported when a callback seam declared by its TYPE receives it', () => {
     // `type ModelCallSink = (report: ModelCallReport) => void`. NOTHING declares
     // a function of the callback's name, so `reportModelCall?.({ … modelId })`
-    // in `cf-backend/src/lib/web-provider.ts` supplies that field through the
+    // in `core/src/web/provider-factory.ts` supplies that field through the
     // binding's annotation and nowhere else.
     const body = "  type RunSink = (deps: RunDeps) => void;\n"
       + "  function emitTo(report: RunSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"

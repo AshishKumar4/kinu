@@ -64,8 +64,9 @@ import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.ru
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { previewHostSuffix } from "./lib/preview-origin";
-import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
+import { previewHostSuffix } from "@kinu.run/core";
+import { sandboxIdForWorkspace } from "./lib/preview-exposures";
+import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";

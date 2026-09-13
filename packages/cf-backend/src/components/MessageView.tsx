@@ -29,7 +29,7 @@ import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
-import { extractPreviewUrl } from "@/lib/preview-origin";
+import { extractPreviewUrl } from "@kinu.run/core";
 import {
   groupMessageParts,
   partOutput, partInput, partEffect, callFailed, parseProvisionError,

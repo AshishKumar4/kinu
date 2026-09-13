@@ -7,7 +7,7 @@
  * port's secret token inside the Durable Object, and forwards to the container
  * (WebSocket upgrades included). Kinu adds only what the SDK has no opinion
  * about: this host serves previews and nothing else, responses are contained
- * (lib/preview-origin.ts), a failed forward gets a page a user can act on
+ * (core preview/preview-origin.ts), a failed forward gets a page a user can act on
  * instead of a bare `Proxy routing error`, and a preview whose exposure did not
  * survive a container recycle gets ONE repair.
  *
@@ -18,7 +18,7 @@
  * ahead of authentication, so an anonymous GET to a guessed hostname would
  * instantiate a container object and its SQLite, once per guess. So the label
  * is proven against the exposures this deployment published
- * (lib/preview-exposures.ts) BEFORE the SDK is handed the request. That record
+ * (core preview/preview-exposures.ts) BEFORE the SDK is handed the request. That record
  * is a KV projection with no object behind a key: proving a forged label wrong
  * allocates nothing. The container object still validates the port token and
  * its runtime activation on every forward — this gate decides only whether the
@@ -28,8 +28,9 @@
 import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
-import { containPreviewResponse, sandboxPreviewLabelOf } from "./lib/preview-origin";
-import { isKinuSandboxId, sandboxPreviewExposed } from "./lib/preview-exposures";
+import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
+import { isKinuSandboxId } from "./lib/preview-exposures";
+import { sandboxPreviewExposed } from "@kinu.run/core";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 

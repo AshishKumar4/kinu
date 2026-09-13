@@ -10,7 +10,7 @@ import * as v from "valibot";
 import { JsonObjectSchema, JsonValueSchema, toolCallEffect } from "@kinu.run/core";
 import { tolerate } from "@kinu.run/core/obs";
 import type { JsonObject, JsonValue } from "@kinu.run/core";
-import { extractPreviewUrl } from "@/lib/preview-origin";
+import { extractPreviewUrl } from "@kinu.run/core";
 
 type Part = UIMessage["parts"][number];
 
