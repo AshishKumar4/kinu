@@ -21,7 +21,7 @@
  * the same actionable mapping as the cloud providers.
  */
 import type { UserDO } from './user-do';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '../providers/cloudflare-ai-fetch';
 import { createUserDOAuthResolver } from '../providers/agent-registry';
 import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';

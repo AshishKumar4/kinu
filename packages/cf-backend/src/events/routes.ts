@@ -34,7 +34,7 @@ import {
 import { err, json, readBounded, safeJson } from '@kinu.run/core';
 import { ingressAdmitted, ingressDenied, peerIp } from '@kinu.run/core';
 import { isFreshAuthTime } from '../auth/session';
-import { decodeJsonWire } from '../lib/orchestrator-wire';
+import { decodeJsonWire } from '@kinu.run/core';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRouteSecret,
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,

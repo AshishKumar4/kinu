@@ -20,7 +20,7 @@ import {
   cloudflareAccountAPIRoot,
   cloudflareAIGatewayId,
   fetchCloudflareAIGateways,
-} from '../src/lib/cloudflare-oauth';
+} from '@kinu.run/core';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 

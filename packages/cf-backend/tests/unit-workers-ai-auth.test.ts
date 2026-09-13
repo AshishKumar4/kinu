@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '../src/lib/cloudflare-oauth';
+import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
 import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';

@@ -3,7 +3,7 @@
 // its only caller-visible form is `mintSubordinateName`, tested there
 // (packages/core/tests/unit-agent-identity-naming.test.ts).
 import { describe, test, expect } from "bun:test";
-import { deriveWorkspaceTitle, resolveWorkspaceTitle } from "../src/lib/agent-naming";
+import { deriveWorkspaceTitle, resolveWorkspaceTitle } from '@kinu.run/core';
 
 describe("deriveWorkspaceTitle", () => {
   test("takes the first non-empty line, collapses whitespace, caps at 60", () => {

@@ -6,13 +6,21 @@
  * every hosted actor alike — so the wiring cannot drift between them.
  */
 
-import {
-  createDefaultWebSearchProvider,
-  type AuthResolver, type ModelCallSink, type WebSearchProvider,
-} from "@kinu.run/core";
+import { createDefaultWebSearchProvider, type WebSearchProvider } from './provider';
+import type { AuthResolver } from '../providers/types';
+import type { ModelCallSink } from '../events/model-call';
+
+/** The one `env.AI` surface this provider touches, stated structurally so core
+ *  compiles without the Worker's ambient `Env`. Matches the binding's
+ *  `toMarkdown(files[])` overload (workers-types `Ai`). */
+interface WorkersAiToMarkdown {
+  toMarkdown(files: { name: string; blob: Blob }[]): Promise<
+    ({ format: 'markdown'; data: string } | { format: 'error' })[]
+  >;
+}
 
 interface WebProviderEnv {
-  readonly AI?: Env['AI'];
+  readonly AI?: WorkersAiToMarkdown;
 }
 
 /**

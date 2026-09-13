@@ -1,7 +1,7 @@
 // nextCronFire — minimal cron next-fire (every-n-minutes + daily), UTC.
 // nextAlarmTime — the alarm-reschedule fold (triggers ∪ peer-outbox retry).
 import { describe, test, expect } from "bun:test";
-import { nextAlarmTime, nextCronFire } from "../src/lib/cron";
+import { nextAlarmTime, nextCronFire } from '@kinu.run/core';
 
 // A fixed UTC base: 2026-06-02T10:17:30Z
 const BASE = Date.UTC(2026, 5, 2, 10, 17, 30);
