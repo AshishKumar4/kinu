@@ -43,20 +43,30 @@ the agent can name back is a peer ask's `event_id` reply route. Reviewed
 2026-09-13. A short display id per drain is the narrow form if quoting or
 replying ever becomes load-bearing; not scheduled.
 
-C5. No model-retractable events. The owner proposed (2026-09-13) an
-`[!IGNORE:<id>]` marker, hidden from the user, that drops an event from
-persistence and, if emitted in the immediately following step, drops that
-step too. Decided against on 2026-09-13 after review. Removing a step
-rewrites the prefix at that index, so every later step re-pays the cache that
-C2 protects. A model that drops an event it needed has no recovery path. A
-hidden marker removes auditability from a ledger-everything codebase. The
-two-step rule is undefined for a step carrying the marker beside tool calls.
-And the mechanism buys nothing C3 does not already give: a mid-turn splice
-never persists, so ignoring is doing nothing. No harness examined lets a
-model retract an event: the owner's oh-my-pi fork hides TTSR injections from
-the TUI but keeps them in context; OpenClaw injects a system line on the next
-heartbeat; Hermes appends steers to the last tool result, and hardened models
-flag that as prompt injection.
+C5. Do not implement model-retractable events. The owner proposed an
+`[!IGNORE:<id>]` marker that removes an event and possibly its following
+assistant step. The owner accepted the decision against it on 2026-09-13.
+
+Dropping irrelevant context can save input tokens, including within a turn.
+It changes cache matching from the deletion point; the earlier prefix can
+still be reused. Deleting a step cannot undo its tool effects. Hidden removal
+also needs an audit and recovery policy. These trade-offs, rather than a
+claim that deletion has no benefit, are why the proposed protocol is absent.
+
+Primary-source checks on 2026-09-13:
+
+- [OpenClaw system events](https://docs.openclaw.ai/cli/system) are queued for
+  a heartbeat, with an immediate-wake option. They are ephemeral across
+  restarts. This surface does not provide model-directed retraction.
+- [Hermes steering](https://github.com/NousResearch/hermes-agent/blob/b9271bcb34e1a8b8fe0eeaef0ef4a6e1f93ba543/agent/agent_runtime_helpers.py#L3167)
+  appends a separate user message after the tool batch and persists it. Its
+  source explains why modifying an already-persisted tool result made replay
+  diverge from live requests. The earlier claim that Hermes still modifies
+  that tool result was stale.
+
+Neither inspected path implements the proposed marker. This is a finding
+about those paths, not proof that every part of either project lacks a
+context-removal mechanism.
 
 ## Codemode and slates
 
