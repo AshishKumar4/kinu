@@ -12,13 +12,15 @@
 import {
   appendFileSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync,
   readSync, renameSync, rmSync, statSync, writeFileSync,
+  promises as fs,
 } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   WORKSPACE_ARCHIVE_EXTENSION,
   ArchiveCursorSchema,
   archiveSqlFromDatabase,
+  archiveFileTree,
   decodeJsonValue,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
@@ -57,7 +59,7 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
 
   const pages = target.mode === 'cloud'
     ? cloudArchivePages(target.cloudName)
-    : localArchivePages(target.localName);
+    : localArchivePages(target.requestedName, output);
 
   writeFileSync(output, '');
   let lines = 0;
@@ -168,16 +170,31 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
   } while (cursor);
 }
 
-async function* localArchivePages(name: string): AsyncGenerator<ArchivePage> {
-  const { dbPath } = resolveLocalAgent(name, { adopt: false });
-  const db = new Database(dbPath, { readonly: true });
+async function* localArchivePages(name: string, output: string): AsyncGenerator<ArchivePage> {
+  const ref = resolveAgentRef(name);
+
+  if (ref?.cwd && !existsSync(ref.cwd)) throw new Error(`Cannot export workspace files: ${ref.cwd} is missing.`);
+  const local = resolveLocalAgent(name, { adopt: false });
+  const outputPath = resolve(output);
+
+  const files = local.placement === 'unplaced' ? null : archiveFileTree({
+    readdir: async (path) => (await fs.readdir(resolve(local.cwd, path), { withFileTypes: true }))
+      .filter((entry) => resolve(local.cwd, path, entry.name) !== outputPath)
+      .map((entry) => ({
+        name: entry.name,
+        type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'special',
+      })),
+    readFile: (path) => fs.readFile(resolve(local.cwd, path)),
+  });
+
+  const db = new Database(local.dbPath, { readonly: true });
 
   try {
     const sql = archiveSqlFromDatabase(db);
     let cursor: ArchiveCursor | null = null;
 
     do {
-      const page = await readWorkspaceArchivePage(sql, { workspace: name, source: 'local', cursor });
+      const page = await readWorkspaceArchivePage(sql, { workspace: local.name, source: 'local', cursor, files });
       yield page;
       cursor = page.next;
     } while (cursor);

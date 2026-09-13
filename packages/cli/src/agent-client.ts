@@ -16,6 +16,7 @@ import type {
   ReasoningEffort, TierId, Usage, RunEvent, JsonObject, ToolOutcome,
   AdmittedInstructionDecision,
   InstructionSourceRow, InstructionSourceView, Page, PageRequest,
+  DeferredApproval, DeferredApprovalAnswer,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -140,6 +141,7 @@ export interface AgentTranscriptMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result';
   content: string;
+  metadata?: JsonObject;
   toolName?: string;
   args?: string;
   success?: boolean;
@@ -274,6 +276,8 @@ export interface LocalSessionControls {
    *  session/request_permission). Returns a disposer. Local only: a cloud turn
    *  runs in the DO, which has no synchronous path back to this process. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void;
+  listDeferredApprovals(): Promise<DeferredApproval[]>;
+  decideDeferredApprovals(ids: string[], decision: DeferredApprovalAnswer): Promise<{ decided: string[] }>;
   listModelProviders(): Promise<Array<{ id: string; available: boolean; unavailableReason?: string }>>;
   /** Instruction-file trust for the working directory (KINU-N028). Local only
    *  for the same reason the shell channel is: signed out there is no cloud

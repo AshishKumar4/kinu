@@ -21,7 +21,7 @@ import type {
   Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
 import type { ExecutorProvider, ResourceLimits } from '@kinu.run/core';
-import type { RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
+import type { DeferredApprovalChannel, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { promises as fs, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve as resolvePath } from 'node:path';
@@ -132,6 +132,7 @@ export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
  * states rather than hides.
  */
 export interface CLIRuntime extends AgentRuntime {
+  setApprovalDeferrals?(channel: DeferredApprovalChannel | null): void;
   setModelCallSink?(sink: ModelCallSink | null): void;
   /** Where direct model operations record their lifecycle; the session binds
    *  it beside {@link setModelCallSink}. Optional for the same reason. */
@@ -582,12 +583,14 @@ export function createCLIRuntime(
   craftStoreImpl.ensureSchema();
   const craftStore = adaptCraftStore(craftStoreImpl);
   let approvalChannel: RequestShellApproval | null = null;
+  let approvalDeferrals: DeferredApprovalChannel | null = null;
   let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
+    get deferrals() { return approvalDeferrals ?? undefined; },
   };
 
   // Bound to a directory, the workspace runtime IS the host shell there, and
@@ -676,6 +679,7 @@ export function createCLIRuntime(
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   }), {
     stores,
+    setApprovalDeferrals: (channel: DeferredApprovalChannel | null) => { approvalDeferrals = channel; },
     setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
     cwd,
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },

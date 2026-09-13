@@ -22,7 +22,7 @@ import {
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
@@ -4043,12 +4043,10 @@ export abstract class ActorAgent extends Think<Env> {
         onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
         // Mission Inbox: a settled background job also notifies the owner
         // (email on the orchestrator; skips silently when pieces are absent).
-        onSettled: (job) => this.notifyOwner(
-          `Background ${job.kind} job ${job.status}`,
-          job.status === 'completed'
-            ? `Background ${job.kind} job ${job.id} completed.\n\nResult:\n${job.result ?? '(empty)'}`
-            : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
-        ),
+        onSettled: (job) => {
+          const notice = backgroundJobNotice(job);
+          this.notifyOwner(notice.subject, notice.body);
+        },
         // Evict-resume (B6): re-drive an interrupted job from its durable
         // checkpoint. A fork re-runs the raw agents tool — MCTS continues its
         // remaining search budget via the search store; heads re-run from input.
@@ -4228,12 +4226,7 @@ export abstract class ActorAgent extends Think<Env> {
        * ACTOR's storage key rather than on the raw node id the search minted.
        */
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
-      // No `runtimeForNodeWorkspace`, and that absence is the honest one: the
-      // seam exists for a backend that provisions a home but cannot
-      // re-credential its own primitives. Here `runtimeFor` already built the
-      // node actor's runtime over this very home, so `seat.actor.runtime` IS
-      // the home-credentialed runtime and a second builder would rebuild what
-      // the host already bound.
+      runtimeForNodeWorkspace: null,
       // An IN-ISOLATE node runs beside this actor's socket, so its transient
       // frames need no wire at all. A HOSTED node's facet publishes over the RPC
       // it already holds, and agents-tool leaves this unread in that case.
@@ -4609,37 +4602,13 @@ export abstract class ActorAgent extends Think<Env> {
     return this._tracing;
   }
 
-  /**
-   * Best-effort tracing, where best-effort is a CONTRACT and not a hope.
-   *
-   * Every call site is fire-and-forget from inside work whose result must not
-   * depend on a log row landing. `this.sql` is SYNCHRONOUS (`sql(...): T[]` on
-   * the SDK's Agent) so `void` discards a row array, not a promise, and a
-   * failing insert — a full database, a table a migration has not reached — is a
-   * throw on the caller's own stack. Without this catch it becomes the caller's
-   * failure, and it has: the sandbox lifecycle seam logs before it
-   * answers the container, so one unwritable row turned an announcement the
-   * agent had ALREADY been given into a rejected RPC, and the container then
-   * retried an incident that was on record forever, being refused by a log line
-   * every time.
-   *
-   * The event NAME is reported and the detail is NOT. The name is a closed word
-   * from this file; the detail is caller prose that can carry workspace text.
-   */
+  /** The platform's monotonic turn clock, over the shared durable trace. */
   protected logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
-    const now = Date.now();
 
-    try {
-      void this.sql`INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at)
-        VALUES (${this.actorHandle().actorId}, ${event}, ${detail ?? null}, ${elapsed}, ${now})`;
-    } catch (cause) {
-      diagnostics.failure('activity_log.write_failed', toKinuError({
-        doing: 'recording an activity-log row',
-        cause,
-        otherwise: 'io',
-      }), { source: event });
-    }
+    writeActivityLog(() => ({ sql: this.boundSql, actor: this.actorHandle() }), {
+      event, detail: detail ?? null, elapsedMs: elapsed, createdAt: Date.now(),
+    });
   }
 
   /**
@@ -5735,6 +5704,7 @@ export abstract class ActorAgent extends Think<Env> {
         // last, over the set that holds every other tool, and wraps it with
         // the clamp and the effect claim the registry declares for it.
         executeTools: ({ native }) => this.getExecuteToolsFactory(mode, profileKey).toolFor(native),
+        craftedToolExecute: null,
         // The turn's cumulative bulk budget lives on the accumulator, so the
         // cached toolset holds a stable reference across turns and the reset
         // rides the turn's own accounting.

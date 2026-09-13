@@ -132,17 +132,16 @@ export interface BackendHost {
    * wake for (triggers, outbox retries, pending reactions), so a caller that
    * passed a time could only disagree with it.
    *
-   * OMITTED — not stubbed — by a host that RE-DERIVES its next wake instead of
+   * null — not a no-op callback — declares a host that RE-DERIVES its next wake instead of
    * arming one. The CLI is that host, and the difference is a ticking process:
    * `agent-host/host.ts`'s `runPass` recomputes `nextTriggerAt(db)` from the
    * same durable rows on every pass, so there is nothing for a session to arm
    * and no moment at which the fold is stale. A Durable Object has no such
    * process, which is why the cf host arms explicitly (`durableWakeOwner`).
-   * An absent key says that; a no-op implementation would claim a guarantee it
-   * has not made, and `capability-parity`'s lock records the asymmetry rather
-   * than letting a reader assume the capability was forgotten.
+   * The null capability states that it does not arm a platform alarm; a no-op
+   * implementation would claim a guarantee it has not made.
    */
-  reconcileDurableWake?(): void;
+  reconcileDurableWake?: (() => void) | null;
 
   /** Head spawner + merge LLM (HeadController's existing seam). CF:
    *  createCFHeadRuntime (Facet sub-agents). CLI: subprocess-backed. Required

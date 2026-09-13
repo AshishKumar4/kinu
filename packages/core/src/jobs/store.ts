@@ -36,6 +36,15 @@ import type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';
 
 export type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';
 
+export function backgroundJobNotice(job: BackgroundJob) {
+  return {
+    subject: `Background ${job.kind} job ${job.status}`,
+    body: job.status === 'completed'
+      ? `Background ${job.kind} job ${job.id} completed.\n\nResult:\n${job.result ?? '(empty)'}`
+      : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
+  };
+}
+
 /** The result of claiming a job for an evict-recovery re-drive. */
 export interface JobClaim {
   /** The new lease epoch every write from this attempt must carry. */

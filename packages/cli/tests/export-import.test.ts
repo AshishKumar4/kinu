@@ -11,11 +11,12 @@
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
-import { JsonArraySchema, JsonObjectSchema } from '@kinu.run/core';
+import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
+import { createInlineWorkspace } from '@kinu.run/core/identity';
 import * as v from 'valibot';
 
 const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
@@ -79,7 +80,61 @@ function restoredDb(home: string, name: string): Database {
   return new Database(join(home, name, 'agent.db'), { readonly: true });
 }
 
+function placedWorkspace() {
+  const home = scratch('kinu-export-placed-');
+  const project = scratch('kinu-export-project-');
+  seedWorkspace(join(mkdirp(home, 'scout'), 'agent.db'));
+  writeFileSync(join(home, 'config.json'), JSON.stringify({
+    agents: { scout: {
+      name: 'scout', mode: 'local', localName: 'scout', cwd: project, workspaceId: 'project',
+      createdAt: '', updatedAt: '',
+    } }, aliases: {},
+  }));
+
+  return { home, project };
+}
+
 describe('kinu export / import', () => {
+  test('a placed local archive includes its real file plane and excludes its own output', async () => {
+    const { home, project } = placedWorkspace();
+    mkdirSync(join(project, 'docs'));
+    mkdirSync(join(project, 'empty'));
+    writeFileSync(join(project, 'docs', 'note.txt'), 'project bytes outside SQLite');
+    const bytes = new Uint8Array([0, 255, 128, 10]);
+    writeFileSync(join(project, 'bytes.bin'), bytes);
+    const archive = join(project, 'backup.kinu.jsonl');
+    const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
+    expect(exported.exitCode).toBe(0);
+    const records = readFileSync(archive, 'utf8').trim().split('\n').map(parseJsonObject);
+    expect(records.filter((row) => row.t === 'file').map((row) => row.path))
+      .toEqual(['bytes.bin', 'docs/note.txt']);
+    expect(records.filter((row) => row.t === 'directory').map((row) => row.path)).toContain('empty');
+    const imported = await result(runCli(home, ['import', archive, '--name', 'restored-files']));
+    expect(imported.exitCode).toBe(0);
+    const db = new Database(join(home, 'restored-files', 'agent.db'));
+
+    try {
+      const { vfs } = createInlineWorkspace(db);
+      expect(await vfs.readFile('docs/note.txt', { encoding: 'utf8' })).toBe('project bytes outside SQLite');
+      expect(await vfs.readFile('bytes.bin')).toEqual(bytes);
+      expect(await vfs.exists('empty')).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('a local archive refuses unsupported symlinks instead of exporting their targets', async () => {
+    const { home, project } = placedWorkspace();
+    const outside = join(scratch('kinu-export-outside-'), 'outside.txt');
+    writeFileSync(outside, 'not part of this workspace');
+    symlinkSync(outside, join(project, 'link'));
+    const archive = join(project, 'backup.kinu.jsonl');
+    const exported = await result(runCli(home, ['export', 'scout', '-o', archive]));
+    expect(exported.exitCode).not.toBe(0);
+    expect(exported.stderr).toContain('cannot preserve symlink entry');
+    expect(exported.stdout).not.toContain('Exported');
+  });
+
   test('a local workspace round-trips through an archive', async () => {
     const home = scratch('kinu-export-local-');
     const out = scratch('kinu-export-out-');

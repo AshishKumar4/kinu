@@ -219,6 +219,54 @@ async function fixture(opts?: {
 }
 
 describe('one node, run as an agent', () => {
+  test.each([undefined, null])('an absent runtime rebuilder (%p) preserves the hosted seat runtime', async (rebuilder) => {
+    let step = 0;
+
+    const model = scriptedTurnModel({
+      provider: 'fake', modelId: 'owned-seat',
+      doGenerate: async () => {
+        step++;
+
+        const content: LanguageModelV3Content[] = step === 1
+          ? [{ type: 'tool-call', toolCallId: 'run-owned', toolName: 'run', input: JSON.stringify({ command: 'echo owned-seat' }) }]
+          : step === 2
+            ? [{ type: 'tool-call', toolCallId: 'report-owned', toolName: 'report', input: JSON.stringify({ status: 'completed', content: 'The owned runtime answered.' }) }]
+            : [{ type: 'text', text: 'Reported.' }];
+
+        return {
+          content, finishReason: { unified: step < 3 ? 'tool-calls' : 'stop', raw: undefined },
+          usage: {
+            inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 5, text: 5, reasoning: undefined },
+          }, warnings: [],
+        };
+      },
+    });
+
+    const { input, deps } = await fixture({ model });
+    const host = deps.hostNode;
+    const executed: string[] = [];
+    const boundIds: string[] = [];
+    deps.runtimeForWorkspace = rebuilder;
+    deps.hostNode = async (node) => {
+      const seat = await host(node);
+      boundIds.push(seat.actor.handle.actorId);
+      expect(seat.actor.runtime.actor.actorId).toBe(seat.actor.handle.actorId);
+      seat.actor.runtime.shell = { exec: async () => {
+        executed.push(seat.actor.runtime.actor.actorId);
+
+        return { stdout: 'owned-seat', stderr: '', exitCode: 0 };
+      } };
+
+      return seat;
+    };
+
+    const run = await runNodeAgent(input, deps);
+    expect(run.report.status).toBe('completed');
+    expect(boundIds).toHaveLength(1);
+    expect(executed).toEqual(boundIds);
+  });
+
   test('a node runs its loop in this isolate and reports the node', async () => {
     const { input, deps } = await fixture();
     const run = await runNodeAgent(input, deps);

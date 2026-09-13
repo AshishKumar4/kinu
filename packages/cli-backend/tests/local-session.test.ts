@@ -25,11 +25,13 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
+  backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
+  readActivityLog,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
   type EventVariant,
@@ -1302,6 +1304,109 @@ describe('LocalAgentSession — context window', () => {
 });
 
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
+  test('turn activity is durably recorded through the shared activity-log interface', async () => {
+    const { session, rt } = setup();
+
+    try {
+      await session.send('record this turn');
+      const rows = readActivityLog(rt.storage.sql, rt.actor, 20);
+
+      expect(rows.filter((row) => row.event === 'first_chunk')).toHaveLength(1);
+      expect(rows.filter((row) => row.event === 'step_finish')).toHaveLength(1);
+      expect(rows.every((row) => row.createdAt > 0 && row.elapsedMs >= 0)).toBe(true);
+    } finally {
+      await session.end();
+    }
+  });
+
+  test('deferred approval survives a session restart and grants one execution across both runtime surfaces', async () => {
+    const { db, rt, session, events } = setup();
+    const command = 'git push --force origin main';
+    const shell = rt.shell;
+    const router = rt.executionRouter;
+
+    if (!shell || !router) throw new Error('local runtime must expose both execution surfaces');
+
+    const executed: string[] = [];
+
+    router.register({
+      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), isAvailable: () => true,
+      homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
+      tools: { exec: { description: 'record execution', execute: async (input) => {
+        executed.push(String(input));
+
+        return 'executed';
+      } } },
+    });
+
+    const exec = router.getProvider('sandbox')?.tools.exec;
+
+    if (!exec) throw new Error('sandbox.exec is missing');
+
+    const first = await shell.exec(command);
+    const [parked] = await session.listDeferredApprovals();
+
+    if (!parked) throw new Error('unattended command was not queued');
+
+    expect(first.exitCode).not.toBe(0);
+    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(await session.listDeferredApprovals()).toHaveLength(2);
+    const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
+
+    if (!sandboxAction) throw new Error('sandbox command was not queued');
+
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
+    await session.end();
+
+    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+
+    try {
+      expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
+      expect(await reopened.decideDeferredApprovals([parked.id, sandboxAction.id, sandboxAction.id], 'approved'))
+        .toEqual({ decided: [parked.id, sandboxAction.id] });
+      expect(executed).toEqual([]);
+      await exec.execute(command);
+      expect(executed).toEqual([command]);
+      await exec.execute(command);
+      expect(executed).toEqual([command]);
+      const [next] = await reopened.listDeferredApprovals();
+
+      expect(next?.id).not.toBe(parked.id);
+      expect(next?.command).toBe(command);
+      expect(reopened.getRunEvents(WORKSPACE_RUN_ID).some((event) => event.type === 'approval_consumed'))
+        .toBe(true);
+    } finally {
+      await reopened.end();
+    }
+  });
+
+  test('deferred approval retains interactive denial and never queues deny_all commands', async () => {
+    const { rt, session } = setup();
+    const shell = rt.shell;
+
+    if (!shell) throw new Error('local runtime must expose its shell');
+
+    try {
+      const detach = session.setShellApprovalHandler(async () => 'deny');
+      const command = 'git push --force origin main';
+      const denied = await shell.exec(command);
+
+      expect(denied.exitCode).not.toBe(0);
+      expect(await session.listDeferredApprovals()).toEqual([]);
+      detach();
+      session.setShellApprovalMode('deny_all');
+      expect((await shell.exec(command)).stderr).toContain('deny_all');
+      expect(await session.listDeferredApprovals()).toEqual([]);
+      session.setShellApprovalMode('strict');
+      expect((await shell.exec(command)).stderr).toContain('queued for owner approval');
+      expect(await session.listDeferredApprovals()).toHaveLength(1);
+    } finally {
+      await session.end();
+    }
+  });
+
   test('always-active skills round-trip through actor_config', () => {
     const { session } = setup();
     expect(session.getAlwaysActiveSkills()).toEqual([]);
@@ -2024,6 +2129,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const order = events.filter((e) => e.type === 'turn-start' || e.type === 'turn-end');
     const wakeStartIdx = order.findIndex((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job');
     expect(wakeStartIdx).toBeGreaterThanOrEqual(0);
+    const noticeAt = events.findIndex((event) => event.type === 'background' && event.event === 'background_job_notice');
+    const wakeAt = events.findIndex((event) => event.type === 'turn-start' && event.event === 'background_job');
+    expect(noticeAt).toBeGreaterThanOrEqual(0);
+    expect(noticeAt).toBeLessThan(wakeAt);
+    expect(JSON.stringify(events[noticeAt])).toContain('bgjob-w failed');
     // A turn-end follows the wake's turn-start: it completed, not truncated.
     expect(order.slice(wakeStartIdx + 1).some((e) => e.type === 'turn-end')).toBe(true);
     // Quiescent: no background work left in flight once settle returned.
@@ -2186,9 +2296,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('the same call detaches once it crosses the policy threshold', async () => {
-    const { db, session, events } = setup(
+    const { db, rt, session, events } = setup(
       'unused',
-      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"computed late"'),
+      executeToolsModel('await new Promise(r => setTimeout(r, 200));\nreturn "computed late";'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000, wakesAfterTurn: true } },
     );
 
@@ -2197,6 +2307,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(true);
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 1 });
+    const [job] = new BackgroundJobStore(rt.storage.sql, rt.actor).list(2);
+
+    if (!job) throw new Error('detached job is missing');
+
+    const notices = events.filter((event) => event.type === 'background' && event.event === 'background_job_notice');
+    expect(notices).toEqual([{ type: 'background', event: 'background_job_notice', message: backgroundJobNotice(job).body }]);
+    expect(JSON.stringify(notices)).toContain('computed late');
   });
 
   test('past the concurrent-job cap a crossing call stays foreground and settles', async () => {
@@ -3997,9 +4114,21 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // with. settleBackgroundWork() drains the job; the dispatch row is found by
     // the tool that wrote it rather than by run recency, since the wake turn's
     // run can easily be the newer one.
-    const { db, session } = setup('unused', searchingModel());
+    const { db, session, events: liveEvents } = setup('unused', searchingModel());
     await session.send('go');
     await session.settleBackgroundWork();
+
+    const streams = liveEvents.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_stream'
+      ? [v.parse(v.object({ headId: v.string(), kind: v.picklist(['text', 'reasoning']), delta: v.string() }), event.event)]
+      : []);
+
+    const activity = liveEvents.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_activity'
+      ? [v.parse(v.object({ headId: v.string() }), event.event).headId]
+      : []);
+
+    expect(streams.length).toBeGreaterThan(0);
+
+    for (const frame of streams) expect(activity).toContain(frame.headId);
 
     const events = session.listRuns().items.flatMap((r) => session.getRunEvents(r.runId));
 
@@ -4987,6 +5116,15 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     });
 
     await head.run();
+
+    const frames = events.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_stream'
+      ? [v.parse(v.object({ headId: v.string(), kind: v.picklist(['text', 'reasoning']), delta: v.string() }), event.event)]
+      : []);
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every((frame) => frame.headId === 'h-fork' && frame.kind === 'text')).toBe(true);
+    expect(frames.map((frame) => frame.delta).join('')).toBe(MERGE_ANSWER);
+    expect(events.some((event) => event.type === 'broadcast' && event.event.type === 'head_activity')).toBe(true);
     // The fork's OWN spec reached the resolver. Without `resolveModel` on this
     // root every fork silently ran the session's model instead, so a panel
     // asked for three vendors got three copies of one.

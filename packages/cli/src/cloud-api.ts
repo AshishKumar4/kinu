@@ -89,12 +89,6 @@ export interface CloudAgentStatus {
   tierId?: string;
 }
 
-export interface CloudChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  createdAt: string | number;
-}
 
 export interface CloudToolDescriptions {
   builtIn: Array<{ name: string; description: string }>;

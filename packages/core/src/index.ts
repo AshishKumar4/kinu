@@ -41,7 +41,9 @@ export {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from './identity/effect-tombstones';
 
-export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
+export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
+
+export { ChatHistoryEntrySchema } from './types/chat';
 
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
@@ -786,6 +788,7 @@ export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer
 
 export {
   toCraftedToolSource,
+  selectInjectableCraftedTools,
   type CraftedToolExecute,
   type CraftedToolExecuteFn,
   type CraftedToolSource,
@@ -1220,7 +1223,7 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles,
+  writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
 } from './vfs/workspace-planes';
 
 export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
@@ -1645,6 +1648,7 @@ export {
 // Background-job system — auto-background long tool calls + wake-on-completion.
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
+  backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   // Per-invocation device-request ownership: the tool reports each durable
   // identity it issues, and the job that detaches the call takes them over.

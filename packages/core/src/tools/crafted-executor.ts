@@ -1,25 +1,23 @@
 /**
- * Platform-correct crafted-tool execution.
+ * Crafted source selection and host-side execution contracts.
  *
- * Crafted tools are stored as JavaScript source text in the `crafted_tools`
- * table. To invoke one, that text must become a callable function. V8 isolates
- * used by Cloudflare Durable Objects disallow all runtime string-compilation
- * primitives with the error "Code generation from strings disallowed for this
- * context" — `isolate.codegen_blocked`, which also records that the ban covers
- * a DO alarm handler and a Worker Loader child at request time, and that module
- * top level is the only exception.
+ * CF compiles source at module scope in a Worker Loader sandbox; local
+ * Node/Bun execution compiles it in-process. The platform catalog's
+ * `isolate.codegen_blocked` measurement pins why CF cannot use a host callback.
  *
- * The CF adapter satisfies this by spawning a per-tool child Worker via
- * `env.LOADER.get(name, factory)` — modules are compiled by the workerd loader,
- * not by V8 codegen. The CLI adapter compiles stored source directly in-
- * process because Node/Bun allows codegen.
- *
- * Both adapters expose the same `CraftedToolExecute` shape so
- * `buildBuiltinTools` in core is platform-agnostic.
+ * Both adapters select source through this module. Only host-side execution
+ * needs `CraftedToolExecute`; CF compiles the selected source in its sandbox
+ * prelude and explicitly declares no host-side callable.
  */
 
 import type { CraftedTool } from '../types/craft';
 import type { JsonValue } from '../utils/json';
+import type { CraftStore } from '../types/agent-runtime';
+import type { SqlExecutor } from '../types/primitives';
+import { filterByEffectiveScore } from '../craft/ema';
+import { isReservedCraftToolName } from '../craft/in-episode';
+import { diagnostics, KinuError } from '../obs/index';
+import { craftedToolDescription } from './sandbox-contract';
 
 /**
  * Input shape the executor needs from a crafted tool. Not a full CraftedTool
@@ -61,7 +59,32 @@ export type CraftedToolExecute = (tool: CraftedToolSource) => CraftedToolExecute
  * worth replacing. Unifying them would have quietly made the codec lossy.
  */
 export function toCraftedToolSource(t: CraftedTool): CraftedToolSource | null {
-  if (!t.code || t.code.startsWith('//')) return null;
+  const code = t.code?.trim();
 
-  return { name: t.name, description: t.description ?? `Crafted tool: ${t.name}`, code: t.code };
+  if (!code || code.startsWith('//')) return null;
+
+  return { name: t.name, description: t.description ?? `Crafted tool: ${t.name}`, code };
+}
+
+/** Read failures must reach the caller, never masquerade as an empty tool set. */
+export function selectInjectableCraftedTools(
+  store: Pick<CraftStore, 'list'>, sql: SqlExecutor, minScore?: number,
+): CraftedToolSource[] {
+  const sources = store.list().flatMap((row) => {
+    const source = toCraftedToolSource(row);
+
+    if (!source || !source.name) return [];
+
+    if (isReservedCraftToolName(source.name)) {
+      diagnostics.failure('craft.tool_skipped', new KinuError('bad_input',
+        `Crafted tool "${source.name}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools`),
+      { tool: source.name });
+
+      return [];
+    }
+
+    return [{ ...source, description: craftedToolDescription(source.name, source.description) }];
+  });
+
+  return filterByEffectiveScore(sql, sources, minScore);
 }

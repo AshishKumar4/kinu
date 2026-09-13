@@ -156,6 +156,7 @@ const SHARED_TRANSPORTS = {
   armCompactNow: '.armForceCompaction',
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
+  decideDeferredApprovals: '.decide',
   createTimerTrigger: 'createTimerTrigger',
   // KINU continual refinement: the whole lane — stage machine, claim fencing,
   // owner routing, staged-skill promotion — is core's evolution/refinement*.
@@ -210,8 +211,10 @@ const SHARED_TRANSPORTS = {
   jobResult: 'jobResult',
   latestAlternateTakes: 'latestAlternateTakeSet',
   listBackgroundJobs: 'listBackgroundJobs',
+  listDeferredApprovals: '.list',
   listCurriculumTasks: 'listProposedTasks',
   listRuns: 'listRuns',
+  logActivity: 'writeActivityLog',
   listScaffoldVersions: 'listScaffoldVersions',
   // `refinementDebt` is the direct call the delegation check can see; the row
   // view beside it (`refinementRequestView`) is passed by reference into map.
