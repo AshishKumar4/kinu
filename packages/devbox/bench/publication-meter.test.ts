@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Miniflare } from 'miniflare';
 import { DEVBOX_SCRATCH_PREFIX } from '../tests/support/scratch';
+import { disposeMiniflare } from '../tests/support/miniflare-settle';
 
 const scratch: string[] = [];
 
@@ -64,6 +65,6 @@ test('the R2 transport meter preserves streaming bodies and includes a failed PU
     const result = await (await runtime.dispatchFetch('https://meter.invalid/')).json();
     expect(result).toMatchObject({ body: 'hello', totals: { objectsPut: 2, bytesPut: 10, errors: [] } });
   } finally {
-    await runtime.dispose();
+    await disposeMiniflare(runtime);
   }
 });
