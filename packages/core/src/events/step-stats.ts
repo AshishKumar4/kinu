@@ -51,6 +51,7 @@ export interface CacheHitStats {
   readonly mean: number | null;
   /** Nearest-rank 95th percentile — the good tail, since higher is better. */
   readonly p95: number | null;
+  readonly p99: number | null;
   readonly ema: number | null;
   readonly emaAlpha: number;
 }
@@ -130,6 +131,7 @@ export function summarizeSteps(
       last: rates.length > 0 ? (rates[rates.length - 1] ?? null) : null,
       mean: rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null,
       p95: percentile(sorted, 0.95),
+      p99: percentile(sorted, 0.99),
       ema,
       emaAlpha: alpha,
     },
