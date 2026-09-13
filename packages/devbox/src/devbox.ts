@@ -489,6 +489,19 @@ export type RestoreAdmission =
   | { readonly kind: 'repair'; readonly incomplete: string };
 
 /**
+ * The readiness gate's whole answer, as DATA.
+ *
+ * `pending` is a value, not an error, for one measured reason: Workers RPC
+ * normalises a thrown error's `name` to `Error`, so a refusal thrown in a
+ * class carries no classification to the isolate that called — and the
+ * caller's decision (transient, ask again) IS the classification. Returned,
+ * it crosses the stub intact.
+ */
+export type RestoreReadiness =
+  | RestoreAdmission
+  | { readonly kind: 'pending'; readonly reason: string };
+
+/**
  * What a restore witness is told, in the order one attempt says it: `opened`
  * once, each {@link RestorePhase} as it lands, `settled` once with the
  * attempt's wall time. The two ends are not phases — the bench keeps them as
@@ -2364,21 +2377,26 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * are different facts, and a gate that resolved `void` for both made the
    * difference discoverable only by a separate poll nobody was obliged to make.
    *
-   * EVERY OTHER PHASE REFUSES, and that closes a measured hole. The tail of this
-   * method used to be a bare `await this.devboxStartup()` with no check after
-   * it — and `devboxStartup` RETURNS NORMALLY when the container was never
-   * admitted (its admitted-nothing exit). So an operation against a box the
-   * platform had no capacity for ran as if ready: measured live in probe `blp1`,
-   * `exec` answered success in 62 ms while the box's own state said no
-   * restoration had attached anything. For a mount-backed strategy that means
-   * the caller's bytes land in a bare `/workspace` nothing will ever checkpoint.
+   * EVERY OTHER PHASE ANSWERS `pending` — and that closes a measured hole.
+   * The tail of this method used to be a bare `await this.devboxStartup()`
+   * with no check after it — and `devboxStartup` RETURNS NORMALLY when the
+   * container was never admitted (its admitted-nothing exit). So an operation
+   * against a box the platform had no capacity for ran as if ready: measured
+   * live in probe `blp1`, `exec` answered success in 62 ms while the box's own
+   * state said no restoration had attached anything. For a mount-backed
+   * strategy that means the caller's bytes land in a bare `/workspace` nothing
+   * will ever checkpoint.
    *
    * The refusal for that case does NOT write `unattached`: nothing was
    * classified, the container was simply not there yet, and `unattached` is
    * terminal to every poller that reads it. The box stays re-armable and this
-   * caller is told to ask again.
+   * caller is told to ask again. `pending` is a VALUE rather than the throw
+   * `ensureReady` performs, because only a return survives a Durable Object
+   * RPC boundary with its `kind` intact — the transport normalises every
+   * thrown error's name to `Error`, which is why the classifier a remote
+   * caller needs cannot ride an error class.
    */
-  async ensureReady(): Promise<RestoreAdmission> {
+  async resolveReadiness(): Promise<RestoreReadiness> {
     await this.#resolveAdoption();
 
     // A stopped container may still have the previous instance's attached
@@ -2428,12 +2446,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // to try again. A caller told this is terminal is being told to call
         // `attachNow()`; one told a retry is under way is being told to ask
         // again.
-        throw new Error(
-          `this devbox has no attached work directory: ${this.#restoration.reason}. `
-          + (this.#restoration.retry
-            ? 'A retry is already under way; operations are refused until it lands.'
-            : 'That recovery class is terminal: call attachNow() to attempt the attach again.'),
-        );
+        if (!this.#restoration.retry) {
+          throw new Error(
+            `this devbox has no attached work directory: ${this.#restoration.reason}. `
+            + 'That recovery class is terminal: call attachNow() to attempt the attach again.',
+          );
+        }
+
+        return {
+          kind: 'pending',
+          reason: `this devbox has no attached work directory: ${this.#restoration.reason}. `
+            + 'A retry is already under way; operations are refused until it lands.',
+        };
       }
     }
 
@@ -2446,10 +2470,26 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // admitted-nothing exit, which records an incident and re-arms) or an
     // attempt is still in flight. Both are re-armable, so the box's phase is
     // left exactly as it is and only this operation is refused.
-    throw new Error(
-      `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
-      + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
-    );
+
+    return {
+      kind: 'pending',
+      reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
+        + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
+    };
+  }
+
+  /**
+   * The STRICT form of {@link resolveReadiness} for operations: a direct
+   * operation must never interpret a resolved `pending` as permission to run,
+   * so this wrapper turns it back into the refusal the gate has always thrown.
+   * One readiness state machine — this adds no policy of its own.
+   */
+  async ensureReady(): Promise<RestoreAdmission> {
+    const readiness = await this.resolveReadiness();
+
+    if (readiness.kind === 'pending') throw new Error(readiness.reason);
+
+    return readiness;
   }
 
   /** The admission this box's settled phase grants, or undefined when it has

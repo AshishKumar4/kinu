@@ -208,7 +208,7 @@ describe('the restore runs on the first delivered frame after a container start'
   test('T3: once per start — a second delivered frame on the same instance adopts', async () => {
     const { box, container } = await stoppedBoxWithService();
     await box.start();
-    expect((await box.ensureReady()).kind).toBe('restored');
+    expect((await box.resolveReadiness()).kind).toBe('restored');
     const stampedOnce = stamps(container);
     const restarts = container.starts.length;
 
@@ -216,7 +216,7 @@ describe('the restore runs on the first delivered frame after a container start'
     // hook marks the restore pending again. The next frame compares the boot
     // id and adopts: one `cat`, no stamp, no second process.
     await box.start();
-    expect((await box.ensureReady()).kind).toBe('restored');
+    expect((await box.resolveReadiness()).kind).toBe('restored');
 
     expect(stamps(container)).toBe(stampedOnce);
     expect(container.starts).toHaveLength(restarts);
@@ -231,7 +231,7 @@ describe('the restore runs on the first delivered frame after a container start'
     // case no request follows.
     expect(armed(container)).toBe(1);
 
-    await box.ensureReady();
+    await box.resolveReadiness();
     // The attempt that settled retired it: a row firing on an attached box is
     // a wake, a port probe and a boot-id read nobody asked for.
     expect(armed(container)).toBe(0);
@@ -270,7 +270,8 @@ describe('the restore runs on the first delivered frame after a container start'
     const opener = box.devboxStartup();
     await parked.reached;
     // The honest answer: restoring, ask again. Nothing is abandoned.
-    await expect(box.exec('echo hi')).rejects.toThrow('not ready');
+    await expect(box.exec('echo hi')).rejects.toMatchObject(
+      { message: expect.stringContaining('not ready') });
 
     parked.release();
     await opener;
@@ -303,7 +304,7 @@ describe('the restore runs on the first delivered frame after a container start'
     await Promise.all([box.onStart(), box.onStart()]);
     expect(container.execs).toEqual([]);
 
-    const [first, second] = await Promise.all([box.ensureReady(), box.devboxStartup()]);
+    const [first, second] = await Promise.all([box.resolveReadiness(), box.devboxStartup()]);
 
     expect(first).toEqual({ kind: 'restored' });
     expect(second).toBeUndefined();
@@ -320,7 +321,7 @@ describe('the restore runs on the first delivered frame after a container start'
     // asks, where a deadline works.
     const restored = await stoppedBoxWithService();
     await restored.box.start();
-    await restored.box.ensureReady();
+    await restored.box.resolveReadiness();
     expect(restored.rows.get('devbox:restoration')).toEqual({ phase: 'attached' });
     // The stamp landed in the container and its mirror in the rows.
     expect(restored.rows.get('devbox:boot-id')).toBe(restored.container.bootId);
@@ -338,7 +339,7 @@ describe('the restore runs on the first delivered frame after a container start'
 
     container.execGate = undefined;
     container.bootId = restored.container.bootId;
-    expect((await box.ensureReady()).kind).toBe('restored');
+    expect((await box.resolveReadiness()).kind).toBe('restored');
     expect(container.execs.at(-1)).toBe('cat /tmp/devbox-boot-id 2>/dev/null || true');
     expect(stamps(container)).toBe(0);
   });
@@ -351,13 +352,13 @@ describe('the restore runs on the first delivered frame after a container start'
     // admitting a caller onto a bare work directory.
     const { box, container } = await stoppedBoxWithService();
     await box.start();
-    await box.ensureReady();
+    await box.resolveReadiness();
     expect((await box.devboxState()).restoration).toBe('attached');
     const stampedOnce = stamps(container);
 
     container.bootId = undefined;
     await box.onStart();
-    const admitted = await box.ensureReady();
+    const admitted = await box.resolveReadiness();
 
     expect(admitted.kind).toBe('restored');
     expect(stamps(container)).toBe(stampedOnce + 1);
@@ -367,7 +368,7 @@ describe('the restore runs on the first delivered frame after a container start'
   test('T9b: a pending adoption whose container was replaced is caught by the beat, not served', async () => {
     const restored = await stoppedBoxWithService();
     await restored.box.start();
-    await restored.box.ensureReady();
+    await restored.box.resolveReadiness();
     const { box, container, activation } = activatedOverRunning(restored.rows);
     container.bootId = undefined;
     await activation;
@@ -381,7 +382,7 @@ describe('the restore runs on the first delivered frame after a container start'
     const beaten = await box.devboxState();
     expect({ restoration: beaten.restoration, decision: beaten.lastTick?.decision })
       .toEqual({ restoration: 'unstarted', decision: 'hold' });
-    await box.ensureReady();
+    await box.resolveReadiness();
     expect(stamps(container)).toBe(1);
   });
 
@@ -407,7 +408,7 @@ describe('the restore runs on the first delivered frame after a container start'
 
     await harnessed.box.start();
     expect(seen).toEqual([]);
-    await harnessed.box.ensureReady();
+    await harnessed.box.resolveReadiness();
 
     const phases = seen.map(([phase]) => phase);
     expect(phases[0]).toBe('opened');
@@ -423,7 +424,7 @@ describe('the restore runs on the first delivered frame after a container start'
     // a start that adopted sees the restore that settled, not one `cat`.
     seen.length = 0;
     await harnessed.box.start();
-    await harnessed.box.ensureReady();
+    await harnessed.box.resolveReadiness();
     expect(seen).toEqual([]);
   });
 
@@ -503,7 +504,7 @@ describe('every ending is a named state, and no ending rejects into the platform
     await box.start();
     storage.faultOn('devbox:attach-recovery', new Error('durable storage unreachable'));
 
-    await expect(box.ensureReady()).rejects.toThrow('durable storage unreachable');
+    await expect(box.resolveReadiness()).rejects.toThrow('durable storage unreachable');
 
     const state = await box.devboxState();
     expect(state.restoration).toBe('unattached');
@@ -517,7 +518,15 @@ describe('every ending is a named state, and no ending rejects into the platform
       'there is no container instance that can be provided to this durable object',
     );
 
-    await expect(box.exec('echo hello')).rejects.toThrow('not ready');
+    await expect(box.exec('echo hello')).rejects.toMatchObject(
+      { message: expect.stringContaining('not ready') });
+
+    // The data contract beside the strict gate: the same refusal as a VALUE,
+    // the shape that survives a Durable Object RPC boundary intact.
+    expect(await box.resolveReadiness()).toEqual({
+      kind: 'pending',
+      reason: expect.stringContaining('not ready'),
+    });
 
     const state = await box.devboxState();
     expect(state.restoration).not.toBe('unattached');

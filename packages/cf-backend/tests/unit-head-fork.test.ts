@@ -53,7 +53,7 @@ setSandboxSdk({
     requestedSandboxId = id;
 
     return {
-      ensureReady: async () => {},
+      resolveReadiness: async () => ({ kind: 'restored' as const }),
       // A command with no caller-set deadline takes the PROCESS lane, so the
       // double has to be able to run one: `exec` here is the SDK's bounded
       // lane and is deliberately not what the handle reaches.

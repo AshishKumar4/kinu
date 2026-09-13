@@ -135,7 +135,7 @@ function captureFetch(response: () => Response): FetchCapture {
  *  adapter's preflight reaches. */
 function execOnlyBox(): KinuSandbox {
   return Object.create({
-    ensureReady: async () => {},
+    resolveReadiness: async () => ({ kind: 'restored' as const }),
     startProcess: async () => ({
       id: 'p1',
       exitCode: 0,
@@ -327,7 +327,11 @@ describe('configuration is awaited before the container runs', () => {
       const order: string[] = [];
 
       const box: KinuSandbox = Object.create({
-        ensureReady: async () => { order.push('ensureReady'); },
+        resolveReadiness: async () => {
+          order.push('resolveReadiness');
+
+          return { kind: 'restored' as const };
+        },
         readFile: async () => {
           order.push('readFile');
 
@@ -359,10 +363,10 @@ describe('configuration is awaited before the container runs', () => {
 
       // Egress once, then readiness before each operation, never after.
       expect(order).toEqual([
-        'configureEgress', 'ensureReady', 'readFile',
-        'ensureReady', 'writeFile',
-        'ensureReady', 'listFiles',
-        'ensureReady', 'deleteFile',
+        'configureEgress', 'resolveReadiness', 'readFile',
+        'resolveReadiness', 'writeFile',
+        'resolveReadiness', 'listFiles',
+        'resolveReadiness', 'deleteFile',
       ]);
     });
 });
