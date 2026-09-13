@@ -75,7 +75,10 @@ test('a handled nested command refusal does not fail its enclosing program', asy
   }]);
 
   expect(result).toMatchObject({ success: true });
-  expect(JSON.parse(result.result)).toEqual({ result: { handled: 'denied' } });
+  expect(JSON.parse(result.result)).toEqual({
+    result: { handled: 'denied' },
+    failures: [{ tool: 'run', action: null, success: false, reason: 'denied', error: 'not run' }],
+  });
   expect(calls).toBe(1);
   expect(executionVerdict(accumulator)).toBe('succeeded');
 });

@@ -37,7 +37,7 @@ import {
   type EventVariant,
   createAgentSelfProvider, openWorkspaceMainActor, defaultLoopOrigin,
   InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER,
-  SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema,
+  SKILLS_DIR, TURN_CONTEXT_HEADER, MergeOutputSchema, SWARM_PRESET_DOCTRINE,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
@@ -4705,12 +4705,15 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // `preset` is the SHAPE of the search and none can be invented for a call
     // that named none, so it is refused before anything expands — and the
     // refusal names the missing field rather than only the action.
-    const refused = v.parse(
-      v.object({ result: v.object({ reason: v.literal('bad_input'), error: v.string() }) }),
-      await run(`return await agents.swarm({ task: 'pick an approach' });`),
-    );
+    const refusal = {
+      success: false, reason: 'bad_input',
+      error: 'swarm needs `preset` — the shape of the search (no role catalog is wired here to take its default from). '
+        + SWARM_PRESET_DOCTRINE.join(' '),
+    };
 
-    expect(refused.result.error).toContain('swarm needs `preset`');
+    await expect(run(`return await agents.swarm({ task: 'pick an approach' });`)).rejects.toEqual(expect.objectContaining({
+      outcome: { ...refusal, failures: [{ ...refusal, tool: 'agents', action: 'swarm' }] },
+    }));
     expect(calls).toHaveLength(expanded);
   });
 
@@ -4731,7 +4734,13 @@ describe('agents.* codemode namespace — node sandbox', () => {
       return searched.error ? 'recovered: ' + searched.error.includes('no value signal') : 'no error';
     `);
 
-    expect(result).toEqual({ result: 'recovered: true' });
+    expect(result).toEqual({
+      result: 'recovered: true',
+      failures: [{
+        tool: 'agents', action: 'swarm', success: false, reason: 'bad_input',
+        error: '`ideate` is flat and has no value signal by design; an objective here would be measured and then ignored, which is a silent lie about what the run did. Use preset:"optimise" to measure something, or drop `objective`.',
+      }],
+    });
     // Refused on the shape, so nothing was spent discovering it.
     expect(calls).toEqual([]);
   });
