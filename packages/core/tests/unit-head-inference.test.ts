@@ -5,7 +5,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ModelMessage } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
@@ -143,6 +143,39 @@ describe('buildHeadAccumulatorTools', () => {
 });
 
 describe('durable delegated turn opening', () => {
+  for (const empty of [false, true]) {
+    test(`a fork's first working revision is its seed and survives reopening, empty=${empty}`, async () => {
+      const { rt, testSql } = createTestRuntime();
+      const seats = hostedSeatsOver({ rt, db: testSql.db });
+      const source = await seats.seat('fork-source', 'subordinate');
+      const fork = await seats.seat('walked-back-fork', 'subordinate');
+
+      const original: ModelMessage[] = [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'second question' },
+      ];
+
+      const seed = empty ? [] : original.slice(0, 2);
+
+      try {
+        source.actor.session.restoreHistory(original);
+        fork.actor.session.restoreHistory(seed);
+        const revisions = fork.actor.stores.claims.working.history();
+        expect(revisions).toHaveLength(1);
+        expect(fork.actor.stores.claims.working.active()?.messages).toEqual(seed);
+        expect(source.actor.stores.claims.working.active()?.messages).toEqual(original);
+
+        const reopened = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back-fork', 'subordinate');
+        reopened.actor.session.restoreWorkingHistory(() => original);
+        expect(reopened.actor.session.history).toEqual(seed);
+        expect(reopened.actor.stores.claims.working.history()).toEqual(revisions);
+      } finally {
+        testSql.close();
+      }
+    });
+  }
+
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
     const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');

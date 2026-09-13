@@ -355,6 +355,45 @@ describe('LocalAgentClient', () => {
     await client.close();
   });
 
+  for (const empty of [false, true]) {
+    test(`a walked-back seed is durable before the fork's first turn, empty=${empty}`, async () => {
+      const seenPrompts: string[] = [];
+      const model = fakeModel('answer', (prompt) => { seenPrompts.push(JSON.stringify(prompt)); });
+      const { client, home, rt } = setup(model);
+      await client.connect();
+      await client.send('first question');
+      await client.send('second question');
+      const pivot = empty ? 'first question' : 'second question';
+      await client.fork({ text: pivot, occurrenceFromEnd: 1 });
+
+      const working = rt.storage.sql<{ messages: string }>`
+        SELECT messages FROM actor_working_revisions
+        WHERE actor_id = ${rt.actor.actorId} AND status = 'active'`;
+
+      expect(working).toHaveLength(1);
+      expect(JSON.parse(working[0]!.messages)).toEqual(empty ? [] : [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'answer' },
+      ]);
+      await client.close();
+
+      const reopened = openPersistentClient(home, model, { transcriptDir: join(home, 'sessions') });
+
+      try {
+        await reopened.connect();
+        await reopened.send('third question');
+        const prompt = seenPrompts.at(-1)!;
+        expect(prompt).toContain('third question');
+        expect(prompt).not.toContain('second question');
+
+        if (empty) expect(prompt).not.toContain('first question');
+        else expect(prompt).toContain('first question');
+      } finally {
+        await reopened.close();
+      }
+    });
+  }
+
   test('status and tools reflect the live session', async () => {
     const { client } = setup(fakeModel('ok'));
     await client.connect();

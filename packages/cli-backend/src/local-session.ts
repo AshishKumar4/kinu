@@ -485,6 +485,9 @@ export type ShellApprovalHandler =
 
 export interface LocalAgentSessionOpts {
   rt: CLIRuntime;
+  /** A new conversation's authored prefix, including an explicitly empty one.
+   *  Ordinary reconnects omit this and restore the actor's working revision. */
+  historySeed?: readonly ModelMessage[];
   /** Raw bun:sqlite handle — backs the EventsHub SqlExec adapter. */
   db: LocalSessionDb;
   /** The ai-SDK chat model runChat drives on a STATIC session — one built
@@ -1070,7 +1073,9 @@ export class LocalAgentSession implements BackendHost {
     // bootstrapScaffold is idempotent (exists-check + INSERT OR IGNORE v0);
     // tracked so end()/settleEvolution joins it before the process exits.
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
-    this.restoreHistory();
+
+    if (opts.historySeed === undefined) this.restoreHistory();
+    else this.actorSession.restoreHistory(opts.historySeed);
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
