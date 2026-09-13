@@ -86,7 +86,8 @@ describe('request-owned chat inputs', () => {
   test.each([false, true])('two asks queued during genesis remain separate (cold=%s)', async (cold) => {
     let harness = await opening();
     const a = capturedInput(harness, 'ask-a', 'ask A');
-    const b = capturedInput(harness, 'ask-b', 'ask B');
+    let b = capturedInput(harness, 'ask-b', 'ask B');
+    const pendingToken = b.body.kinuRequestId;
     a.persist();
     b.persist();
     await settle(harness, 'genesis-answer', 'What should I do first?');
@@ -98,6 +99,8 @@ describe('request-owned chat inputs', () => {
     if (cold) {
       harness = await reactivateOrchestratorHarness(harness.db);
       harness.agent.harnessAdmitChat();
+      b = capturedInput(harness, 'ask-b', 'ask B');
+      expect(b.body.kinuRequestId).toBe(pendingToken);
     }
 
     const second = await harness.agent.beforeTurn(config([...intakeOrder, { role: 'assistant', content: 'answer A' }], b.body));
