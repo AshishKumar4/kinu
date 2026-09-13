@@ -87,7 +87,8 @@ Reject hostile paths, duplicate/out-of-range offsets, invalid pages/digests, mou
 and unsupported metadata. Demand corruption returns EIO, never base fallback. Missing mounts never
 publish readiness.
 
-Proposed lean/Kinu/Storage/BlockLayer.lean statements, not proofs:
+Proposed statements for a `Kinu.Storage.BlockLayer` module, not proofs; the
+module lands with the implementation:
 
 - attach_metadata_bound: work ≤ a+b(M+H)+cL; attach_payload_bytes=0.
 - block_lookup_bound: ≤ a+b⌈log₂(k+1)⌉ page resolutions/block.
