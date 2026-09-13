@@ -2778,4 +2778,90 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   }, 240_000);
+
+  test('a press retired by a remount cannot mark the next tree\'s commits', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // A stored width with no choice of its own: the signal opens the
+      // column on the workspace's behalf without writing a choice.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '300');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-separator]', { timeout: 20_000 });
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+
+      // Press without release: the input mark is set and no clear is
+      // scheduled — only the separator's own detach can retire it. The
+      // release-free move returns the library to inactive with zero
+      // commits, which the hook never listens to, so the mark survives.
+      await page.evaluate(() => {
+        const separator = document.querySelector('[data-separator]');
+        separator?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        separator?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+      });
+
+      // The swap unmounts the separator; the restore mounts a new tree whose
+      // first emission is its own announcement, not a gesture.
+      await page.setViewport({ width: 600, height: 900 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+
+      // The narrower group re-commits the held pixel width at a new share —
+      // twice. The restore's announcement already consumed this tree's first
+      // emission (the mode swap resets the measured flag after it), so the
+      // first tweak only re-arms; the second is the one that classifies.
+      // A retired press is input to no tree, so no choice key can appear:
+      // the storage wait resolves only on the defect — a stale mark
+      // claiming the second tweak — and its timeout is the pass. Geometry
+      // cannot synchronize this read (panels reflow through plain CSS ahead
+      // of the commit pipeline), so the test polls the handler's own effect
+      // instead; the bound (3s against a sub-frame pipeline) is validated
+      // by the red direction on the unfixed hook.
+      const chatBefore = await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[0]?.getBoundingClientRect().width ?? -1,
+      ));
+
+      await page.setViewport({ width: 1400, height: 900 });
+      await page.waitForFunction((prev: number) => Math.round(
+        document.querySelectorAll('[data-panel]')[0]?.getBoundingClientRect().width ?? -1,
+      ) !== prev, { timeout: 10_000 }, chatBefore);
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+      await page.setViewport({ width: 1350, height: 900 });
+
+      const openKey = 'kinu.inspector.open.ashish@example.com.checkout-fixes';
+
+      try {
+        await page.waitForFunction((key: string) => localStorage.getItem(key) !== null, { timeout: 3000 }, openKey);
+        expect.unreachable('a retired press claimed the post-remount commit');
+      } catch (error) {
+        expect(error).toBeInstanceOf(TimeoutError);
+      }
+
+      const state = await page.evaluate(() => ({ ...localStorage }));
+
+      expect(state['kinu.inspector.ashish@example.com']).toBe('300');
+
+      await page.close();
+    });
+  }, 240_000);
 });
