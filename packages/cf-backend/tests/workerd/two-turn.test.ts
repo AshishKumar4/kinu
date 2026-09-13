@@ -168,18 +168,12 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.factsCompressed).toBe(1);
   });
 
-  // The tool-call-only first step, WITHOUT the narrated text delta. This was
-  // reported as a product bug (turn silently skipped) and investigated with a
-  // red run: the verdict is a fixture protocol error, not a product one. The
-  // fake's request schema rejected the SECOND request — an assistant row whose
-  // only content is tool_calls legally carries `content: null` on the OpenAI
-  // wire, and the narrow `string | Array` content schema turned that into a
-  // 500, whose retries exhausted and errored the turn; the error, not any
-  // empty-assistant rule, is what made the enqueue report skipped (evidence:
-  // kinu-logs/two-turn/tool-only/red1–red6, the `[beforestep]` trace showing
-  // step 1 prepared with the executed tool row, and the SCHEMA REJECT lines).
-  // The wire is corrected here and the case stays as the regression: a
-  // tool-call-only first step must run the tool and reach the second request.
+  // The tool-call-only first step, no narrated text delta — the shape real
+  // act-first models answer with. Originally reported as a product bug; the
+  // red run proved it a fixture protocol error (the fake's schema rejected
+  // the follow-up request's legal `content: null` assistant row; evidence in
+  // kinu-logs/two-turn/tool-only/). The corrected wire is pinned here so a
+  // regression on either side — the turn or the fixture — fails this case.
   it('runs a tool-call-only first step instead of silently skipping it', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('tools-only-driver'));
 
@@ -195,10 +189,9 @@ describe('two real turns over the HTTP model seam', () => {
     const http = v.parse(HttpSchema, out.http);
     const posts = http.filter((h) => h.path === '/v1/chat/completions' && h.model === 'probe-tools-only');
 
-    // The bug's shape, when it holds: ONE post, no tool call in any
-    // request, no tool result anywhere — the turn "completed" without
-    // doing anything. The fixed contract is the narrated case's: two
-    // posts, the second carrying the executed `file` result.
+    // Exactly two posts: the tool-call-only first step, then the request
+    // carrying the executed `file` result.
+    expect(posts).toHaveLength(2);
     expect(posts.at(0)?.offeredTools).toContain('file');
 
     const called = posts.find((p) => p.toolCalls.length > 0);

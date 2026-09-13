@@ -106,6 +106,22 @@ function sseDone(): string {
   return 'data: [DONE]\n\n';
 }
 
+/** One scripted SSE answer: the given frames, then stream close. */
+function sseResponse(chunks: readonly string[]): Response {
+  const encoder = new TextEncoder();
+
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(encoder.encode(c));
+
+        controller.close();
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
+}
+
 function recordCall(url: URL, request: Request, body: OutboundBody): void {
   const messages = body.messages ?? [];
 
@@ -175,61 +191,44 @@ async function earlyDoneBody(): Promise<Response> {
   );
 }
 
-async function toolBody(body: OutboundBody): Promise<Response> {
+/** The tools lane: the FIRST request is answered with a real `file` tool call
+ *  (optionally after a narration text delta, `narration`); the second request
+ *  carries the tool's result, answered with text. The `callId` differs per
+ *  variant so the two lanes' wires stay distinguishable in the log. The
+ *  assistant row the tool call round-trips into the next request legally
+ *  carries `content: null` on the OpenAI wire, which is why
+ *  `OutboundMessageSchema` accepts null content explicitly. */
+function toolBody(body: OutboundBody, callId: string, narration?: string): Response {
   const messages = body.messages ?? [];
 
-  // The tool call fires on the FIRST request — no `role: 'tool'` row yet.
-  // The second request carries the tool's result; answering its text then
-  // proves the result arrived inside the model request.
-  const sawToolResult = messages.some((m) => m.role === 'tool');
-  const encoder = new TextEncoder();
-
-  if (!sawToolResult) {
-    const chunks = [
-      sseChunk({ content: 'I will read that fixture file.' }),
-      sseChunk({
-        tool_calls: [{
-          index: 0,
-          id: 'call_probe_1',
-          type: 'function',
-          function: {
-            name: 'file',
-            arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }),
-          },
-        }],
-      }),
-      sseChunk({ role: 'assistant' }, 'tool_calls'),
+  if (messages.some((m) => m.role === 'tool')) {
+    return sseResponse([
+      sseChunk({ content: 'echo:tool-answered' }),
+      sseChunk({ role: 'assistant' }, 'stop'),
       sseDone(),
-    ];
-
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          for (const c of chunks) controller.enqueue(encoder.encode(c));
-
-          controller.close();
-        },
-      }),
-      { headers: { 'content-type': 'text/event-stream' } },
-    );
+    ]);
   }
 
-  const chunks = [
-    sseChunk({ content: 'echo:tool-answered' }),
-    sseChunk({ role: 'assistant' }, 'stop'),
-    sseDone(),
-  ];
+  const chunks: string[] = [];
 
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const c of chunks) controller.enqueue(encoder.encode(c));
-
-        controller.close();
-      },
+  if (narration !== undefined) chunks.push(sseChunk({ content: narration }));
+  chunks.push(
+    sseChunk({
+      tool_calls: [{
+        index: 0,
+        id: callId,
+        type: 'function',
+        function: {
+          name: 'file',
+          arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }),
+        },
+      }],
     }),
-    { headers: { 'content-type': 'text/event-stream' } },
+    sseChunk({ role: 'assistant' }, 'tool_calls'),
+    sseDone(),
   );
+
+  return sseResponse(chunks);
 }
 
 async function errorBody(body: OutboundBody): Promise<Response> {
@@ -266,63 +265,6 @@ async function errorBody(body: OutboundBody): Promise<Response> {
   );
 }
 
-
-/** The tool-call-only lane: a first step that carries the tool call and
- * NOTHING else — valid OpenAI wire (no leading text delta), the shape
- * real act-first models answer with. The step after the tool result answers
- * with text, exactly as the narrated tools lane does. The assistant row this
- * round-trips into the next request legally carries `content: null`, which is
- * why `OutboundMessageSchema` accepts it explicitly. */
-async function toolCallOnlyBody(body: OutboundBody): Promise<Response> {
-  const messages = body.messages ?? [];
-  const encoder = new TextEncoder();
-
-  if (messages.some((m) => m.role === 'tool')) {
-    const chunks = [
-      sseChunk({ content: 'echo:tool-answered' }),
-      sseChunk({ role: 'assistant' }, 'stop'),
-      sseDone(),
-    ];
-
-    return new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          for (const c of chunks) controller.enqueue(encoder.encode(c));
-
-          controller.close();
-        },
-      }),
-      { headers: { 'content-type': 'text/event-stream' } },
-    );
-  }
-
-  const chunks = [
-    sseChunk({
-      tool_calls: [{
-        index: 0,
-        id: 'call_probe_only_1',
-        type: 'function',
-        function: {
-          name: 'file',
-          arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }),
-        },
-      }],
-    }),
-    sseChunk({ role: 'assistant' }, 'tool_calls'),
-    sseDone(),
-  ];
-
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const c of chunks) controller.enqueue(encoder.encode(c));
-
-        controller.close();
-      },
-    }),
-    { headers: { 'content-type': 'text/event-stream' } },
-  );
-}
 
 async function modelsBody(): Promise<Response> {
   return Response.json({
@@ -374,8 +316,8 @@ export async function probeOutbound(request: Request): Promise<Response> {
       switch (body.model) {
         case 'probe': return echoBody(body);
         case 'probe-early-done': return earlyDoneBody();
-        case 'probe-tools': return toolBody(body);
-        case 'probe-tools-only': return toolCallOnlyBody(body);
+        case 'probe-tools': return toolBody(body, 'call_probe_1', 'I will read that fixture file.');
+        case 'probe-tools-only': return toolBody(body, 'call_probe_only_1');
         case 'probe-error': return errorBody(body);
         default: throw new Error(`fake-models: unknown model ${JSON.stringify(body.model)}`);
       }
