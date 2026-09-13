@@ -21,14 +21,24 @@ export function bindChatInput(message: string, claims: ActorClaimStore, hasMessa
   delete body.kinuRequestId;
   const parsed = v.safeParse(Body, body);
 
-  const ids = parsed.success ? parsed.output.messages
-    .filter((input) => input.role === 'user' && !hasMessage(input.id) && !claims.hasInputMessage(input.id))
-    .map((input) => input.id) : [];
+  const userIds = parsed.success ? parsed.output.messages
+    .filter((input) => input.role === 'user').map((input) => input.id) : [];
 
-  if (body.trigger !== 'regenerate-message' && ids.length > 0) {
-    const requestId = crypto.randomUUID();
-    claims.recordInput(requestId, ids);
-    body.kinuRequestId = requestId;
+  const ids = userIds.filter((id) => !hasMessage(id) && claims.requestForInput(id) === null);
+
+  if (body.trigger !== 'regenerate-message') {
+    if (ids.length > 0) {
+      const requestId = crypto.randomUUID();
+      claims.recordInput(requestId, ids);
+      body.kinuRequestId = requestId;
+    } else {
+      // A reconnect can replay an intake already persisted before eviction.
+      // Resolve its own last input ID, never the workspace's newest user row.
+      const lastInput = userIds.at(-1);
+      const pending = lastInput === undefined ? null : claims.requestForInput(lastInput);
+
+      if (pending !== null) body.kinuRequestId = pending;
+    }
   }
 
   return JSON.stringify({

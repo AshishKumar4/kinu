@@ -291,11 +291,11 @@ export class ActorClaimStore {
       VALUES (${this.actorId}, ${requestId}, ${JSON.stringify(messageIds)})`;
   }
 
-  hasInputMessage(messageId: string): boolean {
+  requestForInput(messageId: string): string | null {
     this.actor.assertCurrent();
 
     return this.sql<{ request_id: string }>`SELECT request_id FROM actor_turn_inputs, json_each(message_ids)
-      WHERE actor_id = ${this.actorId} AND json_each.value = ${messageId} LIMIT 1`.length > 0;
+      WHERE actor_id = ${this.actorId} AND settled = 0 AND json_each.value = ${messageId} LIMIT 1`[0]?.request_id ?? null;
   }
 
   input(requestId: string): readonly string[] | null {
