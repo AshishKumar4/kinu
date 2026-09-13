@@ -2202,3 +2202,15 @@ export {
   type SwarmAxis, type SwarmAxisRow, type SwarmResolution, type RunRefusal,
   type RunLevel, type RunLiveness,
 } from './read-models/swarm-resolution';
+
+export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
+
+export {
+  newSendLatch, admitTurn, abandonTurn, abandonTurnIfOwner, type SendLatch,
+} from './utils/send-admission';
+
+export {
+  createSessionRecovery, fetchDeployedBuildSha, pageDeployedBuildSha,
+  primePageDeployedBuildSha, isNewerDeployedBuild,
+  type SessionRecoveryCallbacks, type SessionRecoveryOptions, type SessionRecovery,
+} from './utils/session-recovery';
