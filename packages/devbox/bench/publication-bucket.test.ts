@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Miniflare } from 'miniflare';
+import { disposeMiniflare } from '../tests/support/miniflare-settle';
 import { publicationBucket } from './publication-bucket';
 
 async function measureWrites(mode: 'original' | 'unarmed' | 'armed') {
@@ -61,7 +62,7 @@ async function measureWrites(mode: 'original' | 'unarmed' | 'armed') {
 
     return { storeOperations, controlRpcs, bodies };
   } finally {
-    await runtime.dispose();
+    await disposeMiniflare(runtime);
   }
 }
 

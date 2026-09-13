@@ -159,15 +159,19 @@ export function releaseScratch(): number {
 
   if (held.length > 0) {
     // bun's reporter prints the AggregateError's message but drops each held
-    // error's cause; the leftovers are written to a file the run log can name.
+    // error's cause; the leftovers are written where the run log can name them.
+    // process.env.TMPDIR points inside a scratch root this release may have
+    // just removed, so the report lands in the OS tmpdir by construction.
+    const report = join('/tmp', 'kinu-scratch-held.json');
+
     writeFileSync(
-      join(tmpdir(), 'kinu-scratch-held.json'),
+      report,
       JSON.stringify(held.map((e) => ({ message: e.message, cause: e.cause })), null, 2),
     );
 
     throw new AggregateError(
       held,
-      `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release (leftovers in ${join(tmpdir(), 'kinu-scratch-held.json')})`,
+      `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release (leftovers in ${report})`,
     );
   }
 
