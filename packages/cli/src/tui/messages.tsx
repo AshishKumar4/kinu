@@ -4,6 +4,7 @@ import { useCallback, useRef } from 'react';
 import { TUI_MARKS } from '@kinu.run/core';
 
 import type { AgentClientStatus } from '../agent-client';
+import { EXPANDED_RESULT_LINES, FileDiffCard, fileEditDiffView } from './diff-card';
 import { clipText } from './format';
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';
@@ -14,6 +15,9 @@ export interface DisplayMessage {
   role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'evolution' | 'system';
   content: string;
   toolName?: string;
+  /** The call identity both a call row and its result row carry, so a result
+   *  pairs with its own call however the two interleave. */
+  toolCallId?: string;
   args?: string;
   success?: boolean;
   timestamp?: string;
@@ -127,7 +131,7 @@ function AssistantMessage({ content, live }: { content: string; live?: boolean }
 
 type ToolActivityRow =
   | { readonly kind: 'call'; readonly message: DisplayMessage }
-  | { readonly kind: 'result'; readonly message: DisplayMessage };
+  | { readonly kind: 'result'; readonly message: DisplayMessage; readonly call?: DisplayMessage };
 
 /**
  * A run of tool calls as one card, the web's `ToolCallGroup`: a header that
@@ -169,7 +173,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
             {separator}
             {row.kind === 'call'
               ? <ToolCallRow toolName={row.message.toolName ?? ''} args={row.message.args} previewWidth={callPreviewWidth} />
-              : <ToolResultRow content={row.message.content} success={row.message.success} previewWidth={resultPreviewWidth} expanded={expanded} />}
+              : <ToolResultRow message={row.message} call={row.call} previewWidth={resultPreviewWidth} expanded={expanded} />}
           </box>
         );
       })}
@@ -190,9 +194,22 @@ function ToolCallRow({ toolName, args, previewWidth }: { toolName: string; args?
   );
 }
 
-function ToolResultRow({ content, success, previewWidth, expanded }: { content: string; success?: boolean; previewWidth: number; expanded: boolean }) {
+function ToolResultRow({ message, call, previewWidth, expanded }: {
+  readonly message: DisplayMessage;
+  readonly call: DisplayMessage | undefined;
+  readonly previewWidth: number;
+  readonly expanded: boolean;
+}) {
   const { well } = useTuiTheme().colors;
-  const lines = expanded ? content.split('\n').slice(0, 20) : [clipText(content.replace(/\s+/g, ' '), previewWidth)];
+  const diff = fileEditDiffView(call, message);
+
+  // A file edit or write draws its change-set, not the result's JSON line.
+  if (diff !== null) {
+    return <FileDiffCard view={diff} expanded={expanded} previewWidth={previewWidth} lineCap={EXPANDED_RESULT_LINES} />;
+  }
+
+  const { content, success } = message;
+  const lines = expanded ? content.split('\n').slice(0, EXPANDED_RESULT_LINES) : [clipText(content.replace(/\s+/g, ' '), previewWidth)];
 
   return (
     <box flexDirection="column" style={{ paddingLeft: 2 }}>
@@ -243,18 +260,69 @@ type TranscriptBlock =
   | { readonly kind: 'message'; readonly message: DisplayMessage }
   | { readonly kind: 'tools'; readonly key: string; readonly rows: readonly ToolActivityRow[] };
 
-/** Consecutive tool calls and results fold into one activity card. */
+/** Consecutive tool calls and results fold into one activity card. A result
+ *  also meets the call it answers: by toolCallId first, then — for the rows
+ *  a session log predating call ids left behind — the nearest unmatched call
+ *  of the same tool, then simply the nearest unmatched call. The pairing is
+ *  what lets a `file` result render the diff its call recorded. */
 function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
+  const pending: DisplayMessage[] = [];
+  const pendingById = new Map<string, DisplayMessage>();
+
+  const pair = (message: DisplayMessage): DisplayMessage | undefined => {
+    if (message.toolCallId !== undefined) {
+      const call = pendingById.get(message.toolCallId);
+
+      if (call !== undefined) {
+        pendingById.delete(message.toolCallId);
+
+        const at = pending.indexOf(call);
+
+        if (at >= 0) pending.splice(at, 1);
+
+        return call;
+      }
+    }
+
+    // The nearest unmatched call — of the same tool when the result names
+    // one, positionally when it does not.
+    let index = pending.length - 1;
+
+    if (message.toolName !== undefined) {
+      index = -1;
+
+      for (let cursor = pending.length - 1; cursor >= 0; cursor -= 1) {
+        if (pending[cursor]?.toolName === message.toolName) {
+          index = cursor;
+          break;
+        }
+      }
+    }
+
+    if (index < 0) return undefined;
+    const [call] = pending.splice(index, 1);
+
+    if (call?.toolCallId !== undefined) pendingById.delete(call.toolCallId);
+
+    return call;
+  };
 
   for (const message of messages) {
-    const row: ToolActivityRow | null = message.status
-      ? null
-      : message.role === 'tool_call'
-        ? { kind: 'call', message }
-        : message.role === 'tool_result'
-          ? { kind: 'result', message }
-          : null;
+    let row: ToolActivityRow | null = null;
+
+    if (!message.status) {
+      if (message.role === 'tool_call') {
+        row = { kind: 'call', message };
+        pending.push(message);
+
+        if (message.toolCallId !== undefined) pendingById.set(message.toolCallId, message);
+      } else if (message.role === 'tool_result') {
+        const call = pair(message);
+
+        row = call === undefined ? { kind: 'result', message } : { kind: 'result', message, call };
+      }
+    }
 
     const last = blocks.at(-1);
 

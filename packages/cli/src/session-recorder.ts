@@ -36,11 +36,12 @@ export class SessionRecorder {
         break;
       case 'tool-call':
         this.flushText(session);
-        session.append('tool_call', { toolName: event.toolName, args: event.args, backend: this.backend });
+        session.append('tool_call', { toolName: event.toolName, toolCallId: event.toolCallId, args: event.args, backend: this.backend });
         break;
       case 'tool-result':
         session.append('tool_result', {
           toolName: event.toolName,
+          toolCallId: event.toolCallId,
           result: event.result,
           success: event.success,
           backend: this.backend,

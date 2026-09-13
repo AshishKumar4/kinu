@@ -299,20 +299,27 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
     case 'tool_call':
       {
         const toolName = v.safeParse(v.string(), entry.toolName);
+        const toolCallId = v.safeParse(v.string(), entry.toolCallId);
 
-        return {
+        const message: AgentTranscriptMessage = {
           id: entry.id,
           role: 'tool_call',
           content: '',
           toolName: toolName.success ? toolName.output : 'tool',
           args: safeJson(entry.args),
         };
+
+        if (toolCallId.success) message.toolCallId = toolCallId.output;
+
+        return message;
       }
 
     case 'tool_result':
       {
         const result = v.safeParse(v.string(), entry.result);
         const success = v.safeParse(v.boolean(), entry.success);
+        const toolName = v.safeParse(v.string(), entry.toolName);
+        const toolCallId = v.safeParse(v.string(), entry.toolCallId);
 
         const message: AgentTranscriptMessage = {
           id: entry.id,
@@ -321,6 +328,10 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
         };
 
         if (success.success) message.success = success.output;
+
+        if (toolName.success) message.toolName = toolName.output;
+
+        if (toolCallId.success) message.toolCallId = toolCallId.output;
 
         return message;
       }

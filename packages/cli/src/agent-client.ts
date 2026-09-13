@@ -143,6 +143,9 @@ export interface AgentTranscriptMessage {
   content: string;
   metadata?: JsonObject;
   toolName?: string;
+  /** The call identity a tool row was recorded with; results carry the same
+   *  one, which is what pairs them in the transcript. */
+  toolCallId?: string;
   args?: string;
   success?: boolean;
   /** User message delivered mid-turn through steer(). */

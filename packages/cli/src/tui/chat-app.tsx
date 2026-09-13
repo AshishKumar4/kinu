@@ -1189,12 +1189,18 @@ function ChatScene({
         // it — lands at its true chronological position.
         sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
-        addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+        addMessage({
+          role: 'tool_call', content: '', toolName: event.toolName, toolCallId: event.toolCallId,
+          args: JSON.stringify(event.args),
+        } satisfies Omit<DisplayMessage, 'id'>);
 
         return;
       case 'tool-result':
         setTurnPhase(`finished ${event.toolName}`);
-        addMessage({ role: 'tool_result', content: event.result, success: event.success });
+        addMessage({
+          role: 'tool_result', content: event.result, success: event.success,
+          toolName: event.toolName, toolCallId: event.toolCallId,
+        } satisfies Omit<DisplayMessage, 'id'>);
 
         return;
       case 'step-finish':
