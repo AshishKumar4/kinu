@@ -1,19 +1,27 @@
 /**
  * The inspector column's layout policy: a per-account persisted WIDTH and a
- * per-WORKSPACE persisted open/close choice, decided against the panel
- * library's own layout lifecycle.
+ * per-WORKSPACE persisted open/close choice, classified by INPUT, not by
+ * layout matching.
  *
- * The group mounts immediately — chat stays usable while the profile read is
- * in flight — with the policy default as its layout. `defaultLayout` /
- * `defaultSize` carry the mount decision and no imperative write is ever
- * issued into an unmeasured group: a decision that lands first parks in one
- * slot for the first emission, which applies it once. Every committed layout
- * reports once through `onLayoutChanged`; that single signal persists user
- * gestures and detects the hook's own echoes.
+ * User input is marked at its source — capture-phase listeners on the
+ * separator for the keys the library handles (arrows, Home, End, Enter), for
+ * pointer presses, and for double-click; the column's own affordances mark
+ * themselves. A committed layout then classifies in one branch: an emission
+ * carrying an input mark is a gesture and persists; any other emission —
+ * mount, a decision the hook itself issued, a ResizeObserver constraint —
+ * is adopted into state without persisting. Nothing ever compares a
+ * committed layout to a remembered one, so a write that changes nothing and
+ * a constraint that changes everything both classify correctly.
  */
 
 import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { usePanelRef, type PanelImperativeHandle, type PanelProps, type Layout } from "react-resizable-panels";
+import {
+  usePanelRef,
+  type Layout,
+  type PanelImperativeHandle,
+  type PanelProps,
+  type SeparatorProps,
+} from "react-resizable-panels";
 import { getProfile } from "@/lib/user-api";
 
 const INSPECTOR_DEFAULT_PX = 340;
@@ -71,6 +79,12 @@ export type InspectorPanelProps = Pick<
   PanelProps,
   "id" | "minSize" | "defaultSize" | "collapsible" | "collapsedSize" | "panelRef" | "className"
 >;
+/** The props the separator gets: `elementRef` is where the input listeners
+ *  live, and `disableDoubleClick` keeps the library's own dblclick-to-default
+ *  out of the way so `resetToDefault` is the one reset. The page layers its
+ *  own Enter/dblclick affordances on top. */
+
+export type InspectorSeparatorProps = Pick<SeparatorProps, "elementRef" | "disableDoubleClick">;
 
 export interface InspectorGroupProps {
   readonly defaultLayout: Layout | undefined;
@@ -114,11 +128,18 @@ function committedWidthPx(
   return Math.round((share / total) * Math.max(0, group.clientWidth - separators));
 }
 
-/** Two layouts are the same column: identical collapse, widths within the
- *  flex→px rounding the committed map carries. */
-function matchesLayout(a: InspectorTarget, b: InspectorTarget): boolean {
-  return a.collapsed === b.collapsed && (a.collapsed || Math.abs(a.widthPx - b.widthPx) <= 3);
+/** The keys the library's separator keydown acts on — the marks these press
+ *  leave are what the committed layout's classification reads. */
+const INSPECTOR_INPUT_KEYS = {
+  ArrowLeft: true, ArrowRight: true, Home: true, End: true, Enter: true,
+} satisfies Record<string, true>;
+
+function isInspectorInputKey(key: string): boolean {
+  return Object.hasOwn(INSPECTOR_INPUT_KEYS, key);
 }
+
+/** Where a committed layout came from: an input observed at its source. */
+interface InspectorInput { readonly kind: "pointer" | "key" }
 
 export interface InspectorLayout {
   readonly widthPx: number;
@@ -132,6 +153,7 @@ export interface InspectorLayout {
   readonly panelRef: RefObject<PanelImperativeHandle | null>;
   readonly panelProps: InspectorPanelProps;
   readonly groupProps: InspectorGroupProps;
+  readonly separatorProps: InspectorSeparatorProps;
 }
 
 export function useInspectorLayout(input: {
@@ -191,14 +213,21 @@ export function useInspectorLayout(input: {
   const [ready, setReady] = useState(false);
   const panelRef = usePanelRef();
 
-  // ── Owned state: `expectedLayout` (our echo or their gesture), the
-  // workspace the user chose (`userDecided`) and the one the signal already
-  // opened (`autoOpened`).
-  const expectedLayoutRef = useRef<InspectorTarget | null>(mountDecision);
+  // ── Owned state ────────────────────────────────────────────────────────
+  // The input mark: set by a listener where the user's act begins (the
+  // separator's capture listeners, or an affordance about to write), consumed
+  // by the committed layout it produces. A press that produced nothing is
+  // cleared by the releasing event's zero-delay timeout, so it can never
+  // leak onto a later environment commit.
+  const inputRef = useRef<InspectorInput | null>(null);
+  // The workspace the user has gestured on, and the workspace the one
+  // automatic open already served — comparing the id is the per-workspace
+  // flag, so a gesture or a second signal in another workspace is its own.
   const userDecidedRef = useRef<string | null>(null);
   const autoOpenedRef = useRef<string | null>(null);
+  // The group element: committed px read as the inspector's flex share of its
+  // measured box.
   const groupElementRef = useRef<HTMLDivElement | null>(null);
-
   // A decision made before the group's first committed pass — a write issued
   // into an unmeasured group is recomputed against a zero-size box and lost,
   // so the slot waits for the first emission, which applies it once. This is
@@ -207,18 +236,6 @@ export function useInspectorLayout(input: {
   const pendingDecisionRef = useRef<InspectorTarget | null>(null);
   // The group has committed a layout at least once, so imperative writes land.
   const groupMeasuredRef = useRef(false);
-
-  // The target of the hook's own in-flight imperative write. The next
-  // emission after a write is that write's commit report — even when the
-  // library constrains it short of what was asked — so it adopts the actual
-  // layout without persisting: the intent was already stored by `claim`, or
-  // never needed storing (a policy move). The marker is airtight because a
-  // write the hook issues always spans more than the library's rounding
-  // quantum (3-decimal flex; the hook never writes inside ±3px), so its
-  // emission is guaranteed and the marker cannot strand onto a later
-  // gesture. A same-frame user race reads against the requested direction
-  // and falls through to the gesture path when it disagrees.
-  const writeMarkerRef = useRef<InspectorTarget | null>(null);
   // The desktop/mobile mode the measurement flag belongs to: the group's key
   // follows the mode, so each swap remounts it and the next emission is a
   // fresh announcement again.
@@ -235,26 +252,24 @@ export function useInspectorLayout(input: {
   }, [account, workspace, widePanels]);
 
 
-  // A layout the user now owns: expected so its emission reads as an echo,
-  // reflected into state, persisted as theirs.
+  // A layout the user now owns: reflected into state, persisted as theirs,
+  // latched so no policy transition ever crosses it in this workspace.
   const claim = useCallback((target: InspectorTarget) => {
     userDecidedRef.current = workspace ?? null;
-    expectedLayoutRef.current = target;
     setCollapsed(target.collapsed);
     setWidthPx(target.widthPx);
     persistWidth(target.widthPx);
     persistChoice(!target.collapsed);
   }, [workspace, persistWidth, persistChoice]);
-  // The one place imperative writes leave the hook: the target is remembered
-  // so its own commit report is recognizable past any constraint. Claim
-  // (which persists) and issue (which marks) stay paired at every call site.
 
+  // The one place imperative writes leave the hook. Control actions already
+  // know their target — `claim` persisted it at call time — so the write
+  // marks no input; whatever emission it produces (or none, for a no-op)
+  // lands in the adopt branch like any other non-input commit.
   const issueWrite = useCallback((target: InspectorTarget) => {
     const panel = panelRef.current;
 
     if (panel === null) return;
-
-    writeMarkerRef.current = target;
 
     if (target.collapsed) panel.collapse();
     else panel.resize(target.widthPx);
@@ -267,13 +282,11 @@ export function useInspectorLayout(input: {
   // once-per-workspace latch; a stored choice ends the policy's say entirely.
   useLayoutEffect(() => {
     // The group's key follows the desktop/mobile mode: each swap remounts
-    // it, so measurement, the parked slot and any write marker belong to
-    // the previous tree.
+    // it, so measurement and the parked slot belong to the previous tree.
     if (groupModeRef.current !== desktopPanels) {
       groupModeRef.current = desktopPanels;
       groupMeasuredRef.current = false;
       pendingDecisionRef.current = null;
-      writeMarkerRef.current = null;
     }
 
     if (!desktopPanels || !widePanels || userDecidedRef.current === workspace) return;
@@ -286,11 +299,10 @@ export function useInspectorLayout(input: {
       autoOpenedRef.current = workspace ?? null;
     }
 
-    const expected = expectedLayoutRef.current;
-
-    if (expected !== null && matchesLayout(expected, target)) {
-      setCollapsed(target.collapsed);
-      setWidthPx(target.widthPx);
+    // Already where the decision lands: nothing writes, and the column is
+    // still marked ready — the stored state stands.
+    if (collapsed === target.collapsed
+      && (target.collapsed || widthPx === target.widthPx)) {
       setReady(true);
 
       return;
@@ -302,12 +314,13 @@ export function useInspectorLayout(input: {
       return;
     }
 
-    expectedLayoutRef.current = target;
     setCollapsed(target.collapsed);
     setWidthPx(target.widthPx);
     setReady(true);
-    issueWrite(target);
-  }, [account, workspace, worthShowing, desktopPanels, widePanels, panelRef, issueWrite]);
+
+    if (target.collapsed) panelRef.current.collapse();
+    else panelRef.current.resize(target.widthPx);
+  }, [account, workspace, worthShowing, desktopPanels, widePanels, collapsed, widthPx, panelRef]);
 
   const collapse = useCallback(() => {
     const width = panelRef.current?.getSize().inPixels ?? 0;
@@ -337,11 +350,10 @@ export function useInspectorLayout(input: {
     issueWrite(target);
   }, [claim, issueWrite]);
 
-  // Every committed layout reports here exactly once. The first per group
-  // tree is the mount announcing itself — possibly constrained short of the
-  // decided layout — so it is adopted, never persisted. Later reports are
-  // the hook's own write (the marker names it, direction-checked against a
-  // same-frame user race), an exact echo, or a user gesture.
+  // Every committed layout reports here exactly once, and the classification
+  // is the input mark, not a layout match: a report carrying a mark is the
+  // user's (claim it); anything else — mount, a decision the hook issued, a
+  // ResizeObserver constraint — is adopted without persisting.
   const onLayoutChanged = useCallback((layout: Layout) => {
     if (!desktopPanels) return;
 
@@ -362,7 +374,6 @@ export function useInspectorLayout(input: {
     };
 
     if (first) {
-      expectedLayoutRef.current = now;
       setCollapsed(now.collapsed);
 
       if (!now.collapsed) setWidthPx(now.widthPx);
@@ -370,51 +381,97 @@ export function useInspectorLayout(input: {
       setReady(true);
 
       // A decision parked for this pass applies now, once — the single write
-      // the unmeasured group could not take.
+      // the unmeasured group could not take. A parked decision is the
+      // hook's, not a gesture, so its write marks nothing for input.
       const pending = pendingDecisionRef.current;
       pendingDecisionRef.current = null;
 
       if (pending !== null) {
-        expectedLayoutRef.current = pending;
         setCollapsed(pending.collapsed);
         setWidthPx(pending.widthPx);
         setReady(true);
-        issueWrite(pending);
+
+        const panel = panelRef.current;
+
+        if (panel !== null) {
+          if (pending.collapsed) panel.collapse();
+          else panel.resize(pending.widthPx);
+        }
       }
 
       return;
     }
 
-    const marker = writeMarkerRef.current;
-    writeMarkerRef.current = null;
+    const input = inputRef.current;
+    inputRef.current = null;
 
-    if (marker !== null && (marker.collapsed ? now.collapsed : !now.collapsed)) {
-      // Our own write reporting back, possibly constrained: adopt what
-      // landed. The intent was already persisted by `claim` (or never needs
-      // storing, for a policy move), so nothing writes here.
-      expectedLayoutRef.current = now;
-      setCollapsed(now.collapsed);
-
-      if (!now.collapsed) setWidthPx(now.widthPx);
+    if (input !== null) {
+      // A gesture: the column is the user's — anything still parked dies with it.
+      pendingDecisionRef.current = null;
+      claim(now);
+      setReady(true);
 
       return;
     }
 
-    const expected = expectedLayoutRef.current;
+    // Environment or our own commit: adopt what landed, persist nothing.
+    setCollapsed(now.collapsed);
 
-    if (expected !== null && matchesLayout(expected, now)) {
-      setCollapsed(now.collapsed);
+    if (!now.collapsed) setWidthPx(now.widthPx);
+  }, [desktopPanels, panelRef, widthPx, claim]);
 
-      if (!now.collapsed) setWidthPx(now.widthPx);
+  // The separator's own listeners mark user input where it starts. Capture
+  // phase on the element runs before the library's bubble-phase keydown and
+  // its document-level pointer handlers act, and the committed layout they
+  // produce reports synchronously inside the same dispatch — the mark is
+  // always there to read. Pointer clears on pointerup/pointercancel/
+  // lostpointercapture; keys clear on a zero-delay timeout scheduled inside
+  // the same keydown. The ref callback removes every listener it added —
+  // element and document both — when the separator unmounts, so a
+  // desktop↔mobile remount can never stack them.
+  const separatorDetachRef = useRef<(() => void) | null>(null);
 
-      return;
-    }
+  const separatorRef = useCallback((element: HTMLDivElement | null) => {
+    separatorDetachRef.current?.();
+    separatorDetachRef.current = null;
 
-    // A gesture: the column is the user's — anything still parked dies with it.
-    pendingDecisionRef.current = null;
-    claim(now);
-    setReady(true);
-  }, [desktopPanels, panelRef, widthPx, claim, issueWrite]);
+    if (element === null) return;
+
+    const clear = () => { setTimeout(() => { inputRef.current = null; }, 0); };
+
+    const onPointerDown = () => { inputRef.current = { kind: "pointer" }; };
+
+    const onPointerDone = clear;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isInspectorInputKey(event.key)) return;
+
+      inputRef.current = { kind: "key" };
+      clear();
+    };
+    // No dblclick mark: the separator is disableDoubleClick, and the page's
+    // own onDoubleClick drives `resetToDefault` — a control action.
+
+    const ownerDocument = element.ownerDocument;
+
+    element.addEventListener("pointerdown", onPointerDown, true);
+    element.addEventListener("pointerup", onPointerDone, true);
+    element.addEventListener("pointercancel", onPointerDone, true);
+    element.addEventListener("lostpointercapture", onPointerDone, true);
+    element.addEventListener("keydown", onKeyDown, true);
+    ownerDocument.addEventListener("pointerup", onPointerDone, true);
+    ownerDocument.addEventListener("pointercancel", onPointerDone, true);
+
+    separatorDetachRef.current = () => {
+      element.removeEventListener("pointerdown", onPointerDown, true);
+      element.removeEventListener("pointerup", onPointerDone, true);
+      element.removeEventListener("pointercancel", onPointerDone, true);
+      element.removeEventListener("lostpointercapture", onPointerDone, true);
+      element.removeEventListener("keydown", onKeyDown, true);
+      ownerDocument.removeEventListener("pointerup", onPointerDone, true);
+      ownerDocument.removeEventListener("pointercancel", onPointerDone, true);
+    };
+  }, []);
 
   const panelProps: InspectorPanelProps = desktopPanels
     ? {
@@ -438,6 +495,11 @@ export function useInspectorLayout(input: {
     elementRef: (element: HTMLDivElement | null) => { groupElementRef.current = element; },
   };
 
+  const separatorProps: InspectorSeparatorProps = {
+    elementRef: separatorRef,
+    disableDoubleClick: true,
+  };
+
   return {
     widthPx,
     collapsed,
@@ -450,5 +512,6 @@ export function useInspectorLayout(input: {
     panelRef,
     panelProps,
     groupProps,
+    separatorProps,
   };
 }

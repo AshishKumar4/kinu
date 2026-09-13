@@ -1400,6 +1400,7 @@ export default function WorkspacePage() {
           <PanelResizeHandle
             aria-label="Resize the inspector; press Enter to hide or show it"
             title="Drag to resize the inspector · Enter hides or shows it"
+            {...inspector.separatorProps}
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.defaultPrevented) return;
 

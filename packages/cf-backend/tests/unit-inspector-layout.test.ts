@@ -407,7 +407,7 @@ describe('the committed-layout report, through the page hook', () => {
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a real report clamps at the floor and a collapse keeps the resting width', () => {
+  test('an unmarked report is the environment: adopted, floored, never persisted', () => {
     const stub = panelStub(300);
 
     const mounted = mount({
@@ -425,16 +425,18 @@ describe('the committed-layout report, through the page hook', () => {
 
     const layout = mounted.layout;
 
-    // Each report arrives after the group's own pass settled on that size.
+    // A committed layout with no input mark is adopted into state — the
+    // column shows what the group committed — but nothing persists: no
+    // user's hand touched the separator.
     emit(layout, stub, 412);
-    expect(store['kinu.inspector.a@b']).toBe('412');
+    expect(store['kinu.inspector.a@b']).toBe('300');
 
     emit(layout, stub, 120);
-    expect(store['kinu.inspector.a@b']).toBe('280');
+    expect(store['kinu.inspector.a@b']).toBe('300');
 
-    // The column's own collapse affordance captures the live width, then the
-    // collapsed report keeps it — the resting width survives the collapse
-    // instead of reading back the collapsed pass's own size.
+    // The column's own collapse affordance is an input mark: the write
+    // persists the live width and the close, and its committed report —
+    // marked — keeps the resting width instead of reading back zero.
     stub.state.sizePx = 300;
     layout.collapseControl?.();
     expect(store['kinu.inspector.a@b']).toBe('300');
@@ -444,10 +446,10 @@ describe('the committed-layout report, through the page hook', () => {
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
   });
 
-  test('a divider collapse without the affordance keeps the resting width, and expand reopens at it', () => {
+  test('a collapse affordance keeps the resting width, and a reload expands at it', () => {
     const stub = panelStub(300);
 
-    const first = mount({
+    mount({
       account: 'a@b',
       storedWidth: '300',
       storedChoice: '1',
@@ -458,16 +460,21 @@ describe('the committed-layout report, through the page hook', () => {
       }],
     });
 
-    // Post-mount reports run on the static tree: only side effects assert —
-    // the divider (or keyboard) takes the column to zero with no affordance
-    // capturing a width first. The committed report is collapsed, but the
-    // remembered expansion width stays the last open one — never zero.
+    // The column's own collapse affordance claims the resting width and the
+    // close at call time; its committed report — no input mark — lands in the
+    // adopt branch and keeps both.
+    const first = mount({ account: 'a@b', storedWidth: '300', storedChoice: '1' });
+
+    first.layout.panelRef.current = stub.handle;
+    stub.state.sizePx = 300;
+    first.layout.collapseControl?.();
+    expect(stub.collapses).toBe(1);
     emit(first.layout, stub, 0);
     expect(store['kinu.inspector.a@b']).toBe('300');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
 
-    // A reload reads the collapse back, and its own expand handle reopens at
-    // the remembered width: the round-trip is open at 300, not at zero.
+    // A reload reads the close back; the column's own expand handle reopens
+    // at the remembered width and the write persists it.
     const reloaded = mount({ account: 'a@b' });
 
     expect(reloaded.html).toContain('data-collapsed="true"');
@@ -509,7 +516,7 @@ describe('the committed-layout report, through the page hook', () => {
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a constrained write echo keeps the preferred width and the next gesture still lands', () => {
+  test('a constrained write echo keeps the preferred width and the next control action still lands', () => {
     const stub = panelStub(300);
 
     const mounted = mount({
@@ -525,22 +532,24 @@ describe('the committed-layout report, through the page hook', () => {
 
     const layout = mounted.layout;
 
-    // The reset asks for 340; the group fits only 310. The echo is the
-    // library reporting back on our own write — the preferred 340 stays
-    // stored, the write itself proves it was issued, and the column shows
-    // what fit.
+    // The reset claims 340 at call time and issues the write; the group
+    // fits only 310, and its report — no input mark — adopts without
+    // touching the stored intent.
     layout.resetToDefault();
     expect(stub.resizes).toEqual([340]);
+    expect(store['kinu.inspector.a@b']).toBe('340');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
     emit(layout, stub, 310);
     expect(store['kinu.inspector.a@b']).toBe('340');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
 
-    // The marker is consumed: a later drag is the user's again.
-    emit(layout, stub, 320);
-    expect(store['kinu.inspector.a@b']).toBe('320');
+    // A later control action is still the user's own act: the toggle
+    // claims the close and the write goes out.
+    layout.toggleCollapsed();
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
   });
 
-  test('a collapse racing our own write reads as the user, keeping a width', () => {
+  test('a collapse affordance issued while a reset is in flight still claims its target', () => {
     const stub = panelStub(300);
 
     const mounted = mount({
@@ -556,14 +565,17 @@ describe('the committed-layout report, through the page hook', () => {
 
     const layout = mounted.layout;
 
-    // The reset's write is in flight when the user collapses: the report
-    // disagrees with the marked direction, so it is a gesture — the choice
-    // records, and the width stays a real expansion width, never zero. (The
-    // step shares one render's closure, so the preserved width is the
-    // mount's 300; past a real re-render it would be the reset's 340.)
+    // The reset claims 340 and writes it; before any report lands the
+    // collapse control claims the close at call time — the close is the
+    // user's, whatever the in-flight emission would have said.
     layout.resetToDefault();
-    emit(layout, stub, 0);
-    expect(store['kinu.inspector.a@b']).toBe('300');
+    layout.collapseControl?.();
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
+    expect(stub.resizes).toEqual([340]);
+    expect(stub.collapses).toBe(1);
+    // The reset's commit arrives, unmarked: adopted, nothing repersisted.
+    emit(layout, stub, 340);
+    expect(store['kinu.inspector.a@b']).toBe('340');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
   });
 });
@@ -596,7 +608,7 @@ describe('the decided layout, through the page hook', () => {
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a gesture after the mount announcement is the user\'s: the stored layout never overwrites it', () => {
+  test('an unmarked report after the mount announcement adopts without overwriting the stored layout', () => {
     const stub = panelStub(340);
 
     const mounted = mount({
@@ -612,20 +624,77 @@ describe('the decided layout, through the page hook', () => {
       }],
     });
 
-    // The user's drag commits next: it is the workspace's choice, and no
-    // parked or decided layout ever writes over it.
-    emit(mounted.layout, stub, 412);
-    emit(mounted.layout, stub, 412);
+    // A constraint commit — a viewport squeeze, a neighboring panel's own
+    // bounds — reports a smaller layout with no input mark. It adopts into
+    // state; the stored preference is untouched and no choice is latched.
+    emit(mounted.layout, stub, 310);
+    emit(mounted.layout, stub, 310);
     expect(stub.resizes).toEqual([]);
-    expect(store['kinu.inspector.a@b']).toBe('412');
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+    expect(mounted.html).toContain('data-ready="true"');
+  });
+});
+
+describe('the decided layout, through the page hook', () => {
+  test('the decided layout is the mount layout: nothing issues blind, ready waits on the pass', () => {
+    const stub = panelStub(300);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        // Before the group's first committed pass the hook issues no write
+        // and the column is not yet ready — the mount layout IS the decided
+        // layout, carried by the group's own defaultLayout/defaultSize.
+        expect(stub.resizes).toEqual([]);
+        expect(stub.collapses).toBe(0);
+        expect(layout.ready).toBe(false);
+
+        // The group's first emission lands the decision and marks it ready.
+        emit(layout, stub, 300);
+      }],
+    });
+
+    expect(stub.resizes).toEqual([]);
+    expect(stub.collapses).toBe(0);
+    expect(mounted.html).toContain('data-ready="true"');
+  });
+
+  test('an unmarked report after the mount announcement adopts without overwriting the stored layout', () => {
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        // The mount announces the decided layout first — the library always
+        // commits it before any input can land.
+        emit(layout, stub, 300);
+      }],
+    });
+
+    // A constraint commit — a viewport squeeze, a neighboring panel's own
+    // bounds — reports a smaller layout with no input mark. It adopts into
+    // state; the stored preference is untouched and no choice is latched.
+    emit(mounted.layout, stub, 310);
+    emit(mounted.layout, stub, 310);
+    expect(stub.resizes).toEqual([]);
+    expect(store['kinu.inspector.a@b']).toBe('300');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a no-op decision leaves no marker: the next gesture still persists', () => {
-    // The group dedupes a write whose layout already stands, so a decision
-    // that changes nothing must not park a pending write the next user
-    // gesture gets mistaken for.
+  test('a no-op decision writes nothing and leaves the next control action free', () => {
+    // The group dedupes a write whose layout already stands; with input
+    // marks there is no marker to strand — a parked decision drains and the
+    // next control action still claims its own target.
     const stub = panelStub(340);
 
     const mounted = mount({
@@ -635,7 +704,7 @@ describe('the decided layout, through the page hook', () => {
         layout.panelRef.current = stub.handle;
         controls.flush();
         // The committed layout already IS the decided collapse: the parked
-        // decision drains as a hold, issues nothing, and leaves no marker.
+        // decision drains as a hold, issues nothing.
         emit(layout, stub, 0);
       }],
     });
@@ -643,10 +712,12 @@ describe('the decided layout, through the page hook', () => {
     expect(stub.resizes).toEqual([]);
     expect(stub.collapses).toBe(0);
 
-    // A gesture arriving next is the user's, not an echo: it persists.
+    // The toggle is the user's own act: it claims the open and the write
+    // goes out — nothing parked could have swallowed it.
     const layout = mounted.layout;
-    emit(layout, stub, 320);
-    expect(store['kinu.inspector.a@b']).toBe('320');
+    layout.toggleCollapsed();
+    expect(stub.resizes).toEqual([340]);
+    expect(store['kinu.inspector.a@b']).toBe('340');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
   });
 
@@ -785,7 +856,7 @@ describe('the first-visit policy, through the page hook', () => {
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a gesture that drags the policy-collapsed column open is the user\'s, and persists', () => {
+  test('a report that opens the policy-collapsed column with no input mark is adopted, not stored', () => {
     const stub = panelStub(340);
 
     const mounted = mount({
@@ -793,15 +864,16 @@ describe('the first-visit policy, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        // The policy collapse commits, then the drag open reports a real
-        // width: the column is the user's now.
+        // The policy collapse commits, then a constraint or programmatic
+        // change reports a real width: adopted, never persisted — the
+        // user touched nothing.
         emit(layout, stub, 0);
         emit(layout, stub, 320);
       }],
     });
 
-    expect(store['kinu.inspector.a@b']).toBe('320');
-    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+    expect(store['kinu.inspector.a@b']).toBeUndefined();
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBeUndefined();
     expect(mounted.html).toContain('data-collapsed="false"');
   });
 });
