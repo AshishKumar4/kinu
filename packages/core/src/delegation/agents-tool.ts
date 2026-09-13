@@ -89,7 +89,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, toKinuError, type ErrorCode, type Refusal } from '../obs/index';
 import {
   delegationDepthRefusal,
   delegationExhausted,
@@ -2049,6 +2049,255 @@ function assertHireVariant(input: AgentsToolInput): void {
  * `toolOptions` is the AI SDK tool-call options bag; only `abortSignal` is
  * read, for search cancellation and timer-less peer-wait cancellation.
  */
+/** The `hire scope=workspace` route: a whole new workspace, which only the
+ *  orchestrator's peer seam may open. */
+async function hireWorkspace(
+  deps: AgentsToolDeps,
+  input: AgentsToolInput,
+  mode: WorkMode,
+  toolOptions: AgentsToolCallOptions | undefined,
+  spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null,
+): Promise<object> {
+  const peers = deps.peers;
+
+  if (input.context !== undefined) return badInput('field "context" belongs to a subordinate hire with `role`, not scope="workspace"');
+  const workspaceDepth = spawnDepthRefusal();
+
+  if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
+
+  // Classified, not a bare `{error}`: this is the escape route the depth
+  // cap closes — a fresh workspace is the root of its own tree with the
+  // whole cap below it — so the one refusal that has to hold must land
+  // in `refused` and not indict the tool in `broke`.
+  if (!peers) {
+    throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
+      + 'hire a subordinate here instead (omit scope), or run a search.');
+  }
+
+  if (input.role !== undefined) {
+    return badInput('field "role" is not available for action "hire" on this actor');
+  }
+
+  if (input.tier !== undefined) {
+    return badInput('field "tier" is not available for action "hire" on this actor');
+  }
+
+  if (!input.mission || !input.message) return badInput('hire scope=workspace requires mission and message');
+
+  const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
+    purpose: input.mission,
+    message: input.message,
+    mode,
+  };
+
+  if (input.agent) Object.assign(request, { name: input.agent });
+
+  if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
+  return await peers.spawnWorkspace(request);
+}
+
+/** The `hire` arm's create route: a role resolves to a spawn, durable or
+ *  task-lifetime, and the depth cap has already ruled it in. */
+async function hireCreate(
+  deps: AgentsToolDeps,
+  team: TeamToolDeps,
+  input: AgentsToolInput & { role: string; mission: string },
+  mode: WorkMode,
+  lifetime: 'durable' | 'task',
+  toolOptions: AgentsToolCallOptions | undefined,
+): Promise<object> {
+  const ctx = deps.profile?.();
+
+  if (!ctx) {
+    throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
+  }
+
+  const inheritedContext = input.context === 'inherit'
+    ? [...freezeInheritedContext(team.inheritedContext?.()
+      ?? badInput('context:"inherit" requires this actor\'s parent-conversation source'))]
+    : undefined;
+
+  if (lifetime === 'task') {
+    // A name would be accepted and ignored: a task agent is archived the
+    // moment it answers, so the name never becomes addressable and the
+    // roster row it would carry is gone before anyone could use it.
+    if (input.agent !== undefined) {
+      return badInput('field "agent" is not available on a lifetime:"task" hire — it is archived the '
+        + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
+    }
+
+    const temporary = team.temporary;
+
+    if (!temporary) {
+      throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
+        + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
+    }
+
+    const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
+
+    if ('error' in delegatedTask) return badInput(delegatedTask.error);
+
+    const request: TemporaryRunRequest = {
+      role: delegatedTask.resolved.role.id,
+      roleLabel: input.role,
+      task: input.mission,
+      mode,
+    };
+
+    if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
+
+    if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
+    return await temporary.run(request);
+  }
+
+  const delegated = resolveDelegatedProfile(ctx, input.role!, input.tier);
+
+  if ('error' in delegated) return badInput(delegated.error);
+  // Only an EXPLICIT override rides along: a role's own default tier
+  // is re-derived by the child at its next turn boundary from its
+  // roleId, so storing it twice would be a second source of truth.
+  const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
+
+  const request: Parameters<TeamToolDeps['spawn']>[0] = {
+    role: delegated.resolved.role.id,
+    mission: input.mission,
+    mode,
+  };
+
+  if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
+
+  if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
+
+  if (input.agent) Object.assign(request, { name: input.agent });
+
+  return await team.spawn(request);
+}
+
+/** The create route needs both `role` and `mission` — the same checks the
+ *  guards above its call already perform; the guard is what narrows them for
+ *  `hireCreate` without an assertion. */
+function isHireCreateInput(
+  input: AgentsToolInput,
+): input is AgentsToolInput & { role: string; mission: string } {
+  return Boolean(input.role) && Boolean(input.mission);
+}
+
+/** The `hire` arm: hand work to an existing agent, or create one — subordinate
+ *  (durable or task) or a whole workspace. Reuses the dispatch's own guards so
+ *  budget and depth accounting stay where the spend is counted. */
+async function runHireAction(
+  deps: AgentsToolDeps,
+  input: AgentsToolInput,
+  mode: WorkMode,
+  toolOptions: AgentsToolCallOptions | undefined,
+  spawnGuard: () => void,
+  spawnDepthRefusal: () => { reason: ErrorCode; error: string } | null,
+  isSubordinate: (name: string) => Promise<boolean>,
+): Promise<object> {
+  const team = deps.team;
+  const peers = deps.peers;
+
+  // A durable roster change is barred under Plan and a `task` hire is not: it
+  // is the research rung a Plan turn keeps. Read here, on the same field the
+  // routing below reads, rather than in `actionAdmission` where the two could
+  // drift.
+  const lifetime = input.lifetime ?? 'durable';
+  const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
+
+  if (planBar) throw new KinuError(planBar.reason, planBar.error);
+
+  if ((input.scope ?? 'subordinate') === 'workspace') {
+    return await hireWorkspace(deps, input, mode, toolOptions, spawnDepthRefusal);
+  }
+
+  if (!peers && input.scope !== undefined) {
+    return badInput('field "scope" is not available for action "hire" on this actor');
+  }
+
+  // `role` IS the discriminator, and it is a presence test rather than an
+  // exclusion: with a role this hire CREATES (and `agent`, given, is the
+  // name to create under), without one it hands the workstream to an agent
+  // that already exists. There is nothing to refuse as ambiguous, because
+  // the two readings of `agent` never both apply.
+  //
+  // A hire naming an agent that exists spends no depth and no birth: its
+  // report arrives as an event that wakes you.
+  if (!input.role) {
+    if (!input.agent || !input.message) {
+      return badInput(team
+        ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
+        : 'hire requires agent and message');
+    }
+
+    assertHireVariant(input);
+    spawnGuard();
+    const asked = requestedTopic(input);
+
+    if (team && await isSubordinate(input.agent)) {
+      const assignment: Parameters<TeamToolDeps['assign']>[0] = {
+        name: input.agent,
+        task: input.message,
+        mode,
+      };
+
+      if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
+
+      const handoff = await countedMsgSend(
+        { action: 'hire', transport: 'subordinate', addressing: 'agent', target: input.agent, chars: input.message.length },
+        () => team.assign(assignment),
+        handoffCount,
+      );
+
+      return {
+        status: 'working',
+        agent: input.agent,
+        ...renderHandoff(handoff),
+        note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
+      };
+    }
+
+    if (peers) {
+      const request: Parameters<PeersToolDeps['ask']>[0] = {
+        agent: input.agent, topic: asked.topic, message: input.message, mode,
+      };
+
+      if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
+      return await countedMsgSend(
+        { action: 'hire', transport: 'peer', addressing: 'agent', target: input.agent, chars: input.message.length },
+        () => peers.ask(request),
+        peerAskCount,
+      );
+    }
+
+    return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
+  }
+
+  // From here the hire CREATES, which is what spends a level of tree.
+  const createDepth = spawnDepthRefusal();
+
+  if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
+
+  if (!team) {
+    // Capability absence, and `denied` is what that is: the call is
+    // well-formed and this actor does not wire the surface it needs.
+    throw new KinuError('denied', 'hiring subordinates is not available on this actor');
+  }
+
+  assertHireVariant(input);
+
+  if (!input.mission) return badInput('hire requires role and mission');
+
+  // `agent`, here, is the NAME to create under rather than a target. The role
+  // is a catalog id: validated and spawn-checked, then carried onto the
+  // subordinate's durable identity with its tier override.
+  if (!isHireCreateInput(input)) return badInput('hire requires role and mission');
+
+  return await hireCreate(deps, team, input, mode, lifetime, toolOptions);
+}
+
 export async function dispatchAgentsAction(
   deps: AgentsToolDeps,
   input: AgentsToolInput,
@@ -2118,203 +2367,8 @@ export async function dispatchAgentsAction(
       case 'swarm':
         return await runSwarmAction(deps, input, mode, toolOptions, deps.budget);
 
-      case 'hire': {
-        // A durable roster change is barred under Plan and a `task` hire is
-        // not: it is the research rung a Plan turn keeps. Read here, on the
-        // same field the routing below reads, rather than in `actionAdmission`
-        // where the two could drift.
-        const lifetime = input.lifetime ?? 'durable';
-        const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
-
-        if (planBar) throw new KinuError(planBar.reason, planBar.error);
-
-        if ((input.scope ?? 'subordinate') === 'workspace') {
-          if (input.context !== undefined) return badInput('field "context" belongs to a subordinate hire with `role`, not scope="workspace"');
-          const workspaceDepth = spawnDepthRefusal();
-
-          if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
-
-          // Classified, not a bare `{error}`: this is the escape route the depth
-          // cap closes — a fresh workspace is the root of its own tree with the
-          // whole cap below it — so the one refusal that has to hold must land
-          // in `refused` and not indict the tool in `broke`.
-          if (!peers) {
-            throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
-              + 'hire a subordinate here instead (omit scope), or run a search.');
-          }
-
-          if (input.role !== undefined) {
-            return badInput('field "role" is not available for action "hire" on this actor');
-          }
-
-          if (input.tier !== undefined) {
-            return badInput('field "tier" is not available for action "hire" on this actor');
-          }
-
-          if (!input.mission || !input.message) return badInput('hire scope=workspace requires mission and message');
-
-          const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
-            purpose: input.mission,
-            message: input.message,
-            mode,
-          };
-
-          if (input.agent) Object.assign(request, { name: input.agent });
-
-          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-          return await peers.spawnWorkspace(request);
-        }
-
-        if (!peers && input.scope !== undefined) {
-          return badInput('field "scope" is not available for action "hire" on this actor');
-        }
-
-        // `role` IS the discriminator, and it is a presence test rather than an
-        // exclusion: with a role this hire CREATES (and `agent`, given, is the
-        // name to create under), without one it hands the workstream to an agent
-        // that already exists. There is nothing to refuse as ambiguous, because
-        // the two readings of `agent` never both apply.
-        //
-        // A hire naming an agent that exists spends no depth and no birth: its
-        // report arrives as an event that wakes you.
-        if (!input.role) {
-          if (!input.agent || !input.message) {
-            return badInput(team
-              ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
-              : 'hire requires agent and message');
-          }
-
-          assertHireVariant(input);
-          spawnGuard();
-          const asked = requestedTopic(input);
-
-          if (team && await isSubordinate(input.agent)) {
-            const assignment: Parameters<TeamToolDeps['assign']>[0] = {
-              name: input.agent,
-              task: input.message,
-              mode,
-            };
-
-            if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
-
-            const handoff = await countedMsgSend(
-              { action: 'hire', transport: 'subordinate', addressing: 'agent', target: input.agent, chars: input.message.length },
-              () => team.assign(assignment),
-              handoffCount,
-            );
-
-            return {
-              status: 'working',
-              agent: input.agent,
-              ...renderHandoff(handoff),
-              note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
-            };
-          }
-
-          if (peers) {
-            const request: Parameters<PeersToolDeps['ask']>[0] = {
-              agent: input.agent, topic: asked.topic, message: input.message, mode,
-            };
-
-            if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-            return await countedMsgSend(
-              { action: 'hire', transport: 'peer', addressing: 'agent', target: input.agent, chars: input.message.length },
-              () => peers.ask(request),
-              peerAskCount,
-            );
-          }
-
-          return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
-        }
-
-        // From here the hire CREATES, which is what spends a level of tree.
-        const createDepth = spawnDepthRefusal();
-
-        if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
-
-        if (!team) {
-          // Capability absence, and `denied` is what that is: the call is
-          // well-formed and this actor does not wire the surface it needs.
-          throw new KinuError('denied', 'hiring subordinates is not available on this actor');
-        }
-
-        assertHireVariant(input);
-
-        if (!input.mission) return badInput('hire requires role and mission');
-        // `agent`, here, is the NAME to create under rather than a target.
-        // The role is a catalog id here. It is validated and spawn-checked, then carried
-        // onto the subordinate's durable identity with its tier override.
-        // Without a catalog the hire is refused rather than seeded onto an
-        // identity the child's next turn cannot resolve.
-        const ctx = deps.profile?.();
-
-        if (!ctx) {
-          throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
-        }
-
-        const inheritedContext = input.context === 'inherit'
-          ? [...freezeInheritedContext(team.inheritedContext?.()
-            ?? badInput('context:"inherit" requires this actor\'s parent-conversation source'))]
-          : undefined;
-
-        if (lifetime === 'task') {
-          // A name would be accepted and ignored: a task agent is archived the
-          // moment it answers, so the name never becomes addressable and the
-          // roster row it would carry is gone before anyone could use it.
-          if (input.agent !== undefined) {
-            return badInput('field "agent" is not available on a lifetime:"task" hire — it is archived the '
-              + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
-          }
-
-          const temporary = team.temporary;
-
-          if (!temporary) {
-            throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
-              + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
-          }
-
-          const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
-
-          if ('error' in delegatedTask) return badInput(delegatedTask.error);
-
-          const request: TemporaryRunRequest = {
-            role: delegatedTask.resolved.role.id,
-            roleLabel: input.role,
-            task: input.mission,
-            mode,
-          };
-
-          if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
-
-          if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-          return await temporary.run(request);
-        }
-
-        const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
-
-        if ('error' in delegated) return badInput(delegated.error);
-        // Only an EXPLICIT override rides along: a role's own default tier
-        // is re-derived by the child at its next turn boundary from its
-        // roleId, so storing it twice would be a second source of truth.
-        const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
-
-        const request: Parameters<TeamToolDeps['spawn']>[0] = {
-          role: delegated.resolved.role.id,
-          mission: input.mission,
-          mode,
-        };
-
-        if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
-
-        if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
-
-        if (input.agent) Object.assign(request, { name: input.agent });
-
-        return await team.spawn(request);
-      }
+      case 'hire':
+        return await runHireAction(deps, input, mode, toolOptions, spawnGuard, spawnDepthRefusal, isSubordinate);
 
       case 'msg': {
         // ONE action, two ways to say WHO — and they are exclusive, because a

@@ -374,10 +374,12 @@ function collectReads(
 
     // The binding itself, not a use of it: every function this walk enters names
     // its own parameter, and reading that as "used whole" would report every hop
-    // as unfollowable at exactly the moment it was followed.
+    // as unfollowable at exactly the moment it was followed. A type predicate
+    // (`input is Narrowed`) is the same shape — the parameter name inside it is
+    // part of the signature's contract, not a read of the argument.
     const isBinding = parent !== undefined
       && (parent.type === 'FunctionDeclaration' || parent.type === 'ArrowFunctionExpression'
-        || parent.type === 'FunctionExpression');
+        || parent.type === 'FunctionExpression' || parent.type === 'TSTypePredicate');
 
     if (asMemberObject || asArgument || isBinding) return;
     into.opaque.push(`${at(node)} — \`${param}\` is used whole here, not read field by field`);
