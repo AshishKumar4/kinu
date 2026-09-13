@@ -46,6 +46,8 @@ export type {
 
 export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   model: LanguageModel;
+  spec?: string;
+  modelContext?: ChatOptions['modelContext'];
   /** The live tool surface, resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
   /** Shared chat options and the existing pre-step extension hook. */
@@ -67,56 +69,79 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
       ? Object.fromEntries(call.tools.filter(name => all[name]).map(name => [name, all[name]]))
       : all;
 
-    const spend = opts.spend;
-    const operation = beginModelOperation(spend, 'stream');
-    let usage: Usage = {};
-    let modelId: string | undefined;
-    const outputs = new Map<string, ScaffoldToolOutput>();
-
-    const extensions = new ExtensionHost().register({ name: 'kinu.scaffold-lifetime',
-      prepareStep: async ctx => {
-        assertScaffoldActive(opts);
-
-        return opts.streamOptions?.prepareStep?.(ctx);
-      },
-    });
-
-    try {
-      for await (const event of runChat({
-        model: opts.model, system: call.system, history: call.messages, tools: toolSet,
-        signal: opts.signal, extensions,
-        providerOptions: opts.streamOptions?.providerOptions,
-        stopWhen: opts.streamOptions?.stopWhen,
-        onToolOutput: part => {
-          outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
-            output: part.output, preliminary: part.preliminary });
-        },
-        onStep: async step => {
-          modelId = step.response.modelId;
-          await opts.streamOptions?.onStep?.(step);
-        },
-      })) {
-        if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
-
-        if (event.type === 'tool-result') {
-          const output = event.success ? outputs.get(event.toolCallId)
-            : { type: 'tool-output-error', toolCallId: event.toolCallId, errorText: event.error ?? event.result } satisfies ScaffoldToolOutput;
-
-          if (output === undefined) throw new KinuError('missing', 'the SDK tool output was not observed');
-          outputs.delete(event.toolCallId);
-          yield { type: 'native-tool-output', output };
-        }
-
-        yield event;
-      }
-    } catch (cause) {
-      operation.failed({ cause });
-      throw cause;
-    }
-
-    operation.completed({ usage, modelId });
-    spend?.report({ source: spend.source, usage, modelId });
+    yield* streamScaffoldChat(opts, { system: call.system, history: call.messages, tools: toolSet });
   };
+}
+
+export function createScaffoldDefaultInference(
+  opts: ScaffoldBridgeOpts,
+  frame: Pick<ChatOptions, 'system' | 'history' | 'modelContext'>,
+): NonNullable<ScaffoldRunOptions['defaultInference']> {
+  return async function* () {
+    for await (const event of streamScaffoldChat(opts, { ...frame, tools: opts.tools() })) {
+      if (event.type !== 'native-tool-output') yield { event };
+    }
+  };
+}
+
+async function* streamScaffoldChat(
+  opts: ScaffoldBridgeOpts,
+  frame: Pick<ChatOptions, 'system' | 'history' | 'tools' | 'modelContext'>,
+): ReturnType<ScaffoldRunOptions['llmStream']> {
+  assertScaffoldActive(opts);
+  const spend = opts.spend;
+  const operation = beginModelOperation(spend, 'stream', { spec: opts.spec });
+  let usage: Usage = {};
+  let modelId: string | undefined;
+  const outputs = new Map<string, ScaffoldToolOutput>();
+
+  const extensions = new ExtensionHost().register({ name: 'kinu.scaffold-lifetime',
+    prepareStep: async ctx => {
+      assertScaffoldActive(opts);
+
+      return opts.streamOptions?.prepareStep?.(ctx);
+    },
+  });
+
+  try {
+    for await (const event of runChat({
+      ...frame, model: opts.model, modelContext: opts.modelContext ?? frame.modelContext,
+      signal: opts.signal, extensions,
+      providerOptions: opts.streamOptions?.providerOptions,
+      stopWhen: opts.streamOptions?.stopWhen,
+      onToolOutput: part => {
+        outputs.set(part.toolCallId, { type: 'tool-output-available', toolCallId: part.toolCallId,
+          output: part.output, preliminary: part.preliminary });
+      },
+      onStep: async step => {
+        modelId = step.response.modelId;
+        await opts.streamOptions?.onStep?.(step);
+      },
+    })) {
+      if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
+
+      if (event.type === 'tool-result') {
+        const output = event.success ? outputs.get(event.toolCallId)
+          : { type: 'tool-output-error', toolCallId: event.toolCallId, errorText: event.error ?? event.result } satisfies ScaffoldToolOutput;
+
+        if (output === undefined) throw new KinuError('missing', 'the SDK tool output was not observed');
+        outputs.delete(event.toolCallId);
+        yield { type: 'native-tool-output', output };
+      }
+
+      if (event.type === 'done') {
+        operation.completed({ usage, modelId });
+        spend?.report({ source: spend.source, usage, modelId, spec: opts.spec });
+      }
+
+      yield event;
+    }
+  } catch (cause) {
+    operation.failed({ cause });
+    throw cause;
+  } finally {
+    operation.failed({ cause: opts.signal?.reason ?? new Error('Scaffold model stream closed before completion') });
+  }
 }
 
 /** Messages per page when the scaffold names no limit, and the ceiling it

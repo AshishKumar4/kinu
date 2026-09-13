@@ -80,6 +80,28 @@ describe('ModelCatalogSession.pricing', () => {
 // so the catalog has to report one — and has to say nothing rather than guess
 // when it has not answered.
 describe('ModelCatalogSession.modelOutputLimit', () => {
+  test('an operation awaits limits for its selected model instead of borrowing the chat cache', async () => {
+    const selected = Promise.withResolvers<{ id: string; contextWindow: number; modelOutputLimit: number }>();
+    const lookedUp: string[] = [];
+
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'chat/fast',
+      lookup: async spec => {
+        lookedUp.push(spec);
+
+        return spec === 'deep/selected'
+          ? selected.promise
+          : { id: spec, contextWindow: 8_000, modelOutputLimit: 1_000 };
+      },
+    });
+
+    const pending = session.contextFor('deep/selected');
+    selected.resolve({ id: 'deep/selected', contextWindow: 200_000, modelOutputLimit: 32_000 });
+
+    expect(await pending).toEqual({ id: 'deep/selected', contextWindow: 200_000, modelOutputLimit: 32_000 });
+    expect(lookedUp).toEqual(['deep/selected']);
+  });
+
   test('the reported allowance is what admission reserves', async () => {
     const session = new ModelCatalogSession({
       effectiveSpec: () => 'anthropic/claude-opus-4-7',

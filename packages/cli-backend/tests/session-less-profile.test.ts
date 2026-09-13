@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLM, LLMProviderConfig, ModelRouteResolution } from '@kinu.run/core';
+import { captureOperationProfile, runOperationProfile, operationProfileStream, currentOperationProfile,
+  WORKSPACE_RUN_ID } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { STATIC_MODEL_SPEC, staticModelPlane } from '../src/profile-authority';
@@ -58,6 +60,17 @@ function stubModels(rt: CLIRuntime): ModelRouteResolution[] {
 }
 
 describe('a local runtime opened without a session', () => {
+  test('a later runtime operation resolves the revised profile authority', async () => {
+    const { db, dbPath } = await workspace();
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
+    const seen = stubModels(rt);
+    await rt.llm.complete('before the authority change');
+    rt.profiles?.refine({ plane: staticModelPlane() });
+    await rt.llm.complete('after the authority change');
+
+    expect(seen.map(route => route.model)).toEqual(['openai-compat/fake-model', STATIC_MODEL_SPEC]);
+  });
+
   test("the explorer lane reaches the model instead of refusing for want of a resolver", async () => {
     const { db, dbPath } = await workspace();
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
@@ -74,14 +87,7 @@ describe('a local runtime opened without a session', () => {
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
     const seen = stubModels(rt);
 
-    // A lane is derived from the live turn profile, so a runtime with none
-    // yet reports its lanes unset — routing has nothing to route against.
-    expect(rt.judgeModel).toBeUndefined();
-
-    // Resolving one puts the runtime into a routed state on its own, which is
-    // the whole capability a session-less surface was missing.
-    const profile = await rt.ensureProfile?.();
-    expect(profile?.tier.id).toBe('default');
+    expect(rt.judgeModel).toBeDefined();
 
     await rt.judgeModel?.complete('grade this');
     await rt.fastLlm?.complete('classify this');
@@ -114,12 +120,144 @@ describe('a local runtime opened without a session', () => {
     expect((await rt.ensureProfile?.())?.tier.model).toBe('openai-compat/fake-model');
   });
 
-  test('a turn profile already installed is never displaced by a lane resolving one', async () => {
+  test('an issued operation retains its profile while a later operation sees revised authority', async () => {
     const { db, dbPath } = await workspace();
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
     const pinned = await rt.ensureProfile?.();
 
-    expect(await rt.ensureProfile?.()).toBe(pinned);
+    if (!pinned) throw new Error('runtime profile resolution is required');
+    const operation = captureOperationProfile({ actor: rt.actor, profile: pinned, inputs: null, runId: 'turn-A', turnId: 'turn-A' });
+    const hold = Promise.withResolvers<void>();
+
+    const oldWork = runOperationProfile(operation, async () => {
+      await hold.promise;
+      expect(await rt.ensureProfile?.()).toBe(pinned);
+
+      return rt.llm.complete('detached operation A');
+    });
+
+    const seen = stubModels(rt);
+    rt.profiles?.refine({ plane: staticModelPlane() });
+    await rt.llm.complete('new operation B');
+    hold.resolve();
+    await oldWork;
+
+    expect(seen.map(route => route.model)).toEqual([STATIC_MODEL_SPEC, 'openai-compat/fake-model']);
+  });
+
+  test('a lane stream issued under one operation retains its route when another operation consumes it', async () => {
+    const { db, dbPath } = await workspace();
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
+    const profileA = await rt.ensureProfile?.();
+
+    if (!profileA) throw new Error('runtime profile resolution is required');
+    const operationA = captureOperationProfile({ actor: rt.actor, profile: profileA, inputs: null, runId: 'turn-A', turnId: 'turn-A' });
+
+    rt.profiles?.refine({ plane: staticModelPlane() });
+    const profileB = await rt.ensureProfile?.();
+
+    if (!profileB) throw new Error('runtime profile resolution is required');
+    const operationB = captureOperationProfile({ actor: rt.actor, profile: profileB, inputs: null, runId: 'turn-B', turnId: 'turn-B' });
+
+    const seen: ModelRouteResolution[] = [];
+    const issuer: Array<string | null> = [];
+    rt.setModelForRoute?.(resolution => ({
+      async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
+      complete: async () => 'stub answer',
+    }));
+
+    const stream = runOperationProfile(operationA, () =>
+      rt.llm.stream({ system: 's', messages: [{ role: 'user', content: 'issued under A' }] }));
+
+    const drained: string[] = [];
+    await runOperationProfile(operationB, async () => {
+      for await (const delta of stream) drained.push(delta);
+    });
+
+    expect(drained).toEqual(['streamed']);
+    expect(seen.map(route => route.model)).toEqual(['openai-compat/fake-model']);
+    expect(seen[0]?.reasoningEffort).toBe(profileA.tier.reasoningEffort);
+    expect(issuer).toEqual(['turn-A']);
+  });
+
+  test('a lane stream issued with no operation resolves fresh authority under the workspace identity', async () => {
+    const { db, dbPath } = await workspace();
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
+    const profileA = await rt.ensureProfile?.();
+
+    if (!profileA) throw new Error('runtime profile resolution is required');
+    const operationA = captureOperationProfile({ actor: rt.actor, profile: profileA, inputs: null, runId: 'turn-A', turnId: 'turn-A' });
+
+    rt.profiles?.refine({ plane: staticModelPlane() });
+
+    const seen: ModelRouteResolution[] = [];
+    const issuer: Array<string | null> = [];
+    rt.setModelForRoute?.(resolution => ({
+      async *stream() { issuer.push(currentOperationProfile(rt.actor)?.turnId ?? null); seen.push(resolution); yield 'streamed'; },
+      complete: async () => 'stub answer',
+    }));
+
+    // No ambient operation at issue time: nothing owns this stream yet, so it
+    // must not pick up whoever happens to consume it.
+    const stream = rt.llm.stream({ system: 's', messages: [{ role: 'user', content: 'unowned' }] });
+
+    await runOperationProfile(operationA, async () => {
+      for await (const _ of stream) void _;
+    });
+
+    expect(seen.map(route => route.model)).toEqual([STATIC_MODEL_SPEC]);
+    expect(issuer).toEqual([WORKSPACE_RUN_ID]);
+  });
+
+  test('a delayed generator retains its issuing profile for every continuation and cleanup', async () => {
+    const { db, dbPath } = await workspace();
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
+    const profile = await rt.ensureProfile?.();
+
+    if (!profile) throw new Error('runtime profile resolution is required');
+    const operation = captureOperationProfile({ actor: rt.actor, profile, inputs: null, runId: 'A', turnId: 'A' });
+    const seen = stubModels(rt);
+
+    const events = operationProfileStream((async function* () {
+      try {
+        yield await rt.llm.complete('first A request');
+        yield await rt.llm.complete('second A request');
+      } finally {
+        await rt.llm.complete('A cleanup');
+      }
+    })(), operation);
+
+    rt.profiles?.refine({ plane: staticModelPlane() });
+    await events.next();
+    await rt.llm.complete('B between A continuations');
+    await events.next();
+    await events.return(undefined);
+
+    expect(seen.map(route => route.model)).toEqual([
+      'openai-compat/fake-model', STATIC_MODEL_SPEC, 'openai-compat/fake-model', 'openai-compat/fake-model',
+    ]);
+  });
+
+  test('revoking authority refuses later requests without mutating an issued request', async () => {
+    const { db, dbPath } = await workspace();
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
+    const started = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    rt.setModelForRoute?.(route => ({
+      async *stream() { yield ''; },
+      complete: async () => {
+        started.resolve();
+        await held.promise;
+
+        return route.model;
+      },
+    }));
+    const issued = rt.llm.complete('issued before revocation');
+    await started.promise;
+    rt.setProfileResolver?.(async () => { throw new Error('credential revoked'); });
+    await expect(rt.llm.complete('issued after revocation')).rejects.toThrow('credential revoked');
+    held.resolve();
+    expect(await issued).toBe('openai-compat/fake-model');
   });
 });
 

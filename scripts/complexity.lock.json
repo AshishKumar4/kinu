@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-12",
-  "files": 2149,
-  "functions": 53579,
+  "measuredAt": "2026-09-13",
+  "files": 2159,
+  "functions": 53819,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -166,16 +166,16 @@
       "complexity": 40
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
-      "complexity": 39
-    },
-    {
       "key": "scripts/axis-ergonomics/report.ts#score",
       "complexity": 39
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
       "complexity": 39
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
+      "complexity": 38
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",

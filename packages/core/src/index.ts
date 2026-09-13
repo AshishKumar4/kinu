@@ -1732,6 +1732,13 @@ export {
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
 
+export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from './evolution/scaffold-candidate';
+
+export { captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
+  withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
+
+export { createRoutedModelLane } from './profiles/model-lane';
+
 export {
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,
 } from './orchestrator/background-tools';
