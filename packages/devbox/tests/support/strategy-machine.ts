@@ -468,6 +468,25 @@ export class ContainerDisk {
     if (this.stopped) throw new ContainerStopped(what);
   }
 
+  /** Successful termination loses every container-local byte: files, trees,
+   *  mounts, overlays and the whiteouts between them. Recorded call history
+   *  and configured faults stay — they are the test's memory, not the
+   *  container's — and so do the lifecycle flags: a stopped disk is gone,
+   *  not alive-again. The disk object itself survives so references the
+   *  caller already holds observe the loss rather than a swap. */
+  discardLocalState(): void {
+    this.files.clear();
+    this.dirs.clear();
+    this.dirs.add(DEVBOX_WORKDIR);
+    this.dirs.add(DEVBOX_RUNTIME_DIR);
+    this.mounts.clear();
+    this.overlays.clear();
+    this.trees.clear();
+    this.mountServed.clear();
+    this.whiteouts.clear();
+    this.usedBytes = 0;
+  }
+
   /** Charge `delta` bytes against the quota; refuse, effect-free, past it. */
   charge(delta: number, path = '(tree)'): void {
     // tmpfs lives in memory rather than on the container disk, and layer
@@ -1741,17 +1760,29 @@ function snapshotChainArm(): ConformanceArm {
       this.#storage = this.#build();
     }
 
-    replaceContainer(): void {
-      this.disk.dead = true;
-      this.disk = new ContainerDisk();
+    /** A stopped container loses everything that lived on its own disk —
+     *  every byte, every mount, the boot-local stamp and whatever a commit
+     *  had staged — while the durable store, the DO's row, the recorded
+     *  calls and the configured faults carry on. Replacement clears the
+     *  same set; a stopped boot just keeps its flags on the same disk. */
+    #loseContainerLocalState(): void {
+      this.disk.discardLocalState();
       this.#seedStamp = undefined;
       this.#publishing = undefined;
+      this.#packed = undefined;
+    }
+
+    replaceContainer(): void {
+      this.#loseContainerLocalState();
+      this.disk.dead = true;
+      this.disk = new ContainerDisk();
       // The old boot's held commit keeps the old gate; the replacement gets its own.
       this.#finalizeGate = new OneShotGate();
       this.#storage = this.#build();
     }
 
     stop(): void {
+      this.#loseContainerLocalState();
       this.disk.stopped = true;
     }
 
