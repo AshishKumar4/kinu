@@ -762,7 +762,7 @@ function chainShell(exec: ContainerExec, root: string) {
 
   return {
     /** `/proc/mounts` as the container sees it. */
-    readMounts: async (): Promise<string> => (await exec('cat /proc/mounts')).stdout,
+    readMounts: async (): Promise<string> => await must('reading the mount table', 'cat /proc/mounts'),
     /** Does this container path exist? A mount line without a usable upper is
      *  a box whose writes have nowhere to land. */
     pathExists: async (path: string): Promise<boolean> =>
@@ -1235,7 +1235,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const storedDelta: ChainDeltaLayer | undefined = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
     const deltaId = storedDelta?.id ?? generation.base.id;
     const deltaSource = mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaObjectKey(root, deltaId));
-    const blockToken = `${generation.base.id}:${mountedGeneration ?? 'unobserved'}`;
+    const blockToken = `${generation.base.id}:${deltaId}:${mountedGeneration ?? 'unobserved'}`;
     const haveDelta = storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA? The stamp is written only by the
@@ -1357,10 +1357,29 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const delta = findMount(mounts, deltaLayer);
 
     if (block?.source !== `devbox-block:${token}` || block.fstype !== 'fuse.devbox-block'
+      || findMount(mounts, CHAIN_STORE_MOUNT) === undefined
       || base?.source !== baseSource || !base.fstype.includes('squashfuse')
       || delta?.source !== deltaSource || !delta.fstype.includes('squashfuse')) {
       throw new Error('composed lower mounts or generation do not match; readiness refused');
     }
+  };
+
+  const assertStandingComposition = async (mounts: string, state: ChainState | null): Promise<void> => {
+    const block = findMount(mounts, blockLower);
+
+    if (block === undefined) {
+      if (state?.deltaFormat === 'chunked' && deltaLayerServed(mounts, state.base.id)) throw new Error('incomplete composed mounts; readiness refused');
+
+      return;
+    }
+
+    const [prefix, baseId = '', deltaId = '', runtime] = block.source.split(':');
+
+    if (prefix !== 'devbox-block' || !isChainId(baseId) || !isChainId(deltaId)
+      || runtime !== ((await ports.containerGeneration?.()) ?? 'unobserved')) throw new Error('composed mount generation mismatch');
+    assertComposedMounts(mounts, `${baseId}:${deltaId}:${runtime}`,
+      mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, baseId)),
+      mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaObjectKey(root, deltaId)), deltaLayerMountPoint(baseId));
   };
 
   const attachChain = async (generation: ChainGeneration): Promise<AttachOutcome> => {
@@ -1590,13 +1609,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const mounts = await shell.readMounts();
 
     if (isOverlayMounted(mounts, DEVBOX_WORKDIR)) {
-      if (state?.deltaFormat === 'chunked' && deltaLayerServed(mounts, state.base.id)) {
-        const block = findMount(mounts, blockLower);
-        const runtime = await ports.containerGeneration?.();
-
-        if (block?.source !== `devbox-block:${state.base.id}:${runtime ?? 'unobserved'}`
-          || findMount(mounts, lowerBase) === undefined) throw new Error('incomplete composed mounts; readiness refused');
-      }
+      await assertStandingComposition(mounts, state);
 
       ports.log(`${DEVBOX_WORKDIR} already attached — attach skipped`);
 

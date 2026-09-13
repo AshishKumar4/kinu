@@ -1,5 +1,6 @@
 mod index;
 mod model;
+mod namespace;
 mod storage;
 
 use crate::index::invalid;
