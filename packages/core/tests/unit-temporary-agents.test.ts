@@ -10,6 +10,7 @@
 //   visible while it runs, historical afterwards, never in the durable roster;
 //   the child is a real agent, so it recurses until the depth cap removes it.
 import { Database } from 'bun:sqlite';
+import type { ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -105,6 +106,7 @@ interface Scene {
   calls: string[];
   /** Every assignment body handed to a child, whole. */
   briefs: string[];
+  assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
   /** This actor's REAL event log. `published()` counts the `subordinate_report`
    *  rows on it, which is how "a settled answer never reaches the rail" is a
    *  measurement rather than a stub's opinion. */
@@ -147,12 +149,14 @@ function makeScene(options: {
   duringAssignment?: () => Promise<void>;
   /** Leave the temporary port UNWIRED — the actor with no child substrate. */
   withoutTemporary?: boolean;
+  originContext?: ModelMessage[];
 } = {}): Scene {
   const roster = makeRosterStore();
   roster.ensureSchema();
   const { vfs: files } = createMemoryVfs();
   const calls: string[] = [];
   const briefs: string[] = [];
+  const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
   let sequence = 0;
   const wakes: number[] = [];
   const eventDb = new Database(':memory:');
@@ -182,6 +186,7 @@ function makeScene(options: {
     async assign(name, input) {
       calls.push(`assign:${name}`);
       briefs.push(input.body);
+      assignments.push(input);
 
       if (options.fail === 'assign') throw new Error('admission refused');
       await options.duringAssignment?.();
@@ -219,6 +224,7 @@ function makeScene(options: {
     createName: (role) => `${role}-a1b2c3`,
     now: () => NOW,
     inheritedContext: () => [],
+    originContext: () => options.originContext ?? [],
     ownMission: () => 'Keep the release train moving.',
     broadcast: () => { /* no listeners in this scene */ },
     broadcastTask: () => { /* no listeners in this scene */ },
@@ -246,6 +252,7 @@ function makeScene(options: {
     roster,
     calls,
     briefs,
+    assignments,
     files,
     published: () => log.pending().filter((event) => event.variant === 'subordinate_report').length,
     wakes,
@@ -329,6 +336,44 @@ const FailedOutcome = v.object({
 });
 
 describe('a task-lifetime hire returns one completed answer', () => {
+  test('a forked task hire answers and releases with its birth-time conversation intact', async () => {
+    const conversation: ModelMessage[] = [{ role: 'user', content: 'The ledger uses integer cents.' }];
+    const scene = makeScene({ originContext: conversation });
+    const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.', context: 'inherit' });
+    conversation[0] = { role: 'user', content: 'Changed after dispatch.' };
+    await run.ready;
+    expect(scene.assignments[0]?.inheritedContext).toEqual({ kind: 'fork', messages: [
+      { id: 'ctx-0', role: 'user', content: 'The ledger uses integer cents.', createdAt: 0 },
+    ] });
+    await scene.report({ content: 'The ledger balances.' });
+    expect(await run.settled).toMatchObject({ status: 'completed', answer: 'The ledger balances.', transcript: 'kept' });
+    expect(scene.roster.list()).toEqual([]);
+    expect(scene.calls).toEqual([`spawn:${TEMP_NAME}`, `assign:${TEMP_NAME}`, `dismiss:${TEMP_NAME}:true`]);
+  });
+
+  test('a forked hire persists the bounded dispatch conversation before birth and re-drives that copy', async () => {
+    const conversation: ModelMessage[] = Array.from({ length: 51 }, () => ({ role: 'user', content: 'Earlier turn.' }));
+    conversation.push({ role: 'assistant', content: 'A'.repeat(1000) + 'B'.repeat(1000) });
+    const scene = makeScene({ fail: 'spawn', originContext: conversation });
+    await expect(scene.call({ action: 'hire', role: 'auditor', mission: 'Continue the audit.', context: 'inherit' }))
+      .rejects.toMatchObject({ code: 'unavailable' });
+    const inherited = scene.roster.requireExisting('auditor-a1b2c3').birth?.assignment?.inheritedContext;
+    expect(inherited?.kind).toBe('fork');
+
+    if (inherited?.kind !== 'fork') throw new Error('No fork survived admission.');
+    expect(inherited.messages).toHaveLength(51);
+    expect(inherited.messages[0]).toEqual({ id: 'ctx-omitted', role: 'system', createdAt: -1,
+      content: '(2 earlier messages omitted from inherited context — durable state lives in the workspace files)' });
+    expect(inherited.messages.at(-1)).toEqual({ id: 'ctx-49', role: 'assistant', createdAt: 49,
+      content: 'A'.repeat(800) + '\n[... 400 chars omitted from the middle ...]\n' + 'B'.repeat(800) });
+    conversation.splice(0, conversation.length, { role: 'user', content: 'After the interruption.' });
+    await scene.recover(true);
+    expect(scene.assignments[0]?.inheritedContext).toEqual(inherited);
+    expect(scene.roster.requireExisting('auditor-a1b2c3').birth).toBeNull();
+    await scene.deps.team!.assign({ name: 'auditor-a1b2c3', task: 'One more question.', mode: 'build' });
+    expect(scene.assignments[1]?.inheritedContext?.kind).not.toBe('fork');
+  });
+
   // THE PAIR THE LIFETIME FIELD EXISTS FOR, on one scene: the same action, the
   // same role, the same mission, and the only difference between "an answer
   // came back and no colleague stayed" and "a colleague stayed" is `lifetime`.

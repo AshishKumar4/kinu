@@ -27,7 +27,7 @@
  */
 
 import type { ToolCallRecord } from '../evolution/types';
-import type { HeadFileChange, HeadFileChangeSet, HeadId } from '../types/heads';
+import type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage } from '../types/heads';
 import type { EvaluationGrounding } from '../types/evaluation';
 import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
@@ -35,7 +35,7 @@ import type { BuiltinToolName } from '../tools/registry';
 import type { LoopOrigin } from '../scaffold/loop-origin';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
-export type { HeadFileChange, HeadFileChangeSet, HeadId };
+export type { HeadFileChange, HeadFileChangeSet, HeadId, SerializedMessage };
 
 /** What kind of merging the parent wants — drives the merge prompt. */
 export type MergeStrategy =
@@ -66,16 +66,6 @@ export interface HeadBudget {
   readonly maxWallClockMs?: number;
   /** Epoch ms when the head was spawned; used for wall-clock enforcement. */
   readonly spawnedAt: number;
-}
-
-/** A snapshotted message from the parent's conversation, given to each head. */
-export interface SerializedMessage {
-  readonly id: string;
-  readonly role: 'system' | 'user' | 'assistant' | 'tool';
-  readonly content: string;
-  readonly createdAt: number;
-  /** For 'tool' role: which tool produced this result. */
-  readonly toolName?: string;
 }
 
 /** Everything a branching head needs to start working. */

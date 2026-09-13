@@ -6,6 +6,7 @@ import { diagnostics } from '../obs/index';
 import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
+import { SubordinateInheritedContextSchema } from '../types/subordinates';
 
 const SubordinateSeedSchema = v.strictObject({
   name: v.pipe(v.string(), v.nonEmpty()),
@@ -26,7 +27,7 @@ export const SubordinateBirthSchema = v.strictObject({
     body: v.pipe(v.string(), v.nonEmpty()),
     mode: v.custom<WorkMode>(isWorkMode),
     deliverable: v.optional(v.string()),
-    inheritedContext: v.optional(v.string()),
+    inheritedContext: v.optional(SubordinateInheritedContextSchema),
   })),
 });
 

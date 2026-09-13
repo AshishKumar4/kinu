@@ -16,6 +16,7 @@
  */
 
 import type { WorkMode } from '../../types/turn';
+import type { SubordinateInheritedContext } from '../../types/subordinates';
 import type { JsonObject, JsonValue } from '../../utils/json';
 
 // ── Trust ────────────────────────────────────────────────────────
@@ -217,7 +218,7 @@ export interface SubordinateTaskPayload {
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
-  inherited_context?: string;
+  inherited_context?: SubordinateInheritedContext;
   kinu_mode: WorkMode;
   creation_id?: string;
 }

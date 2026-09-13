@@ -4,7 +4,7 @@ import { createTestActor, makeSqlExec } from './helpers';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { actorReferenceOf } from '../src/identity/actor-handle';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { finishSubordinateBirth, recoverSubordinateLifecycles } from '../src/subordinates/birth';
+import { finishSubordinateBirth, recoverSubordinateLifecycles, type SubordinateBirth } from '../src/subordinates/birth';
 import { admitSubordinateTask, describeSubordinateHandoff, type SubordinateRuntime } from '../src/subordinates/support';
 import { EventLog } from '../src/events/hub/log';
 import { initEventsHubTables } from '../src/events/hub/schema';
@@ -64,17 +64,38 @@ function setup() {
     },
   };
 
-  const admit = (creationId: string) => roster.create({
+  const admit = (creationId: string, assignment: SubordinateBirth['assignment'] = { body: 'Read the source.', mode: 'plan' }) => roster.create({
     name: 'reader', actorReference: null, deleteRequested: false,
-    birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable' }, assignment: { body: 'Read the source.', mode: 'plan' } },
+    birth: { creationId, seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable' }, assignment },
     createdBy: 'orchestrator', status: 'working', currentTask: 'Read the source.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null,
   });
 
-  return { database, child, childActor, directory, main, roster, runtime, admit,
+  return { database, child, childActor, directory, main, roster, runtime, admit, events,
     interruptSeed: () => { interruptSeed = true; }, interruptAssignment: () => { interruptAssignment = true; }, interruptDeletion: () => { interruptDeletion = true; } };
 }
 
 describe('admitted subordinate lifecycle', () => {
+  test('a cold birth re-drive retains the fork and admits its first assignment once', async () => {
+    const fixture = setup();
+
+    const assignment: NonNullable<SubordinateBirth['assignment']> = {
+      body: 'Read the source.', mode: 'plan', inheritedContext: { kind: 'fork', messages: [
+        { id: 'parent-1', role: 'user', content: 'The reader owns cancellation.', createdAt: 1 },
+      ] },
+    };
+
+    fixture.admit('fork-birth', assignment);
+    fixture.interruptAssignment();
+    await expect(finishSubordinateBirth(fixture.roster, fixture.runtime, 'reader')).rejects.toMatchObject({ code: 'unavailable' });
+    const cold = new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main);
+    expect(cold.requireExisting('reader').birth?.assignment).toEqual(assignment);
+    await recoverSubordinateLifecycles(cold, fixture.runtime);
+    const delivered = fixture.events.pending({ variant: 'subordinate_task' });
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]?.payload).toMatchObject({ inherited_context: assignment.inheritedContext });
+    expect(cold.requireExisting('reader').birth).toBeNull();
+  });
+
   test('a lost seed acknowledgement recovers the same actor after a cold roster open', async () => {
     const fixture = setup();
     fixture.admit('birth-one');

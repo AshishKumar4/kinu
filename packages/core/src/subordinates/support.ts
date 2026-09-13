@@ -37,6 +37,9 @@ import type {
 } from '../delegation/agents-tool';
 import { SUBORDINATE_LIFETIMES, type SubordinateLifetime, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
+import { subordinateBirthContext, type SubordinateInheritedContext } from '../types/subordinates';
+import type { ModelMessage } from 'ai';
+import { inheritedContextFromHistory } from '../orchestrator/heads-support';
 
 export interface SubordinateLiveStatus {
   lastActivity: number | null;
@@ -407,12 +410,24 @@ function windowMessage(content: string, budget: number): string {
   return `${content.slice(0, head)}${marker(cut)}${tail > 0 ? content.slice(-tail) : ''}`;
 }
 
+/** Only the birth assignment carries a fork; later tasks have no new prefix. */
+export function subordinateForkContext(context?: SubordinateInheritedContext): SerializedMessage[] {
+  return context?.kind === 'fork' ? context.messages : [];
+}
+
+export function subordinateTurnContext(log: EventLog, turnId: string): SerializedMessage[] {
+  return log.query({ turn_id: turnId, variant: 'subordinate_task' }).flatMap((event) =>
+    event.variant === 'subordinate_task' && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
+      ? subordinateForkContext(event.payload.inherited_context)
+      : []);
+}
+
 export function admitSubordinateTask(log: EventLog, input: {
   fromWorkspace: string;
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
-  inheritedContext?: string;
+  inheritedContext?: SubordinateInheritedContext;
   creationId?: string;
   mode: WorkMode;
   now: number;
@@ -420,7 +435,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   const fromWorkspace = requiredText(input.fromWorkspace, 'fromWorkspace');
   const body = requiredText(input.body, 'body');
   const deliverable = optionalText(input.deliverable);
-  const inheritedContext = optionalText(input.inheritedContext);
+  const inheritedContext = input.inheritedContext;
 
   const payload = {
     from_workspace: fromWorkspace,
@@ -592,7 +607,7 @@ export interface SubordinateRuntime {
     body: string;
     mode: WorkMode;
     deliverable?: string;
-    inheritedContext?: string;
+    inheritedContext?: SubordinateInheritedContext;
     creationId?: string;
   }): Promise<SubordinateHandoff>;
   status(name: string): Promise<SubordinateLiveStatus>;
@@ -669,6 +684,8 @@ export function createTeamToolDeps(deps: {
   createName(role: string): string;
   now(): number;
   inheritedContext(): SerializedMessage[];
+  /** The live conversation the swarm dispatch reads, including this turn. */
+  originContext?(): readonly ModelMessage[];
   /** THIS actor's own mission — the workspace's purpose as it knows it. What
    *  an owner-created additional agent inherits when the owner gave it none,
    *  because an agent added to a workspace is there for what the workspace is
@@ -721,6 +738,7 @@ export function createTeamToolDeps(deps: {
     role?: RoleId;
     tier?: TierId;
     mission?: string;
+    inheritedContext?: SerializedMessage[];
   }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
     name: string;
     displayName: string;
@@ -782,7 +800,9 @@ export function createTeamToolDeps(deps: {
     if (!ownerCreated) {
       if (mode === null) throw new KinuError('bad_input', 'A subordinate task requires a work mode.');
       assignment = { body: mission, mode };
-      const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+
+      const inheritedContext = subordinateBirthContext(input.inheritedContext,
+        () => renderSubordinateInheritedContext(deps.inheritedContext()));
 
       if (inheritedContext) assignment.inheritedContext = inheritedContext;
     }
@@ -805,6 +825,9 @@ export function createTeamToolDeps(deps: {
   };
 
   const team: TeamToolDeps = {
+    inheritedContext: () => deps.originContext
+      ? inheritedContextFromHistory(deps.originContext())
+      : deps.inheritedContext(),
     delegation: deps.delegation,
     snapshot: () => deps.roster.list(),
     list: async () => deps.roster.list(),
@@ -855,7 +878,9 @@ export function createTeamToolDeps(deps: {
 
       try {
         const deliverable = optionalText(input.deliverable);
-        const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+
+        const inheritedContext = subordinateBirthContext(undefined,
+          () => renderSubordinateInheritedContext(deps.inheritedContext()));
 
         const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
           body: task,

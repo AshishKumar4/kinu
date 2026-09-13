@@ -604,6 +604,12 @@ export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubor
 
 export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
 
+export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } from './types/subordinates';
+
+export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
+
+export { inheritedAsModelMessage } from './heads/head-inference';
+
 export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
 // open-38: ONE physical workspace SQLite for every logical actor. The host that

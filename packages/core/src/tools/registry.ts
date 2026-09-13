@@ -404,12 +404,8 @@ export const DELEGATION_FRAME =
  * which rung a task wants, and the half each rung's doctrine composes from here
  * rather than wording for itself.
  *
- * Keyed by ACTION rather than written as one paragraph covering both, because
- * the two rungs need OPPOSITE instructions and a rule the model has to apply
- * itself gets applied to the wrong one. "You did not see this conversation, so
- * restate everything" is true of a hire and FALSE of a search node running under
- * `context:'inherit'`; "build on what you already know" is true of that node and
- * false of a hire. The shape is the deepseek
+ * Keyed by ACTION because a search's preset chooses its context, while a hire
+ * starts fresh unless the caller requests inheritance. The shape is the deepseek
  * harness's (deepseek-ai/deepseek-harness 0.1.0-rc.7, tool-subagent/src/index.ts
  * :213-243), where a single provider-declared `inheritsParentContext` boolean
  * selects between two tool descriptions AND two prompt-parameter descriptions,
@@ -429,12 +425,13 @@ export const DELEGATION_FRAME =
  * (strategy/swarm.ts, SWARM_CONTEXTS): `inherit` hands it the parent's conversation
  * VERBATIM as one cacheable prefix per branch point, `fresh` hands it the
  * engine-authored seed and its focus and nothing else, and each preset takes the
- * value its search needs. A hire gets renderSubordinateInheritedContext's
- * bounded digest — 8 messages, 9600 chars, per-message cuts disclosed
- * (subordinates/support.ts) — plus its role and mission. So the difference is
- * real and it is a RATIO, not zero against everything: "it cannot see anything
- * you saw" would be false too.
+ * value its search needs. A fresh hire gets renderSubordinateInheritedContext's
+ * bounded digest plus its role and mission. An inherited hire gets the shared
+ * heads-support conversation window, frozen into its birth assignment.
  */
+export const DELEGATION_CONTEXT_DESCRIPTION =
+  'Under `inherit` your recent turns arrive as its conversation, so it already knows what you know; under `fresh` it starts from the brief. Fork when the work needs the conversation you share; use fresh when your own framing is the thing in question.';
+
 export const DELEGATION_INHERITANCE = {
   swarm: {
     rung:
@@ -444,9 +441,11 @@ export const DELEGATION_INHERITANCE = {
   },
   hire: {
     rung:
-      'A hire starts FRESH: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
+      'A hire with `context:"fresh"` (or no context set) gets its role, its mission and a short digest of your recent messages. '
+      + DELEGATION_CONTEXT_DESCRIPTION
+      + ' Set `context:"inherit"` to fork at birth; later turns do not take another copy of your conversation.',
     brief:
-      'It did not watch this conversation and gets only a short digest of your recent messages, so state the goal, the constraints and what finished looks like here rather than assuming shared ground.',
+      'State the goal, the constraints and what finished looks like here. With the default `context:"fresh"` it gets only a short digest of your recent messages; `context:"inherit"` also hands it your recent turns as its conversation.',
   },
 } as const;
 

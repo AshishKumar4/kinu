@@ -22,6 +22,11 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
  *  context over long sessions. */
 export const INHERITED_CONTEXT_CAP = 50;
 
+/** Detach a delegation's birth-time conversation from its parent's live turn. */
+export function freezeInheritedContext<T>(messages: readonly T[]): readonly T[] {
+  return Object.freeze(structuredClone([...messages]));
+}
+
 /** Narrow an arbitrary stored role to the SerializedMessage union (anything
  *  unrecognized reads as assistant output). */
 export function narrowInheritedRole(role: string): SerializedMessage['role'] {
@@ -39,6 +44,8 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
   if (text.success) return text.output;
 
   if (Array.isArray(content)) {
+    if (content.every((part) => part.type === 'text')) return content.map((part) => part.text).join('');
+
     return JSON.stringify(content.map((part) =>
       part.type === 'file'
         ? { type: 'file', mediaType: part.mediaType, filename: part.filename }

@@ -44,6 +44,7 @@ import type { SubordinateRuntime } from './support';
 import { finishSubordinateBirth, type SubordinateBirth } from './birth';
 import {
   TEMPORARY_LIFETIME,
+  subordinateBirthContext,
   type TemporaryAgentPort, type TemporaryRunOutcome,
 } from '../types/subordinates';
 
@@ -323,7 +324,7 @@ export function createTemporaryAgentPort(deps: {
         body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
       };
 
-      const inherited = deps.renderInheritedContext();
+      const inherited = subordinateBirthContext(request.inheritedContext, deps.renderInheritedContext);
 
       if (inherited) assignment.inheritedContext = inherited;
 
