@@ -28,7 +28,7 @@ import {
 } from '@kinu.run/core';
 import { testOwner, type DeviceFrame } from './helpers/user-do';
 import { WORKSPACE, OTHER_WORKSPACE, daemon, deviceHarness } from './helpers/device-harness';
-import { CapabilityDeniedError } from '../src/user/workspace-capability';
+import { CapabilityDeniedError } from '@kinu.run/core';
 
 /** The shipped daemon's own sandbox module: the statuses its probe can answer
  *  and the HELLO block it builds from one. Loaded rather than restated, so a

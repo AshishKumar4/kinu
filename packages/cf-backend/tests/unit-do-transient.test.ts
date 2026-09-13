@@ -9,7 +9,7 @@
 // two cannot drift apart.
 import { describe, test, expect } from 'bun:test';
 import { PLATFORM_CATALOG } from '@kinu.run/core';
-import { retryTransientDO, classifyTransientDO } from '../src/lib/do-rpc';
+import { retryTransientDO, classifyTransientDO } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 
 const USER = '0123456789abcdef0123456789abcdef';

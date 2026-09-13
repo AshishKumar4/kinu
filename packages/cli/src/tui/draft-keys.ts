@@ -8,7 +8,7 @@
 import type { RefObject } from 'react';
 import type { KeyEvent, TextareaRenderable } from '@opentui/core';
 import type { TuiActionId } from './actions';
-import type { InputEffect, InputMachineEvent } from './input-state';
+import type { InputEffect, InputMachineEvent } from '@kinu.run/core';
 import type { ActiveSurface } from './chat-app';
 
 export interface PromptHistoryCursor {

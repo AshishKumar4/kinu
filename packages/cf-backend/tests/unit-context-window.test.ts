@@ -3,7 +3,7 @@
 import { describe, test, expect } from "bun:test";
 import { userCredentialSource } from './helpers/user-credentials';
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from "../src/providers/workers-ai-catalog";
+import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from "@kinu.run/core";
 import {
   catalogModelInfo,
   contextWindowForModel,

@@ -6,9 +6,9 @@ import {
 } from '../src/auth/store';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { makeKv, type FakeKv } from './helpers/kv';
-import { sha256Hex } from '../src/lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 interface TestNamespace<Stub> {
   idFromName(name: string): string;

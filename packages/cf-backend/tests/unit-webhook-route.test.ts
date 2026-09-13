@@ -20,7 +20,7 @@ import { makeKv, type FakeKv } from './helpers/kv';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRoutePath,
-} from '../src/events/webhook-route';
+} from '@kinu.run/core';
 
 // The route's module graph reaches `cloudflare:email` through `agents`, so the
 // stub has to be installed before it loads.

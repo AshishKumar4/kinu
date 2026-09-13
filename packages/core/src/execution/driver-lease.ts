@@ -1,0 +1,302 @@
+/**
+ * The single-driver lease — which OS process is allowed to DRIVE one local
+ * conversation.
+ *
+ * ## Why this exists
+ *
+ * A local workspace is one SQLite file, and more than one process can open it:
+ * the resident scheduler daemon (`kinu daemon run`, a detached child), a
+ * foreground `kinu daemon tick`, and every interactive `kinu chat` / TUI. They
+ * all drive the same durable work — the trigger registry, the event log's
+ * pending drain, the queued-turn pump.
+ *
+ * The orchestrator's drain is safe against a concurrent drain *inside one
+ * process* and says so: `markConsumed` is synchronous, so a second drain on the
+ * same event loop sees the events already bound. Across two processes that
+ * argument does not hold. `EventLog.markConsumed` is a bare
+ * `UPDATE agent_log SET turn_id=?, step_idx=?, consumed_at=? WHERE id=?` with no
+ * `consumed_at IS NULL` guard, so two processes that both read `pending()` both
+ * bind the same rows and both deliver them — one external event becomes two
+ * turns, and the second one's reply channel points at a turn nobody is watching.
+ *
+ * So the mutual exclusion has to live one level up, at "who may drive", and it
+ * has to be durable, because the participants do not share memory.
+ *
+ * ## Why there is no expiry
+ *
+ * A lease with a deadline answers "is the holder still working?" by guessing.
+ * An agent turn legitimately runs for a very long time, so any deadline short
+ * enough to recover from a crash is short enough to steal the lease from a
+ * healthy turn mid-flight, which is the double-drive this module exists to
+ * prevent. The row therefore carries NO timestamp at all — not even for
+ * diagnostics, so that expiry cannot be added without changing the schema.
+ *
+ * Recovery uses the fact that actually distinguishes a crash from slow work:
+ * the holder's process no longer exists. That is a same-machine question with
+ * an exact answer, and it is asked through {@link LeaseProcess} so a test can
+ * script two process-shaped participants without spawning either.
+ *
+ * ## Preemption is one-directional
+ *
+ * A person waiting at a prompt outranks background maintenance, so an
+ * interactive process may take the lease from a LIVE daemon. The reverse is
+ * never allowed: the daemon exists to run work while nobody is watching, and a
+ * daemon that interrupted a live interactive owner would interleave its
+ * programmatic turns with the user's own — the thing that must not happen.
+ * A daemon meeting a live interactive holder waits for the next pass instead.
+ *
+ * ## One public surface
+ *
+ * {@link DriverLeaseHold} is the whole entry: take it, ask whether it is still
+ * mine, give it back. The three primitives it composes and the OS liveness seam
+ * are module-private, because an export nothing outside this file imports is an
+ * export the wired gate is right to refuse. A suite that has to read the row
+ * from a SECOND connection — the observation a rival process makes, and the
+ * only one that proves exclusion — does it through `tests/driver-lease-probe.ts`
+ * rather than through a surface production never asks for.
+ */
+import { KinuError, refusalOf, type Refusal } from "../obs/index";
+import { type RawSqlExec, type SqlExecutor } from '../types/primitives';
+
+/** One row, one conversation: the lease is per workspace database. */
+const LEASE_ROW_ID = 'local';
+
+const DRIVER_LEASE_DDL = `
+CREATE TABLE IF NOT EXISTS driver_lease (
+  id    TEXT PRIMARY KEY,
+  pid   INTEGER NOT NULL,
+  token TEXT    NOT NULL,
+  kind  TEXT    NOT NULL CHECK(kind IN ('interactive', 'daemon'))
+)`;
+
+/**
+ * What a driver is. The two differ only in who may take the lease from whom —
+ * see the preemption rule in this module's header.
+ */
+export type DriverKind = 'interactive' | 'daemon';
+
+/** The lease as its holder sees it. `token` is the capability: every gated
+ *  operation presents it, and only it can release the row. */
+interface DriverLease {
+  readonly token: string;
+  readonly kind: DriverKind;
+  readonly pid: number;
+}
+
+/** Who holds the lease right now, for a refusal that names someone. */
+export interface DriverLeaseHolder {
+  readonly pid: number;
+  readonly kind: DriverKind;
+}
+
+/**
+ * This process's identity, and whether some other pid on this machine still
+ * exists.
+ *
+ * Injected rather than called directly so the two-process behaviour is testable
+ * without two processes: a test supplies distinct `pid`s and decides which of
+ * them is alive, which is the only thing the real implementation can tell us.
+ */
+export interface LeaseProcess {
+  readonly pid: number;
+  isAlive(pid: number): boolean;
+}
+
+/** A lease that was not granted, and who has it. Named because it travels on
+ *  its own: a driver that stood down reports the holder to whoever asked. */
+export interface DriverLeaseRefusal {
+  readonly refused: Refusal;
+  readonly holder: DriverLeaseHolder;
+}
+
+type DriverLeaseResult = { readonly held: DriverLease } | DriverLeaseRefusal;
+
+export interface DriverLeaseDeps {
+  /** Tagged-template SQL over this workspace's own database. */
+  readonly sql: SqlExecutor;
+  /** DDL channel, so a database that never ran the workspace schema still
+   *  gets the table on first use — a branch worker or a fixture. */
+  readonly execRaw: RawSqlExec;
+  readonly proc: LeaseProcess;
+}
+
+interface LeaseRow {
+  pid: number;
+  token: string;
+  kind: string;
+}
+
+function initDriverLeaseTable(execRaw: RawSqlExec): void {
+  execRaw(DRIVER_LEASE_DDL);
+}
+
+function readRow(sql: SqlExecutor): DriverLeaseHolderRow | null {
+  const rows = sql<LeaseRow>`SELECT pid, token, kind FROM driver_lease WHERE id = ${LEASE_ROW_ID}`;
+  const row = rows[0];
+
+  if (!row) return null;
+  // A row whose kind this build does not recognise is treated as a live claim
+  // by an unknown driver rather than ignored: the safe reading of "someone
+  // wrote something here" is that someone is driving.
+  const kind: DriverKind = row.kind === 'interactive' ? 'interactive' : 'daemon';
+
+  return { pid: Number(row.pid), token: row.token, kind };
+}
+
+interface DriverLeaseHolderRow extends DriverLeaseHolder {
+  readonly token: string;
+}
+
+/**
+ * Take the lease, or refuse and say who has it.
+ *
+ * The write is a compare-and-swap on the token we read, and the outcome is
+ * decided by re-reading rather than by a row count — the SQL seams here return
+ * no row count for a write, and a re-read is the honest question anyway: after
+ * two processes race, exactly one of them finds its own token in the row.
+ */
+function acquireDriverLease(
+  deps: DriverLeaseDeps,
+  kind: DriverKind,
+): DriverLeaseResult {
+  const proc = deps.proc;
+  initDriverLeaseTable(deps.execRaw);
+  const current = readRow(deps.sql);
+  const token = crypto.randomUUID();
+
+  if (current && current.pid !== proc.pid) {
+    // The whole preemption rule, in one place: a live holder yields only to an
+    // interactive process taking over from a daemon. A dead holder yields to
+    // anyone, which is the only recovery path and the reason no deadline exists.
+    const alive = proc.isAlive(current.pid);
+    const mayTake = !alive || (kind === 'interactive' && current.kind === 'daemon');
+
+    if (!mayTake) {
+      return {
+        // `unavailable`, not `denied`: nothing is forbidden here, the driver is
+        // simply taken. The caller's next pass is the retry, and a refusal that
+        // read as a permission failure would invite someone to add a bypass.
+        refused: refusalOf(new KinuError(
+          'unavailable',
+          `the ${current.kind} driver in process ${String(current.pid)} is running this conversation; `
+          + `a ${kind} driver does not interrupt it`,
+        )),
+        holder: { pid: current.pid, kind: current.kind },
+      };
+    }
+  }
+
+  // `void` because these are WRITES: the executor returns rows only for reads,
+  // and the outcome is read back below rather than inferred from a return value.
+  if (current) {
+    void deps.sql`
+      UPDATE driver_lease SET pid = ${proc.pid}, token = ${token}, kind = ${kind}
+      WHERE id = ${LEASE_ROW_ID} AND token = ${current.token}`;
+  } else {
+    void deps.sql`
+      INSERT INTO driver_lease (id, pid, token, kind)
+      VALUES (${LEASE_ROW_ID}, ${proc.pid}, ${token}, ${kind})
+      ON CONFLICT(id) DO NOTHING`;
+  }
+
+  const settled = readRow(deps.sql);
+
+  if (settled?.token === token) {
+    return { held: { token, kind, pid: proc.pid } };
+  }
+
+  // Someone else's write landed between our read and ours. Report THEM, not a
+  // generic failure: the caller's next pass is the retry.
+  const holder = settled ?? { pid: proc.pid, kind, token };
+
+  return {
+    refused: refusalOf(new KinuError(
+      'unavailable',
+      `another ${holder.kind} driver (process ${String(holder.pid)}) claimed this conversation first`,
+    )),
+    holder: { pid: holder.pid, kind: holder.kind },
+  };
+}
+
+/**
+ * Whether this token is still the live claim.
+ *
+ * Called before every gated operation rather than once at the start, because
+ * the point of preemption is that a lease can be lost while its holder is
+ * between operations. A holder that was preempted must stop driving at the
+ * next boundary, not at the end of its pass.
+ */
+function holdsDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
+  return readRow(deps.sql)?.token === token;
+}
+
+/**
+ * Give up the lease.
+ *
+ * Guarded by the token, so a process that was preempted and then finished its
+ * pass cannot delete its successor's claim — the release is for OUR lease, and
+ * a stale token releases nothing. Returns whether the row was actually ours.
+ */
+function releaseDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
+  const held = holdsDriverLease(deps, token);
+
+  if (!held) return false;
+  void deps.sql`DELETE FROM driver_lease WHERE id = ${LEASE_ROW_ID} AND token = ${token}`;
+
+  return true;
+}
+
+/**
+ * One process's hold on one conversation's lease.
+ *
+ * Every driver performs the same three operations in the same order — take it,
+ * ask whether it is still mine, give it back — so they live together here
+ * rather than being re-implemented per driver. The daemon host keeps one of
+ * these per bound agent; an interactive client keeps one for its session. That
+ * is what makes "am I still the driver?" the same question in both: it is
+ * answered from the row, never from the token this object remembers.
+ */
+export class DriverLeaseHold {
+  private token: string | null = null;
+
+  constructor(
+    private readonly deps: DriverLeaseDeps,
+    readonly kind: DriverKind,
+  ) {}
+
+  /**
+   * Become the driver, or report who is — the refusal carries its holder, so a
+   * caller that has to say why it stood down does not go asking again.
+   *
+   * A token already held is RE-CHECKED rather than trusted: the whole point of
+   * preemption is that a lease can be lost between operations, so "I had it" is
+   * not "I have it".
+   */
+  acquire(): DriverLeaseRefusal | null {
+    if (this.token !== null && holdsDriverLease(this.deps, this.token)) return null;
+    const outcome = acquireDriverLease(this.deps, this.kind);
+
+    if ('held' in outcome) {
+      this.token = outcome.held.token;
+
+      return null;
+    }
+
+    this.token = null;
+
+    return { refused: outcome.refused, holder: outcome.holder };
+  }
+
+  /** Whether this process still holds what it took. */
+  held(): boolean {
+    return this.token !== null && holdsDriverLease(this.deps, this.token);
+  }
+
+  /** Give the lease back, if the row is still ours. A stale token releases
+   *  nothing, so a preempted holder cannot evict its successor. */
+  release(): void {
+    if (this.token === null) return;
+    releaseDriverLease(this.deps, this.token);
+    this.token = null;
+  }
+}

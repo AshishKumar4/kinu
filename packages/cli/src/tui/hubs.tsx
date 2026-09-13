@@ -7,7 +7,7 @@ import { tierIdsOf,
 } from '@kinu.run/core';
 import { agentWorkspaceKey } from '../agent-list';
 import type { TuiAgentSummary } from './tui-shell';
-import { agentDisplayLabel } from './format';
+import { agentDisplayLabel } from '@kinu.run/core';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 
 export type TuiHubView = 'agents' | 'roles' | 'tiers';

@@ -21,8 +21,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@kinu.run/core';
-import { explorationForkTree, type MctsRow } from '../src/lib/fork-tree-rows';
-import type { ForkNode, ForkNodeLifecycle } from '../src/lib/protocol';
+import { explorationForkTree, type MctsRow } from '@kinu.run/core';
+import type { ForkNode, ForkNodeLifecycle } from '@kinu.run/core';
 
 const ROOT = 'root-1';
 

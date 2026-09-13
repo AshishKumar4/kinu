@@ -28,7 +28,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
 import { ConnectDevicePanel, DeviceConnectFlow } from '../src/components/ConnectDevicePanel';
-import { buildCliInstallCommand } from '../src/cli/install-command';
+import { buildCliInstallCommand } from '@kinu.run/core';
 import type { UserDevice } from '../src/lib/user-api';
 
 /** The one-liner the server hands over, built by the same builder the devices

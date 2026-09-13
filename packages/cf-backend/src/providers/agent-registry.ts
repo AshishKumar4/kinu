@@ -22,12 +22,12 @@ import {
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai';
-import { createMyGatewayProvider } from './my-gateway';
-import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway';
+import { createWorkersAIProvider, type WorkersAIOptions } from '@kinu.run/core';
+import { createMyGatewayProvider } from '@kinu.run/core';
+import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import type { CredentialSummary } from '../user/user-do';
-import type { UserCaller } from '../user/workspace-capability';
-import { retryTransientDO } from '../lib/do-rpc';
+import type { UserCaller } from '@kinu.run/core';
+import { retryTransientDO } from '@kinu.run/core';
 
 /** Stub for the per-user DO that owns this user's credentials, paired with the
  *  identity this context presents to it — a Worker route acting for the

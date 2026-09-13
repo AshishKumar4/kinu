@@ -5,7 +5,7 @@
 // Tavily upgrade then never engages even after the claim. This pins that.
 import { describe, test, expect, afterEach } from 'bun:test';
 import type { AuthResolver } from '@kinu.run/core';
-import { buildCfWebSearchProvider } from '../src/lib/web-provider';
+import { buildCfWebSearchProvider } from '@kinu.run/core';
 
 const DDG_HTML = `
 <div class="result">

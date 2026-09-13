@@ -14,7 +14,7 @@
  * only one of them is checkable at the type level.
  */
 import { renderThrownChain, diagnostics, toKinuError } from '@kinu.run/core/obs';
-import type { FeedbackRecord } from '../feedback/contract';
+import type { FeedbackRecord } from '@kinu.run/core';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
 import { internalCaller } from './admin-caller';
 

@@ -23,12 +23,10 @@
  * A second table of which binaries prove `python` is the drift this repo keeps
  * deleting.
  *
- * Locked cli-only in scripts/capability-parity.lock.json rather than moved to a
- * shared package. It imports nothing core could not, so the parity gate reads it
- * as movable — but `Bun.which` is a platform global, absent on workerd, and the
- * gate says outright that a global reached with no import is its blind spot.
+ * The explicit Bun import identifies the platform lookup this adapter owns.
  */
 
+import { which } from 'bun';
 import {
   TOOLCHAIN_PROBE_BINARIES, TOOLCHAIN_UNPROBEABLE, toolchainCapabilities,
   type ExecutorCapability,
@@ -53,7 +51,7 @@ const STRUCTURAL: readonly ExecutorCapability[] = [
  *  value is the honest one to ask against. */
 export function hostToolchainCapabilities(): readonly ExecutorCapability[] {
   const PATH = process.env.PATH ?? '';
-  const found = TOOLCHAIN_PROBE_BINARIES.filter((binary) => Bun.which(binary, { PATH }) !== null);
+  const found = TOOLCHAIN_PROBE_BINARIES.filter((binary) => which(binary, { PATH }) !== null);
 
   return [...STRUCTURAL, ...toolchainCapabilities(found)];
 }

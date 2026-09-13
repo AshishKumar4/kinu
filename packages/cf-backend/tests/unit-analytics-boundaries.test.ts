@@ -42,10 +42,10 @@ import { readFileSync } from 'node:fs';
 import { Visitor, parseSync, type VisitorObject } from 'oxc-parser';
 import * as v from 'valibot';
 
-import { boundaryOf, eventFamily } from '../src/analytics/boundaries';
-import { AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA } from '../src/analytics/schemas';
-import * as record from '../src/analytics/record';
-import type { AnalyticsEnv } from '../src/analytics/writer';
+import { boundaryOf, eventFamily } from '@kinu.run/core/analytics';
+import { AGENT_METRICS_SCHEMA, CONTROL_PLANE_OPS_SCHEMA } from '@kinu.run/core/analytics';
+import * as record from '@kinu.run/core/analytics';
+import type { AnalyticsEnv } from '@kinu.run/core/analytics';
 
 const REPO = new URL('../../../', import.meta.url).pathname;
 
@@ -141,7 +141,7 @@ function sitesOf(file: string): readonly CallSite[] {
   return parsed;
 }
 
-const BOUNDARIES_FILE = 'packages/cf-backend/src/analytics/boundaries.ts';
+const BOUNDARIES_FILE = 'packages/core/src/obs/analytics/boundaries.ts';
 
 /**
  * One recovered row.
@@ -490,7 +490,7 @@ describe('the gate fails when an instrument is missing', () => {
   test('an event name nothing emits at its file is caught', () => {
     const invented = {
       event: 'provider.error_that_was_renamed',
-      site: 'packages/cf-backend/src/providers/cloudflare-ai-fetch.ts',
+      site: 'packages/core/src/providers/cloudflare-ai-fetch.ts',
     };
 
     const emitted = sitesOf(invented.site).some((site) => site.firstString === invented.event);
@@ -503,7 +503,7 @@ describe('the gate fails when an instrument is missing', () => {
   test('a name mentioned only in a comment or a string is not a call site', () => {
     // `boundaries.ts` names every emitter as DATA. If the predicate were a text
     // search it would report all of them as wired from this file alone.
-    const sites = sitesOf('packages/cf-backend/src/analytics/boundaries.ts');
+    const sites = sitesOf('packages/core/src/obs/analytics/boundaries.ts');
 
     for (const boundary of FLEET_BOUNDARIES) {
       if (boundary.mechanism !== 'writer') continue;

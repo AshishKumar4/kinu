@@ -9,7 +9,7 @@ import { TUI_MARKS } from '@kinu.run/core';
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
 import { agentWorkspaceKey, groupAgentWorkspaces, type ListedAgent } from '../agent-list';
-import { agentDisplayLabel, clipText } from './format';
+import { agentDisplayLabel, clipText } from '@kinu.run/core';
 import {
   createKeybindingRegistry,
   createKeyDispatcher,

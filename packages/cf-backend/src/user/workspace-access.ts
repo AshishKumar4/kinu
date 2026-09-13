@@ -7,8 +7,8 @@
 // and only this one creates — see that module's header.
 import type { UserDO } from './user-do';
 import { createCloudWorkspaceForUser, type CreateCloudWorkspaceInput } from './workspace-create';
-import { err, json, safeJson } from '../lib/http';
-import { ownerCaller } from './workspace-capability';
+import { err, json, safeJson } from '@kinu.run/core';
+import { ownerCaller } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 

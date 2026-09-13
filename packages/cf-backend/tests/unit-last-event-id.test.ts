@@ -8,7 +8,7 @@
 // The function lives beside the run-event wire rather than in the route because
 // the route reaches `cloudflare:*`.
 import { describe, test, expect } from 'bun:test';
-import { resumeIndexFromLastEventId } from '../src/lib/orchestrator-wire';
+import { resumeIndexFromLastEventId } from '@kinu.run/core';
 
 describe('Last-Event-ID resume index', () => {
   test('an absent header replays from the start', () => {

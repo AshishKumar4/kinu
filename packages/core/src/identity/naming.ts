@@ -165,7 +165,7 @@ export function resolveWorkspaceTitle(opts: {
  *
  * A DNS label holds 63 characters; the hosted preview label spends 32 of them on
  * the port, capability handle, token and their separators
- * (cf-backend `lib/nimbus-preview-host.ts`), so the address is the remaining 31.
+ * (`preview/nimbus-preview-host.ts`), so the address is the remaining 31.
  * Every address {@link workspaceSlug} mints fits (adjective ≤ 11, noun ≤ 8, 8 hex
  * digits, two hyphens = 29). A chosen one is refused at creation rather than
  * truncated: a truncated address would name a different workspace.
@@ -425,4 +425,25 @@ function cleanTitle(value: string): string {
     .replace(/\s+/g, ' ')
     .slice(0, 60)
     .trim();
+}
+
+/** The one workspace-name grammar. Named so the throwing gate and the
+ *  predicate below cannot drift into two different ideas of a valid name. */
+const WORKSPACE_NAME = /^[a-zA-Z0-9._-]{1,64}$/;
+
+/** Whether a name COULD be a workspace's. For a caller that is asking a
+ *  question rather than admitting a value — feedback attribution asks the
+ *  registry only about names the registry could hold, so a malformed one is
+ *  refused here instead of arriving as a thrown error from a Durable Object
+ *  that no caller can tell apart from an outage. */
+export function isWorkspaceName(name: string): boolean {
+  return WORKSPACE_NAME.test(name);
+}
+
+/** Agent names follow the same rule. The DO id system already restricts to
+ *  printable ascii; this is an extra-strict guard at the API boundary. */
+export function validateWorkspaceName(name: string): void {
+  if (!isWorkspaceName(name)) {
+    throw new Error('Invalid workspace name. Use alphanumerics, dot, underscore and dash only (max 64 chars).');
+  }
 }

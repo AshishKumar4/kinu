@@ -330,13 +330,13 @@ uses Git data without touching its index; non-Git compares re-markable
 asks `workspace` and `sandbox` for ports
 (`cf-backend/src/hooks/use-kinu.ts:1023-1044`); transport failure retains the
 last result with an error, successful empty output removes stale previews
-(`cf-backend/src/lib/preview-ports.ts:25-29`).
+(`core/src/preview/preview-ports.ts:25-29`).
 
 A shell command passes central approval. Device actions require owner-scoped
 capability and consent. Preview hosts require configured suffix and provider
 capability. Nimbus previews strip Kinu credentials and require a random,
 revocable port capability before guest code
-(`cf-backend/src/nimbus-route.ts:5-39`, `lib/nimbus-preview-host.ts`).
+(`cf-backend/src/nimbus-route.ts:5-39`, `core/src/preview/nimbus-preview-host.ts`).
 Workspace ownership precedes every Nimbus-backed file operation.
 persists a reusable tool. That surface rejects references to version machinery,
 rollout configuration, self-modification entry points, and consent settings.

@@ -1,10 +1,9 @@
 [
   "aliased EXITED_COMMAND_DRAIN_MS@packages/cli-backend/src/runtime.ts = DRAIN_DEBOUNCE_MS@packages/core/src/orchestrator/drain-scheduler.ts",
-  "aliased MAX_SEND_ATTEMPTS@packages/cf-backend/src/email/outbox.ts = MAX_DELIVERY_ATTEMPTS@packages/core/src/events/ingress/peer.ts",
+
   "aliased STEP_UP_WINDOW_MS@packages/cf-backend/src/auth/session.ts = HMAC_TIMESTAMP_WINDOW_MS@packages/core/src/events/ingress/webhook.ts",
   "divergent DEFAULT_SEARCH_LIMIT",
   "divergent HEAD_FRACTION",
   "divergent RETRY_BASE_MS",
-  "duplicated ESTIMATED_MEDIA_CHARS",
-  "duplicated WS_OPEN"
+  "duplicated ESTIMATED_MEDIA_CHARS"
 ]

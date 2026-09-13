@@ -1,9 +1,5 @@
-/** Which band a 0–1 score falls in. One ladder for every surface that grades
- *  a score — this bar and the swarm tree's node fill share it, so a threshold
- *  change lands in both places instead of one. */
-export function scoreBand(value: number): "success" | "warning" | "danger" {
-  return value >= 0.7 ? "success" : value >= 0.4 ? "warning" : "danger";
-}
+import type { ReactElement } from 'react';
+import { scoreBand } from '@kinu.run/core';
 
 interface Props {
   value: number;
@@ -16,7 +12,7 @@ const BAND_DOT = {
   danger: "p-dot-danger",
 } as const;
 
-function ScoreBar({ value, className }: Props) {
+function ScoreBar({ value, className }: Props): ReactElement {
   const color = BAND_DOT[scoreBand(value)];
 
   return (

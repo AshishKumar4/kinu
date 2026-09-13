@@ -17,9 +17,9 @@ import {
   parseGatewayTarget,
   type GatewayTarget,
 } from '@kinu.run/core';
-import { createWorkersAIProvider } from '../src/providers/workers-ai';
-import { createMyGatewayProvider } from '../src/providers/my-gateway';
-import { createAIGatewayProvider, resolvePlatformGateway } from '../src/providers/ai-gateway';
+import { createWorkersAIProvider } from '@kinu.run/core';
+import { createMyGatewayProvider } from '@kinu.run/core';
+import { createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
 
 const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({

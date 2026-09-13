@@ -1531,7 +1531,7 @@ export function measureFields(
         // table above holds nothing for `reportModelCall?.({ … })`; the
         // annotation on the binding is the whole declaration of what that call
         // receives. Without this, `ModelCallReport.modelId` read as supplied by
-        // nothing while `cf-backend/src/lib/web-provider.ts:47` supplies it.
+        // nothing while `core/src/web/provider-factory.ts:47` supplies it.
         const signature = node.children.find((child) => child.raw.type === 'TSFunctionType');
 
         if (signature !== undefined) {

@@ -8,11 +8,11 @@ import { describe, expect, setSystemTime, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
-import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
+import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 

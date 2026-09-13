@@ -37,7 +37,7 @@ import { diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
-} from './access-token-store';
+} from '@kinu.run/core';
 import * as v from 'valibot';
 
 /** Worker→DO header carrying the verified connect-ticket scopes. Always

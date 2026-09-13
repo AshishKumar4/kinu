@@ -44,8 +44,8 @@ import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { err, json, safeJson } from '../lib/http';
-import { ownerCaller } from '../user/workspace-capability';
+import { err, json, safeJson } from '@kinu.run/core';
+import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
   actorDigest, adminCaller, adminDenialMessage, adminDenialStatus, authorizeAdmin,
@@ -57,13 +57,14 @@ import {
   ControlActionSchema, describeAction, runControlAction, UserIdSchema,
   type ActionEnv, type ActionIdentity,
 } from './actions';
-import { controlPlaneMetrics, type MetricsRequest } from './metrics';
+import { controlPlaneMetrics } from '@kinu.run/core/control-plane';
+import type { MetricsRequest } from '@kinu.run/core/control-plane';
 import type {
   AuditOutcome, AuditSettlement, ControlAuditRow, OperationMarker,
 } from './control-plane-do';
 import type {
   AuditDraft, RosterWorkspace, WorkspaceFilter,
-} from './store';
+} from '@kinu.run/core/control-plane';
 
 /** Bound on the per-workspace detail reads. Each is a separate Durable Object
  *  query and the panel shows a recent window, not a history — the history has

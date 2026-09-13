@@ -73,7 +73,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
-import type { HostedNodeHome } from './node-home';
+import type { HostedNodeHome } from '@kinu.run/core';
 
 /**
  * The agents-SDK members a hosted actor's runtime reaches on the ROOT object it

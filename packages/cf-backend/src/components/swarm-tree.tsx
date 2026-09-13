@@ -65,13 +65,13 @@ import {
 } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
 import { useElementSize } from "@/hooks/use-element-size";
-import type { ForkNode } from "@/lib/protocol";
+import type { ForkNode } from "@kinu.run/core";
 import {
 	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
 	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,
 	type ExplorerSelection,
-} from "./swarm-tree-model";
-import { scoreBand } from "@/components/ui/score-bar";
+} from "@kinu.run/core";
+import { scoreBand } from '@kinu.run/core';
 
 /** One search's band on the canvas. */
 export interface SwarmTreeRegion {

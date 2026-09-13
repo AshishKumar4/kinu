@@ -6,7 +6,7 @@
 //
 // Hoisted out of the cf-backend OrchestratorAgent (re-arch P4) so the CLI gets
 // background jobs for free. The platform supplies a durable `fiber` (CF:
-// Agent.runFiber; CLI: createLinuxFiber); the wake is a plain
+// Agent.runFiber; CLI: createSqlFiber); the wake is a plain
 // SignalDelivery.deliver, so this never picks a delivery mechanism of its own.
 // The @callable control-plane RPCs (jobResult/list/
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.

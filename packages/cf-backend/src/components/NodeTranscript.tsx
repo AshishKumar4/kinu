@@ -33,15 +33,15 @@ import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
-} from "@/components/head-chat";
+} from "@kinu.run/core";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, CodeBlock } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
+import { cleanNodeLabel, findForkNode } from "@kinu.run/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import type { SeekCursor } from "@kinu.run/core";
-import { fmtTokens, timeAgo } from "@/lib/format";
-import type { ForkNode, Rpc } from "@/lib/protocol";
+import { fmtTokens, timeAgo } from "@kinu.run/core";
+import type { ForkNode, Rpc } from "@kinu.run/core";
 
 
 interface OlderPageLoad {

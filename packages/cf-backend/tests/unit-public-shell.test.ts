@@ -26,10 +26,10 @@ import { resolve } from 'node:path';
 
 import {
   mark, markDocument, publicPage, MARK_IDS, KINU_MARK,
-} from '../src/lib/public-shell';
+} from '@kinu.run/core';
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
-} from '../src/lib/public-pages';
+} from '@kinu.run/core';
 import {
   CURSOR_ENTER_AT, MOVIE_CUES, MOVIE_END,
   composerTextAt, cueCountAt, cursorAt, discreteAt,

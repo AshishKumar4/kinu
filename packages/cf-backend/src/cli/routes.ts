@@ -3,29 +3,29 @@ import type { AuthIdentity } from '../auth/session';
 import {
   AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
 } from '../auth/session';
-import { publicHtmlHeaders } from '../lib/security-headers';
-import { approvalDocument, installDocument } from '../lib/public-pages';
+import { publicHtmlHeaders } from '@kinu.run/core';
+import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
-} from '../lib/deployed-assets';
-import { err, escapeHtml, json, safeJson } from '../lib/http';
-import { randomToken } from '../lib/crypto';
+} from '@kinu.run/core';
+import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
+import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '../events/webhook-route';
+import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '@kinu.run/core';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
 } from './auth-store';
-import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store';
+import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from '@kinu.run/core';
 import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
-import { buildCliInstallCommand } from './install-command';
-import { bunResolutionShell, cliPlatformShell } from './bun-runtime';
+import { buildCliInstallCommand } from '@kinu.run/core';
+import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { handleUserAIProxyRequest } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
-import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
+import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 

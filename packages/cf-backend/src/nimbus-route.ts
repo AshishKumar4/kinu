@@ -40,11 +40,11 @@
  */
 
 import { workspaceAddressRefusal } from '@kinu.run/core';
-import { previewHostSuffix } from './lib/preview-origin';
+import { previewHostSuffix } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
-import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from './lib/nimbus-preview-host';
+import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run/core';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
-import { reoriginateRequest } from './lib/http';
+import { reoriginateRequest } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
 
 const HKDF_SALT = 'kinu.workspace-preview.salt';
@@ -160,7 +160,7 @@ function base32(bytes: Uint8Array): string {
  * servers in its workspace, and the port surface reports why the URL is
  * unavailable instead of failing the exposure. The reason is per workspace
  * as well as per deployment, because the workspace-name grammar admits names
- * a hostname label cannot carry (`lib/nimbus-preview-host.ts`), and a
+ * a hostname label cannot carry (core `preview/nimbus-preview-host.ts`), and a
  * workspace so named keeps every other port surface while its previews
  * report exactly that.
  */

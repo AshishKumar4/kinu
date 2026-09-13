@@ -16,7 +16,7 @@
 import { SELF } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { kinuUserAgent, reoriginateRequest } from '../../src/lib/http';
+import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 
 const PAYLOAD = 'hello-world-1234';
 

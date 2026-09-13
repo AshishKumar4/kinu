@@ -187,7 +187,7 @@ import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeExecuteToolFactory } from './execute-tools-factory';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
-import { detectOrphanedFibers, type OrphanedFiber } from './fiber';
+import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
@@ -908,7 +908,7 @@ export class LocalAgentSession implements BackendHost {
     );
 
     // The stores every agent has, from core — one list both backends inherit.
-    // Background-job lifecycle rides the durable local fiber (createLinuxFiber)
+    // Background-job lifecycle rides the durable local fiber (createSqlFiber)
     // with this session as the BackendHost (enqueueTurn wakes the agent).
     //
     // HOSTED, they are the ones the root's host bound over the ONE workspace

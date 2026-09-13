@@ -657,7 +657,7 @@ export const SUPPLY = new Map<string, Supply>([
   ['CLOUDFLARE_OAUTH_SCOPES', {
     handling: 'config-var',
     required: false,
-    absent: 'nothing — CLOUDFLARE_WORKERS_AI_SCOPES in lib/cloudflare-oauth.ts is the one source '
+    absent: 'nothing — CLOUDFLARE_WORKERS_AI_SCOPES in core/src/providers/cloudflare-oauth.ts is the one source '
       + 'of truth and this only overrides it.',
   }],
 ]);

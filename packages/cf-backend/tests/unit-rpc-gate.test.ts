@@ -18,7 +18,7 @@ import {
   requiredRpcAccess,
   rpcAccessScope,
 } from '../src/cli/rpc-gate';
-import { extractTicketOrchestratorAgentName } from '../src/agent-routing';
+import { extractTicketOrchestratorAgentName } from '@kinu.run/core';
 
 const root = join(import.meta.dir, '..');
 

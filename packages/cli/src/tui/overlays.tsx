@@ -4,11 +4,11 @@ import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { formatContextWindow, CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_MARKS, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
-import { filterModels, type AgentModelEntry } from '../model-catalog';
+import { filterModels, type AgentModelEntry } from '@kinu.run/core';
 import type { ProviderFailure, ShellApprovalRequest } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
-import { clipText } from './format';
+import { clipText } from '@kinu.run/core';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
   SYSTEM_TUI_THEME_SELECTION,

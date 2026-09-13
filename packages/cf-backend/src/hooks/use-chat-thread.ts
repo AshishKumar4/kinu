@@ -36,7 +36,7 @@ import {
 import type { UIMessage } from "ai";
 
 import { usePagedScroll, walkStart, type PagedScroll } from "@/hooks/use-paged-scroll";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 
 /** Messages per older-history request. Small enough that a page renders in one
  *  frame and the scroll stays smooth, large enough that a flick up does not

@@ -26,14 +26,14 @@ import {
   type TestUserDO,
 } from './helpers/user-do';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-import { CapabilityDeniedError, type UserCaller } from '../src/user/workspace-capability';
+import { CapabilityDeniedError, type UserCaller } from '@kinu.run/core';
 import {
   cliBearerConnectionTag,
   cliBearerFromTags,
   sessionBearerConnectionTag,
   sessionBearerFromTags,
 } from '../src/cli/rpc-gate';
-import { sha256Hex } from '../src/lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import type { Connection } from 'agents';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
@@ -83,12 +83,23 @@ function capabilityRows(harness: TestUserDO): string[] {
 }
 
 describe('a workspace whose delete has begun', () => {
+  const teardowns: Array<() => Promise<void>> = [];
+
+  afterEach(async () => {
+    for (const teardown of teardowns.splice(0)) await teardown();
+  });
+
   test('has already lost its authority when the teardown is still in flight', async () => {
     const held = gate();
+    const entered = gate();
 
     const harness = createTestUserDO({
       durableObjectId: USER_ID,
-      destroyWorkspaceGate: () => held.promise,
+      destroyWorkspaceGate: () => {
+        entered.open();
+
+        return held.promise;
+      },
     });
 
     const owner = await testOwner();
@@ -96,10 +107,19 @@ describe('a workspace whose delete has begun', () => {
     const survivor = await provisionTestWorkspace(harness, 'survivor');
 
     const deleting = harness.userDO.removeWorkspace(owner, 'doomed', USER_ID);
+    teardowns.push(async () => {
+      held.open();
+
+      try {
+        await deleting;
+      } finally {
+        harness.close();
+      }
+    });
     // The delete is now parked on the destroy — the window in which the old
     // order (revoke AFTER the teardown) left the dying workspace holding a
     // token its own registry still honoured.
-    await Promise.resolve();
+    await entered.promise;
 
     const doomedCaller: UserCaller = { workspaceToken: token };
     await expect(harness.userDO.listWorkspaces(doomedCaller)).rejects.toThrow(CapabilityDeniedError);
@@ -117,7 +137,6 @@ describe('a workspace whose delete has begun', () => {
     held.open();
     await deleting;
     expect(harness.destroyedWorkspaces).toEqual(['doomed']);
-    harness.close();
   });
 
   test('cannot be issued a fresh identity while its teardown is outstanding', async () => {

@@ -1,5 +1,5 @@
 import * as oauth from 'oauth4webapi';
-import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../lib/cloudflare-oauth';
+import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 
 export type OAuthProviderId = 'google' | 'github' | 'cloudflare';
 

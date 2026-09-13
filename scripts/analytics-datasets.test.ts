@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 import { parseJsonc } from './jsonc';
-import { ANALYTICS_SCHEMAS, analyticsDataset } from '../packages/cf-backend/src/analytics/schemas';
+import { ANALYTICS_SCHEMAS, analyticsDataset } from '@kinu.run/core/analytics';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 

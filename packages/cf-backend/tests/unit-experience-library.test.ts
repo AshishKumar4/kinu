@@ -8,7 +8,7 @@
 // publish at all.
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { describe, expect, test } from 'bun:test';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import type { PublishableCandidate } from '@kinu.run/core';
 
 const ALPHA = 'workspace-a';

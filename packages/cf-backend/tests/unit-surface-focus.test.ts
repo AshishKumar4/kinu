@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { useSurfaceFocus, type SurfaceFocus } from '../src/components/surfaces/use-surface-focus';
 import type { SurfaceKind } from '../src/components/surfaces/WorkSurface';
 import type { SlateSummary } from '@kinu.run/core';
-import type { PinnedPreviewPort as PinnedPort } from '../src/lib/preview-ports';
+import type { PinnedPreviewPort as PinnedPort } from '@kinu.run/core';
 
 const slate = (id: string, title: string): SlateSummary => ({ id, title, bindings: [] });
 

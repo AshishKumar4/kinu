@@ -6,14 +6,14 @@ import {
   type WebSearchProvider,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
-import { buildCfWebSearchProvider } from './lib/web-provider';
+import { buildCfWebSearchProvider } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,
 } from './providers/agent-registry';
 import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { UserDO } from './user/user-do';
-import type { UserCaller } from './user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 export interface OwnedModelServicesOptions {
   readonly env: Env;

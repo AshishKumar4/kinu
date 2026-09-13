@@ -18,7 +18,7 @@ import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ParkedCommands, ParkedDecisionFlow, type ParkedDecision, type ParkedDecisionDeps } from '../src/components/surfaces/WorkTab';
-import type { Rpc } from '../src/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
 import type { PendingAction } from '@kinu.run/core';
 
 /** One fixed queue timestamp, so "queued X ago" is stable across renders. */

@@ -4,7 +4,7 @@ import { useCallback, useRef } from 'react';
 import { TUI_MARKS } from '@kinu.run/core';
 
 import type { AgentClientStatus } from '../agent-client';
-import { clipText } from './format';
+import { clipText } from '@kinu.run/core';
 import { StatusView } from './help-view';
 import { useTuiTheme, type TuiThemeColors } from './theme';
 import { useSceneWidth } from './tui-shell';

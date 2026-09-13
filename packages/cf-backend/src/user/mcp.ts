@@ -10,7 +10,7 @@
  *   locally and dispatches each call back to `UserDO.callMcpTool(...)`.
  */
 
-import { sha256Hex } from '../lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
   admitMcpDescriptors, McpToolSurfaceSchema,

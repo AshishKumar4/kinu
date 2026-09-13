@@ -28,7 +28,7 @@ mockAgentsSdk();
 
 const { handleWebhookDeliveryRequest } = await import('../src/events/routes');
 
-const { webhookRoutePath } = await import('../src/events/webhook-route');
+const { webhookRoutePath } = await import('@kinu.run/core');
 
 /** The one route secret this suite mints and verifies under. */
 const ROUTE_SECRET = 'test-webhook-route-secret-0123456789';

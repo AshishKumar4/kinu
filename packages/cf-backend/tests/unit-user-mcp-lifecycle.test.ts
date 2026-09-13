@@ -26,7 +26,7 @@ import {
 import { storedMcpOptionsCarryCredential, validateMcpServerInput } from '../src/user/mcp';
 import { McpToolSurfaceSchema } from '@kinu.run/core';
 import type { McpToolSurface } from '../src/user/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as v from 'valibot';

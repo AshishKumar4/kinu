@@ -15,13 +15,13 @@ import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
   PLANE, FileWriteConflict, fileTextEditable, putFileBytes, sandboxedHtml, textRenderOf, viewerKindOf,
   type FileText, type TextRender,
-} from "./files-plane";
+} from "@kinu.run/core";
 
 export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;

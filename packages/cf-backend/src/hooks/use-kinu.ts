@@ -12,40 +12,39 @@ import {
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { explorationForkTree } from "../lib/fork-tree-rows";
+import { explorationForkTree } from "@kinu.run/core";
 import type {
   ToolInfo,
   MemoryEntry,
   ForkNode,
-  BackgroundJob,
   ExecutorCommandResult,
   PendingConsent,
   Rpc,
   SubordinateActivityEvent,
-  SubordinateRosterEntry,
   TabPresence,
-} from "../lib/protocol";
-import type { ExecutorInfo } from "../lib/executors";
-import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
+} from "@kinu.run/core";
+import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { ExecutorInfo } from "@kinu.run/core";
+import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
-} from "../components/head-chat";
+} from "@kinu.run/core";
 import { looksLikeSecretField, type InlineSteer } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
-} from "../lib/preview-ports";
+} from "@kinu.run/core";
 import {
   createSessionRecovery,
   fetchDeployedBuildSha,
   isNewerDeployedBuild,
   pageDeployedBuildSha,
   type SessionRecovery,
-} from "./session-recovery";
-import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "./send-admission";
-import { terminalChatError, type ChatTurnError } from "./chat-turn-error";
+} from "@kinu.run/core";
+import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
+import { terminalChatError, type ChatTurnError } from "@kinu.run/core";
 import type { AsyncResource } from "./use-async-resource";
 import { pruneSlateReloads } from "../components/surfaces/presence";
 
@@ -1207,7 +1206,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // ── Session recovery: every reconnect re-fetches what the dead transport
   // silently missed, and a corpse socket — OPEN by readyState, timed-out by
   // every RPC — is forced to redial once the evidence is unambiguous. The
-  // policy lives in hooks/session-recovery.ts; this is the wiring.
+  // policy lives in core utils/session-recovery.ts; this is the wiring.
   const recoveryFirstOpen = useRef(true);
   useEffect(() => {
     if (!agent) return;

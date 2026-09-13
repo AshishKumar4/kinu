@@ -13,4 +13,4 @@ export {
   type DriverLeaseHolder,
   type DriverLeaseRefusal,
   type LeaseProcess,
-} from './driver-lease';
+} from '@kinu.run/core';

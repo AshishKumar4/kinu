@@ -36,10 +36,10 @@ import {
   providerProxyBaseURL, proxyTargetAllowed,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
-import { errorResponse } from '../providers/cloudflare-ai-fetch';
-import { json } from '../lib/http';
-import { ownerCaller, type UserCaller } from './workspace-capability';
-import { validateCredentialKey } from './validate';
+import { errorResponse } from '@kinu.run/core';
+import { json } from '@kinu.run/core';
+import { ownerCaller, type UserCaller } from '@kinu.run/core';
+import { validateCredentialKey } from '@kinu.run/core';
 import { renderCauseChain } from '@kinu.run/core/obs';
 
 export const USER_AI_PROXY_FORWARD_PREFIX = PROVIDER_PROXY_PATH;

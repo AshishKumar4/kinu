@@ -39,7 +39,7 @@ import {
 import { CAPABLE_HELLO } from './helpers/device-harness';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { makeKv } from './helpers/kv';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import type { JsonValue } from '@kinu.run/core';
 
 // Dynamic, and deliberately: the helpers imported above install the agents-SDK

@@ -34,15 +34,15 @@
 import * as v from 'valibot';
 import { KinuError, diagnostics, tolerate } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
-import { err, json, readBounded } from '../lib/http';
-import { readBuildStamp } from '../lib/deployed-assets';
+import { err, json, readBounded } from '@kinu.run/core';
+import { readBuildStamp } from '@kinu.run/core';
 import {
   CLIENT_ERROR_ENDPOINT,
   CLIENT_ERROR_MAX_REQUEST_BYTES,
   CLIENT_RENDER_FAILED,
   ClientErrorReportSchema,
   type ReleaseMatch,
-} from './contract';
+} from '@kinu.run/core';
 
 const OVER_REQUEST_LIMIT = `a render-failure report is limited to ${String(CLIENT_ERROR_MAX_REQUEST_BYTES >> 10)} KiB`;
 

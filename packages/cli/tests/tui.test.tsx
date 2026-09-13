@@ -23,7 +23,7 @@ import {
   TakesOverlay,
 } from '../src/tui/overlays';
 
-import type { AgentModelEntry } from '../src/model-catalog';
+import type { AgentModelEntry } from '@kinu.run/core';
 import type { KinuConfig } from '../src/config';
 import { MessageList } from '../src/tui/messages';
 

@@ -7,7 +7,7 @@ import {
 import { bumpProviderRevision, loadConfigFile, requireAuthConfig, updateConfigFile } from '../config';
 import { ACCENT, DIM, formatWhen, OK, WARN } from '../display';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { waitForAnswer } from '../wait';
+import { waitForAnswer } from '@kinu.run/core';
 
 export interface CliAuthCallbacks {
   started?(flow: { verificationUrl: string; userCode: string }): void;

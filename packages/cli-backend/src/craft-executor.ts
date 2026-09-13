@@ -1,7 +1,7 @@
 /**
  * Node/Bun crafted-tool executor.
  *
- * V8 on Node/Bun permits `new Function()` codegen, so the CLI adapter compiles
+ * Node's VM permits runtime code generation, so this adapter compiles
  * stored crafted-tool code directly in-process. The code convention is an
  * expression that evaluates to an async function (arrow or function
  * expression) — the same convention the CF LOADER path uses, and the one the
@@ -30,6 +30,7 @@
  */
 
 import { decodeJsonValue, requireBuild } from '@kinu.run/core';
+import { runInThisContext } from 'node:vm';
 import type { CraftedToolExecute, CraftedToolExecuteFn, JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 
@@ -45,8 +46,7 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
       //   async function(x) { return x * 2 }
       // upsertCraftedTool runs this exact compilation before storing, so a tool
       // that reaches here has already produced a callable once.
-      const factory = new Function('return (' + tool.code + ')');
-      const fn = v.parse(v.function_(), factory());
+      const fn = v.parse(v.function_(), runInThisContext('(' + tool.code + ')'));
       compiled = async (arg) => {
         const result = await fn(arg);
 

@@ -22,7 +22,7 @@ import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import {
   BRANCH_EXPLORE, BRANCH_READY, BRANCH_REFLECT, BranchReplySchema,
   type BranchCall, type BranchCallReply, type BranchMethod,
-} from './branch-protocol';
+} from '@kinu.run/core';
 import type { LocalProviderCredentials } from './model-resolver';
 import { registerLocalActor, localActorProcessBootstrap, retireLocalActor } from './actor-identity';
 

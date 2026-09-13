@@ -58,7 +58,7 @@ actors that work inside it.
   different workspace. Workspaces created before this rule under a name a label
   cannot carry keep their shell, files and sandbox previews; their workspace
   previews have no URL, and the Ports surface and the `expose` refusal say why
-  (`cf-backend/src/lib/nimbus-preview-host.ts`).
+  (`core/src/preview/nimbus-preview-host.ts`).
 - Ownership is workspace-level. `workspace_identity.owner_user_id` is the
   single ownership root. The UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the

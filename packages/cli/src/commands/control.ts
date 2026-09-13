@@ -29,7 +29,7 @@ import {
   normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
-} from '../model-catalog';
+} from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 interface ControlOpts {

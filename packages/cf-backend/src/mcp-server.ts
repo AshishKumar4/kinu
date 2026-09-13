@@ -69,7 +69,7 @@ import type { OrchestratorAgent } from "./orchestrator";
 import { AuthError, authenticateRequest } from "./auth/session";
 import { authenticateCliToken, readBearer } from "./cli/auth-store";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
-import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire';
+import { decodeRunEventWire, decodeScaffoldRunWire } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 const corsHeaders = {

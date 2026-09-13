@@ -2,7 +2,7 @@ import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
   CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
-  MODEL_CAPABILITIES,
+  normalizeModelMenu,
   codexCredentialToHeaders,
   createAnthropicProvider,
   createCodexProvider,
@@ -25,7 +25,7 @@ import {
   reasoningEffortOptions,
   type AuthResolution,
   type AuthResolver,
-  type ModelCapability,
+  type AgentModelEntry,
   type ModelInfo,
   cloudProxyBaseURL,
   type CloudProxyProviderId,
@@ -46,20 +46,6 @@ import { OPENCODE_PROVIDER_ID, createOpenCodeProvider } from './opencode-provide
 import type { LocalCodexAuthStore } from './codex-auth-store';
 import * as v from 'valibot';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
-
-const cloudMenuSchema = v.object({
-  models: v.optional(v.array(v.object({
-    spec: v.string(),
-    label: v.optional(v.string()),
-    provider: v.string(),
-    capabilities: v.optional(v.array(v.string())),
-    contextWindow: v.optional(v.number()),
-  })), []),
-  failures: v.optional(v.array(v.object({
-    provider: v.string(),
-    reason: v.string(),
-  })), []),
-});
 
 const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
@@ -558,18 +544,10 @@ function createGatewayBackedProvider(opts: {
   };
 }
 
-interface CloudMenuEntry {
-  spec: string;
-  label: string;
-  provider: string;
-  capabilities?: ModelCapability[];
-  contextWindow?: number;
-}
-
 const CLOUD_MENU_TTL_MS = 60_000;
 
 interface CloudMenu {
-  entries: CloudMenuEntry[];
+  entries: AgentModelEntry[];
   /** Why the server could not list a provider, keyed by provider id — the
    *  cloud providers report it verbatim instead of their canned hint. */
   failures: Map<string, string>;
@@ -600,21 +578,13 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
       });
 
       if (!res.ok) return EMPTY_CLOUD_MENU;
-      const source = v.parse(cloudMenuSchema, await res.json());
+      const source = normalizeModelMenu({ payload: await res.json() });
 
-      const entries = source.models.map((item): CloudMenuEntry => ({
-        spec: item.spec,
-        label: item.label ?? item.spec,
-        provider: item.provider,
-        capabilities: item.capabilities
-          ? MODEL_CAPABILITIES.filter((capability) => item.capabilities?.includes(capability))
-          : undefined,
-        contextWindow: item.contextWindow && item.contextWindow > 0
-          ? Math.floor(item.contextWindow)
-          : undefined,
-      }));
+      const menu: CloudMenu = {
+        entries: source.models,
+        failures: new Map(source.failures.map(({ provider, reason }) => [provider, reason])),
+      };
 
-      const menu: CloudMenu = { entries, failures: cloudMenuFailures(source.failures) };
       cached = { at: Date.now(), menu };
 
       return menu;
@@ -720,18 +690,6 @@ function createProxyCredentialSource(
   return { load, providerIds: () => providerIds };
 }
 
-function cloudMenuFailures(rows: v.InferOutput<typeof cloudMenuSchema>['failures']): Map<string, string> {
-  const out = new Map<string, string>();
-
-  for (const { provider, reason } of rows) {
-    if (provider && reason) {
-      out.set(provider, reason);
-    }
-  }
-
-  return out;
-}
-
 /** workers-ai / my-gateway backed by the worker's signed-in AI proxy. The
  *  model id IS the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
  *  match the hosted backend exactly. */
@@ -769,6 +727,7 @@ function createCloudProxyProvider(opts: {
           label: entry.label,
           capabilities: entry.capabilities ? [...entry.capabilities] : undefined,
           contextWindow: entry.contextWindow,
+          reasoningEfforts: entry.reasoningEfforts,
         }));
     },
     createModel(modelId): LanguageModel {

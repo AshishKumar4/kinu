@@ -36,7 +36,7 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/cf-backend/src/components/background-event.ts",
+      "file": "packages/core/src/read-models/background-event.ts",
       "kind": "hand-parser",
       "owner": "parseDrainedEvents",
       "sourceSha256": "d652e1a8f8b03c0d4f5b6adf9dc82952e1debe51146dba4df70333123263beb7",
@@ -295,7 +295,7 @@
       "decision": "cli"
     },
     {
-      "file": "packages/cli/src/tui/context-status.ts",
+      "file": "packages/core/src/tui/context-status.ts",
       "kind": "hand-parser",
       "owner": "stripKnownProvider",
       "sourceSha256": "e41b2bd0d7a20cf88067b46fe3b82a4bf4b1f46553a1145c06fcfaebab55aab4",

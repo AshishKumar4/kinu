@@ -7,6 +7,8 @@ import type { JsonObject, JsonValue } from '@kinu.run/core';
 import { JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
 
+export const MODEL_OPTION_FLAG = '--model';
+
 export function parsePositiveInt(value: string, label: string): number {
   const parsed = Number.parseInt(value, 10);
 

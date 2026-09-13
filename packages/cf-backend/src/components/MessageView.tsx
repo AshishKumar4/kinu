@@ -29,18 +29,18 @@ import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
-import { extractPreviewUrl } from "@/lib/preview-origin";
+import { extractPreviewUrl } from "@kinu.run/core";
 import {
   groupMessageParts,
   partOutput, partInput, partEffect, callFailed, parseProvisionError,
   type AnyToolPart,
-} from "@/components/tool-call-grouping";
-import { liveTail } from "@/components/message-live-tail";
+} from "@kinu.run/core";
+import { liveTail } from "@kinu.run/core";
 import { redactPayload, segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
-  type DrainedEvent, type ProgrammaticTurn, type SignalCard,
-} from "@/components/background-event";
+  type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
+} from "@kinu.run/core";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 
 function getMessageText(msg: UIMessage): string {
@@ -599,7 +599,7 @@ function AdvisorCard({ severity, text, state }: {
  *  signal became, or the live card of one spliced into a running turn. Same
  *  classifier, same cards, one rendering. */
 export function ProgrammaticTurnCard({ turn, text, state }: {
-  turn: ProgrammaticTurn; text: string; state: CardState;
+  turn: ClassifiedProgrammaticTurn; text: string; state: CardState;
 }) {
   if (turn.kind === "background_job") {
     return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;

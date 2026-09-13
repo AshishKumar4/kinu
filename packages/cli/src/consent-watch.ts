@@ -19,7 +19,7 @@ import type {
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { waitForAnswer } from './wait';
+import { waitForAnswer } from '@kinu.run/core';
 
 const CONSENT_POLL_MS = 750;
 

@@ -20,7 +20,7 @@ import type { HeadStep } from '@kinu.run/core';
 import {
   appendHeadDelta, deltaAsMessage, retireHeadDelta, stepAsMessage,
   type HeadDelta,
-} from '../src/components/head-chat';
+} from '@kinu.run/core';
 
 const NOTHING: ReadonlyMap<string, HeadDelta> = new Map();
 
