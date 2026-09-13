@@ -1,0 +1,102 @@
+[devbox-bench] no abandoned benchmark resources from earlier runs
+[devbox-bench:snapshot-chain] deployed https://kinu-devbox-bench-20260913161823-snapshot-chain.ashishkmr472.workers.dev at version 7c80508f-63c9-4c30-a92d-3116c6d959e6
+[devbox-bench:snapshot-chain] create (cold attach)
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 1)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 2)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 3)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 4)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 5)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 6)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 7)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 8)
+[devbox-bench:snapshot-chain] cold attach: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench:snapshot-chain] cold attach: no restoration has run for this container yet; driving readiness through one no-op exec (drive 9)
+[devbox-bench:snapshot-chain] POST /exec?box=ab-snapshot-chain-20260913161823: transport loss on attempt 1; asking again
+[devbox-bench:snapshot-chain] create failed: cold attach did not attach within its 54547 ms ceiling (last reading: stopped: no restoration has run for this container yet — running=false restoration=unstarted, 8 incident(s) recorded (8 undelivered), unready: no restoration has run for this container yet; a readiness drive posted 4524 ms ago has not answered)
+[devbox-bench:snapshot-chain] restore probe cold-attach: wallMs=null no phases (absent: the box wrote no probe row for its last start)
+[devbox-bench] snapshot-chain fixture resources: worker: deleted or absent, kinu-devbox-bench-20260913161823-snapshot-chain-snapshotchainbox: absent
+[devbox-bench:snapshot-chain] POST /exec?box=ab-snapshot-chain-20260913161823: transport loss on attempt 2; asking again
+### Devbox storage strategy: `snapshot-chain`
+
+- date: `2026-09-13`
+- run: `kinu-devbox-bench-20260913161823`
+- worker: `kinu-devbox-bench-20260913161823-snapshot-chain`
+- bucket: `kinu-devbox-bench-20260913161823-snapshot-chain`
+- image: `registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e`
+- seed: `20260824`
+- loop budget ms: `8000`
+- deciding repetitions: `2`
+- publication rendezvous: `armed at Worker boot; one added control RPC per successful object write`
+- publication accounting: `counter lookup per PUT/part/complete; the C3 window additionally persists each attempt completion`
+- witness profile: `chunked`
+- live C3: `required; isolated one-file baseline after the priced workloads; raw PUT window and genuinely cold digest check`
+
+#### Lifecycle proof, first, per arm
+
+| arm | lifecycle proof | failing checks |
+| --- | --- | --- |
+| `snapshot-chain` | **FAILED** | — |
+
+An ordinary arm whose lifecycle proof fails measured the container's own blank disk. Its rows are recorded for diagnosis and are NOT ranked. Probe rows are different: PRECONDITION FAILED means no probe ran; PARTIAL means some evidence was archived before the finding. Neither is an arm verdict.
+
+#### Lifecycle
+
+| arm | attach cold (ms) | attach warm (ms) | stop (ms) | wake (ms) | wake attach.kind |
+| --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | — | — | — | — | **unknown** |
+
+A wake whose `attach.kind` is not `attached` did not restore anything: the container never went down, so no durability conclusion may be drawn from that cycle.
+
+#### Checkpoint ladder
+
+| arm | change | kind | ms | bytes committed | outcome |
+| --- | --- | --- | --- | --- | --- |
+
+#### Restore and backup time versus tree size
+
+One fixed 64 KiB backup plus one stop then wake at each ladder rung’s cumulative tree size. The last rung’s restore is the post-ladder wake itself, so no container work is duplicated. Measured 2026-09-13.
+
+| arm | tree bytes | 64 KiB backup (ms) | restore (ms) | restore remote ops | restore payload bytes | outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | 65,536 | NOT MEASURED: the arm recorded no tree-size row at 65,536 bytes | — | — | — | NOT MEASURED |
+| `snapshot-chain` | 4,259,840 | NOT MEASURED: the arm recorded no tree-size row at 4,259,840 bytes | — | — | — | NOT MEASURED |
+| `snapshot-chain` | 71,368,704 | NOT MEASURED: the arm recorded no tree-size row at 71,368,704 bytes | — | — | — | NOT MEASURED |
+
+#### Workload, per-operation p50 (ms)
+
+| metric | `snapshot-chain` |
+| --- | --- |
+
+Repetitions of the deciding metric `small-stat-1k`, which is what G9 scores: `snapshot-chain` 0. The run asked for 2 per arm, and G9 censors a cell below 2.
+
+#### R2 operations and teardown
+
+| arm | class A | class B | free | total | teardown |
+| --- | --- | --- | --- | --- | --- |
+| `snapshot-chain` | — | — | — | — | {} |
+
+#### What did not hold
+
+- `snapshot-chain`: create failed: cold attach did not attach within its 54547 ms ceiling (last reading: stopped: no restoration has run for this container yet — running=false restoration=unstarted, 8 incident(s) recorded (8 undelivered), unready: no restoration has run for this container yet; a readiness drive posted 4524 ms ago has not answered)
+
+#### Recommendation
+
+RECOMMENDATION REFUSED. This run failed admission, so ranking anything it measured would publish a claim the instrument cannot support:
+- G1 Mount truth.: arm `snapshot-chain` neither attached nor recorded why
+- G2 Filesystem semantics.: arm `snapshot-chain` did NOT produce its expected red witness "mutable-delta": an expected failure that vanished is instrument drift; arm `snapshot-chain` did NOT produce its expected red witness "chunked-absorption": an expected failure that vanished is instrument drift
+- G3 Publication safety.: no completed fault-cut evidence: the interruption at the publication cut never ran to completion; observers did not confirm all-old-or-all-new state across the cut; barrier-ack loss across the cut was never counted; post-publication references were never swept for absent objects; rollback and phantom-root behaviour was never checked
+- G4 Security.: security fault cells incomplete: F7 stale-writer, F10 hostile-metadata, F11 capability escape/replay, and F12 credential exposure must all have run
+- G5 Restore complexity.: arm `snapshot-chain` declares durability but never exercised a restore; arm `snapshot-chain` claims a bounded-k restore bound that was never mechanically verified; arm `snapshot-chain` no counted restore: the wake answered "nothing", so the restore never ran and none of the seven fields was observed (counted: wake kind "none")
+- G6 Complete cells.: cell T0/C0/K0 (blank) did not complete; arm snapshot-chain recorded no required live C3 observation; arm `snapshot-chain` recorded no cold attach, so its first attach was never timed; arm `snapshot-chain` cold attach reported kind "none"; arm `snapshot-chain` second attach did not observe the unchanged generation (kind "none"); arm `snapshot-chain` did not record both wake and warm-attach generation ids, so unchanged attach was not evidenced; arm `snapshot-chain` wake did not attach durable bytes (kind "none"); arm `snapshot-chain` recorded 0 of 6 ladder checkpoints
+- G7 Reconciled accounting.: the run recorded no operation accounting at all; arm `snapshot-chain` recorded no `/ops` tally, so its operations are unaccounted
+- G9 Statistical validity.: deciding cell T0/C0/K0 censored: fewer than two repetitions; every deciding cell is censored, so no statistical claim survives; arm snapshot-chain decisive segment npm/1/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/1/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/1/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/1/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/1/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/2/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/2/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/2/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/2/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm/2/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/1/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/1/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/1/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/1/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/1/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/2/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/2/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/2/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/2/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment npm-excluded/2/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/1/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/1/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/1/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/1/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/1/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/2/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/2/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/2/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/2/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment git/2/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/1/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/1/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/1/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/1/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/1/4 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/2/0 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/2/1 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/2/2 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/2/3 is incomplete: no unique priced observation; arm snapshot-chain decisive segment sqlite/2/4 is incomplete: no unique priced observation; arm `snapshot-chain` measured the deciding metric `small-stat-1k` 0 time(s); 2 repetitions are the fewest a dispersion claim can rest on; arm `snapshot-chain` measured the deciding metric `small-stat-1k` 0 time(s) where the run asked for 2: repetition(s) were lost, so the dispersion is over fewer samples than the run intended
+
+[devbox-bench] artifact written to bench-artifacts/devbox-strategies-20260913161823.json
+DECISIVE_RUN_EXIT=1
