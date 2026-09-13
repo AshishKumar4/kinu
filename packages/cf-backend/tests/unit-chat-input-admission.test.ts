@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
 import type { ModelMessage, UIMessage } from 'ai';
-import type { Connection } from 'agents';
 import { ActorClaimStore, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { makeSql, SDK_SESSION_DDL } from '../../core/tests/helpers';
 import { bindChatInput } from '../src/chat-intake';
@@ -123,13 +124,15 @@ describe('request-owned chat inputs', () => {
     expect(texts(second?.messages)).toEqual([GENESIS.content, GENESIS_REPLY.content, 'ask B', 'answer B', 'ask A']);
   });
 
-  test('the installed intake binds each frame before asynchronous SDK persistence interleaves', async () => {
+  test('input binding reserves each frame before asynchronous persistence interleaves', async () => {
     const harness = await opening();
     const delayed = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
     const seen: JsonObject[] = [];
-    harness.agent.onMessage = async (_connection, wire) => {
-      const parsed = v.parse(Envelope, wire);
+
+    const receive = async (wire: string) => {
+      const bound = bindChatInput(wire, claims(harness), () => false);
+      const parsed = v.parse(Envelope, bound);
       const body = v.parse(JsonObjectSchema, parsed.init.body);
       seen.push(body);
 
@@ -139,20 +142,14 @@ describe('request-owned chat inputs', () => {
       }
     };
 
-    harness.agent.harnessInstallChatIntake();
-    const partial: Partial<Connection> = { id: 'chat-intake', tags: [], send: () => {} };
-    // SAFETY: the intake gate reads only tags/id/send; the SDK dispatcher is
-    // the delayed callback above, so no other platform member is reachable.
-    const connection = partial as Connection;
-
     const wire = (id: string) => JSON.stringify({ type: 'cf_agent_use_chat_request', id, init: {
       method: 'POST', body: JSON.stringify({ messages: [{ id, role: 'user', parts: [{ type: 'text', text: id }] }] }),
     } });
 
-    const a = harness.agent.onMessage(connection, wire('a'));
+    const a = receive(wire('a'));
 
     await entered.promise;
-    await harness.agent.onMessage(connection, wire('b'));
+    await receive(wire('b'));
     expect(seen).toHaveLength(2);
     expect(claims(harness).input(String(seen[0]?.kinuRequestId))).toEqual(['a']);
     expect(claims(harness).input(String(seen[1]?.kinuRequestId))).toEqual(['b']);
@@ -200,6 +197,17 @@ describe('request-owned chat inputs', () => {
     const pending = capturedInput(harness, 'pending-chat', 'ask B');
     pending.persist();
     await settle(harness, 'genesis-answer', 'What should I do first?');
+    const sdk = readFileSync(fileURLToPath(import.meta.resolve('@cloudflare/think')), 'utf8');
+    const ddl = /CREATE TABLE IF NOT EXISTS cf_think_submissions \([^)]*\)/.exec(sdk)?.[0];
+
+    if (ddl === undefined) throw new Error('the installed SDK has no durable submission table');
+    harness.db.run(ddl);
+    harness.db.run(`INSERT INTO cf_think_submissions
+      (submission_id, request_id, status, messages_json, created_at) VALUES (?, ?, ?, ?, ?)`, [
+      'harness-admitted', 'harness-admitted', 'running', JSON.stringify([
+        { id: 'durable-notice', role: 'user', parts: [{ type: 'text', text: 'the durable job notification' }] },
+      ]), 1,
+    ]);
     harness.agent.harnessAdmitChat('submission');
 
     const prepared = await harness.agent.beforeTurn(config([
