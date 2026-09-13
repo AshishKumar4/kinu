@@ -61,6 +61,11 @@ export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 // `exports` loopback resolves it under the compatibility date we deploy.
 export { CodemodeEgress } from '../../src/codemode-egress';
 
+// The devbox readiness refusal as DATA: the probe answers `resolveReadiness`
+// with both halves of `RestoreReadiness`, plus the thrown control that proves
+// why the refusal cannot ride an error class over RPC.
+export { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
+
 import * as v from 'valibot';
 
 /**

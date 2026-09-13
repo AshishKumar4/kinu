@@ -34,7 +34,7 @@
 
 import type { Process } from "@cloudflare/sandbox";
 import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { sandboxPreviewLabelOf } from "./lib/preview-origin";
 import type { SandboxPreviewExposures } from "./lib/preview-exposures";
@@ -249,7 +249,14 @@ export function adaptCloudflareSandbox(
 
   const onContainer = async <T>(run: () => Promise<T>): Promise<T> => {
     await configured();
-    await handle.ensureReady();
+    // Readiness arrives as DATA because a thrown refusal's name does not
+    // survive the DO RPC this stub is. The conversion is caller-side and
+    // classification-bearing on purpose: `unavailable` is the verdict every
+    // reader of `error.code` can rely on, where the normalized `Error` the
+    // transport hands back has nothing to say.
+    const readiness = await handle.resolveReadiness();
+
+    if (readiness.kind === 'pending') throw new KinuError('unavailable', readiness.reason);
 
     return await run();
   };

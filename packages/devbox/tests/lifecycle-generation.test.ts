@@ -649,8 +649,10 @@ describe('a failed restored service is never exposed and never reported ready', 
     const { box } = harnessed;
     failAttempt(harnessed, 'MISSING_CREDENTIALS');
     await expect(box.devboxStartup()).rejects.toThrow('MISSING_CREDENTIALS');
-    await expect(box.exec('ls')).rejects.toThrow('no attached work directory');
-    await expect(box.exec('ls')).rejects.toThrow('permanent → refuse');
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('no attached work directory') });
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('permanent → refuse') });
   });
 
   test('a stop on a box whose attach was refused stops the container with nothing to commit', async () => {
@@ -751,7 +753,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
       expect(container.destroys).toBe(0);
       expect(armed(container)).toBe(0);
       expect(ladder(rows)?.stage).toBe('replace');
-      await expect(box.exec('ls')).rejects.toThrow('transient → refuse');
+      await expect(box.exec('ls')).rejects.toMatchObject(
+        { message: expect.stringContaining('transient → refuse') });
     });
 
   test('storage exhaustion refuses at once: it repeats no work and moves no ladder', async () => {
@@ -764,7 +767,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
     expect({ armed: armed(container), destroys: container.destroys })
       .toEqual({ armed: 0, destroys: 0 });
     expect(ladder(rows)?.stage).toBeUndefined();
-    await expect(box.exec('ls')).rejects.toThrow('exhausted → refuse');
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('exhausted → refuse') });
   });
 
   test('permanent configuration refuses at once, without spending the ladder', async () => {
@@ -807,7 +811,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
       // Nothing was attached, and the attach was never even attempted.
       expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toEqual([]);
       expect(rows.has('devbox:last-attach')).toBe(false);
-      await expect(box.exec('ls')).rejects.toThrow('unreadable → refuse');
+      await expect(box.exec('ls')).rejects.toMatchObject(
+        { message: expect.stringContaining('unreadable → refuse') });
     });
 
   test('an attach that lands deletes the row, so the next failure starts fresh', async () => {
@@ -873,7 +878,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
     container.destroyFault = new Error('the container did not answer the signal');
     await expect(box.devboxStartup()).rejects.toThrow('did not answer the signal');
     expect(container.running.running).toBe(true);
-    await expect(box.exec('ls')).rejects.toThrow('could not be destroyed');
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('could not be destroyed') });
     expect(container.containerStarts).toBe(0);
   });
 
@@ -887,9 +893,9 @@ describe('one container identity is retried, then replaced, then refused', () =>
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
     expect(container.running.running).toBe(false);
-    // A caller arrives. `ensureReady` starts a container, its drive turns the
+    // A caller arrives. `resolveReadiness` starts a container, its drive turns the
     // generation over, and this attach lands.
-    await box.ensureReady();
+    await box.resolveReadiness();
     expect(container.containerStarts).toBe(1);
     expect((await box.devboxState()).ready).toBe(true);
     // The success is what clears the ladder.
@@ -907,7 +913,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
       rows.set(RECOVERY_KEY, seeded('replace'));
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
-      await expect(box.exec('ls')).rejects.toThrow('no attached work directory');
+      await expect(box.exec('ls')).rejects.toMatchObject(
+        { message: expect.stringContaining('no attached work directory') });
 
       // Repair attempt one still fails: refused again, and STILL no destruction.
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
@@ -946,7 +953,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     // The deployed shape: a box failed its attach with
     // OPERATION_INTERRUPTED, the taxonomy answered `stale-owner → retry`, and
     // the ONE schedule row that answer armed was the only thing that could
-    // re-drive it — `ensureReady` refused every operation on `unattached` and
+    // re-drive it — the readiness gate answered `pending` on `unattached` and
     // `kickStartup` no-opped on any phase but `unstarted`. Lose that write and
     // /create, /wake and every operation are inert for ever.
     const harnessed = harness(TestBox);
@@ -976,8 +983,10 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
 
-    await expect(box.exec('ls')).rejects.toThrow('A retry is already under way');
-    await expect(box.exec('ls')).rejects.toThrow('stale-owner → retry');
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('A retry is already under way') });
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('stale-owner → retry') });
     expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 0 });
   });
 
@@ -991,8 +1000,10 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await expect(box.devboxStartup()).rejects.toThrow('NO_SPACE');
     expect(armed(container)).toBe(0);
 
-    await expect(box.exec('ls')).rejects.toThrow('exhausted → refuse');
-    await expect(box.exec('ls')).rejects.toThrow('terminal: call attachNow()');
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('exhausted → refuse') });
+    await expect(box.exec('ls')).rejects.toMatchObject(
+      { message: expect.stringContaining('terminal: call attachNow()') });
     expect(stamps(container)).toBe(0);
   });
 

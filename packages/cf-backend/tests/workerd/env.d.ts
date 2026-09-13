@@ -21,6 +21,7 @@ import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type { CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall, PendingCancelResult } from './two-turn-shapes';
 import type { JsonValue } from '@kinu.run/core';
@@ -90,6 +91,11 @@ declare global {
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
+  // A devbox's readiness refusal must serialise over Workers RPC as data,
+  // not as a thrown class name. The probe is a narrow DO exposing only the
+  // two halves of `RestoreReadiness` plus the normalization control —
+  // deliberately NOT a sandbox stub, so it says nothing about containers.
+  DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

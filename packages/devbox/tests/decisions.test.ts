@@ -809,7 +809,7 @@ describe('arming must ignore the row being dispatched', () => {
   test('the guard the class uses is this one, not a row count', () => {
     // The whole defect was `length > 0`. Pinned so it cannot come back. The
     // guard now has TWO readers — `#arm` before it writes a row, and
-    // `ensureReady` before it drives a retry the schedule already owes — so it
+    // `resolveReadiness` before it drives a retry the schedule already owes — so it
     // is pinned where it lives, plus the delegation that keeps it single.
     const devbox = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
     const guard = devbox.slice(devbox.indexOf('async #pending('));
