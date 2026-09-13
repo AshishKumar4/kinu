@@ -759,9 +759,9 @@ export class FakeSandbox {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
 
-    if (command.includes('/usr/bin/squashfuse')) {
-      const quoted = quotedSegments(command);
-      const mountPoint = quoted.at(-1);
+    if (command.includes('/usr/local/bin/devbox-squashfuse')) {
+      const quoted = quotedSegments(command.slice(command.indexOf('/usr/local/bin/devbox-squashfuse')));
+      const mountPoint = quoted[1];
 
       if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
 

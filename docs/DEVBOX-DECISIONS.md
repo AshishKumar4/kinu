@@ -65,19 +65,24 @@ an app port), re-decided 2026-09-13 on P3. Status: rebuilding on
 (DECISIVE-2026-09-05.md, "Six fresh starts") were measured under the reversed
 shape and do not bear on the port-proven one.
 
-D2. Attach cost is O(M + L + D), not O(1). Attach mounts the store subtree
-and the base and legacy-delta lowers lazily, reads the chunked manifest
-(M records, one per changed file), and materialises every chunked file into
-the upper before readiness: for a changed big file that is its whole base
-plus its overrides, so D counts the full base bytes of each changed chunked
-file. Readiness is published only after that. Decided 2026-09-13 after three
-lazy designs were refuted: first-touch hydration (readiness would expose base
-bytes to supervised processes and previews), hydration on the first
-post-readiness command (same exposure), and serving overrides as a sparse
-delta lower (measured with fuse-overlayfs 1.7.1: a sparse newer inode shadows
-the whole base inode, holes read as zero; `tests/support/sparse-lower-probe.sh`).
-R2's O(1) attach needs a block-serving layer inside the container and is
-open (O2). Publication stays chunked (D4).
+D2. Storage attach processes O(M + H + L) metadata and reads zero file-payload
+bytes: M changed files, H other changed namespace records (including ancestor
+directories, deletions and hardlink names), L layer records. There is no
+stored-byte, stored-file-count or largest-changed-file term. This reverses
+the eager-materialization decision of 2026-09-13. V2 moves overrides out of
+the manifest into authenticated search pages. The read-only block lower
+composes ranges on demand; the lazy tree lower serves whole records.
+Deletions are pre-mounted `.wh.` whiteouts, the representation fuse-overlayfs
+1.7.1 uses when the backing overlay refuses mknod(0,0).
+
+Measured 2026-09-13 by `tests/block-lower.test.ts`: attach's block server read
+zero payload bytes and zero index pages; the overlay served exact
+base/chunk/hole/EOF bytes, deletions, replacements, hardlinks and symlinks.
+The eager control copied each changed chunked file's complete base; the new
+stack copies none. The sparse-inode counterexample still fails:
+`tests/support/sparse-lower-probe.sh`. This is a storage-work bound, not a
+30-second wall-clock guarantee. Service startup can demand an entire file
+or trigger its copy-up before lifecycle readiness. Publication stays D4.
 
 D3. `onStart` reaches the container only through the budgeted restore path
 after a port-proven start. `scripts/do-init-gate.ts` pins this. Its previous
@@ -116,12 +121,13 @@ remote objects; `resetIsolate()` keeps the disk. Decided 2026-09-13 from P1
 (`0a913d39c`). Before this the double kept the disk across a stop, so tests
 that passed under it proved reactivation, not restart.
 
-D7. Block-layer design gate. Status: designed, unimplemented. The conditional
-read-only composition design and proposed Lean statements are in
-[DEVBOX-BLOCK-LAYER.md](DEVBOX-BLOCK-LAYER.md). Evaluated 2026-09-13 on
-`feat/devbox-block-layer`, based on `df1694e9c`; this entry and the design
-are committed together. No candidate meets the strengthened full-hook
-bound for arbitrary restored workloads, so none is adopted.
+D7. Block-layer design gate. Status: storage half implemented on 2026-09-13.
+The conditional design is in [DEVBOX-BLOCK-LAYER.md](DEVBOX-BLOCK-LAYER.md).
+Manifest v2 is `f69af22cf`; the Rust/fuser lower is `7598a68a6`; the derived
+image is `ac6ae8f39`, digest-pinned for both product and bench. The exact
+stack is `block-lower:lower-delta/<generation>/.devbox-delta/tree:lower-base`.
+No implementation can bound arbitrary service-demanded work before readiness;
+the adopted read-only lower bounds storage attachment only.
 
 A read-only range-serving lower removes eager base-file copying from storage
 attach, but fuse-overlayfs copies the complete inode on a writable open.
@@ -135,13 +141,26 @@ FICLONE same-filesystem contract requires.
 V1 inline override arrays also invalidate O(M + L) when M counts files:
 the real planner produced 525 to 6,616,994 manifest bytes for one changed
 file and one deduplicated chunk, over synthetic logical sizes 64 KiB to
-1 GiB. A proposed V2 replaces `over` with a range-paged index reference
-inside the existing delta object and refuses V1 by version; no format
-change has shipped. Other changed namespace records must be counted too.
-D2, D4 and O2 remain in force. Measurements and exact commands:
-`kinu-logs/block-layer/evidence.json`. No product deployment or Lean proof
-was run, and no full-hook latency or callback-only publication bound is
-claimed.
+1 GiB. V2 replaces `over` with a 128-byte-page authenticated index reference
+inside the delta object and refuses V1 by version. The same changed-file
+record stays bounded while the index grows. C3 publishes 90,298 bytes in one
+object in the conformance harness. The conditional wire theorem's premises
+are unchanged: a record at most 4 KiB and encoding/framing overhead at most
+64 KiB; the four aligned index pages consume 512 bytes of that overhead.
+
+The image's high-level squashfuse assigned different inodes to two names
+of a hardlink; its same-version low-level driver preserves that identity.
+Both the source tarball and derived image are pinned in
+`packages/devbox/block-lower/upstream.json`. A mounted-archive overwrite
+probe returned new byte 66 in place of old byte 65. Each delta now gets a
+new UUID key and a CAS-published pointer. Retained metadata is merged with
+the upper; a sweep keeps an old delta while a live mount or fallback needs
+it. Publication remains cumulative in the changed set, not pending-only.
+
+The eager counterexamples `c3_attach_copies_the_whole_64mib_base` and
+`attach_materialization_has_no_constant_bound` are retired with the eager
+implementation. They do not describe v2 storage attach. No product deployment,
+full-hook latency guarantee or callback-only publication bound is claimed.
 
 ## Measurement contract for a strategy comparison
 
@@ -155,9 +174,7 @@ admitted only when every G gate passes; a refused run ranks nothing.
 
 O1. Live acceptance of the chunked chain on deployed Containers and R2 after
 the evidence corrections of 2026-09-12 (`6e6b9e43c`, `ccb5a2aab`).
-O2. A block-serving layer inside the container that composes a file from
-base ranges and delta chunks per read, so attach no longer copies changed
-big files (R2). Not scheduled; the owner decides whether the D2 cost is
-acceptable.
+O2. Storage implementation closed by D7. Deployed latency evidence remains
+part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is
 proposed; none is scheduled.

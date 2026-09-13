@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { buildDeltaIndex, DELTA_BLOCK_BYTES, type DeltaOverride } from '../src/delta-index';
-import type { DeltaManifest } from '../src/chunked-delta';
+import { buildDeltaAttachOps, type DeltaManifest } from '../src/chunked-delta';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
 const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}block-conformance-`));
@@ -36,9 +36,14 @@ test('real squashfuse and overlay compose indexed bytes with zero payload read a
   expected.fill(0, 2 * DELTA_BLOCK_BYTES, 3 * DELTA_BLOCK_BYTES);
   expected.fill(67, 6 * DELTA_BLOCK_BYTES);
   mkdirSync(`${root}/base/dir`, { recursive: true });
+  mkdirSync(`${root}/base/gone/sub`, { recursive: true });
+  mkdirSync(`${root}/base/replace`, { recursive: true });
   mkdirSync(`${root}/pkg/.devbox-delta/chunks`, { recursive: true });
   mkdirSync(`${root}/pkg/.devbox-delta/tree`, { recursive: true });
   writeFileSync(`${root}/base/dir/file`, base);
+  writeFileSync(`${root}/base/gone/sub/file`, 'deleted');
+  writeFileSync(`${root}/base/replace/child`, 'old directory child');
+  writeFileSync(`${root}/pkg/.devbox-delta/tree/replace`, 'replacement');
   writeFileSync(`${root}/expected`, expected);
   writeFileSync(`${root}/whole`, 'whole record\n');
   writeFileSync(`${root}/pkg/.devbox-delta/tree/whole`, 'whole record\n');
@@ -60,10 +65,12 @@ test('real squashfuse and overlay compose indexed bytes with zero payload read a
 
   const manifest: DeltaManifest = { v: 2,
     files: [{ kind: 'chunked', p: 'dir/file', s: expected.length, mode: 420, uid: 0, gid: 0, over: index.ref },
-      { kind: 'whole', p: 'whole', s: 13 }, { kind: 'whole', p: 'hardlink', s: 13 }, { kind: 'whole', p: 'link', s: 5 }],
-    dirs: [{ p: 'dir', mode: 493, uid: 0, gid: 0 }], deleted: [], treplace: [], links: [['whole', 'hardlink']] };
+      { kind: 'whole', p: 'whole', s: 13 }, { kind: 'whole', p: 'hardlink', s: 13 }, { kind: 'whole', p: 'link', s: 5 },
+      { kind: 'whole', p: 'replace', s: 11 }],
+    dirs: [{ p: 'dir', mode: 493, uid: 0, gid: 0 }], deleted: ['gone/sub/file'], treplace: ['replace'], links: [['whole', 'hardlink']] };
 
   writeFileSync(`${root}/pkg/.devbox-delta/manifest.json`, JSON.stringify(manifest));
+  writeFileSync(`${root}/namespace.sh`, ['set -e', ...buildDeltaAttachOps(manifest, '/var/tmp/devbox/upper')].join('\n'));
 
   const result = spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
     '-v', `${root}:/fixture:ro`, '-v', `${join(import.meta.dir, 'support/block-lower-probe.sh')}:/probe.sh:ro`,

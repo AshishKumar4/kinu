@@ -1466,7 +1466,47 @@ describe('red direction — every new cell fails against a deliberately broken a
 });
 
 describe('explicit collapse paths', () => {
-  for (const profile of ['chunked', 'full-upper', 'stuck-sidecar'] as const) {
+  test('successive deltas are immutable and a mounted archive survives the sweep', async () => {
+    const arm = CONFORMANCE_ARMS['snapshot-chain']();
+    await attach(arm);
+    await arm.workspace.write('base', 'base bytes');
+    expectCommitted(await arm.storage().checkpoint('quiesce'), 'base');
+    await arm.workspace.write('first', 'first delta');
+    expectCommitted(await arm.storage().checkpoint('tick'), 'first delta');
+    const first = (await arm.declaredPayload()).find(object => object.names.includes('delta'));
+
+    if (first === undefined) throw new Error('first delta not published');
+    const bytes = arm.durable.get(first.key);
+    expect((await wake(arm)).kind).toBe('attached');
+    await arm.workspace.write('second', 'second delta');
+    expectCommitted(await arm.storage().checkpoint('tick'), 'second delta');
+    const second = (await arm.declaredPayload()).find(object => object.names.includes('delta'));
+    expect(second?.key).not.toBe(first.key);
+    expect(arm.durable.get(first.key)).toEqual(bytes);
+    const expected = await arm.workspace.snapshot();
+    expect((await wake(arm)).kind).toBe('attached');
+    await expectTreeExact(arm, expected, 'retained metadata merged at a new key');
+    await arm.workspace.write('third', 'third delta');
+    expectCommitted(await arm.storage().checkpoint('tick'), 'third delta');
+    expect(arm.durable.get(first.key)).toBeNull();
+  });
+
+  test('an overlay without its composed block mount cannot publish readiness on a repeated attach', async () => {
+    const arm = CONFORMANCE_ARMS['snapshot-chain']();
+    await attach(arm);
+    await arm.workspace.write('base', 'base bytes');
+    expectCommitted(await arm.storage().checkpoint('quiesce'), 'base');
+    await arm.workspace.write('delta', 'delta bytes');
+    expectCommitted(await arm.storage().checkpoint('tick'), 'delta');
+    expect((await wake(arm)).kind).toBe('attached');
+    const block = [...arm.disk().mounts].find(([, mount]) => mount.fstype === 'fuse.devbox-block');
+
+    if (block === undefined) throw new Error('composed lower missing');
+    arm.disk().unmount(block[0]);
+    await expect(attach(arm)).rejects.toThrow('incomplete composed mounts');
+  });
+
+  for (const profile of ['chunked', 'full-upper', 'block-start-refusal'] as const) {
     test(`${profile} keeps its external fault direction and restores exact bytes`, async () => {
       const arm = CONFORMANCE_ARMS['snapshot-chain']();
       await attach(arm);
@@ -1490,14 +1530,15 @@ describe('explicit collapse paths', () => {
 
       arm.replaceContainer();
 
-      if (profile === 'stuck-sidecar') {
-        arm.disk().processFaults.push({ match: /fusermount3 -u.*\/lower-delta\//, exitCode: 1, stderr: 'Device or resource busy' });
+      if (profile === 'block-start-refusal') {
+        arm.disk().processFaults.push({ match: /^# devbox-block-lower-v2/, exitCode: 1, stderr: 'block server refused the mount' });
+        await expect(attach(arm)).rejects.toThrow();
+        expect(arm.disk().processFaultsReached).not.toHaveLength(0);
+        arm.disk().processFaults.length = 0;
       }
 
       expect((await attach(arm)).kind).toBe('attached');
       await expectTreeExact(arm, committed, 'after the forced restore');
-
-      if (profile === 'stuck-sidecar') expect(arm.disk().processFaultsReached).not.toHaveLength(0);
 
       await arm.workspace.write('after.txt', 'next checkpoint');
       const expected = await arm.workspace.snapshot();

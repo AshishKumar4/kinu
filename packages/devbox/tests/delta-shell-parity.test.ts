@@ -22,7 +22,7 @@ import {
   DELTA_BLOCK_BYTES,
   DELTA_MANIFEST_NAME,
   DeltaManifestSchema,
-  buildDeltaMaterializeOps,
+  buildDeltaAttachOps,
   buildDeltaStageOps,
   deltaBaseStatCommand,
   deltaBlockHashCommand,
@@ -305,23 +305,19 @@ describe('the delta shell against bash', () => {
     expect(manifest).toEqual(plan.manifest);
   });
 
-  test('the materialize leaves the same upper, and it is the editor\'s', () => {
-    const ops = buildDeltaMaterializeOps(plan.manifest, {
-      sideDir: real.pkg, upperDir: real.upper2, lowerBase: real.base, mergedDir: real.upper2, indexes: plan.indexes,
-    });
-
-    for (const phase of [ops.pre, ops.post]) {
-      const command = batch(phase);
-      expect(realShell(command).exitCode).toBe(0);
-      expect(deltaCommand(command, disk)!.exitCode).toBe(0);
-    }
+  test('attach prepares exact directory metadata without copying a file into the upper', () => {
+    const command = batch(buildDeltaAttachOps(plan.manifest, real.upper2));
+    expect(realShell(command).exitCode).toBe(0);
+    expect(deltaCommand(command, disk)?.exitCode).toBe(0);
 
     const served = readReal(real.upper2);
     expect(sameTree(served, disk.snapshot(real.upper2), '')).toBe('');
     // THE PRODUCT'S OWN PROPERTY, on real bytes: base plus delta is the upper
     // the editor left, for every path the delta carries — the pruned
     // subtrees excepted, which no delta carries by policy.
-    const carried = fixture().upper.filter((entry) => !entry.path.split('/').includes('node_modules'));
+    const carried = fixture().upper.filter((entry) => entry.kind === 'dir' && !entry.path.split('/').includes('node_modules'));
     expect(sameTree(carried, served, '')).toBe('');
+    expect(served.every(entry => entry.kind === 'dir')).toBe(true);
+    expect(command).not.toMatch(/\b(cp|dd|truncate|rm)\b/);
   });
 });

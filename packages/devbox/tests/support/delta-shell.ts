@@ -21,7 +21,8 @@
 
 import { createHash } from 'node:crypto';
 
-import { DELTA_MANIFEST_NAME } from '../../src/chunked-delta';
+import { DELTA_MANIFEST_NAME, DELTA_BLOCK_BYTES, DeltaManifestSchema, readDeltaIndex } from '../../src/chunked-delta';
+import * as v from 'valibot';
 import type { ContainerDisk } from './strategy-machine';
 import {
   contentSize,
@@ -67,6 +68,7 @@ const OP = {
   manifest: new RegExp(String.raw`^printf %s ${Q} \| base64 -d > ${Q}$`),
   cat: new RegExp(String.raw`^cat ${Q} 2>/dev/null$`),
   base64: new RegExp(String.raw`^base64 ${Q}$`),
+  mknod: new RegExp(String.raw`^: > ${Q}$`),
 };
 
 /**
@@ -76,9 +78,66 @@ const OP = {
  */
 export function deltaCommand(command: string, disk: ContainerDisk): ShellReply | undefined {
   if (!command.startsWith('# devbox-')) return undefined;
+
+  if (command.startsWith('# devbox-block-lower-v2')) return composeBlockMount(command, disk);
   const shell = new DeltaShell(disk);
 
   return shell.run(command.split('\n'));
+}
+
+/** This in-memory filesystem oracle composes eagerly, as its squashfs model
+ * unpacks eagerly. Real IO bounds are measured by block-lower.test.ts. */
+function composeBlockMount(command: string, disk: ContainerDisk): ShellReply {
+  const args = new Map([...command.matchAll(new RegExp(String.raw`--([a-z-]+) ${Q}`, 'g'))].map(match => [match[1], match[2]]));
+
+  const get = (key: string): string => {
+    const value = args.get(key);
+
+    if (value === undefined) throw new Error(`block lower lacks ${key}`);
+
+    return unquote(value);
+  };
+
+  const delta = get('delta');
+  const base = get('base');
+  const mount = get('mount');
+  const bytes = disk.readFile(`${delta}/${DELTA_MANIFEST_NAME}`);
+
+  if (bytes === undefined) throw new Error('missing block manifest');
+  const manifest = v.parse(DeltaManifestSchema, JSON.parse(new TextDecoder().decode(bytes)));
+  const tree = disk.tree(mount);
+  tree.plant(manifest.dirs.map((dir, ino) => ({ path: dir.p, ino: ino + 1, kind: 'dir', mode: dir.mode, metadata: { ...ROOT_METADATA, uid: dir.uid, gid: dir.gid } })));
+
+  for (const file of manifest.files) {
+    if (file.kind !== 'chunked') continue;
+    const output = new Uint8Array(file.s);
+    const fromBase = disk.readFile(`${base}/${file.p}`);
+
+    if (fromBase !== undefined) output.set(fromBase.subarray(0, file.s));
+    const index = disk.readFile(`${delta}/.devbox-delta/${file.over.index}`);
+
+    if (index === undefined) throw new Error('missing block index');
+
+    for (const override of readDeltaIndex(file.over, file.s, index)) {
+      if (override.src === 'hole') output.fill(0, override.o, Math.min(file.s, override.o + DELTA_BLOCK_BYTES));
+      else {
+        const chunk = disk.readFile(`${delta}/.devbox-delta/chunks/${override.d}`);
+
+        if (chunk === undefined || createHash('sha256').update(chunk).digest('hex') !== override.d) throw new Error('corrupt block chunk');
+        output.set(chunk, override.o);
+      }
+    }
+
+    tree.writeFile(file.p, output, { ...ROOT_METADATA, uid: file.uid, gid: file.gid });
+    const node = tree.node(file.p);
+
+    if (node === undefined) throw new Error('composed inode missing');
+    node.mode = file.mode;
+  }
+
+  disk.mount(mount, { source: `devbox-block:${get('generation')}`, fstype: 'fuse.devbox-block', options: 'ro' });
+
+  return { stdout: '', stderr: '', exitCode: 0 };
 }
 
 /** `%T@`: seconds and a ten-digit fraction, as GNU find prints a time. */
@@ -213,6 +272,20 @@ class DeltaShell {
     if ((m = OP.manifest.exec(line)) !== null) return this.#manifest(unquote(m[1]!), unquote(m[2]!));
 
     if ((m = OP.cat.exec(line)) !== null) return this.#cat(unquote(m[1]!));
+
+    if ((m = OP.mknod.exec(line)) !== null) {
+      const path = m[1];
+
+      if (path === undefined) throw new Error('whiteout lacks a path');
+      const owned = this.#dest(unquote(path));
+      const prefix = unquote(path).slice(0, -owned.relative.length - 1);
+      const whiteouts = this.disk.whiteouts.get(prefix) ?? new Set<string>();
+      const slash = owned.relative.lastIndexOf('/');
+      whiteouts.add(owned.relative.slice(0, slash + 1) + owned.relative.slice(slash + 5));
+      this.disk.whiteouts.set(prefix, whiteouts);
+
+      return 0;
+    }
 
     if ((m = OP.base64.exec(line)) !== null) {
       const path = m[1];
