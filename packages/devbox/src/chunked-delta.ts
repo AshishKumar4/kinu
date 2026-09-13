@@ -213,7 +213,7 @@ export function deltaBlockHashCommand(input: {
       `mkdir -p ${shellPath(u)}`,
       `split -b ${DELTA_BLOCK_BYTES} -a 4 ${shellPath(file.upperPath)} ${shellPath(`${u}/x`)} || false`,
       `printf 'USIDE ${file.index}\\n'`,
-      `sha256sum ${shellPath(`${u}/`)}* 2>/dev/null || false`,
+      `find ${shellPath(u)} -type f -exec sha256sum {} + || false`,
       `rm -rf ${shellPath(u)}`,
     );
 
@@ -222,7 +222,7 @@ export function deltaBlockHashCommand(input: {
       lines.push(
         `if test -s ${shellPath(file.basePath)}; then mkdir -p ${shellPath(b)}; `
         + `split -b ${DELTA_BLOCK_BYTES} -a 4 ${shellPath(file.basePath)} ${shellPath(`${b}/x`)} || false; `
-        + `printf 'BSIDE ${file.index}\\n'; sha256sum ${shellPath(`${b}/`)}* 2>/dev/null || false; `
+        + `printf 'BSIDE ${file.index}\\n'; find ${shellPath(b)} -type f -exec sha256sum {} + || false; `
         + `rm -rf ${shellPath(b)}; else printf 'BEMPTY ${file.index}\\n'; fi`,
       );
     }

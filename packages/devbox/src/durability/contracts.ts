@@ -20,6 +20,14 @@
 
 import * as v from 'valibot';
 
+/** Evidence for publishing a legacy whole-upper delta instead of chunked. */
+export const DeltaFallbackSchema = v.object({
+  reason: v.picklist(['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed']),
+  detail: v.string(),
+});
+
+export type DeltaFallback = v.InferOutput<typeof DeltaFallbackSchema>;
+
 const DecimalSchema = v.pipe(
   v.string(),
   v.regex(/^(?:0|[1-9]\d*)$/, 'Expected a canonical non-negative decimal string'),

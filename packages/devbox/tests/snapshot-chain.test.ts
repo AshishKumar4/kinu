@@ -36,6 +36,7 @@ import {
   deltaObjectKey,
   isChainId,
   metadataObjectKey,
+  normalizeChainState,
   publishCommand,
   shouldRebase,
   snapshotChainStorage,
@@ -3652,6 +3653,44 @@ describe('the generation lifecycle, against ONE box', () => {
     expect(record.state?.fallback).toBeUndefined();
     expect(record.objects.has(baseObjectKey(STORE_ROOT, rebased))).toBe(true);
   });
+});
+
+describe('a legacy delta publication carries its fallback evidence', () => {
+  for (const reason of ['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed'] as const) {
+    test(reason, async () => {
+      const record = harness({ state: chainState(), mounts: MOUNTED });
+      const exec = record.ports.exec;
+      const type = reason === 'whiteout-probe-failed' ? 'c' : 'f';
+      const size = reason === 'block-hash-failed' ? 65536 : 32;
+      const encoded = Buffer.from([type, '42', '1', '644', '0', '0', String(size), '0', '0', '', 'file', ''].join('\0')).toString('base64');
+      record.ports.exec = async command => {
+        let stdout: string | undefined;
+
+        if (command.startsWith('# devbox-probe-v1')) stdout = reason === 'upper-probe-failed' ? '1 failed' : reason === 'upper-empty' ? '0 ' : `0 ${encoded}`;
+
+        if (command.startsWith('# devbox-whiteout-v1')) stdout = '';
+
+        if (command.startsWith('# devbox-basestat-v1')) stdout = reason === 'base-probe-failed' ? 'garbled' : 'ABSENT';
+
+        if (command.startsWith('# devbox-blockhash-v1')) stdout = 'USIDE 0\n';
+
+        if (reason === 'stage-failed' && command.startsWith('# devbox-stage-v1')) return { stdout: '', stderr: 'stage refused', exitCode: 1 };
+
+        return stdout === undefined ? await exec(command) : { stdout, stderr: '', exitCode: 0 };
+      };
+
+      expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+      expect(record.state?.deltaFormat).toBeUndefined();
+      expect(record.state?.deltaFallback?.reason).toBe(reason);
+      expect(record.state?.deltaFallback?.detail.length).toBeGreaterThan(0);
+      const fallback = record.state?.deltaFallback;
+      expect(normalizeChainState({ mode: 'chain', rev: 2, at: 1, base: { id: CHAIN_ID, bytes: BASE_BYTES },
+        deltaFallback: fallback === undefined ? undefined : { ...fallback },
+      })?.deltaFallback).toEqual(fallback);
+      expect(record.calls.some(call => call.includes('"event":"devbox.checkpoint.delta.fallback"') && call.includes(`"reason":"${reason}"`))).toBe(true);
+      expect(record.calls.some(call => call.includes('"event":"devbox.checkpoint.published"') && call.includes(`"reason":"${reason}"`))).toBe(true);
+    });
+  }
 });
 
 describe('the retained fallback', () => {

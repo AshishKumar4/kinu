@@ -49,7 +49,7 @@ import {
   mergeDeltaPublication,
   readDeltaIndex,
 } from './chunked-delta';
-import type { StoragePhase } from './durability/contracts';
+import { DeltaFallbackSchema, type DeltaFallback, type StoragePhase } from './durability/contracts';
 import { describeThrown as describe, findMount } from './lifecycle';
 import {
   DEVBOX_RUNTIME_DIR,
@@ -208,7 +208,7 @@ export function supersedeGeneration(
 ): Pick<ChainState, 'fallback' | 'orphans'> {
   if (previous.fallback === undefined) {
     return {
-      fallback: { base: previous.base, delta: previous.delta, deltaFormat: previous.deltaFormat },
+      fallback: { base: previous.base, delta: previous.delta, deltaFormat: previous.deltaFormat, deltaFallback: previous.deltaFallback },
       orphans: previous.orphans,
     };
   }
@@ -391,11 +391,10 @@ interface ChainDeltaLayer extends ChainLayer {
   readonly id?: string | undefined;
 }
 
-/** ONE GENERATION: the immutable base, and the cumulative changed set once one
- *  has landed. Both live under one `<box>/backups/<uuid>/` prefix, so a
- *  generation is either wholly referenced or wholly garbage. `ChainState` IS
- *  its current generation and `fallback` is the same shape, so promoting the
- *  fallback is a spread. */
+type DeltaPublication = { kind: 'chunked'; layer: ChainLayer } | { kind: 'whole-upper'; fallback: DeltaFallback };
+
+/** An immutable base and its cumulative changed set. A retained fallback
+ * carries the same format and fallback evidence as the current generation. */
 export interface ChainGeneration {
   /** The full base. Immutable once written. */
   readonly base: ChainBaseLayer;
@@ -408,6 +407,8 @@ export interface ChainGeneration {
   *  record written before chunked deltas existed holds a full delta; a box
   *  that wrote one keeps serving it until its next delta commit replaces it. */
   readonly deltaFormat?: 'chunked' | undefined;
+  /** Evidence for publishing a legacy whole-upper delta instead of chunked. */
+  readonly deltaFallback?: DeltaFallback | undefined;
 }
 
 /** Everything a box knows about its own chain. One record, one writer,
@@ -472,6 +473,7 @@ const ChainGenerationSchema = v.object({
     objectVersion: ObjectVersionSchema,
   })),
   deltaFormat: v.optional(v.picklist(['chunked'])),
+  deltaFallback: v.optional(DeltaFallbackSchema),
 });
 
 const ChainStateSchema = v.object({
@@ -504,6 +506,7 @@ function generationOf(row: v.InferOutput<typeof ChainGenerationSchema>): ChainGe
       objectVersion: row.delta.objectVersion,
     },
     deltaFormat: row.deltaFormat,
+    deltaFallback: row.deltaFallback,
   };
 }
 
@@ -1566,7 +1569,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // The mark described another generation's changed set. An undefined
       // mark never matches, so the next tick archives rather than skips.
       upperMark: undefined,
-      fallback: { base: state.base, delta: state.delta, deltaFormat: state.deltaFormat },
+      fallback: { base: state.base, delta: state.delta, deltaFormat: state.deltaFormat, deltaFallback: state.deltaFallback },
       lastFailure: { at: ports.now(), reason },
     };
 
@@ -1731,20 +1734,19 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
   /**
    * Stage the upper as a CHUNKED delta and publish it under the delta key, or
-   * answer null when this host cannot (the probe did not run, `split` is
-   * absent, a fact disagreed mid-checkpoint): the caller then archives the
-   * whole upper as before, so a chunked host is faster and every other host
-   * is exactly what it was. See `chunked-delta.ts` for the format.
+   * report the evidence that requires a whole-upper publication. The caller
+   * persists that reason beside the published pointer. A retained chunked
+   * delta refuses fallback because the upper alone no longer holds its data.
    *
    * ONLY WHOLE OBJECT: the package is one squashfs, so the object count per
    * checkpoint stays at one whatever the changed set holds.
    */
-  const stageChunkedDelta = async (chainId: string, deltaId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<ChainLayer | null> => {
-    const fallback = (why: string): null => {
-      if (retained !== undefined) throw new Error(`refusing to lose the retained delta: ${why}`);
-      ports.log(`${DEVBOX_WORKDIR} chain ${chainId}: archiving the whole upper because ${why}`);
+  const stageChunkedDelta = async (chainId: string, deltaId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<DeltaPublication> => {
+    const fallback = (reason: DeltaFallback['reason'], detail: string) => {
+      if (retained !== undefined) throw new Error(`refusing to lose the retained delta: ${reason}: ${detail}`);
+      ports.log(JSON.stringify({ event: 'devbox.checkpoint.delta.fallback', chainId, deltaId, reason, detail }));
 
-      return null;
+      return { kind: 'whole-upper', fallback: { reason, detail } } satisfies DeltaPublication;
     };
 
     const excludes: string[] = [];
@@ -1760,10 +1762,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     try {
       probe = parseDeltaProbe((await ports.exec(deltaProbeCommand(upperDir, excludes))).stdout);
     } catch (error) {
-      return fallback(`the upper probe did not answer: ${describe({ cause: error })}`);
+      return fallback('upper-probe-failed', `the upper probe did not answer: ${describe({ cause: error })}`);
     }
 
-    if (probe.length === 0) return fallback('the probe listed nothing');
+    if (probe.length === 0) return fallback('upper-empty', 'the probe listed nothing');
     // ROOM TO STAGE IT, asked before staging: the package and the hash
     // scratch are bounded by the upper's own bytes, so a disk short of those
     // stages in tmpfs exactly as the whole-tree archive does.
@@ -1782,7 +1784,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
       const lines = statted.stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
 
-      if (lines.length !== devices.length) return fallback('the whiteout probe answered short');
+      if (lines.length !== devices.length) return fallback('whiteout-probe-failed', 'the whiteout probe answered short');
       devices.forEach((path, at) => { if (lines[at] === '0,0') whiteouts.add(path); });
     }
 
@@ -1793,7 +1795,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       try {
         baseFacts = parseDeltaBaseStat((await ports.exec(deltaBaseStatCommand(carried, lowerBase))).stdout, carried);
       } catch (error) {
-        return fallback(`the base probe did not answer: ${describe({ cause: error })}`);
+        return fallback('base-probe-failed', `the base probe did not answer: ${describe({ cause: error })}`);
       }
     }
 
@@ -1824,7 +1826,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         hashes = parseDeltaBlockHashes(hashed.stdout, wanted);
       } catch (error) {
         if (!(error instanceof Error) || error.message !== 'NOSPLIT') {
-          return fallback(`the block hashes did not answer: ${describe({ cause: error })}`);
+          return fallback('block-hash-failed', `the block hashes did not answer: ${describe({ cause: error })}; exit ${hashed.exitCode}; ${hashed.stderr}`);
         }
 
         // No `split` on this host: big files travel whole, still one object.
@@ -1843,11 +1845,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     try {
       await runOpsBatched('staging the chunked delta', buildDeltaStageOps(plan, { upperDir, pkgDir }));
     } catch (error) {
-      return fallback(`the stage did not complete: ${describe({ cause: error })}`);
+      return fallback('stage-failed', `the stage did not complete: ${describe({ cause: error })}`);
     }
 
     try {
-      return await stageAndPut(deltaObjectKey(root, deltaId), pkgDir, [], storeHeld);
+      return { kind: 'chunked', layer: await stageAndPut(deltaObjectKey(root, deltaId), pkgDir, [], storeHeld) };
     } finally {
       // The package lives in memory when the disk was short; it is released
       // whether or not the publication landed.
@@ -2040,6 +2042,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     let layer: ChainLayer;
     const deltaId = fresh ? undefined : crypto.randomUUID();
     let deltaFormat: 'chunked' | undefined;
+    let deltaFallback: DeltaFallback | undefined;
 
     if (fresh) {
       layer = await stageAndPut(
@@ -2064,7 +2067,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // drops was only ever "durable in the delta" until the next rebase.
       // CHUNKED FIRST: changed extents plus a per-file map in one object; a
       // host that cannot stage one archives the whole upper exactly as before
-      // (`stageChunkedDelta` answers null and says why).
+      // (`stageChunkedDelta` returns a named format decision).
       const mounted = deltaLayerServed(await shell.readMounts(), chainId);
 
       const retained = mounted && previous.deltaFormat === 'chunked'
@@ -2074,10 +2077,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
       if (deltaId === undefined) throw new Error('delta publication has no identity');
       const chunked = await stageChunkedDelta(chainId, deltaId, storeHeld, retained ?? undefined);
-      deltaFormat = chunked === null ? undefined : 'chunked';
-      layer = chunked ?? await stageAndPut(
-        deltaObjectKey(root, deltaId), upperDir, ports.archiveExcludes(), storeHeld,
-      );
+
+      if (chunked.kind === 'chunked') {
+        deltaFormat = 'chunked';
+        layer = chunked.layer;
+      } else {
+        deltaFallback = chunked.fallback;
+        layer = await stageAndPut(deltaObjectKey(root, deltaId), upperDir, ports.archiveExcludes(), storeHeld);
+      }
     }
 
     // State first, cleanup second (header, "Ordering under crash"): a crash
@@ -2089,6 +2096,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       delta: fresh ? undefined : { ...layer, id: deltaId },
       retiredDeltas: retirementAfter(previous),
       deltaFormat: fresh ? undefined : deltaFormat,
+      deltaFallback,
       at: ports.now(),
       changeVersion: version,
       upperMark,
@@ -2103,6 +2111,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await publish(previous, committed, async () => {
       await ports.exec(`rm -rf ${shellPath(stageDir)}`);
     });
+    ports.log(JSON.stringify({ event: 'devbox.checkpoint.published', chainId, deltaId, deltaFormat, deltaFallback }));
 
     // THIS UPPER *IS* THE DELTA JUST PUBLISHED, so the stamp says so where the
     // next attach reads it. A base or a rebase stamps nothing: its generation

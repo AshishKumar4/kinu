@@ -264,7 +264,8 @@ describe('the delta shell against bash', () => {
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);
     const hashedByDisk = deltaCommand(hashCommand, disk)!;
-    expect(hashedByDisk.stdout).toBe(hashedByBash.stdout);
+    // find batches argv safely; directory iteration order is not wire order.
+    expect(parseDeltaBlockHashes(hashedByDisk.stdout, wanted)).toEqual(parseDeltaBlockHashes(hashedByBash.stdout, wanted));
     expect(hashedByDisk.exitCode).toBe(hashedByBash.exitCode);
     const hashes = parseDeltaBlockHashes(hashedByBash.stdout, wanted);
 
