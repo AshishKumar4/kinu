@@ -32,7 +32,7 @@ import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { diagnostics, tolerate, toKinuError, type ErrorCode } from '../obs/index';
+import { classifyErrorCode, diagnostics, tolerate, toKinuError, type ErrorCode } from '../obs/index';
 import { abortableSleep } from '../providers/pacing';
 import { stableStringify } from '../safety/argument-digest';
 import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
@@ -517,7 +517,10 @@ const ADVISOR_REVIEW_MAX_ATTEMPTS = 3;
  * passing while the work may still be running; `io` is the transport itself
  * breaking (ECONNRESET). Everything else is definitive: `bad_input` and
  * `denied` are the request refused, `unsupported` and `missing` will not
- * exist on retry, `cancelled` is the caller stopping, and `oom` recurs.
+ * exist on retry, `cancelled` is the caller stopping, and `oom` recurs. An
+ * UNCLASSIFIED cause earns no guess at all: an unknown failure is definitive,
+ * never presumed transient — the classifier returns null rather than guess,
+ * and this list must not be extended to cover it.
  */
 const ADVISOR_TRANSIENT_CODES: readonly ErrorCode[] = ['unavailable', 'timeout', 'io'];
 
@@ -737,7 +740,9 @@ export function markAdvisorLaneStarted(
  * failure earns another attempt, up to {@link ADVISOR_REVIEW_MAX_ATTEMPTS},
  * and every attempt's failure is stated on `advisor.review_failed` with its
  * number. An exhausted lane is a turn with no advice, answered as null. A
- * definitive failure is a defect in the review itself and still throws.
+ * classified definitive failure is a defect in the review itself and still
+ * throws; an unclassified one is definitive without being classified — one
+ * attempt, one report, no advice — since retrying it would be a guess.
  */
 export async function reviewRecordedTurn(deps: {
   readonly snapshot: AdvisorRecoverySnapshot;
@@ -773,11 +778,19 @@ export async function reviewRecordedTurn(deps: {
       // stays unreviewed says how many reviews it cost.
       diagnostics.failure('advisor.review_failed', failure, { attempt });
 
-      // A definitive failure is a defect in the review itself and throws, as
-      // before. A transient one gets its next attempt on the shared recovery
-      // pace; an exhausted one is a turn with no advice, never a fabricated
-      // note.
-      if (!ADVISOR_TRANSIENT_CODES.includes(failure.code)) throw failure;
+      // A classified definitive failure is a defect in the review itself and
+      // throws, as before. A transient one gets its next attempt on the
+      // shared recovery pace; an exhausted one is a turn with no advice,
+      // never a fabricated note. The retry decision reads the CAUSE's own
+      // classification, not the fallback code: `otherwise` is what the lane
+      // reports, and retrying on it would guess "transient" for a failure
+      // nothing recognised. An unclassified cause is definitive on its own —
+      // one attempt, one report, no advice.
+      const classified = classifyErrorCode({ cause });
+
+      if (classified !== null && !ADVISOR_TRANSIENT_CODES.includes(classified)) throw failure;
+
+      if (classified === null) return null;
 
       if (attempt < ADVISOR_REVIEW_MAX_ATTEMPTS) await abortableSleep(recoveryBackoffMs(attempt - 1));
     }
