@@ -70,6 +70,49 @@ async function opening(): Promise<Harness> {
 }
 
 describe('request-owned chat inputs', () => {
+  test('alarm recovery leaves the live Think root claim with its foreground owner', async () => {
+    const harness = await opening();
+    const turn = claims(harness).latestTurn();
+
+    if (turn === null) throw new Error('no root turn was admitted');
+    expect(await harness.agent.hasSandboxBackgroundWork()).toBe(true);
+    const host = harness.agent.observeActorHost();
+    const acquire = host.acquire.bind(host);
+    let acquired = 0;
+    host.acquire = async (reference) => {
+      acquired += 1;
+
+      return acquire(reference);
+    };
+
+    await harness.agent._kinuTerminalRetryTick();
+    expect(acquired).toBeGreaterThan(0);
+    expect(claims(harness).read(turn.turnId)?.status).toBe('admitted');
+    await settle(harness, 'answer', 'complete answer');
+  });
+
+  test('the foreground owner stays live while its response is being converted for settlement', async () => {
+    const harness = await opening();
+    const ending = settle(harness, 'answer', 'complete answer');
+    const claimed = claims(harness).latestTurn()?.status;
+    const busy = harness.agent.hasSandboxBackgroundWork();
+    await ending;
+
+    expect(claimed).toBe('admitted');
+    expect(await busy).toBe(true);
+    expect(claims(harness).latestTurn()?.status).toBe('settled');
+  });
+
+  test('alarm recovery still classifies a genuinely idle unverified root claim', async () => {
+    const warm = await opening();
+    const turn = claims(warm).latestTurn();
+
+    if (turn === null) throw new Error('no root turn was admitted');
+    const cold = await reactivateOrchestratorHarness(warm.db);
+    await cold.agent._kinuTerminalRetryTick();
+    expect(claims(cold).read(turn.turnId)).toMatchObject({ status: 'settled', outcome: 'indeterminate' });
+  });
+
   test.each([
     ['every-tool', 'List every tool you can call right now, one per line, names only, nothing else.'],
     ['slate', 'Create the hello slate and start its preview.'],

@@ -1571,12 +1571,6 @@ export abstract class ActorAgent extends Think<Env> {
     // trail.
     const errorText = result.error?.slice(0, 500);
     this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status);
-    // Clear the in-flight flag once the turn is durably completed — forkAgent
-    // is allowed again from here forward. Evolution (the orchestrator's detached engine.reviewTurn)
-    // runs fire-and-forget and does NOT extend the busy window.
-    this._inFlight = false;
-    this._turnOperation = null;
-    this._cliCwd = null;
     // The turn's durable claim closes here, named by what the response did.
     // The claim carries an OUTCOME rather than vanishing, so a later reader can
     // tell a turn that completed from one an eviction left open — which a
@@ -1599,6 +1593,11 @@ export abstract class ActorAgent extends Think<Env> {
     this.settleTurnClaim(result.status === 'completed'
       ? 'completed'
       : result.status === 'aborted' ? 'aborted' : 'error');
+    // Conversion and the durable context/claim close still belong to this
+    // foreground owner. Requeues begin only after that ownership is released.
+    this._inFlight = false;
+    this._turnOperation = null;
+    this._cliCwd = null;
     // Order matters: the flag is already clear, so the leftover steer enqueues
     // as a turn of its own instead of buffering for a turn that is over.
     this.rerunLeftoverSteers();
