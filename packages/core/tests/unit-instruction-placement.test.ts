@@ -110,7 +110,6 @@ function promptFor(opts: Partial<SystemPromptOptions>): string {
   return buildSystemPromptSync(rt, {
     soulOverride: 'You are Kinu.',
     availableTools: ['file', 'run'],
-    workMode: 'build',
     model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
     currentDate: '2026-01-01',
     ...opts,

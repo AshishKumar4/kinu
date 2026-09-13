@@ -504,9 +504,8 @@ export interface AssignedTurnFraming {
  * names, role, identity — because those are facts only a backend holds. What is
  * decided HERE is what makes it an ASSIGNED turn:
  *
- *   - `planSubmissionAvailable` is false. A delegated turn reports to whoever
- *     assigned it; owning an independent plan review is the other case, and
- *     `PromptSurfaceOptions` states that distinction where the flag is declared.
+ *   - the assigned turn's resolved mode and submission reach arrive through
+ *     its dynamic context reader, not through this static system framing.
  *   - the brief is the turn's one opening message, in the user role, because
  *     that is what it is: input to the turn rather than policy for it.
  *
@@ -525,7 +524,7 @@ export function assignedTurnFraming(
   },
 ): AssignedTurnFraming {
   return {
-    system: buildSystemPromptSync(rt, { ...input.surface, planSubmissionAvailable: false }),
+    system: buildSystemPromptSync(rt, input.surface),
     messages: [{ role: 'user', content: input.brief }],
   };
 }

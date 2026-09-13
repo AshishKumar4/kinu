@@ -46,7 +46,7 @@
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   HeadCapture, buildHeadToolSet, runHeadInference,
-  collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute,
+  collectDynamicContext, craftedToolDeclarations, explorationActorKey, headStatusUnsettled, resolveModelRoute,
   storedHeadReportStatus, subordinateDelegatesOf,
   type ActorHost, type ActorReference, type BranchExploration, type BranchHandle,
   type BranchReflection, type CraftedTool, type HeadId, type HeadInferenceDeps,
@@ -249,10 +249,12 @@ async function explorationModelSpec(
  * unreachable server to name. Passing a stub value for either would put a claim
  * nobody measured into the model's context.
  */
-function explorationDynamicContext(actor: HostedActor): DynamicContext {
+function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
   return collectDynamicContext({
     rt: actor.runtime,
     stores: actor.stores,
+    profile,
+    craftedTools: () => craftedToolDeclarations(tools, profile),
     memoryTail: undefined,
     missingCapabilities: [],
     subordinateDelegates: () => subordinateDelegatesOf([]),
@@ -318,7 +320,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
             isAborted: () => stopped !== null,
             abortReason: () => stopped,
             profile: (request) => seams.profile({ actor, ...request }),
-            dynamic: () => explorationDynamicContext(actor),
+            dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
             reportStep: (seq, step) => seams.recordStep(input.id, seq, step),
             reportDelta: seams.publishDelta,
           };
@@ -379,7 +381,7 @@ export async function hostNodeSeat(
     actor,
     runId: crypto.randomUUID(),
     profile: (request) => seams.profile({ actor, ...request }),
-    dynamic: () => explorationDynamicContext(actor),
+    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
   };
 }
 

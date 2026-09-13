@@ -2,7 +2,7 @@ import type { Database } from 'bun:sqlite';
 import {
   ActorSession, EventLog, EvolutionEngine, WorkspaceActorDirectory,
   BUILTIN_PROFILE_CATALOG, actorReferenceOf, createAgentStores, profileCatalogDigest,
-  collectDynamicContext, createActorHost, defaultLoopOrigin, explorationActorKey,
+  collectDynamicContext, craftedToolDeclarations, createActorHost, defaultLoopOrigin, explorationActorKey,
   facetHomeReleaser, headAgentName, resolveAgentTurnProfile,
   type ActorHost, type AgentRuntime, type BroadcastEvent, type HostedNodeSeat,
   type ActorHandle, type HeadInput, type NodeIdentity, type ProfileAuthorityInputs,
@@ -136,9 +136,11 @@ export function headSeatFactory(
           inputs,
         };
       },
-      dynamic: () => collectDynamicContext({
+      dynamic: (profile, tools) => collectDynamicContext({
         rt: actor.runtime,
         stores: actor.stores,
+        profile,
+        craftedTools: () => craftedToolDeclarations(tools, profile),
         memoryTail: undefined,
         missingCapabilities: [],
         subordinateDelegates: () => [],
@@ -261,9 +263,11 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       }),
       inputs,
     }),
-    dynamic: () => collectDynamicContext({
+    dynamic: (profile, tools) => collectDynamicContext({
       rt: runtime,
       stores,
+      profile,
+      craftedTools: () => craftedToolDeclarations(tools, profile),
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => [],

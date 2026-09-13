@@ -1,0 +1,38 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/unit-volatile-context.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+830 |     const next = { ...state, factsBlock: '- k = next' };
+831 |     const result = await composePrepareStep({ dynamic: { ledger, snapshot: () => next } },
+832 |       { stepNumber: 0, messages: history, steps: [] });
+833 | 
+834 |     expect(result?.messages[1]).toBe(first?.messages[1]);
+835 |     expect(result?.messages.at(-1)?.content).toContain('kind="delta"');
+                                                   ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "kind=\"delta\""
+Received: "<dynamic_context fingerprint=\"91bd382374766bd6\" kind=\"full\">\nKinu runtime state, not conversation or user text. Full blocks replace prior state.\nDelta sections replace named sections; omitted sections stay. Execution deltas update named runtimes. Cleared means empty.\n\n## World model (facts you remembered)\n- k = next\n\n## Execution status\nLive availability for the runtimes described in the system prompt, and what each one declares it can run:\n- sandbox: ready on demand, files at /sandbox\n</dynamic_context>"
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/core/tests/unit-volatile-context.test.ts:835:46)
+(fail) DynamicContextLedger (the cache-stability contract) > shared step preparation keeps the ledger append-only across a turn boundary [1.01ms]
+847 |     const first = ledger.weave(history, state);
+848 |     history.push({ role: 'assistant', content: 'finished' });
+849 |     const empty = ledger.weave(history, {});
+850 | 
+851 |     expect(empty[1]).toBe(first[1]);
+852 |     expect(empty.at(-1)?.content).toContain('kind="delta"');
+                                        ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "kind=\"delta\""
+Received: "finished"
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/core/tests/unit-volatile-context.test.ts:852:35)
+(fail) DynamicContextLedger (the cache-stability contract) > empty live state appends a clear, stays empty, and cannot revive at compaction [0.16ms]
+
+ 0 pass
+ 72 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [161.00ms]

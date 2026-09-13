@@ -51,7 +51,7 @@ export interface HostedHeadSeat {
   readonly runId: string;
   readonly profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
   => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
-  readonly dynamic: () => DynamicContext;
+  readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   /** Drop this head's runtime objects and retire its directory row. */
   release: () => Promise<void>;
 }

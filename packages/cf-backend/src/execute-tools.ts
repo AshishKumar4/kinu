@@ -29,6 +29,7 @@ import {
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
+  withCraftedToolDeclarations,
   withCodemodeProgram, craftedFailureFunctions,
   codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing,
 } from "@kinu.run/core";
@@ -99,9 +100,8 @@ function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | un
 /** What `createExecuteToolsFactory` hands back: one `execute_tools` tool per
  *  finished native tool set. */
 export interface ExecuteToolsFactory {
-  /** The tool for a native surface that is FINISHED (built, narrowed). Its
-   *  declaration lists every tool in `native` except `execute_tools` itself,
-   *  and every crafted tool the store holds at this moment. */
+  /** The tool for a FINISHED native surface. Native declarations are static;
+   *  its attached live reader describes the same crafted resolver it calls. */
   toolFor(native: ToolSet): Tool;
   /** A slate calls the same native function or crafted source as tools.<name>. */
   callTool(native: ToolSet, name: string, input: JsonObject): Promise<JsonValue | undefined>;
@@ -111,6 +111,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
   const { loader, rt, sql, webSearch } = options;
 
   if (!loader) throw new Error("CF runtime missing LOADER binding");
+  const craftedTools = () => selectInjectableCraftedTools(rt.craftStore, sql);
 
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
   // `agents.*` — the delegation tool projected into the sandbox, so a workflow
@@ -161,7 +162,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
           throw new KinuError('denied', `${name} is not within this actor's reach right now`);
         }
 
-        if (!selectInjectableCraftedTools(rt.craftStore, sql).some((tool) => tool.name === name)) {
+        if (!craftedTools().some((tool) => tool.name === name)) {
           throw new KinuError('missing', `tools has no member ${name}`);
         }
 
@@ -186,9 +187,9 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
         const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
 
         // The `tools` namespace: native tools dispatched to the host, crafted
-        // tools defined in the prelude. The declaration is rendered from the set
-        // as it is NOW; the callable half, prelude included, is re-read on every
-        // call below. Core's two contract functions skip the sandbox's own entry.
+        // tools defined in the prelude. Native declarations are fixed; crafted
+        // callables and the ledger reader resolve the same live source below.
+        // Core's two contract functions skip the sandbox's own entry.
         // This build passes no prelude: createCodeTool resolves providers to name
         // plus fns and drops it, so building one here would parse and stringify
         // every crafted tool and discard the result each build.
@@ -218,7 +219,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
             // rows. createCodeTool froze the native fns when the tool was built;
             // they are the finished set's, which is what this tool exists for.
             execute: (code, resolved) => {
-              const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
+              const crafted = craftedTools();
               const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
 
               const live = Array.isArray(resolved)
@@ -243,7 +244,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
       const unrestricted = build('build');
       let planning: Tool | undefined;
 
-      return permitInPlan({
+      return withCraftedToolDeclarations(permitInPlan({
         ...unrestricted,
         execute: (input, context) => {
           const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
@@ -255,7 +256,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
             result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
           }), await execute(input, context)));
         },
-      });
+      }), craftedTools);
     },
   };
 }

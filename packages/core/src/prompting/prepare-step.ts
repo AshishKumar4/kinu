@@ -200,8 +200,6 @@ function finishPrepareStep(
     : undefined;
 
   const shrunk = pruned ?? base;
-
-  if (ctx.stepNumber === 0) pipeline.dynamic?.ledger.beginTurn();
   // The weave always rewrites (frozen blocks must be re-applied every step —
   // a prepareStep override never feeds the next step's input).
   const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot());

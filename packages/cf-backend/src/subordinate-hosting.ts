@@ -50,7 +50,7 @@ import {
   terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
-  type DynamicContext, type HeadInferenceDeps, type HeadInput, type HostedActor,
+  type DynamicContext, type HeadInferenceDeps, type HeadInput, type HostedActor, type ResolvedTurnProfile,
   type MissionScope,
   type SqlExec, type SqlExecutor, type SubordinateEventResult, type SubordinateHandoff,
   type SubordinateLifetime, type SubordinateReportOrigin,
@@ -157,7 +157,7 @@ export interface SubordinateHostSeams {
    *  some would resolve the rest a second time. */
   taskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile>;
   /** The per-step live plane the turn reports. */
-  dynamic(actor: HostedActor): DynamicContext;
+  dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   /** The mission ledger a delegated turn charges, or null. */
   mission(actor: HostedActor): MissionScope | null;
   /** Announce a roster change to whoever is watching this actor's pane. */
@@ -438,7 +438,7 @@ export async function runHostedTask(
       // turn leaves its claim unsettled, which is the record that work is owed.
       isAborted: () => false,
       profile: (request) => seams.profile({ actor, ...request }),
-      dynamic: () => seams.dynamic(actor),
+      dynamic: (profile, tools) => seams.dynamic(actor, profile, tools),
     };
 
     if (mission !== null) inference.mission = mission;

@@ -113,7 +113,7 @@ describe('every registered section reaches a rendered prompt', () => {
       const prompt = buildSystemPromptSync(rt, testCase.opts);
       expect({ name: testCase.name, long: prompt.length > 200 })
         .toEqual({ name: testCase.name, long: true });
-      const mode = { workMode: testCase.opts.workMode ?? 'build', planSubmission: testCase.opts.planSubmissionAvailable ?? false };
+      const mode = testCase.mode ?? { workMode: 'build', planSubmission: false };
       rendered.add(`${prompt}\n${renderDynamicContextBlock({ mode })}`);
     }
 
