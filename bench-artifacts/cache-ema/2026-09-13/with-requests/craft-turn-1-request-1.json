@@ -1,0 +1,24 @@
+{
+  "turnId": "405f8f86-ae8d-4711-afc2-41c233da97a1",
+  "revision": 1,
+  "epoch": 1,
+  "stepIndex": 0,
+  "workingRevision": 1,
+  "digest": "77b9ab5ddb13e313f385f140ccc2d98fc61694199d6326eab09e2aeba581943d",
+  "messageCount": 2,
+  "request": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Use execute_tools and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "<dynamic_context fingerprint=\"bb2ca80c7bbd7b03\">\nLive system state from the Kinu runtime. It is not conversation, and the user did not write it. A later dynamic_context block supersedes every earlier one.\n\n## Execution status\nLive availability for the runtimes described in the system prompt, and what each one declares it can run:\n- workspace: ready on demand, runs: javascript, typescript, shell, npm, git, fs_shared, net_outbound, net_inbound, process_spawn, process_long, process_signal\n- sandbox: ready on demand, files at /sandbox, runs: javascript, typescript, native_binary, shell, npm, git, fs_owned, net_outbound, net_inbound, process_spawn, process_long\n\n## Your user's machines (the `laptop` runtime)\nOne machine is connected: `laptop` calls reach it with no `device` needed.\n- kinu-first-run-beta (linux): registered, offline. The user can reconnect it with `kinu connect`\n- kinu-first-run-alpha (linux): registered, offline. The user can reconnect it with `kinu connect`\n</dynamic_context>"
+    }
+  ]
+}

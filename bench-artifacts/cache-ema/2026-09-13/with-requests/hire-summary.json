@@ -1,0 +1,61 @@
+{
+  "table": [
+    {
+      "runId": "run-3rnyk6442t2p02sg6nilc",
+      "step": 1,
+      "input": 20414,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-3rnyk6442t2p02sg6nilc",
+      "step": 2,
+      "input": 20600,
+      "cacheRead": 1792,
+      "share": 0.08699029126213592
+    },
+    {
+      "runId": "run-kk710bwirpw2oq3h2iium",
+      "step": 1,
+      "input": 20647,
+      "cacheRead": 20096,
+      "share": 0.9733133142829467
+    },
+    {
+      "runId": "run-kk710bwirpw2oq3h2iium",
+      "step": 2,
+      "input": 28573,
+      "cacheRead": 20096,
+      "share": 0.703321317327547
+    },
+    {
+      "runId": "run-kk710bwirpw2oq3h2iium",
+      "step": 3,
+      "input": 28714,
+      "cacheRead": 0,
+      "share": 0
+    }
+  ],
+  "stats": {
+    "steps": 5,
+    "windowLimit": 200,
+    "tokens": {
+      "input": 118948,
+      "output": 8084,
+      "cacheRead": 41984,
+      "neurons": 14021.367283970118
+    },
+    "cacheHit": {
+      "samples": 5,
+      "last": 0,
+      "mean": 0.3527249845745259,
+      "p95": 0.9733133142829467,
+      "ema": 0.24602332082586742,
+      "emaAlpha": 0.2
+    },
+    "usd": 0.15423504,
+    "pricedSteps": 5,
+    "unpricedSteps": 0,
+    "stepsWithoutUsage": 0
+  }
+}

@@ -84,10 +84,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
     // prelude's own definitions do.
     const nativeBindings = nativeToolFunctions(surface.native);
 
-    const toolsDeclaration = renderToolsDeclaration(
-      surface.native,
-      Object.entries(surface.craftedTools()).map(([name, entry]) => ({ name, description: entry.description })),
-    );
+    const toolsDeclaration = renderToolsDeclaration(surface.native, []);
 
     return tool({
       // The one description, composed in core (registry.

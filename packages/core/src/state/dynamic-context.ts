@@ -26,6 +26,7 @@ import {
 } from '../prompting/volatile-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
+import { selectInjectableCraftedTools } from '../tools/crafted-executor';
 
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
@@ -77,6 +78,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
   const { rt, stores } = input;
 
   return agentDynamicContext({
+    craftedTools: selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),

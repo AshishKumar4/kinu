@@ -184,7 +184,6 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
 
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
-        const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
 
         // The `tools` namespace: native tools dispatched to the host, crafted
         // tools defined in the prelude. The declaration is rendered from the set
@@ -196,7 +195,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
         const toolsProvider: CodemodeProvider = {
           name: CRAFTED_TOOL_NAMESPACE,
           tools: nativeToolFunctions(toolsInWorkMode(mode, reachable)),
-          types: renderToolsDeclaration(reachable, crafted),
+          types: renderToolsDeclaration(reachable, []),
           positionalArgs: true,
         };
 
