@@ -17,20 +17,13 @@
  *     container just failed — both answered by the root agent over its stub,
  *   * Kinu's egress and container-event interception, which is a security
  *     property of THIS product and belongs nowhere else.
- *
- * The attach budget is derived, not retyped: `PLATFORM_CATALOG` holds the
- * measured point at which the runtime cancels `blockConcurrencyWhile` and
- * resets the object, so the catalog stays the one source and a correction to
- * it moves this with it.
  */
 
 import {
-  DEFAULT_DEVBOX_POLICY, DEFAULT_DEVBOX_STRATEGY, Devbox,
-  type DevboxIncident, type DevboxPolicy, type DevboxStore, type DevboxStrategyName,
+  Devbox,
+  type DevboxIncident, type DevboxStore,
   type IncidentDisposition,
 } from "@kinu.run/devbox";
-import { PLATFORM_CATALOG } from "@kinu.run/core";
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
 import { SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
@@ -44,11 +37,6 @@ import {
 /** Which workspace owns this container. Written when the workspace binds its
  *  egress; without it there is no root agent to answer Devbox's two questions. */
 const WORKSPACE_NAME_KEY = "kinu:workspace-name";
-
-/** Our own teardown margin inside the platform's cancel point: the attach has
- *  to finish AND this object has to log and return before the runtime resets
- *  it. */
-const ATTACH_MARGIN_MS = 5_000;
 
 /** What Devbox may ask the owning workspace. A narrow projection of the real
  *  class, exactly like the container-event client in egress/outbound.ts;
@@ -96,79 +84,21 @@ export class KinuSandbox extends Devbox<Env> {
     return bucket === undefined ? undefined : { binding: "BACKUP_BUCKET", bucket };
   }
 
-  /** The format the bytes in that bucket are written in. Stated here, not
-   *  inherited silently: a box that already holds bytes cannot change it, so
-   *  the format belongs to this class rather than to a call. */
-  protected override get strategy(): DevboxStrategyName {
-    return DEFAULT_DEVBOX_STRATEGY;
-  }
-
   /** The zone preview URLs are minted on. Absent turns port publishing off and
    *  leaves exec and files working, which is the long-standing behaviour. */
   protected override get previewHost(): string | undefined {
     return this.env.PREVIEW_HOST_SUFFIX;
   }
 
-  /** The attach budget comes from the measured platform ceiling, minus our own
-   *  teardown margin — never a number retyped beside the catalog. */
-  protected override get policy(): DevboxPolicy {
-    return {
-      ...DEFAULT_DEVBOX_POLICY,
-      attachBudgetMs:
-        PLATFORM_CATALOG['do.block_concurrency.cancel_ms'].limit.value - ATTACH_MARGIN_MS,
-    };
-  }
-
   /** Is work still bound to this container? The root agent answers over the
-   *  whole subordinate roster and answers conservatively when a facet cannot be
-   *  reached, so an unreachable root holds the container open rather than
-   *  stopping one that is still serving something. */
+   *  whole subordinate roster. An unreachable root reads as idle here: the
+   *  heartbeat treats a throwing check as possibly busy and holds the box. */
   protected override async hasBackgroundWork(): Promise<boolean> {
     const root = await this.#rootAgent();
 
     if (root === null) return false;
 
-    try {
-      return await root.hasSandboxBackgroundWork();
-    } catch (error) {
-      diagnostics.failure('sandbox.background_work_unreadable', toKinuError({
-        doing: 'asking the workspace whether background work is still bound to this container',
-        cause: error,
-        otherwise: 'unavailable',
-      }));
-
-      // Unreadable means possibly-busy. Never stop a container on a guess.
-      return true;
-    }
-  }
-
-  /**
-   * A caller is using this container INTERACTIVELY, over a lane the lease
-   * cannot see.
-   *
-   * The PTY is the reason this exists. `@cloudflare/sandbox` exposes a terminal
-   * only on the client wrapper, which proxies a WebSocket at the container's
-   * own port, and `@cloudflare/containers` renews the SDK's activity clock on
-   * every forwarded frame. So the container stays awake by the SDK's reckoning
-   * — but Devbox's DURABLE lease moves only when a public operation stamps it,
-   * and the quiesce decision reads that stamp. Without this call a user typing
-   * in a terminal looks perfectly idle to the heartbeat, which then takes a
-   * final checkpoint and SIGTERMs the container out from under them.
-   *
-   * Only the host can know which of its entry points are a caller, which is why
-   * `stampInteraction` is protected rather than private. This is Kinu's: the
-   * terminal route calls it before the WebSocket upgrade and again on its
-   * keepalive while the socket is attached. Re-calling is cheap — the durable
-   * write is already throttled inside `stampInteraction`, and `ensureReady`
-   * returns immediately once this container generation has settled.
-   *
-   * It goes through `ensureReady` rather than stamping alone because a terminal
-   * on a box whose workspace never attached is a terminal onto the wrong disk;
-   * refusing loudly there is the same answer every other operation gives.
-   */
-  async noteTerminalActivity(): Promise<void> {
-    await this.ensureReady();
-    this.stampInteraction();
+    return await root.hasSandboxBackgroundWork();
   }
 
   /** Tell the agent its container failed. Devbox has already made the incident
