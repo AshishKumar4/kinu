@@ -14,14 +14,6 @@ import { describe, test, expect } from 'bun:test';
 import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
 import type { JsonObject } from '@kinu.run/core';
 
-interface RunOptions {
-  signal?: AbortSignal;
-  extraHeaders?: Record<string, string>;
-  returnRawResponse?: boolean;
-}
-
-type BindingAnswer = Response | ReadableStream<Uint8Array> | JsonObject;
-
 const encoder = new TextEncoder();
 
 function nativeFrame(response: string): string {
@@ -30,10 +22,9 @@ function nativeFrame(response: string): string {
 
 const DONE = 'data: [DONE]\n\n';
 
-/** A binding body the test owns: scripted frames, then whatever lifecycle
- *  the case leaves it in, with cancel calls counted. Shaped exactly like the
- *  sibling stream test's stub so the single `as Ai` below resolves the same
- *  way: the adapter under test calls no other member of the binding. */
+/** A binding the test owns: scripted frames, then whatever lifecycle the
+ *  case leaves it in, with cancel calls counted. The object IS the adapter's
+ *  narrow runner contract, passed without a cast. */
 function scriptedBinding(frames: string[], hangOpen: boolean, onCancel?: () => Promise<void> | void) {
   const cancels: string[] = [];
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -49,8 +40,17 @@ function scriptedBinding(frames: string[], hangOpen: boolean, onCancel?: () => P
     },
   });
 
-  const ai = {
-    run(_model: string, _inputs: JsonObject, _options?: RunOptions): Promise<BindingAnswer> {
+  return {
+    stream,
+    cancels,
+    // The fixture IS the narrow binding contract the adapter calls: one
+    // `run` answering the shapes workerd can hand back. No cast — the
+    // parameter takes this exactly.
+    run: (_model: string, _inputs: JsonObject, _options?: {
+      signal?: AbortSignal;
+      extraHeaders?: Record<string, string>;
+      returnRawResponse?: boolean;
+    }): Promise<Response | ReadableStream<Uint8Array> | JsonObject> => {
       for (const frame of frames) controller?.enqueue(encoder.encode(frame));
 
       if (!hangOpen) controller?.close();
@@ -58,8 +58,6 @@ function scriptedBinding(frames: string[], hangOpen: boolean, onCancel?: () => P
       return Promise.resolve(new Response(stream, { headers: { 'content-type': 'text/event-stream' } }));
     },
   };
-
-  return { ai, stream, cancels };
 }
 
 function turnBody(): string {
@@ -93,9 +91,7 @@ describe('direct Workers AI terminal cancel', () => {
   test('a producer-open stream ends at [DONE] with the upstream cancelled', async () => {
     const binding = scriptedBinding([nativeFrame('hi'), DONE], true);
 
-    // SAFETY: this constructed fixture provides `Ai.run`, and the adapter
-    // under test calls no other member of the binding.
-    const fetch = createDirectWorkersAIFetch(binding.ai as Ai);
+    const fetch = createDirectWorkersAIFetch(binding);
 
     const response = await fetch('https://fake.invalid/ai/run', {
       method: 'POST',
@@ -117,8 +113,7 @@ describe('direct Workers AI terminal cancel', () => {
   test('a rejecting upstream cancel reaches the caller with the lock released', async () => {
     const binding = scriptedBinding([nativeFrame('hi'), DONE], true, () => Promise.reject(new Error('boom')));
 
-    // SAFETY: same constructed `Ai.run` fixture as above.
-    const fetch = createDirectWorkersAIFetch(binding.ai as Ai);
+    const fetch = createDirectWorkersAIFetch(binding);
 
     const response = await fetch('https://fake.invalid/ai/run', {
       method: 'POST',

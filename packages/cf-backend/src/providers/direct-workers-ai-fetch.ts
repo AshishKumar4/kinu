@@ -127,17 +127,13 @@ interface DirectWorkersAIRunner {
  * with no reply.
  */
 export function createDirectWorkersAIFetch(
-  binding: Ai,
+  binding: DirectWorkersAIRunner,
   retry: RateLimitRetryOptions = {},
 ): typeof globalThis.fetch {
   return withRateLimitRetry(directWorkersAIFetch(binding), retry);
 }
 
-function directWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
-  // Assignable without an assertion: the binding really does own this method,
-  // and every arm of the union is narrowed below before use.
-  const runner: DirectWorkersAIRunner = binding;
-
+function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const body = v.parse(JsonObjectSchema, JSON.parse(await request.text()));
@@ -156,7 +152,7 @@ function directWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
     let answer: Response | ReadableStream<Uint8Array> | JsonObject;
 
     try {
-      answer = await runner.run(route.model, bindingInputs(body, route), options);
+      answer = await binding.run(route.model, bindingInputs(body, route), options);
     } catch (caught) {
       const failure = toKinuError({
         doing: `Workers AI binding inference for ${route.model}`,
