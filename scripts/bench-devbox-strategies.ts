@@ -92,6 +92,7 @@ import {
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
+import blockImage from '../packages/devbox/block-lower/upstream.json';
 import {
   runSecurityFaultCells,
   securityNonce,
@@ -480,13 +481,13 @@ const HARNESS = '/workspace/.devbox-bench';
 
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
 
-/** The manifest digest the published sandbox tag resolved to on 2026-08-27. */
-export const SANDBOX_IMAGE_DIGEST = 'sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f';
+/** The built and registry-published block-lower image, pinned with its inputs. */
+export const SANDBOX_IMAGE_DIGEST = blockImage.digest;
 
 /** Every generated fixture config uses this immutable reference, so the image
  *  provenance row identifies the bytes that ran rather than a tag another
  *  publisher can repoint. */
-export const SANDBOX_IMAGE = `docker.io/cloudflare/sandbox@${SANDBOX_IMAGE_DIGEST}`;
+export const SANDBOX_IMAGE = blockImage.image;
 
 /**
  * The decisive experiment's arms, from the adopted research spec.
