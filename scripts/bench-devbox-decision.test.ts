@@ -21,6 +21,8 @@ import {
 import * as v from 'valibot';
 import { WRANGLER_FAILED } from './fixtures/r2-bench/deploy-substrate';
 import { scratchDir } from '@kinu.run/test-utils';
+import { readFileEvidence, writeC3File, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
+import { publicationTotals, type PublicationWindow } from '../packages/devbox/bench/publication-meter';
 import {
   COMPLEXITY_TREE_BYTES,
   chainArchiveExpectations,
@@ -33,7 +35,12 @@ import {
   isTransientContainerCreateError,
   parseOptions,
   readArmArtifact,
+  readBoxFile,
+  barrierAckLoss,
+  type BarrierAcknowledgement,
+  type FileObservation,
   runArm,
+  runDecisive,
   render,
   orphanTeardownExecutor,
   SANDBOX_IMAGE,
@@ -44,6 +51,8 @@ import {
   type ControlWitnessFacts,
   type Strategy,
   countedRestoreWork,
+  judgeChainCut,
+  type ChainCutFacts,
   diffOpTallies,
   restoreWorkFromCounts,
   verifyRestoreBound,
@@ -85,6 +94,7 @@ describe('startup polling contract', () => {
   test('returns only after restoration publishes its durable attach outcome', () => {
     expect(startupPollVerdict({
       state: {
+        running: true,
         restoration: 'attached',
         lastAttach: { kind: 'attached', detail: 'the work directory is mounted' },
       },
@@ -92,6 +102,28 @@ describe('startup polling contract', () => {
       kind: 'attached',
       attach: { kind: 'attached', detail: 'the work directory is mounted' },
     });
+  });
+
+  test('a stopped container cannot reuse an attached or repair record', () => {
+    for (const restoration of ['attached', 'repair'] as const) {
+      expect(startupPollVerdict({
+        state: {
+          running: false,
+          restoration,
+          lastAttach: { kind: 'attached', detail: 'the stopped generation' },
+          unready: 'the container stopped',
+        },
+      })).toEqual({ kind: 'stopped', detail: 'the container stopped' });
+    }
+  });
+
+  test('an attach record without a running observation remains pending', () => {
+    expect(startupPollVerdict({
+      state: {
+        restoration: 'attached',
+        lastAttach: { kind: 'attached', detail: 'an unconfirmed generation' },
+      },
+    })).toEqual({ kind: 'pending' });
   });
 
   test('stops polling only on a definitive unattached restoration', () => {
@@ -165,6 +197,201 @@ describe('startup polling contract', () => {
 
 const BENCH_FIXTURE = { origin: 'https://bench.invalid', token: 'bench-token' };
 
+async function withFastClock<Result>(run: () => Promise<Result>): Promise<Result> {
+  const real = globalThis.setTimeout;
+  globalThis.setTimeout = Object.assign((...args: Parameters<typeof real>) => {
+    const [handler, , ...rest] = args;
+
+    return real(handler, 0, ...rest);
+  }, real);
+
+  try {
+    return await run();
+  } finally {
+    globalThis.setTimeout = real;
+  }
+}
+
+const OLD_CUT: ChainCutFacts = {
+  recordPresent: true,
+  preBaseId: 'base-before', preHasDelta: true, preRev: 7, preDeltaEtag: 'etag-before',
+  postBaseId: 'base-before', postHasDelta: true, postRev: 7, postDeltaEtag: 'etag-before',
+  servedWord: 'base+delta absorbed into the upper',
+  cutMarkerPresent: false, baseExists: true, deltaExists: true,
+};
+
+describe('cut observation completeness', () => {
+  test('publication accounting includes every fully observed PUT attempt and refuses unknown bodies', () => {
+    const window: PublicationWindow = {
+      schema: 'devbox-publication-window/1', token: 'window', prefix: 'boxes/test/', openedAt: 1, closedAt: 10,
+      attempts: [
+        { id: 'first', key: 'boxes/test/delta.sqsh', operation: 'put', uploadId: null, startedAt: 2, finishedAt: 3, bytes: 65_536, observedBytes: 65_536, outcome: 'threw', error: 'lost acknowledgement', bodyError: null },
+        { id: 'retry', key: 'boxes/test/delta.sqsh', operation: 'put', uploadId: null, startedAt: 4, finishedAt: 5, bytes: 65_536, observedBytes: 65_536, outcome: 'returned', error: null, bodyError: null },
+      ],
+    };
+
+    expect(publicationTotals(window)).toEqual({ objectsPut: 2, bytesPut: 131_072, errors: [] });
+    expect(publicationTotals(null).bytesPut).toBeNull();
+    expect(publicationTotals({ ...window, attempts: [{ ...window.attempts[0]!, bytes: null, bodyError: 'stream unobserved' }] }).bytesPut).toBeNull();
+    expect(publicationTotals({ ...window, closedAt: null }).objectsPut).toBeNull();
+  });
+
+  test('the live C3 file producer matches the existing seeded overwrite exactly', async () => {
+    expect(C3_WORKLOAD).toEqual({ path: 'vol/dense.bin', baselineBytes: 67_108_864, overwriteBytes: 65_536, offset: 8_388_608, baselineSeed: 61, overwriteSeed: 62 });
+    const root = scratchDir('devbox-c3-files');
+    await writeC3File(root, 'baseline');
+    expect(await readFileEvidence(join(root, 'vol/dense.bin'))).toEqual({
+      kind: 'file', size: 67_108_864, sha256: '936bd9856c5ba7b6d1a40f11b8be8ff3d296ce952447a6cf8c9973197adf1a2c',
+    });
+    await writeC3File(root, 'overwrite');
+    expect(await readFileEvidence(join(root, 'vol/dense.bin'))).toEqual({
+      kind: 'file', size: 67_108_864, sha256: '6adec5191fbd1aab70959259fdd85c2ea8195168a90dd2c98341360640aaaecb',
+    });
+  });
+
+  test('a fully observed decisive checkpoint keeps its raw window and measured classes', async () => {
+    const real = globalThis.fetch;
+    let puts = 0;
+
+    const answer = async (input: Parameters<typeof real>[0], init?: Parameters<typeof real>[1]) => {
+      const path = new URL(String(input)).pathname;
+
+      if (path === '/checkpoint') {
+        puts++;
+
+        return Response.json({ ok: true, token: `cp-${puts}`, state: 'pending' });
+      }
+
+      if (path === '/operation') return Response.json({ ok: true, state: 'done', ms: 3, outcome: { kind: 'committed', movedBytes: 16 } });
+
+      if (path === '/ops') return Response.json({ calls: { put: puts }, total: puts, classA: puts, classB: 0, classFree: 0 });
+
+      if (path === '/incidents') return Response.json({ ok: true, incidents: [] });
+
+      if (path === '/state') return Response.json({ ok: true, state: { running: true, restoration: 'attached', bootId: 'stable' } });
+
+      if (path === '/exec') {
+        const body = JSON.parse(String(init?.body ?? '{}'));
+        const segment = /--segment (\d+)/.exec(body.command)?.[1] ?? 'unknown';
+
+        return Response.json({ ok: true, exitCode: 0, stdout: JSON.stringify({
+          workload: 'npm', segments: [{ name: `part-${segment}`, bytesWritten: 16, pathsTouched: 1, wallMs: 1 }],
+        }) });
+      }
+
+      return Response.json({ ok: true });
+    };
+
+    globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+
+    try {
+      const run = await withFastClock(async () => await runDecisive(BENCH_FIXTURE, 'box', 'snapshot-chain', {
+        id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4',
+      }, 1, 1));
+
+      expect(run.ticks).toHaveLength(5);
+      expect(run.ticks.every((row) => row.classA === 1 && row.classB === 0 && row.classFree === 0)).toBe(true);
+      expect(run.segments[0]?.accounting.before?.calls).toEqual({ put: 0 });
+      expect(run.segments[0]?.accounting.after?.calls).toEqual({ put: 1 });
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test('unobserved decisive segments survive instead of disappearing from the run', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = Object.assign(async () => Response.json({ ok: false, error: 'startup pending' }), { preconnect: real.preconnect });
+
+    try {
+      const run = await runDecisive(BENCH_FIXTURE, 'box', 'snapshot-chain', {
+        id: 'npm', workload: 'npm', excludes: false, args: '--target-mib 400 --segments 4',
+      }, 1, 1);
+
+      expect(run.ticks).toHaveLength(0);
+      expect(run.segments).toHaveLength(5);
+      expect(run.segments.every((row) => !row.priced && row.command?.error === 'startup pending')).toBe(true);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test('barrier loss requires a committed acknowledgement and every read', () => {
+    const digest = 'a'.repeat(64);
+
+    const acknowledgement: BarrierAcknowledgement = {
+      checkpoint: { ok: true, outcome: { kind: 'committed' } },
+      witnesses: [{ path: '/workspace/ack.txt', expectedDigest: digest, expectedSize: 5 }],
+    };
+
+    const retained: FileObservation = {
+      path: '/workspace/ack.txt', reply: { ok: true, exitCode: 0 }, error: null,
+      evidence: { kind: 'file', size: 5, sha256: digest },
+    };
+
+    expect(barrierAckLoss(acknowledgement, [retained])).toBe(0);
+    expect(barrierAckLoss(acknowledgement, [{ ...retained, evidence: { kind: 'missing' } }])).toBe(1);
+    expect(barrierAckLoss(acknowledgement, [{
+      ...retained, evidence: { kind: 'file', size: 5, sha256: 'b'.repeat(64) },
+    }])).toBe(1);
+    expect(barrierAckLoss(acknowledgement, [{ ...retained, evidence: null, error: 'pending' }])).toBeNull();
+    expect(barrierAckLoss(acknowledgement, [])).toBeNull();
+    expect(barrierAckLoss(null, [retained])).toBeNull();
+    expect(barrierAckLoss({ ...acknowledgement, witnesses: [] }, [])).toBeNull();
+    expect(barrierAckLoss({
+      ...acknowledgement, checkpoint: { ok: true, outcome: { kind: 'failed' } },
+    }, [retained])).toBeNull();
+  });
+
+  test('a refused observer is unobserved even when its body resembles absence', async () => {
+    const real = globalThis.fetch;
+    const reply = { ok: false, error: 'startup pending', stdout: '{"kind":"missing"}' };
+    globalThis.fetch = Object.assign(async () => Response.json(reply), { preconnect: real.preconnect });
+
+    try {
+      const observed = await readBoxFile(BENCH_FIXTURE, 'box', '/workspace/witness.txt');
+      expect(observed.evidence).toBeNull();
+      expect(observed.reply).toEqual(reply);
+      expect(observed.error).toContain('startup pending');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test('file evidence distinguishes bytes, absence and failed reads', async () => {
+    const directory = scratchDir('devbox-file-evidence');
+    const path = join(directory, 'witness.txt');
+    writeFileSync(path, 'hello');
+    expect(await readFileEvidence(path)).toEqual({
+      kind: 'file', size: 5,
+      sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    });
+    expect(await readFileEvidence(join(directory, 'absent'))).toEqual({ kind: 'missing' });
+    await expect(readFileEvidence(directory)).rejects.toThrow();
+  });
+
+  test('an unobserved marker cannot establish all-old state', () => {
+    expect(judgeChainCut({ ...OLD_CUT, cutMarkerPresent: null }).verdict).toBe('unjudged');
+    expect(judgeChainCut(OLD_CUT).verdict).toBe('all-old');
+  });
+
+  test('unknown archive or record evidence cannot establish a cut verdict', () => {
+    const omissions: Partial<ChainCutFacts>[] = [
+      { baseExists: null }, { deltaExists: null },
+      { preDeltaEtag: null }, { postDeltaEtag: null },
+      { preRev: null }, { postRev: null },
+    ];
+
+    for (const omission of omissions) {
+      expect(judgeChainCut({ ...OLD_CUT, ...omission }).verdict).toBe('unjudged');
+    }
+
+    expect(judgeChainCut({
+      ...OLD_CUT, postBaseId: 'base-after', postHasDelta: false, postRev: 8,
+      postDeltaEtag: null, deltaExists: null, servedWord: 'base', cutMarkerPresent: true,
+    }).verdict).toBe('all-new');
+  });
+});
+
 
 /** The driver-side fields these fakes read out of a posted body. Parsed rather
  *  than trusted, because what the driver sends is the thing under test. */
@@ -206,7 +433,7 @@ const PostedBodySchema = v.looseObject({
  * first two wakes attach (the two tree-size rung restores); the third refuses,
  * which ends the arm after its ladder with the rung rows already settled.
  */
-function rungRestoreFixture(stopOps: number, wakeOps: number) {
+function rungRestoreFixture(stopOps: number, wakeOps: number, workloadChurn = false) {
   const asked: string[] = [];
   let wakes = 0;
   let total = 5;
@@ -230,7 +457,7 @@ function rungRestoreFixture(stopOps: number, wakeOps: number) {
     }
 
     if (route === 'GET /state') {
-      return new Response(JSON.stringify(wakes > 2
+      return new Response(JSON.stringify(!workloadChurn && wakes > 2
         ? { ok: true, state: { running: true, restoration: 'unattached', unready: 'the third wake refuses' } }
         : {
             ok: true,
@@ -269,8 +496,16 @@ function rungRestoreFixture(stopOps: number, wakeOps: number) {
       const posted = v.safeParse(PostedBodySchema, JSON.parse(String(init?.body ?? '{}')));
       const command = posted.success ? posted.output.command ?? '' : '';
       const marker = /printf %s (devbox-verify-[0-9a-f-]+)/.exec(command)?.[1] ?? '';
+      let stdout = marker;
 
-      return new Response(JSON.stringify({ ok: true, exitCode: 0, stdout: marker, stderr: '', ms: 3 }));
+      if (workloadChurn && command.includes('probe.ts')) boot = 99;
+
+      if (workloadChurn && command.includes('echo DONE')) stdout = 'DONE';
+      else if (workloadChurn && (command.includes('probe.ts') || command.includes('out-'))) {
+        stdout = JSON.stringify({ schema: 'probe/1', root: '/workspace', seed: 1, loopBudgetMs: 1, phases: [] });
+      }
+
+      return new Response(JSON.stringify({ ok: true, exitCode: 0, stdout, stderr: '', ms: 3 }));
     }
 
     if (route === 'GET /ops') {
@@ -286,6 +521,32 @@ function rungRestoreFixture(stopOps: number, wakeOps: number) {
 }
 
 describe('the tree-size restore rows', () => {
+  test('the warm observation belongs to its wake before later workload churn', async () => {
+    const fixture = rungRestoreFixture(10, 3, true);
+    const realTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = Object.assign((...args: Parameters<typeof realTimeout>) => {
+      const [handler, , ...rest] = args;
+
+      return realTimeout(handler, 0, ...rest);
+    }, realTimeout);
+    let arm: ArmResult;
+
+    try {
+      arm = await runArm(BENCH_FIXTURE, 'snapshot-chain', {
+        ...parseOptions([]), arms: ['snapshot-chain'], runId: 'warm-window-probe',
+      }, () => {});
+    } finally {
+      globalThis.setTimeout = realTimeout;
+      fixture.restore();
+    }
+
+    expect(arm.wakeBootId).toBe('boot-3');
+    expect(arm.attachWarmBootId).toBe('boot-3');
+    expect(arm.workloadStates?.some((row) => row.state?.state?.bootId === 'boot-99')).toBe(true);
+    expect(arm.startups?.find((row) => row.operation === 'warm attach')?.observations
+      .some((row) => row.event === 'state' && row.finishedAt !== null && row.reply !== null)).toBe(true);
+  });
+
   test('price the wake alone, never the stop that preceded it', async () => {
     // RED-FIRST. Run 20260905193714 recorded 67 remote operations for five
     // rung restores of three arms with different call mixes, and 10 puts on a
@@ -429,11 +690,47 @@ const COPIED_INTO_THE_UPPER: ControlWitnessFacts = {
 
 
 describe('the preregistered witness cells', () => {
+  test('normal chunked absorption requires its manifest, both marker reads and a committed next checkpoint', () => {
+    const digest = 'a'.repeat(64);
+
+    const marker: FileObservation = {
+      path: '/workspace/witness.txt', reply: { ok: true, exitCode: 0 }, error: null,
+      evidence: { kind: 'file', size: 7, sha256: digest },
+    };
+
+    const facts: ControlWitnessFacts = {
+      ...WITNESSED,
+      chunkedAbsorption: {
+        markerPath: 'witness.txt', markerDigest: digest,
+        manifest: { v: 1, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
+        manifestRead: { ok: true, exitCode: 0 }, markerInMerged: marker,
+        markerInUpper: { ...marker, path: '/var/tmp/devbox/upper/witness.txt' },
+        sidecarMounted: false, mounts: { ok: true, exitCode: 0 },
+        before: 'chain-before', after: 'chain-before', afterNamesDelta: true,
+        nextCheckpoint: { ok: true, outcome: { kind: 'committed' } },
+        wake: null,
+      },
+    };
+
+    const check = (input: ControlWitnessFacts) => controlWitnessChecks('snapshot-chain', input)
+      .find((row) => row.name === 'chunked-absorption');
+
+    expect(check(facts)?.observed).toBe(true);
+
+    for (const changed of [
+      { manifest: null }, { markerInMerged: { ...marker, evidence: null } },
+      { markerInUpper: { ...marker, evidence: null } }, { sidecarMounted: true },
+      { manifestRead: null }, { mounts: { ok: false, error: 'pending' } },
+      { nextCheckpoint: { ok: true, outcome: { kind: 'skipped' } } },
+    ]) {
+      expect(check({ ...facts, chunkedAbsorption: { ...facts.chunkedAbsorption!, ...changed } })?.observed).toBe(false);
+    }
+  });
 
 
 
   test('a delta COPIED into the fresh upper is the old behaviour, and refuses as drift', () => {
-    const [, collapse] = controlWitnessChecks('snapshot-chain', COPIED_INTO_THE_UPPER);
+    const [, collapse] = controlWitnessChecks('snapshot-chain', COPIED_INTO_THE_UPPER, 'layered');
     expect(collapse?.name).toBe('delta-layer-collapse');
     expect(collapse?.observed).toBe(false);
     // Both halves of the copy are named, so a reader sees WHICH behaviour ran.
@@ -443,7 +740,7 @@ describe('the preregistered witness cells', () => {
 
     // And the SERVED facts observe it, so the two directions are discriminated
     // by this witness rather than by which fields happen to be populated.
-    const [, served] = controlWitnessChecks('snapshot-chain', WITNESSED);
+    const [, served] = controlWitnessChecks('snapshot-chain', WITNESSED, 'layered');
     expect(served?.observed).toBe(true);
     expect(served?.detail).toContain('mounted as a lower layer');
     expect(served?.detail).toContain('the delta is served');
@@ -458,7 +755,7 @@ describe('the preregistered witness cells', () => {
         collapsedChainId: 'chain-7',
         collapsedNamesDelta: true,
       },
-    });
+    }, 'layered');
 
     expect(collapse?.observed).toBe(false);
     expect(collapse?.detail).toContain('and still names a delta');
@@ -468,7 +765,7 @@ describe('the preregistered witness cells', () => {
     const [, collapse] = controlWitnessChecks('snapshot-chain', {
       ...WITNESSED,
       deltaLayerCollapse: { ...WITNESSED.deltaLayerCollapse!, deltaBytes: 0, deltaLayerMounted: false },
-    });
+    }, 'layered');
 
     expect(collapse?.observed).toBe(false);
     expect(collapse?.detail).toContain('delta 0B');

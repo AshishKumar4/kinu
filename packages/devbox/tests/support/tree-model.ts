@@ -25,6 +25,9 @@
  */
 
 import { createHash } from 'node:crypto';
+import { Seeded } from '../../bench/seeded';
+
+export { Seeded } from '../../bench/seeded';
 
 export type NodeKind = 'file' | 'dir' | 'symlink';
 
@@ -168,42 +171,6 @@ export function paintedSegments(content: FileContent): LogicalLayout {
   if (cursor < content.size) segments.push({ zeros: true, start: cursor, end: content.size });
 
   return { segments, size: content.size };
-}
-
-/** A seeded generator: the same seed gives the same tree on every run. */
-export class Seeded {
-  #state: number;
-
-  constructor(seed: number) {
-    this.#state = (seed >>> 0) || 0x9e3779b9;
-  }
-
-  /** One 32-bit draw (xorshift32). */
-  next(): number {
-    let x = this.#state;
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    this.#state = x >>> 0;
-
-    return this.#state;
-  }
-
-  /** An integer in `[0, bound)`. */
-  below(bound: number): number {
-    return this.next() % bound;
-  }
-
-  /** Fill `bytes` with pseudo-random content, four bytes per draw. */
-  fill(bytes: Uint8Array): Uint8Array {
-    const words = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength >>> 2);
-
-    for (let at = 0; at < words.length; at += 1) words[at] = this.next();
-
-    for (let at = words.length << 2; at < bytes.byteLength; at += 1) bytes[at] = this.next() & 0xff;
-
-    return bytes;
-  }
 }
 
 // ── entries ─────────────────────────────────────────────────────────────────

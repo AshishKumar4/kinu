@@ -75,6 +75,9 @@ import {
   reachPublicationCut, type PublicationCut,
 } from './publication-cut';
 import { publicationBucket } from './publication-bucket';
+import { stopContainer } from './container-stop';
+import type { PublicationOperation, PublicationWindow } from './publication-meter';
+import { meterPublicationBucket, observePublicationRequest, type PublicationFinish } from './publication-transport';
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -209,8 +212,13 @@ async function holdPublicationAck(env: BenchEnv, key: string, bytes: number): Pr
 
 /** The existing meter wraps the boot-selected object store. */
 function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
-  const observed = publicationBucket(bucket, env.BENCH_PUBLICATION_CUT,
-    (key, bytes) => holdPublicationAck(env, key, bytes));
+  const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
+
+  const observed = meterPublicationBucket(publicationBucket(bucket, env.BENCH_PUBLICATION_CUT,
+    (key, bytes) => holdPublicationAck(env, key, bytes)), {
+    begin: async (key, operation, uploadId) => await counter.beginPublicationAttempt(key, operation, uploadId),
+    finish: async (id, result) => await counter.finishPublicationAttempt(id, result),
+  });
 
   const counted: Partial<R2Bucket> = {
     head: async (key) => {
@@ -343,6 +351,69 @@ export interface OpCounts {
 }
 
 export class BenchOpCounter extends DurableObject<BenchEnv> {
+  async openPublicationWindow(token: string, prefix: string): Promise<PublicationWindow> {
+    if (token === '' || prefix === '') throw new Error('a publication window requires its token and box prefix');
+
+    return await this.ctx.storage.transaction(async (txn) => {
+      const current = await txn.get<PublicationWindow>('publication-meter-window');
+
+      if (current?.token === token) return current;
+
+      if (current !== undefined && (current.closedAt === null || current.attempts.some((row) => row.finishedAt === null))) {
+        throw new Error('another publication window is active or has unfinished writes');
+      }
+
+      const window: PublicationWindow = {
+        schema: 'devbox-publication-window/1', token, prefix, openedAt: Date.now(), closedAt: null, attempts: [],
+      };
+
+      await txn.put('publication-meter-window', window);
+
+      return window;
+    });
+  }
+
+  async beginPublicationAttempt(key: string, operation: PublicationOperation, uploadId: string | null): Promise<string | null> {
+    return await this.ctx.storage.transaction(async (txn) => {
+      const window = await txn.get<PublicationWindow>('publication-meter-window');
+
+      if (window === undefined || window.closedAt !== null || !key.startsWith(window.prefix)) return null;
+      const id = crypto.randomUUID();
+      window.attempts.push({
+        id, key, operation, uploadId, startedAt: Date.now(), finishedAt: null,
+        bytes: null, observedBytes: null, outcome: null, error: null, bodyError: null,
+      });
+      await txn.put('publication-meter-window', window);
+
+      return id;
+    });
+  }
+
+  async finishPublicationAttempt(id: string, result: PublicationFinish): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      const window = await txn.get<PublicationWindow>('publication-meter-window');
+      const attempt = window?.attempts.find((row) => row.id === id);
+
+      if (window === undefined || attempt === undefined) throw new Error('the publication attempt is not registered');
+
+      if (attempt.finishedAt !== null) return;
+      Object.assign(attempt, result, { finishedAt: Date.now() });
+      await txn.put('publication-meter-window', window);
+    });
+  }
+
+  async closePublicationWindow(token: string): Promise<PublicationWindow> {
+    return await this.ctx.storage.transaction(async (txn) => {
+      const window = await txn.get<PublicationWindow>('publication-meter-window');
+
+      if (window === undefined || window.token !== token) throw new Error('the publication window token does not match');
+      window.closedAt ??= Date.now();
+      await txn.put('publication-meter-window', window);
+
+      return window;
+    });
+  }
+
   async armCut(token: string, prefix: string): Promise<void> {
     await this.ctx.storage.transaction(async (txn) => {
       const current = await txn.get<PublicationCut>('publication-cut');
@@ -450,6 +521,12 @@ class CountingContainerProxy extends ContainerProxy {
     // nothing: the s3fs traffic never passes through it.
     super(ctx, { ...env, BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET, env) });
     flushEnv = env;
+  }
+
+  override async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).hostname !== 'r2.internal') return await super.fetch(request);
+
+    return await observePublicationRequest(request, async (forwarded) => await super.fetch(forwarded));
   }
 }
 
@@ -655,9 +732,11 @@ class BenchBox extends Devbox<BenchEnv> {
   /** Release the benchmark container without preserving state. The caller is
    * deleting that state and must free the class's only instance first. */
   async stopForTeardown(): Promise<void> {
-    await this.stop('SIGTERM');
-
-    while (this.ctx.container?.running === true) await scheduler.wait(100);
+    await stopContainer({
+      stop: async () => await this.stop('SIGTERM'),
+      running: () => this.ctx.container?.running === true,
+      wait: async () => await scheduler.wait(100),
+    });
   }
 
   /**
@@ -798,9 +877,11 @@ class BenchBox extends Devbox<BenchEnv> {
    */
   async killWithoutQuiesce(): Promise<boolean> {
     if (this.ctx.container?.running !== true) return false;
-    await this.stop('SIGKILL');
-
-    while (this.ctx.container?.running === true) await scheduler.wait(100);
+    await stopContainer({
+      stop: async () => await this.stop('SIGKILL'),
+      running: () => this.ctx.container?.running === true,
+      wait: async () => await scheduler.wait(100),
+    });
 
     return true;
   }
@@ -816,8 +897,11 @@ class BenchBox extends Devbox<BenchEnv> {
    * the container down and turns over before admitting.
    */
   async destroyContainerForBench(): Promise<boolean> {
-    if (this.ctx.container?.running !== true) return false;
-    await this.destroy();
+    await stopContainer({
+      stop: async () => await this.destroy(),
+      running: () => this.ctx.container?.running === true,
+      wait: async () => await scheduler.wait(100),
+    });
 
     return true;
   }
@@ -1036,6 +1120,14 @@ async function serveInstrumentRoutes(
       return json({ ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, 202);
     }
 
+    case 'POST /publication-window/open': {
+      const token = url.searchParams.get('token') ?? '';
+
+      return json({ ok: true, window: await counter.openPublicationWindow(token, storePrefixOf(env, strategy, name)) });
+    }
+
+    case 'POST /publication-window/close':
+      return json({ ok: true, window: await counter.closePublicationWindow(url.searchParams.get('token') ?? '') });
     case 'GET /fault-cut':
       return json(await counter.readCut(url.searchParams.get('token') ?? ''));
     case 'POST /fault-cut/kill': {
