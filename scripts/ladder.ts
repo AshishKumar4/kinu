@@ -304,8 +304,8 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.05 s. Replaces 0.2 s.
     seconds: 0.05,
     catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
-      + 'a recorded reason. Nine installed dependencies declare `preinstall`/`install`/'
-      + '`postinstall`; bun blocks five; FOUR EXECUTE — esbuild, workerd, puppeteer, sharp — and '
+      + 'a recorded reason. Measured 2026-09-12: eight installed dependencies declare `preinstall`/'
+      + '`install`/`postinstall`; bun blocks five; THREE EXECUTE — esbuild, workerd, puppeteer — and '
       + 'the first two fetch a binary and run it (`fetch(`, `https.get`, `execFileSync` in their '
       + 'install.js). Nothing in this repository authorised that: `trustedDependencies` is absent, '
       + "so the allowlist doing the work is bun's own, compiled into bun and able to widen in a "
@@ -715,7 +715,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and
@@ -734,6 +734,9 @@ export const LADDER: readonly Gate[] = [
     // stays 24s — that addition is an order of magnitude inside the 23.4/24.4s
     // spread already measured for the other twenty, and declaring 24.1s would
     // claim a resolution these figures do not have.
+    // `client-graph.test.ts`, `install-scripts-gate.test.ts` and
+    // `tracing-gate.test.ts` join 2026-09-12: three gates that had shipped with
+    // no red proof at all. Measured solo on the 24-thread box: 0.7/0.4/0.2s.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '

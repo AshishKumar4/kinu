@@ -63,6 +63,8 @@ import { Miniflare, NoOpLog, type WorkerOptions } from 'miniflare';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
+import { isProductSource, readMatching } from './sources';
+import { parse, walk } from './syntax';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -71,24 +73,8 @@ const REPO = new URL('..', import.meta.url).pathname;
  *  environment list is the thing that drifts when someone adds a third. */
 const WRANGLER_CONFIGS = ['packages/cf-backend/wrangler.jsonc'] as const;
 
-/** Files that may construct a tracer. The census the config assertion is
- *  conditioned on. If none of them uses the factory, traces being off is not a
- *  defect and the gate says so rather than inventing one.
- *
- *  `actor-agent.ts` is the PRODUCTION call site: its `tracing` getter is the
- *  one seam every actor and every facet mode shares. Until it was listed here
- *  this gate's config assertion was vacuous by its own design: the factory was
- *  used only by itself and by this gate's fixture, so `instrumentedCount`
- *  counted two files that ship no span and `observability.traces` could have
- *  been absent from every environment without a finding. That is the shape the
- *  whole gate warns about. Correct, wired, dead. Reproduced one level up, in
- *  the gate. */
-const TRACER_SOURCES = [
-  'packages/cf-backend/src/obs/cf-tracer.ts',
-  'packages/cf-backend/src/actor-agent.ts',
-  'packages/cf-backend/tests/fixtures/tracing-gate-worker.ts',
-] as const;
-
+/** The fixture worker the runtime half boots. It is test code, outside the
+ *  product corpus the census reads, and it is the one file this gate names. */
 const FIXTURE_ENTRY = 'packages/cf-backend/tests/fixtures/tracing-gate-worker.ts';
 
 const TRACER_FACTORY = 'createWorkersTracer';
@@ -157,9 +143,25 @@ export function environmentsOf(configPath: string): readonly EnvironmentConfig[]
   ];
 }
 
-/** Derived, not listed: the files that actually construct a tracer. */
-export function tracerCallSites(files: readonly string[]): readonly string[] {
-  return files.filter((file) => readFileSync(join(REPO, file), 'utf8').includes(`${TRACER_FACTORY}(`));
+/** Derived, not listed: every product file that CALLS the tracer factory. The
+ *  file that declares it is not a call site — counting it made this gate's
+ *  config assertion vacuous once, with the factory used only by itself and by
+ *  the fixture — so the census is `createWorkersTracer(` outside a declaration,
+ *  over the product corpus rather than a list beside the gate. */
+export function tracerCallSites(sources: ReadonlyMap<string, string>): readonly string[] {
+  const sites: string[] = [];
+
+  for (const [file, text] of sources) {
+    let called = false;
+    walk(parse(file, text).root, (node) => {
+      if (node.raw.type === 'CallExpression' && node.raw.callee.type === 'Identifier'
+        && node.raw.callee.name === TRACER_FACTORY) called = true;
+    });
+
+    if (called) sites.push(file);
+  }
+
+  return sites.sort();
 }
 
 export interface RuntimeObservation {
@@ -333,7 +335,7 @@ export function auditTracing(
 async function main(): Promise<number> {
   const gate = 'tracing';
   const environments = WRANGLER_CONFIGS.flatMap((config) => environmentsOf(config));
-  const instrumented = tracerCallSites(TRACER_SOURCES);
+  const instrumented = tracerCallSites(readMatching(isProductSource));
   const observations = await observeSpans();
   const findings = auditTracing(environments, instrumented.length, observations);
 
@@ -355,7 +357,7 @@ async function main(): Promise<number> {
 
   console.log(`${gate}: ok — ${measured}`);
   console.log('  blind: the span tree shape. tailStream is not dispatched locally or on the deployed runtime, so shape is readable only from Cloudflare ingestion');
-  console.log('  blind: the file list is hand kept. A new production call site outside TRACER_SOURCES is uncounted until the list gains it');
+  console.log(`  blind: a call site outside the product corpus — a script, a fixture, a test — is uncounted; the census is ${instrumented.join(', ')}`);
 
   return 0;
 }
