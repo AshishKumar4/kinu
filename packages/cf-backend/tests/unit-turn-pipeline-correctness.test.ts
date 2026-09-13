@@ -1141,7 +1141,7 @@ describe('turn-pipeline correctness wiring', () => {
     const system = config?.system ?? '';
     // The turn's resolved role is a prefix fact: it changes on a deliberate
     // agent event and nothing else.
-    expect(system).toContain('## Role: General (general)');
+    expect(system).toContain('## Role: Task (task)');
     // Provenance is not. The resume sentence must not appear at system
     // placement on ANY turn, because it flips mid-session and the prefix
     // cannot: it rides `turnLocalTail` instead.
