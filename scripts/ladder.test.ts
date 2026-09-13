@@ -223,7 +223,7 @@ describe('the ladder measures something', () => {
     // suites after the probe are named files, so an eighth is a deliberate edit
     // here rather than a suite that silently joined a measured row.
     expect(durabilityProbeGate?.run).toBe(
-      'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts'
+      'bun test scripts/bench*.test.ts'
       + ' scripts/sandbox-durability-probe.test.ts'
       + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
       + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'

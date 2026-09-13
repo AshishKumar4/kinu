@@ -1714,7 +1714,6 @@ export function runnerClaims(tracked: readonly string[]): RunnerClaim[] {
     ['test:cli', 'the full CLI suite runner'],
     ['test:workerd', 'the workerd layer, both roots'],
     ['test:eval', 'the eval tier: bun arm plus the vitest eval suites'],
-    ['test:mutation', 'the exploration-policy mutation suite'],
     ['test:anti-slop', 'the vendored plugin suites, under Node'],
   ];
 

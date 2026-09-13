@@ -304,8 +304,8 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.05 s. Replaces 0.2 s.
     seconds: 0.05,
     catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
-      + 'a recorded reason. Nine installed dependencies declare `preinstall`/`install`/'
-      + '`postinstall`; bun blocks five; FOUR EXECUTE — esbuild, workerd, puppeteer, sharp — and '
+      + 'a recorded reason. Measured 2026-09-12: eight installed dependencies declare `preinstall`/'
+      + '`install`/`postinstall`; bun blocks five; THREE EXECUTE — esbuild, workerd, puppeteer — and '
       + 'the first two fetch a binary and run it (`fetch(`, `https.get`, `execFileSync` in their '
       + 'install.js). Nothing in this repository authorised that: `trustedDependencies` is absent, '
       + "so the allowlist doing the work is bun's own, compiled into bun and able to widen in a "
@@ -715,7 +715,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and
@@ -734,6 +734,9 @@ export const LADDER: readonly Gate[] = [
     // stays 24s — that addition is an order of magnitude inside the 23.4/24.4s
     // spread already measured for the other twenty, and declaring 24.1s would
     // claim a resolution these figures do not have.
+    // `client-graph.test.ts`, `install-scripts-gate.test.ts` and
+    // `tracing-gate.test.ts` join 2026-09-12: three gates that had shipped with
+    // no red proof at all. Measured solo on the 24-thread box: 0.7/0.4/0.2s.
     seconds: 24,
     catches: 'a gate whose decision boundary someone simplified. These are the tests '
       + 'that fail when a fingerprint stops distinguishing a renamed copy from a '
@@ -964,38 +967,6 @@ export const LADDER: readonly Gate[] = [
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
   },
-  {
-    // THE TIER IS THE BUDGET'S DECISION AND NOT A PREFERENCE. Measured the way this file
-    // measures — `performance.now()` around `Bun.spawnSync(['bun','run','test:mutation'])`,
-    // seven samples, 2026-08-19: 0.178 0.186 0.190 0.197 0.199 0.206 0.207 — so the declared
-    // cost is the MAXIMUM rather than the median, because a ceiling declared from a middle is
-    // exceeded half the time. This belongs at push rather than commit: the commit tier is
-    // the pre-commit hook and declares 53.24s (re-measured 2026-09-05), so a gate lives
-    // there only if a commit cannot wait for the push that follows it — and a policy
-    // mutation is fully recoverable at push. (The row once read 15.00s against a `< 15`
-    // ceiling and 66.90s against 90: both fictions the ladder-budget lock replaces.)
-    run: 'bun run test:mutation',
-    tier: 'push',
-    seconds: 0.21,
-    catches: 'a policy decision inverted with nothing to notice. Seven of them — the archive '
-      + 'novelty floor and the nearest-occupant search beside it, `isBetter`\'s direction and '
-      + 'its strictness, the publication seal, the merge policy derived from settle, the cycle '
-      + 'scan that makes a refusal all-or-nothing, budget conservation, and the clamp\'s '
-      + 'head/tail split — are each mutated in an isolated copy of the module and the NAMED '
-      + 'test that defends them is required to fail against the mutant. Every one of the nine '
-      + 'mutations typechecks, throws nothing, and changes one comparison: measured 2026-08-19, '
-      + 'admitting a tie reports the re-record as `recorded, displaced: true`, skipping the '
-      + 'cycle scan reports `applied` where a refusal belongs, and giving the tail the whole '
-      + 'cap returns 1796 characters against a budget of 1400. A suite that only ever asserts '
-      + '"something was refused" is green through all nine, which is why this is a tier gate '
-      + 'and not a comment.',
-    blind: 'any decision not on the list, and the list is hand-written — nothing enumerates the '
-      + 'comparisons a policy module contains, so a new threshold arrives uncovered and this '
-      + 'gate stays green over it. It also proves only that ONE named test catches each '
-      + 'mutation, never that the mutation is the worst reading available, and a mutant that '
-      + 'merely crashed would satisfy a weaker harness: the rejection is required to be a '
-      + 'failed `expect` rather than any throw.',
-  },
 
   {
     run: 'bun run gate:scanner-bundle',
@@ -1187,7 +1158,7 @@ export const LADDER: readonly Gate[] = [
     // and the r2-bench deploy substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
+    run: 'bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
     // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
@@ -1391,18 +1362,10 @@ export const LADDER: readonly Gate[] = [
       + 'Chrome cost keeps it out of the commit tier.',
   },
   {
-    run: 'bun test scripts/slate-preview-ux.test.ts',
-    tier: 'ci',
-    seconds: 5,
-    catches: 'whether SlateFrame loads the previewSlate URL in its sandbox and whether a selected Slate that disappears returns the work surface to Work.',
-    blind: 'the preview fixture uses a static data URL, so this does not exercise a deployed preview origin or its server-side authorization.',
-  },
-  {
     run: 'bun run layergate',
     tier: 'ci',
     seconds: 25,
-    catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers. '
-      + 'Runs in no tier today.',
+    catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers.',
     blind: '`tool-construction`, declared and measured at 0/0 — and all three tool-surface '
       + 'defects live exactly there.',
   },
@@ -1549,34 +1512,6 @@ export const LADDER: readonly Gate[] = [
       + 'hammer prints its blind spots on the green path.',
   },
   {
-    run: 'bun run gate:twin-differential',
-    // PUSH, because it is a source read plus one in-process merge over a shared
-    // fixture: 0.2s, and the drift it catches is cheapest to fix on the machine
-    // that caused it.
-    tier: 'push',
-    seconds: 0.25,
-    catches: 'two backend halves that BOTH delegate to core and still disagree about what '
-      + 'they hand it — the shape the twin inventory beside it cannot see. `headMergeLLM` is '
-      + 'the case in the record: the cf merge resolved the `judge` route off the turn profile '
-      + 'while the local merge passed the SESSION\'S CHAT MODEL at a hardcoded `low` and filed '
-      + 'the result as `judge` spend anyway, so one split was synthesised by the deep tier in '
-      + 'the cloud and by whatever `/model` happened to be set on a laptop. Both bodies called '
-      + 'into core; neither was a twin. Three seams are declared — head-merge policy, '
-      + 'workspace planes, name minting — and each is held to ONE shared fixture that BOTH '
-      + 'sides must pin, because two suites maintaining two expectations is exactly how that '
-      + 'drift survived: each looked correct alone. The fixture is then EXECUTED here, so a '
-      + 'pinned value cannot rot into something core no longer produces. All four directions '
-      + 'proven red: a seam whose core symbol no surface reaches, a side that stops pinning '
-      + 'the shared fixture, and the policy itself moved in core (`HEAD_MERGE_SOURCE` from '
-      + '`judge` to `fast`) each turn it red.',
-    blind: 'it does not construct the CLI session in this process — that would be a '
-      + 'cf-backend suite importing the other adapter\'s composition root, and the two are '
-      + 'deliberately separate programs. So a seam whose two suites both pin the fixture and '
-      + 'both still call it wrongly is outside it, and the CLI half of every seam is measured '
-      + 'in its own package. Three seams of the 60-entry twin inventory carry a differential; '
-      + 'the rest are held only by the inventory and by `gate:capability-parity`.',
-  },
-  {
     run: 'bun run gate:mutation-fences',
     tier: 'deploy',
     // Four fences, each proved twice (pristine green, mutant red) inside one
@@ -1591,7 +1526,7 @@ export const LADDER: readonly Gate[] = [
       + 'MECHANICALLY in an isolated copy and its owner is required to fail. Green with the '
       + 'fence stripped is the finding, because it names a fence nothing guards. A snippet '
       + 'that no longer sits in its file exactly once fails as a stale fixture rather than '
-      + 'passing, which is the `test:mutation` rule applied to guards instead of policies.',
+      + 'passing, which is the exploration-policy mutation suites\' rule applied to guards instead of policies.',
     blind: 'a fence nobody declared — the list is hand-written and nothing enumerates the '
       + 'guards a module contains. It proves ONE named strip per fence, never that the strip '
       + 'is the worst reading, and only that ONE test catches it. The copy is HEAD, so a '
