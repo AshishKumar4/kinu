@@ -1,4 +1,4 @@
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
 import { INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
@@ -77,7 +77,7 @@ export interface ActorExecutionInput {
   readonly loopVersion: number;
   readonly chat: Omit<ChatOptions, 'history' | 'signal' | 'extensions' | 'meter' | 'dynamicContext'>;
   readonly extensions: readonly KinuExtension[];
-  readonly dynamic: () => DynamicContext;
+  readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   readonly scaffoldSpend?: ModelCallSpend;
   /** Re-checked by the runner before each model call, for a kind whose
    *  liveness is owned outside this session (a head or a swarm node whose
@@ -404,6 +404,9 @@ export class ActorSession {
     const active = this.requireTurn(lease);
 
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
+    const profile = active.profile;
+    const allowedTools = new Set(profile.allowedTools);
+    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
     const extensions = new ExtensionHost();
 
     for (const extension of input.extensions) extensions.register(extension);
@@ -446,8 +449,9 @@ export class ActorSession {
         program, scaffoldSpend: input.scaffoldSpend,
         assertActive: input.assertActive,
         scaffoldStreamOptions: input.scaffoldStreamOptions,
-        chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
-          meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
+        chat: { ...input.chat, tools, history: this.messages, signal: active.abort.signal, extensions,
+          meter: this.orchestrator.acc.composition,
+          dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools) },
           stepContext: this.context.steps(claim) } satisfies ChatOptions,
       }), captureOperationProfile({
         actor: this.runtime.actor, profile: active.profile,
