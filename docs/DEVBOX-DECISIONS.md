@@ -237,6 +237,25 @@ startup now returns when that running generation already has admission;
 unsettled generations still use the same coordinator. The active-caller
 regression is red before the guard and green after it.
 
+D13. A request in the running-before-hook window joins the generation's
+startup coordinator (2026-09-13). Run `20260913154111`, control `fed2b9d779`,
+quiesced after Git repetition 1 segment 2. The next requests saw
+`running:true` before `onStart` had registered its restore promise and
+received `pending` instead of joining startup. The remaining workload
+preparations were attempted before the replacement restore settled. D12's
+guard was not responsible: quiesce revoked admission, and the new boot
+`5a7624fb-b8e2-41dd-b8bc-577847457b76` subsequently restored successfully.
+
+`resolveReadiness` now joins or creates the existing port-proven coordinator
+for an already-running unstarted generation. It never joins a hook owned by
+a retired generation. Requests arriving before the container reports running
+keep the existing path; runtime and observation budgets are unchanged.
+The lifecycle double is red before the fix for an exec issued immediately
+after `running:true`, before the hook, and for a running boot without a
+coordinator. Both are green after it; the before-running control remains
+green. Each exec returns the new boot marker only after restore settles.
+Raw control evidence is under `bench-artifacts/devbox-admission/20260913154111/`.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

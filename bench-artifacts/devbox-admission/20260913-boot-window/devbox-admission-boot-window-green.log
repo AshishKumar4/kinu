@@ -1,0 +1,124 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/lifecycle-generation.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] superseded admission refused: the container reported CONTAINER_UNAVAILABLE
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported MISSING_CREDENTIALS
+[devbox] start refused: the container reported MISSING_CREDENTIALS
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported NO_SPACE
+[devbox] start refused: the container reported INVALID_MOUNT_CONFIG
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] start refused: the attach-recovery record did not parse [unreadable → refuse]
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] start refused: the container reported NO_SPACE
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] start refused: the container reported MISSING_CREDENTIALS
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported UNKNOWN_ERROR
+[devbox] start refused: the stamp refused
+[devbox] start refused: the stamp refused
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/restore-after-start.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: settled row could not be persisted
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] dropping the schedule row for `snapshotWorkspaceIfDue`: this class carries no such member, so the alarm loop can only log it and keep the row for ever
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+ 81 pass
+ 0 fail
+ 348 expect() calls
+Ran 81 tests across 2 files. [163.00ms]
