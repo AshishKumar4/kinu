@@ -482,7 +482,7 @@ export class LocalAgentClient implements AgentClient {
     if (this.pending) throw new Error('Cannot fork while a turn is running.');
     const { actorId } = this.deps.rt.actor;
 
-    const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
+    const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: 'user' | 'assistant'; content: string; created_at: number }>`
       SELECT id, parent_id, role, content, created_at
       FROM actor_messages
       WHERE actor_id = ${actorId} AND session_id = ${this.canonicalConversation}
@@ -511,7 +511,7 @@ export class LocalAgentClient implements AgentClient {
       ...this.deps.transcript,
       conversationId: this.canonicalConversation,
     });
-    this.session = this.createAgentSession();
+    this.session = this.createAgentSession(rows.slice(0, pivot).map(({ role, content }) => ({ role, content })));
     await this.connect();
 
     return { client: this, label: `branch ${this.activeCliSession.id}` };
@@ -687,9 +687,10 @@ export class LocalAgentClient implements AgentClient {
     return normalizeModelMenu({ payload: await this.session.listAvailableModels() });
   }
 
-  private createAgentSession(): LocalAgentSession {
+  private createAgentSession(historySeed?: LocalAgentSessionOpts['historySeed']): LocalAgentSession {
     const options: LocalAgentSessionOpts = {
       rt: this.deps.rt,
+      historySeed,
       db: this.deps.db,
       model: this.deps.model,
       modelResolver: this.deps.modelResolver,
