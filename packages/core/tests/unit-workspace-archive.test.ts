@@ -18,6 +18,7 @@ import {
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   writeWorkspaceArchive,
+  workspaceArchiveFiles,
   type ArchiveCursor,
   type SqlValue,
 } from '../src/index';
@@ -67,6 +68,34 @@ async function seeded() {
 }
 
 describe('workspace archive', () => {
+  test('the hosted workspace file tree restores binary and nested text through the shared archive', async () => {
+    const source = await seeded();
+    const files = workspaceArchiveFiles(createWorkspaceBundle(source.db));
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files });
+    const target = fresh();
+    const restored = await restoreWorkspaceArchive(target.archive, lines, { files: () => target.vfs });
+
+    expect(restored.files).toBeGreaterThan(0);
+    expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
+    expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' })).toBe('a plan with a "quote" and a \\ backslash');
+  });
+
+  test('SQL cannot arrive after the destination filesystem has opened', async () => {
+    const source = await seeded();
+    const files = workspaceArchiveFiles(createWorkspaceBundle(source.db));
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files });
+    const end = lines.at(-1);
+
+    if (!end) throw new Error('archive has no end record');
+    const target = fresh();
+
+    await expect(restoreWorkspaceArchive(target.archive, [
+      ...lines.slice(0, -1),
+      JSON.stringify({ t: 'schema', kind: 'table', name: 'late_table', sql: 'CREATE TABLE late_table (id INTEGER)' }),
+      end,
+    ], { files: () => target.vfs })).rejects.toThrow('SQL records after its workspace files');
+  });
+
   test('round-trips a workspace into an empty database, byte-exactly', async () => {
     const source = await seeded();
     const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local', now: 42 });

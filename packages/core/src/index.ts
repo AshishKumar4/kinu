@@ -1223,7 +1223,7 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles,
+  writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, archiveFileTree,
 } from './vfs/workspace-planes';
 
 export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
