@@ -1,13 +1,16 @@
 /**
  * Does a devbox's readiness refusal reach its caller intact?
  *
- * THE SEAM UNDER TEST. `adaptCloudflareSandbox` (src/sandbox-exec-lane.ts)
- * asks `handle.resolveReadiness()` on a `DurableObjectStub<KinuSandbox>` —
- * the sandbox object lives in its own isolate, so the answer reaches the
- * executor through Workers RPC serialisation. A THROWN refusal is
- * normalised by that transport: the measured run for this file showed
- * `error.name` arriving as `Error` no matter which class threw it, which is
- * why the refusal is a RETURNED value — `RestoreReadiness` serialises by
+ * THE SEAM UNDER TEST. The sandbox object a cf-backend executor commands
+ * lives in its own isolate, so `handle.resolveReadiness()` on a
+ * `DurableObjectStub<KinuSandbox>` reads through Workers RPC
+ * serialisation. This file measures that transport, and stops there:
+ * what the adapter does with the answer is the OTHER half's seam, proven
+ * bun-side. A THROWN refusal is normalised by the transport — the class
+ * name reads `StillRestoring` inside the callee isolate
+ * (`localRefusalName` reads it before the throw ever crosses) and
+ * `Error` by the time the rejection reaches the caller — which is why
+ * the refusal is a RETURNED value: `RestoreReadiness` serialises by
  * value and loses nothing.
  *
  * A method rather than `fetch`, because that is the call shape
@@ -19,6 +22,10 @@ import { DurableObject } from 'cloudflare:workers';
 const NOT_READY_TEXT =
   'this devbox is not ready: a restoration has been running in the request for 120 ms. '
   + 'Nothing has been classified as a failure; a startup is armed, so ask again.';
+
+class StillRestoring extends Error {
+  override name = 'StillRestoring';
+}
 
 export class DevboxNotReadyProbeDO extends DurableObject<Cloudflare.Env> {
   /** The pending half of `RestoreReadiness` verbatim — the answer a box with
@@ -42,9 +49,12 @@ export class DevboxNotReadyProbeDO extends DurableObject<Cloudflare.Env> {
    *  assertion green. A synchronous throw crosses the same serialization —
    *  the property under test — as a plain call failure. */
   namedRefusal(): string {
-    class StillRestoring extends Error { }
-
     throw new StillRestoring(NOT_READY_TEXT);
+  }
+
+  /** Observe the custom name before RPC serialization. */
+  localRefusalName(): string {
+    return new StillRestoring(NOT_READY_TEXT).name;
   }
 
   /** The dispatch sentinel: if a caller-side gate ever lets this run on a
