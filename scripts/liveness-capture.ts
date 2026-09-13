@@ -319,7 +319,7 @@ async function sendMission(page: Page): Promise<void> {
   const tabs = await page.$$("button");
 
   for (const tab of tabs) {
-    if ((await tab.evaluate((el) => (el.title ?? el.textContent ?? "").trim())) === "Exploration") {
+    if ((await tab.evaluate((el) => (el.title ?? el.textContent ?? "").trim())) === "Swarms") {
       await tab.click();
       break;
     }

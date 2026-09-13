@@ -1,5 +1,5 @@
 /**
- * The gated right-pane tabs — Releases and Exploration earn their place only
+ * The gated right-pane tabs — Releases and Swarms earn their place only
  * when they have content (`surfaceHasContent`, the predicate the tab strip
  * filters through), and a reader left on one whose content just emptied must
  * not be stranded on a tab that no longer renders (`resolveGatedSurface`
@@ -64,9 +64,9 @@ const renderStrip = (tabPresence: TabPresence | undefined): string =>
 
 
 describe('the gated tabs appear only with content', () => {
-  test('a fresh workspace shows neither Releases nor Explore', () => {
+  test('a fresh workspace shows neither Releases nor Swarms', () => {
     expect(surfaceHasContent('Releases', FRESH, EMPTY_TREES, [])).toBe(false);
-    expect(surfaceHasContent('Exploration', FRESH, EMPTY_TREES, [])).toBe(false);
+    expect(surfaceHasContent('Swarms', FRESH, EMPTY_TREES, [])).toBe(false);
   });
 
   test('every ungated surface stays visible on a fresh workspace', () => {
@@ -77,13 +77,13 @@ describe('the gated tabs appear only with content', () => {
     }
 
     expect(html).not.toContain('aria-label="Releases"');
-    expect(html).not.toContain('aria-label="Exploration"');
+    expect(html).not.toContain('aria-label="Swarms"');
   });
 
   test('a workspace with content shows the gated tabs in the strip', () => {
     const html = renderStrip(FULL);
     expect(html).toContain('aria-label="Releases"');
-    expect(html).toContain('aria-label="Exploration"');
+    expect(html).toContain('aria-label="Swarms"');
   });
 
 
@@ -91,18 +91,18 @@ describe('the gated tabs appear only with content', () => {
     expect(surfaceHasContent('Releases', { ...FRESH, releases: true }, EMPTY_TREES, [])).toBe(true);
   });
 
-  test('an exploration run makes Explore appear', () => {
-    expect(surfaceHasContent('Exploration', { ...FRESH, explorations: true }, EMPTY_TREES, [])).toBe(true);
+  test('an exploration run makes Swarms appear', () => {
+    expect(surfaceHasContent('Swarms', { ...FRESH, explorations: true }, EMPTY_TREES, [])).toBe(true);
   });
 
 
   test('a search in flight appears through the live trees without waiting for the next refresh', () => {
-    expect(surfaceHasContent('Exploration', FRESH, oneTree(), [])).toBe(true);
+    expect(surfaceHasContent('Swarms', FRESH, oneTree(), [])).toBe(true);
   });
 
   test('an absent presence keeps every tab visible — fixture frames claim nothing about ledgers', () => {
     expect(surfaceHasContent('Releases', undefined, EMPTY_TREES, [])).toBe(true);
-    expect(surfaceHasContent('Exploration', undefined, EMPTY_TREES, [])).toBe(true);
+    expect(surfaceHasContent('Swarms', undefined, EMPTY_TREES, [])).toBe(true);
   });
 });
 
@@ -121,12 +121,12 @@ describe('an active tab whose content vanishes falls back', () => {
     expect(resolveGatedSurface('Releases', FRESH, EMPTY_TREES, [])).toBe('Work');
   });
 
-  test('being on Explore when the last run goes away lands on Work', () => {
-    expect(resolveGatedSurface('Exploration', FRESH, EMPTY_TREES, [])).toBe('Work');
+  test('being on Swarms when the last run goes away lands on Work', () => {
+    expect(resolveGatedSurface('Swarms', FRESH, EMPTY_TREES, [])).toBe('Work');
   });
 
-  test('a live tree keeps an active Explore tab exactly where it is', () => {
-    expect(resolveGatedSurface('Exploration', FRESH, oneTree(), [])).toBe('Exploration');
+  test('a live tree keeps an active Swarms tab exactly where it is', () => {
+    expect(resolveGatedSurface('Swarms', FRESH, oneTree(), [])).toBe('Swarms');
   });
 
   test('ungated surfaces are never moved', () => {
@@ -137,6 +137,6 @@ describe('an active tab whose content vanishes falls back', () => {
 
   test('content present means no move, even on a gated tab', () => {
     expect(resolveGatedSurface('Releases', FULL, EMPTY_TREES, [])).toBe('Releases');
-    expect(resolveGatedSurface('Exploration', FULL, EMPTY_TREES, [])).toBe('Exploration');
+    expect(resolveGatedSurface('Swarms', FULL, EMPTY_TREES, [])).toBe('Swarms');
   });
 });

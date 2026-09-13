@@ -21,7 +21,7 @@ export function surfaceHasContent(
 ): boolean {
 	if (surface === "Releases") return tabPresence?.releases ?? true;
 
-	if (surface === "Exploration") return (tabPresence?.explorations ?? true) || mctsTrees.size > 0;
+	if (surface === "Swarms") return (tabPresence?.explorations ?? true) || mctsTrees.size > 0;
 
 	if (surface.startsWith(SLATE_PREFIX)) {
 		const id = surface.slice(SLATE_PREFIX.length);

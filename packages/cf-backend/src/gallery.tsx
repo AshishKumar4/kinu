@@ -2548,7 +2548,7 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 
   return (
     <div data-live-stage={stage} className="contents">
-      <Shell surface="Exploration" rpc={rpc} headActivity={activity} backgroundJobs={[]} />
+      <Shell surface="Swarms" rpc={rpc} headActivity={activity} backgroundJobs={[]} />
     </div>
   );
 }
@@ -5782,23 +5782,23 @@ async function mount() {
   const fixtureNode = fixtureFrames.get(frame);
 
   if (frame === "shell") node = <Shell />;
-  else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
+  else if (frame === "forks") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
   // The same surface with its config disclosure OPEN. The card is shut by the
   // owner's own ruling — config is asked for, never shoved at a reader — so no
   // product prop exists just for gallery capture.
   else if (frame === "forkconfig") {
-    node = <OpenConfigDisclosures><Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} /></OpenConfigDisclosures>;
+    node = <OpenConfigDisclosures><Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} /></OpenConfigDisclosures>;
   }
-  else if (frame === "forkmerge") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={mergeFirstRpc} />;
-  else if (frame === "forkpreset") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={provePresetRpc} />;
-  else if (frame === "forkfanin") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={swarmFanInRpc} />;
-  else if (frame === "forkrefused") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={refusedRunRpc} />;
-  else if (frame === "forkstopped") node = <Shell surface="Exploration" rpc={stoppedRunRpc} />;
+  else if (frame === "forkmerge") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={mergeFirstRpc} />;
+  else if (frame === "forkpreset") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={provePresetRpc} />;
+  else if (frame === "forkfanin") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={swarmFanInRpc} />;
+  else if (frame === "forkrefused") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={refusedRunRpc} />;
+  else if (frame === "forkstopped") node = <Shell surface="Swarms" rpc={stoppedRunRpc} />;
   // A multi-node MIXED-STATUS run: nodes reported, nodes still working, one
   // aborted and one failed on the provider, over two levels. The state the whole
   // surface exists for and the one no frame could photograph.
   else if (frame === "forkrunning") {
-    node = <Shell surface="Exploration" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
+    node = <Shell surface="Swarms" rpc={runningSwarmRpc} headActivity={RUNNING_ACTIVITY} />;
   }
   else if (frame === "forklive") node = <ForkLiveFrame pinned={pinnedLiveStage(location.search)} />;
   else if (frame === "forkfull" || frame === "forkbig" || frame === "forkswarmfull") {

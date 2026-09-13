@@ -29,7 +29,7 @@ import { SLATE_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
-const SURFACES = ["Work", "Diffs", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
+const SURFACES = ["Work", "Diffs", "Files", "Releases", "Swarms", "Agent", "Environment"] as const;
 
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
@@ -53,7 +53,7 @@ const SURFACE_LABEL = {
   Work: "Work",
   Files: "Files",
   Releases: "Releases",
-  Exploration: "Explore",
+  Swarms: "Swarms",
   Agent: "Agent",
   Environment: "Env",
 } satisfies Record<(typeof SURFACES)[number], string>;
@@ -292,7 +292,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <FilesSurface rpc={props.rpc} executors={props.executors} jump={filesJump} onConnectDevice={openConnect} />
           )}
           {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
-          {surface === "Exploration" && (
+          {surface === "Swarms" && (
             <ExplorationSurface
               liveTrees={props.mctsTrees}
               headActivity={props.headActivity}
