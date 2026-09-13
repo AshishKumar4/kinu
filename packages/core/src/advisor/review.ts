@@ -32,8 +32,10 @@ import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { diagnostics, tolerate, toKinuError } from '../obs/index';
+import { diagnostics, tolerate, toKinuError, type ErrorCode } from '../obs/index';
+import { abortableSleep } from '../providers/pacing';
 import { stableStringify } from '../safety/argument-digest';
+import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../types/advisor';
 
 export {
@@ -424,6 +426,22 @@ export function parseAdvisorReply(raw: string): AdvisorNote | null {
   };
 }
 
+/** How many times one turn's lane may run its review. One provider failure
+ *  must not lose the turn's only review, and past three transient failures a
+ *  further attempt is hammering a provider that already answered. Attempts,
+ *  never an elapsed deadline: the budget is a count, not a clock. */
+const ADVISOR_REVIEW_MAX_ATTEMPTS = 3;
+
+/**
+ * Which classified failures earn another attempt. `unavailable` is the
+ * provider saying slow down or not yet (429, 5xx); `timeout` is a deadline
+ * passing while the work may still be running; `io` is the transport itself
+ * breaking (ECONNRESET). Everything else is definitive: `bad_input` and
+ * `denied` are the request refused, `unsupported` and `missing` will not
+ * exist on retry, `cancelled` is the caller stopping, and `oom` recurs.
+ */
+const ADVISOR_TRANSIENT_CODES: readonly ErrorCode[] = ['unavailable', 'timeout', 'io'];
+
 /**
  * Review one finished turn.
  *
@@ -636,8 +654,11 @@ export function markAdvisorLaneStarted(
  * completion gate records beside the snapshot; a backend without one passes
  * false by construction.
  *
- * Never throws: a reviewer that failed is a turn with no advice, stated as
- * `advisor.review_failed` and answered as null.
+ * One provider failure must not lose the turn's only review: a transient
+ * failure earns another attempt, up to {@link ADVISOR_REVIEW_MAX_ATTEMPTS},
+ * and every attempt's failure is stated on `advisor.review_failed` with its
+ * number. An exhausted lane is a turn with no advice, answered as null. A
+ * definitive failure is a defect in the review itself and still throws.
  */
 export async function reviewRecordedTurn(deps: {
   readonly snapshot: AdvisorRecoverySnapshot;
@@ -651,26 +672,37 @@ export async function reviewRecordedTurn(deps: {
 
   if (llm === undefined) return null;
   const labels = snapshot.turn.missionLabels ?? [];
+  const governed = labels.length === 0 ? llm : deps.govern(llm, labels);
 
-  try {
-    return await runAdvisorLane({
-      turn: snapshot.turn,
-      llm: labels.length === 0 ? llm : deps.govern(llm, labels),
-      minSeverity: snapshot.minSeverity,
-      recent: snapshot.recent,
-      gateOpen: deps.gateOpen,
-      reachable: snapshot.reachable,
-      deliver: deps.deliver,
-      record: deps.record,
-    });
-  } catch (cause) {
-    const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });
+  for (let attempt = 1; attempt <= ADVISOR_REVIEW_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await runAdvisorLane({
+        turn: snapshot.turn,
+        llm: governed,
+        minSeverity: snapshot.minSeverity,
+        recent: snapshot.recent,
+        gateOpen: deps.gateOpen,
+        reachable: snapshot.reachable,
+        deliver: deps.deliver,
+        record: deps.record,
+      });
+    } catch (cause) {
+      const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });
 
-    // Advice is optional; the turn is not. A reviewer that is down or slow is
-    // a turn with no advice. Anything else is a defect in the review itself.
-    if (failure.code !== 'unavailable' && failure.code !== 'timeout') throw failure;
-    diagnostics.failure('advisor.review_failed', failure);
+      // Advice is optional; the turn is not. Every attempt's failure is
+      // recorded on the lane's own event with its number, so a turn that
+      // stays unreviewed says how many reviews it cost.
+      diagnostics.failure('advisor.review_failed', failure, { attempt });
 
-    return null;
+      // A definitive failure is a defect in the review itself and throws, as
+      // before. A transient one gets its next attempt on the shared recovery
+      // pace; an exhausted one is a turn with no advice, never a fabricated
+      // note.
+      if (!ADVISOR_TRANSIENT_CODES.includes(failure.code)) throw failure;
+
+      if (attempt < ADVISOR_REVIEW_MAX_ATTEMPTS) await abortableSleep(recoveryBackoffMs(attempt - 1));
+    }
   }
+
+  return null;
 }
