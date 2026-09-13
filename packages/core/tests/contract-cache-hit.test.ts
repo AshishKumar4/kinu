@@ -49,6 +49,7 @@ import {
   runChat,
   createAnthropicProvider, createOpenAIProvider, createCodexProvider,
   createOpenRouterProvider, createOpenAICompatProvider,
+  createWorkersAIProvider,
   markLastToolForAnthropicCache,
   TurnAccumulator, ExtensionHost,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
@@ -458,7 +459,16 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
         baseURL: 'https://workers-ai.example/v1',
       },
     },
-    model: (deps) => createOpenAICompatProvider('workers-ai').createModel('@cf/moonshotai/kimi-k2.6', deps),
+    model: (deps) => createWorkersAIProvider({ sessionAffinity: SESSION_KEY }, {
+      async run(model, inputs, options) {
+        if (deps.fetch === undefined) throw new Error('the binding fixture needs its recording fetch');
+
+        return deps.fetch('https://workers-ai.example/v1/chat/completions', {
+          method: 'POST', headers: options?.extraHeaders,
+          body: JSON.stringify({ model, ...inputs }),
+        });
+      },
+    }).createModel('@cf/moonshotai/kimi-k2.6', deps),
   },
 ];
 
@@ -647,6 +657,18 @@ const BLIND_SPOTS = [
 ];
 
 describe('a stable prefix reads back as a nonzero cache hit', () => {
+  test('the actual Workers AI provider routes every binding step to its conversation replica', async () => {
+    const entry = CACHING_PROVIDERS.find((candidate) => candidate.label === 'workers-ai');
+
+    if (entry === undefined) throw new Error('missing Workers AI case');
+    const { mock } = await driveTurn(entry);
+    expect(mock.requests).toHaveLength(3);
+
+    for (const request of mock.requests) {
+      expect(request.headers['x-session-affinity']).toBe(SESSION_KEY);
+    }
+  });
+
   test('every caching provider accumulates a nonzero cacheRead on the multi-step turn', async () => {
     const lines: string[] = [];
 
