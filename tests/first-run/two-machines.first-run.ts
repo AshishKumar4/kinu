@@ -82,6 +82,9 @@ describe(SUITE, () => {
       await runFirstRunCase(PLAN, {
         id: CASE,
         modelCalls: 'expected',
+        // Genesis independently probes both machines before the unnamed ask.
+        // This row measures routing for the two explicit asks, not orientation.
+        genesis: false,
         purpose: 'An assistant working across the owner\'s two machines, which it must never '
           + 'confuse for one.',
         async run({ session }) {
