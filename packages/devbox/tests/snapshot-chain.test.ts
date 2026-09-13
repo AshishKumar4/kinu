@@ -2981,6 +2981,7 @@ describe('discard — objects before the pointer', () => {
     // nothing would delete them.
     expect(deleted).toBeLessThan(cleared);
     expect(record.calls).toContain('deleteObjects:3');
+    expect(record.calls).not.toContain('deleteObjects:0');
 
     for (const key of [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID),
       metadataObjectKey(STORE_ROOT, CHAIN_ID)]) {

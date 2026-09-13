@@ -1,0 +1,24 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/snapshot-chain.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+2979 |     const cleared = record.calls.indexOf('clearState');
+2980 |     // Reversed, a crash orphans both: nothing would name the objects and
+2981 |     // nothing would delete them.
+2982 |     expect(deleted).toBeLessThan(cleared);
+2983 |     expect(record.calls).toContain('deleteObjects:3');
+2984 |     expect(record.calls).not.toContain('deleteObjects:0');
+                                    ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "deleteObjects:0"
+Received: [ "deleteObjects:3", "deleteObjects:0", "clearState" ]
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-block-layer-impl/packages/devbox/tests/snapshot-chain.test.ts:2984:30)
+(fail) discard — objects before the pointer > all three keys go, and only then the record [0.63ms]
+
+ 0 pass
+ 133 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [47.00ms]

@@ -2303,8 +2303,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         metadataObjectKey(root, generation),
       ],
     ));
-    await ports.deleteObjects([...new Set([state.delta?.id, state.fallback?.delta?.id, ...(state.retiredDeltas ?? [])])]
-      .filter((id): id is string => id !== undefined).map(id => deltaObjectKey(root, id)));
+
+    const deltas = [...new Set([state.delta?.id, state.fallback?.delta?.id, ...(state.retiredDeltas ?? [])])]
+      .filter((id): id is string => id !== undefined).map(id => deltaObjectKey(root, id));
+
+    if (deltas.length > 0) await ports.deleteObjects(deltas);
     await ports.clearState();
   };
 
