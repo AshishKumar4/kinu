@@ -116,6 +116,33 @@ remote objects; `resetIsolate()` keeps the disk. Decided 2026-09-13 from P1
 (`0a913d39c`). Before this the double kept the disk across a stop, so tests
 that passed under it proved reactivation, not restart.
 
+D7. Block-layer design gate. Status: designed, unimplemented. The conditional
+read-only composition design and proposed Lean statements are in
+[DEVBOX-BLOCK-LAYER.md](DEVBOX-BLOCK-LAYER.md). Evaluated 2026-09-13 on
+`feat/devbox-block-layer`, based on `df1694e9c`; this entry and the design
+are committed together. No candidate meets the strengthened full-hook
+bound for arbitrary restored workloads, so none is adopted.
+
+A read-only range-serving lower removes eager base-file copying from storage
+attach, but fuse-overlayfs copies the complete inode on a writable open.
+Saved services can perform that open, or read the entire file, before
+readiness. A plain sparse-file bind exposes zeros; a writable FUSE bind
+needs a kernel-visible checkpoint barrier before its callback bitmap is
+complete. The prior native dirty-mmap failure remains relevant. A tiny
+local clone from actual squashfuse to the image upper failed EXDEV, as the
+FICLONE same-filesystem contract requires.
+
+V1 inline override arrays also invalidate O(M + L) when M counts files:
+the real planner produced 525 to 6,616,994 manifest bytes for one changed
+file and one deduplicated chunk, over synthetic logical sizes 64 KiB to
+1 GiB. A proposed V2 replaces `over` with a range-paged index reference
+inside the existing delta object and refuses V1 by version; no format
+change has shipped. Other changed namespace records must be counted too.
+D2, D4 and O2 remain in force. Measurements and exact commands:
+`kinu-logs/block-layer/evidence.json`. No product deployment or Lean proof
+was run, and no full-hook latency or callback-only publication bound is
+claimed.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
