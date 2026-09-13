@@ -106,6 +106,54 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
 }
 
 describe('the start hook owns restoration', () => {
+  for (const arrival of ['before running', 'before hook'] as const) {
+    test(`after quiesce, exec arriving ${arrival} joins the replacement restore`, async () => {
+      const { box, container } = harness(TestBox);
+      await box.ensureReady();
+      const oldBoot = container.bootId;
+      await box.quiesce();
+      expect(container.running.running).toBe(false);
+      const window = gate();
+      const restored = gate();
+
+      if (arrival === 'before running') container.containerStartGate = window;
+      else container.containerHookGate = window;
+      container.stampGate = restored;
+      const startup = box.devboxStartup();
+      await window.reached;
+      expect(container.running.running).toBe(arrival === 'before hook');
+      let settled = false;
+
+      const caller = (async () => {
+        try {
+          return { output: await box.exec('cat /tmp/devbox-boot-id 2>/dev/null || true') };
+        } catch (error) {
+          return { error };
+        } finally {
+          settled = true;
+        }
+      })();
+
+      try {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(settled).toBe(false);
+        window.release();
+        await restored.reached;
+        expect(settled).toBe(false);
+      } finally {
+        window.release();
+        restored.release();
+        await startup;
+      }
+
+      expect(await caller).toMatchObject({ output: { stdout: container.bootId, stderr: '', exitCode: 0 } });
+      expect(container.bootId).toBeString();
+      expect(container.bootId).not.toBe(oldBoot);
+      expect(stamps(container)).toBe(2);
+      expect((await box.devboxState()).ready).toBe(true);
+    });
+  }
+
   for (const termination of ['stop', 'destroy'] as const) {
     test(`actual container ${termination} loses local state while the same identity keeps durable state`, async () => {
       const { box, container, rows } = harness(TestBox);
@@ -311,13 +359,14 @@ describe('the start hook owns restoration', () => {
     expect(container.starts).toHaveLength(1);
   });
 
-  test('T5b: the request door refuses an unsettled running generation without restoring', async () => {
+  test('T5b: a running boot without a coordinator creates and joins its port-proven start', async () => {
     const { box, container } = runningBoxWithService();
     container.running.running = true;
-    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
-    expect(container.execs).toEqual([]);
-    expect(container.starts).toEqual([]);
-    expect(armed(container)).toBe(1);
+    expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
+    expect(container.startWaitOptions).toHaveLength(1);
+    expect(stamps(container)).toBe(1);
+    expect(container.starts).toHaveLength(1);
+    expect(armed(container)).toBe(0);
   });
 
   test('T6: the in-flight phase names the hook', async () => {
@@ -369,7 +418,7 @@ describe('the start hook owns restoration', () => {
     expect((await box.devboxState()).ready).toBe(true);
   });
 
-  test('T9b: heartbeat refuses a replaced generation and arms the only coordinator', async () => {
+  test('T9b: after heartbeat detects replacement the request joins the only coordinator', async () => {
     const restored = await stoppedBoxWithService();
     await restored.box.start();
     const { box, container, activation } = activatedOverRunning(restored.rows);
@@ -377,8 +426,8 @@ describe('the start hook owns restoration', () => {
     await activation;
     await box.devboxHeartbeat();
     expect((await box.devboxState()).ready).toBe(false);
-    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
-    expect(stamps(container)).toBe(0);
+    expect(await box.resolveReadiness()).toEqual({ kind: 'repair', incomplete: 'port 3000 never answered' });
+    expect(stamps(container)).toBe(1);
     await box.devboxStartup();
     expect(stamps(container)).toBe(1);
   });
