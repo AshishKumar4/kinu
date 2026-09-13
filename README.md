@@ -34,10 +34,10 @@
 ## Demo
 
 <p align="center">
-  <img alt="Illustrative interface demo: plan review, candidate patches, and focused checks, using sample data." src="docs/assets/kinu-bugfix-demo.webp" width="976" height="648">
+  <img alt="Animated walkthrough: the agent plans the checkout fix, submits the plan for review, the cursor approves it, and the support-queue slate builds and opens, using sample data." src="docs/assets/kinu-plan-demo.gif" width="976" height="818">
 </p>
 
-<p align="center"><em>An interface example with sample data. Try the current planning walkthrough at <a href="https://kinu.run">kinu.run</a>.</em></p>
+<p align="center"><em>The planning walkthrough with sample data, recorded from the live interface. Try it at <a href="https://kinu.run">kinu.run</a>.</em></p>
 
 ## What Kinu is
 
