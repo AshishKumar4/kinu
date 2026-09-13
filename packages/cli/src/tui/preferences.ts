@@ -32,6 +32,7 @@ export interface TuiPreferences {
   readonly wideSidebarOpen: boolean;
   readonly onboardingLocation?: WorkspaceLocationChoice;
   readonly skippedOnboardingSteps: readonly OnboardingStepId[];
+  readonly promptHistory?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface TuiPreferenceStore {
@@ -89,6 +90,7 @@ const TuiPreferencesSchema = v.strictObject({
   wideSidebarOpen: v.boolean(),
   onboardingLocation: v.optional(v.picklist(['cloud', 'local', 'both'])),
   skippedOnboardingSteps: v.array(v.picklist(ONBOARDING_STEP_IDS)),
+  promptHistory: v.optional(v.record(v.string(), v.pipe(v.array(v.string()), v.transform((entries) => entries.slice(-500))))),
 });
 
 function parseTuiPreferences(json: string, source: string): TuiPreferences {
@@ -126,6 +128,7 @@ function parseTuiPreferences(json: string, source: string): TuiPreferences {
     keyOverrides: Object.freeze(keyOverrides),
     wideSidebarOpen: parsed.wideSidebarOpen,
     skippedOnboardingSteps: Object.freeze([...new Set(parsed.skippedOnboardingSteps)]),
+    promptHistory: parsed.promptHistory,
   };
 
   return Object.freeze(parsed.onboardingLocation === undefined

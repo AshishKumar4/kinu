@@ -14,6 +14,7 @@
  */
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
+import { writeFileSync } from 'node:fs';
 
 import { ChatApp } from '../../src/tui/chat-app';
 import { fakeClient, soloHub } from '../helpers/chat-app-fixture';
@@ -25,7 +26,8 @@ const TURN = { text: REPLY, toolCalls: [], steps: 1, durationMs: 1, hadError: fa
 
 const agent = fakeClient({
   name: 'pty',
-  send: async () => {
+  send: async (input) => {
+    if (process.env.KINU_PTY_SENT_FILE) writeFileSync(process.env.KINU_PTY_SENT_FILE, JSON.stringify(input));
     agent.emit({ type: 'turn-start', kind: 'user', text: '' });
     agent.emit({ type: 'text-delta', delta: REPLY });
     agent.emit({ type: 'turn-end', turn: TURN });

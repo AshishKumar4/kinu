@@ -48,6 +48,11 @@ const TUI_ACTIONS = {
   'editor.submit': { scope: 'editor', label: 'Send message' },
   'editor.newline': { scope: 'editor', label: 'Insert newline' },
   'editor.external': { scope: 'editor', label: 'Open external editor' },
+  'editor.history-previous': { scope: 'editor', label: 'Previous prompt' },
+  'editor.history-next': { scope: 'editor', label: 'Next prompt' },
+  'editor.history-search': { scope: 'editor', label: 'Search prompts' },
+  'editor.clear': { scope: 'editor', label: 'Save and clear draft' },
+  'editor.undo': { scope: 'editor', label: 'Undo draft edit' },
   'effort.cycle': { scope: 'editor', label: 'Cycle reasoning effort' },
   'tier.cycle': { scope: 'editor', label: 'Cycle tier' },
   'tier.cycle-reverse': { scope: 'editor', label: 'Cycle tier backwards' },
@@ -140,8 +145,13 @@ const COMMON_BINDINGS = {
   'queue.edit-last': ['backspace'],
   'history.page-up': ['pageup'],
   'history.page-down': ['pagedown'],
-  'history.line-up': ['up'],
-  'history.line-down': ['down'],
+  'history.line-up': ['alt+up'],
+  'history.line-down': ['alt+down'],
+  'editor.history-previous': ['up'],
+  'editor.history-next': ['down'],
+  'editor.history-search': ['ctrl+r'],
+  'editor.clear': ['ctrl+c'],
+  'editor.undo': ['ctrl+-', 'ctrl+_'],
 } as const satisfies KeymapOverrides;
 
 const PRESET_BINDINGS = {
