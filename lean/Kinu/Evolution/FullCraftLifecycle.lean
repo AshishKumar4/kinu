@@ -1,6 +1,13 @@
 /-
   Kinu.Evolution.FullCraftLifecycle — 5-phase CraftStore pipeline.
-  Models: evolution/engine.ts, craft/ema.ts, craft/consolidation.ts, evolution/tools.ts
+  Sources: packages/core/src/evolution/engine.ts#EvolutionEngine.extractPattern,
+  packages/core/src/craft/ema.ts#emaUpdate,
+  packages/core/src/craft/consolidation.ts#periodicCraftConsolidation.
+  The nonempty retirement guard still holds; age/use eligibility, extraction
+  vetoes, SQL persistence and configurable floating-point EMA are abstracted out.
+  On parity 21d0f5ae7, shared source eligibility is
+  packages/core/src/tools/crafted-executor.ts#selectInjectableCraftedTools;
+  this list model makes no claim about compiler or source-selection parity.
 -/
 
 import Kinu.Types

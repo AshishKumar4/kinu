@@ -2,9 +2,9 @@
   Kinu.Exploration.ArchiveAdmission — the novelty rejection test, and what it
   does and does not bound. 0 sorry.
 
-  Models `admitToArchive` (`packages/core/src/strategy/archive.ts:205-232`): the
-  nearest-occupant search, the floor comparison at `archive.ts:227`, and the
-  identical-artifact exclusion at `archive.ts:220`.
+  Models `admitToArchive` (`packages/core/src/strategy/archive.ts#admitToArchive`): the
+  nearest-occupant search, the floor comparison at `packages/core/src/strategy/archive.ts#admitToArchive`, and the
+  identical-artifact exclusion at `packages/core/src/strategy/archive.ts#admitToArchive`.
 
   `Archive.lean` models S5, the descriptor partition, and its header names exactly
   the gap this file is for: "What covers it is not this file: it is section 6.5's
@@ -15,14 +15,15 @@
   written to prove.
   ================================================================
 
-  `archive.ts:32-39` justifies having no eviction rule like this:
+  The archive header formerly justified having no eviction rule like this:
 
       "nothing is ever deleted from a cell, because the thing that bounds a cell's
       population is the admission test rather than a row cap — a candidate too
       close to an occupant never lands, so a cell cannot accumulate the near-copies
       an eviction rule would exist to remove."
 
-  Two claims are welded together there and only one of them is true.
+  That historical claim joined two properties; only one is true. The current
+  archive header now states the distinction and cites the proofs below.
 
   TRUE, and proved below as an invariant over every finite admitted sequence: a
   cell's occupants are pairwise at least `novelty` apart. No near-copy is ever in
@@ -34,7 +35,7 @@
   trace of `n` writes from an empty cell in which every write is admitted, the
   result satisfies the invariant, and the cell holds `n` occupants. The distance it
   uses is not a device: `noveltyDistance` returns exactly `1` for two artifacts
-  sharing no token — `shared = 0`, so `1 - 0/union = 1` (`archive.ts:143`) — and
+  sharing no token — `shared = 0`, so `1 - 0/union = 1` (`packages/core/src/strategy/archive.ts#noveltyDistance`) — and
   exactly `0` for the same artifact, so on a family of artifacts with pairwise
   disjoint vocabularies `noveltyDistance` IS the function used below, and `1` is the
   strictest floor the unit interval admits. A cell can therefore grow without bound
@@ -68,12 +69,12 @@
      live there and what covers it is a mutation, not this file.
 
   2. THE FLOOR'S VALUE. `novelty` is a parameter here because it is a parameter
-     there: `swarm.ts:189-197` refuses to declare one and section 6.3 never stated a
+     there: `packages/core/src/types/swarm.ts#SwarmAdvanceSetting` refuses to declare one and section 6.3 never stated a
      τ. Every theorem below is universally quantified over it, which is the only
      honest treatment of a number the specification declines to invent.
 
   3. THE SEAL. `admitToArchive` checks `admitsPublication` before it reads a single
-     occupant (`archive.ts:215-217`). That check is modelled in `RecordsStore.lean`,
+     occupant (`packages/core/src/strategy/archive.ts#admitToArchive`). That check is modelled in `RecordsStore.lean`,
      whose `verdict` refuses `sealed` ahead of everything else; repeating it here
      would be a second copy of one rule.
 
@@ -91,13 +92,13 @@ open Kinu.Exploration
 /-! ## The nearest-occupant search
 
   A left fold in the cell's own order keeping a STRICTLY closer occupant, because
-  that is what `archive.ts:219-223` is: `if (nearest === null || distance <
+  that is what `packages/core/src/strategy/archive.ts#admitToArchive` is: `if (nearest === null || distance <
   nearest.distance)`. The strictness decides the tie order — the first of two
   equally close occupants is the one named — and `cellOccupants` returns the cell
   best-first, so the tie order is observable. -/
 
 /-- One occupant considered. An occupant carrying the candidate's own artifact is
-    skipped entirely (`archive.ts:220`): a re-record is the monotone rule's
+    skipped entirely (`packages/core/src/strategy/archive.ts#admitToArchive`): a re-record is the monotone rule's
     business, never an admission question. -/
 def nearerOf (dist : Nat → Nat → Int) (a : Nat)
     (acc : Option (Nat × Int)) (o : Nat) : Option (Nat × Int) :=
@@ -112,13 +113,13 @@ def nearerOf (dist : Nat → Nat → Int) (a : Nat)
 def nearestFrom (dist : Nat → Nat → Int) (a : Nat) (os : List Nat) : Option (Nat × Int) :=
   os.foldl (nearerOf dist a) none
 
-/-- The floor test, `archive.ts:227`: STRICTLY below the floor refuses, so the floor
+/-- The floor test, `packages/core/src/strategy/archive.ts#admitToArchive`: STRICTLY below the floor refuses, so the floor
     itself admits. -/
 def belowFloor (ν : Int) : Option (Nat × Int) → Bool
   | none => false
   | some (_, w) => w < ν
 
-/-- `ArchiveVerdict`'s archive-specific arm (`archive.ts:171-176`), carrying the
+/-- `ArchiveVerdict`'s archive-specific arm (`packages/core/src/strategy/archive.ts#ArchiveVerdict`), carrying the
     occupant it collided with and the distance: a refusal that cannot name what it
     collided with is not actionable. -/
 inductive Verdict where
@@ -134,7 +135,7 @@ def admit (dist : Nat → Nat → Int) (ν : Int) (os : List Nat) (a : Nat) : Ve
 /-- What an admitted candidate does to the population. An artifact already present
     updates its own row rather than adding one, because `record_key` derives from
     `artifactDigest` and the store's write is an `UPDATE` on a key collision
-    (`records.ts:436-447`). -/
+    (`packages/core/src/strategy/records.ts#recordExploration`). -/
 def landed (os : List Nat) (a : Nat) : List Nat := if a ∈ os then os else a :: os
 
 def stepOf (dist : Nat → Nat → Int) (ν : Int) (os : List Nat) (a : Nat) : List Nat :=
@@ -264,7 +265,7 @@ def Separated (dist : Nat → Nat → Int) (ν : Int) (os : List Nat) : Prop :=
 
 /-- Symmetry is a HYPOTHESIS on the results that need it, never an axiom — the
     discipline `Publication.lean` uses for digest injectivity. `noveltyDistance` is
-    symmetric because Jaccard overlap is (`archive.ts:136-144` reads both token sets
+    symmetric because Jaccard overlap is (`packages/core/src/strategy/archive.ts#noveltyDistance` reads both token sets
     the same way), and `discreteDist_symm` discharges it for the witness below, so
     nothing here rests on an assumption nothing satisfies. -/
 theorem step_preserves_separation (dist : Nat → Nat → Int) (ν : Int) (os : List Nat)
@@ -371,7 +372,7 @@ theorem fresh_run (n : Nat) : runOf discreteDist 1 [] (freshTrace n) = descendin
 
     Every write in the trace is admitted, the result is separated, and the population
     is `n`. So the admission test does not bound a cell's population, and
-    `archive.ts:32-39`'s reason for having no eviction rule does not establish what
+    `packages/core/src/strategy/archive.ts#admitToArchive`'s reason for having no eviction rule does not establish what
     it claims: it establishes the absence of near-copies, which is a different
     property. Reported as a finding, not weakened into a bound. -/
 theorem separated_cells_are_unboundedly_large (n : Nat) :
@@ -408,7 +409,7 @@ theorem a_near_copy_is_refused_and_names_the_occupant :
 theorem an_empty_cell_admits : admit demoDist 5 [] 0 = .recorded := by decide
 
 /-- **The threshold is read as a FLOOR.** At distance exactly `5` a floor of `5`
-    admits and a floor of `6` refuses, so `archive.ts:227`'s comparison is `<` and
+    admits and a floor of `6` refuses, so `packages/core/src/strategy/archive.ts#admitToArchive`'s comparison is `<` and
     not `<=`. This is the comparison a silent inversion lives in. -/
 theorem the_threshold_is_read_as_a_floor :
     admit demoDist 5 [2] 1 = .recorded ∧ admit demoDist 6 [2] 1 = .tooClose 2 5 := by
@@ -416,7 +417,7 @@ theorem the_threshold_is_read_as_a_floor :
 
 /-- **The identical artifact is excluded from the comparison**, so a re-record can
     never be refused as too close — it falls through to the monotone rule instead
-    (`archive.ts:220`). At distance `0` from itself it would otherwise be the nearest
+    (`packages/core/src/strategy/archive.ts#admitToArchive`). At distance `0` from itself it would otherwise be the nearest
     occupant there is. -/
 theorem an_identical_artifact_is_not_a_near_copy :
     admit demoDist 5 [0] 0 = .recorded := by decide
@@ -428,7 +429,7 @@ theorem the_refusal_names_the_nearest :
 /-! ### The search direction is load-bearing -/
 
 /-- The same fold keeping the FARTHEST occupant — the inversion of
-    `archive.ts:222`'s `distance < nearest.distance`. -/
+    `packages/core/src/strategy/archive.ts#admitToArchive`'s `distance < nearest.distance`. -/
 def fartherOf (dist : Nat → Nat → Int) (a : Nat)
     (acc : Option (Nat × Int)) (o : Nat) : Option (Nat × Int) :=
   if o = a then acc

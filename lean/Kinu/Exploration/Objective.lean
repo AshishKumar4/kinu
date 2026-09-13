@@ -2,15 +2,16 @@
   Kinu.Exploration.Objective — the objective's direction, what a verifier may
   return, and the floor's two declaration-time checks. 0 sorry.
 
-  Models `packages/core/src/types/objective.ts` (and the predicates in
-  `strategy/objective.ts`). Specified by
+  Models `packages/core/src/types/objective.ts#Measurement`, #Floor and
+  #ObjectiveDirection, and packages/core/src/strategy/objective.ts#isBetter
+  and #floorMargin. Specified by
   docs/EXPLORATION.md — "The objective", "The closed verifier registry" and
   "The floor".
 
   -- Model assumption, stated because it is the one that matters:
   A measured value is an `Int`, never a `Float`. Lean's `Float` is opaque and
   admits no order reasoning, and this corpus already refuses Float proofs
-  (`MCTS/Backpropagation.lean:9-20` replaced them with exact scaled integers).
+  (`MCTS/Backpropagation.lean (update)` replaced them with exact scaled integers).
   So a value here is the RAW measurement scaled by a fixed positive factor.
   Every statement below is an order or equality statement and is division-free,
   so nothing is rounded away INSIDE the model — but IEEE-754 comparison in
@@ -29,7 +30,7 @@ namespace Kinu.Exploration
 
 /-! ## Direction and strict betterness -/
 
-/-- Which way is better (`objective.ts:44`). Two values and no default: a number
+/-- Which way is better (`packages/core/src/types/objective.ts#ObjectiveDirection`). Two values and no default: a number
     without a direction is not an objective, and guessing "higher is better"
     silently inverts every cost. -/
 inductive Direction where
@@ -43,9 +44,9 @@ def Direction.flip : Direction → Direction
   | .minimise => .maximise
   | .maximise => .minimise
 
-/-- `objective.ts:382-386`. STRICTLY better: a tie does not displace, because a
+/-- `packages/core/src/strategy/objective.ts#isBetter`. STRICTLY better: a tie does not displace, because a
     tie carries no signal and `ORDER BY value DESC` over equal values is row
-    order (`mcts/convergence.ts:56-93` is the live precedent). -/
+    order (`packages/core/src/mcts/convergence.ts#converge` is the live precedent). -/
 def isBetter (cand inc : Int) : Direction → Bool
   | .minimise => cand < inc
   | .maximise => inc < cand
@@ -72,7 +73,7 @@ theorem isBetter_total (a b : Int) (d : Direction)
 
 /-! ## What a verifier may return -/
 
-/-- Everything a verifier may return (`objective.ts:103`).
+/-- Everything a verifier may return (`packages/core/src/types/objective.ts#Measurement`).
 
     Note what is NOT a constructor: there is no way to say "the verifier itself
     broke". That is the mechanism, not an oversight — a broken instrument throws,
@@ -95,7 +96,7 @@ theorem measurement_cannot_report_fault (m : Measurement) :
 
 /-! ## The floor -/
 
-/-- How the bound was established (`objective.ts:159`). -/
+/-- How the bound was established (`packages/core/src/types/objective.ts#Floor`). -/
 inductive FloorKind where
   | certificate
   | adversary
@@ -104,7 +105,7 @@ inductive FloorKind where
 
 /-- Only `certificate` and `physical` are admissible AS floors. An `adversary`
     bound is a worst case, and using one as a floor scores a lucky honest run as a
-    cheat (`hard-tasks/tasks.ts:29-39`). The type keeps `adversary` as a DECLARABLE
+    cheat (`packages/test-utils/src/hard-tasks/tasks.ts#COMPARE_ORACLE`). The type keeps `adversary` as a DECLARABLE
     value that is refused, so an author is told why instead of quietly relabelling
     it — which is why this is a predicate over a three-valued type rather than a
     two-valued type. -/
@@ -123,7 +124,7 @@ structure Floor where
   value : Int
   kind : FloorKind
   /-- The measured cost of the best honest solution known when the floor was
-      written (`objective.ts:160-169`). REQUIRED, and it is the mechanical half
+      written (`packages/core/src/types/objective.ts#Floor`). REQUIRED, and it is the mechanical half
       of the floor's proof. -/
   bestKnownHonest : Int
   deriving Repr, BEq, Inhabited
@@ -135,7 +136,7 @@ def breaches (v : Int) (f : Floor) : Direction → Bool
   | .maximise => f.value < v
 
 /-- The floor's room to the best known honest cost — the NUMERATOR of
-    `floorMargin()` (`objective.ts:190-195`).
+    `floorMargin()` (`packages/core/src/strategy/objective.ts#floorMargin`).
 
     Division-free on purpose. `floorMargin` divides by `|bestKnownHonest|`, and a
     division by a positive quantity cannot change a sign, so the sign convention
@@ -154,7 +155,7 @@ def floorRoom (f : Floor) : Direction → Int
     instead of to the measured baseline.
 
     This is the sign-convention theorem. Getting the convention backwards
-    inverts the check the function exists to perform, and `objective.ts:185-188`
+    inverts the check the function exists to perform, and `packages/core/src/strategy/objective.ts#floorMargin`
     names that as the reason the function is named rather than inlined. -/
 theorem floorRoom_neg_iff_bestKnown_breaches (f : Floor) (d : Direction) :
     (floorRoom f d < 0) ↔ (breaches f.bestKnownHonest f d = true) := by
@@ -186,7 +187,7 @@ theorem floorAdmissible_rejects_adversary (f : Floor) (baseline : Int)
 /-! ### The majority-vote floor, as a witness that C1 is not the check that
      caught it
 
-  The majority-vote numbers (`hard-tasks/tasks.ts:192-206`), with `MAJORITY.n = 1200`
+  The majority-vote numbers (`packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY`), with `MAJORITY.n = 1200`
   and a `minimise` objective in oracle calls. C1 and C2 would NOT have caught this
   floor and C3 — the reported margin, which *Floor margin* requires the caller be
   SHOWN — is what would. These two theorems are that claim, mechanised: the
@@ -195,11 +196,11 @@ theorem floorAdmissible_rejects_adversary (f : Floor) (baseline : Int)
   claiming more for the mechanical checks than they deliver. -/
 
 /-- The defective floor: `2*(n-1) = 2398` against a best known honest cost of
-    2992 (`tasks.ts:198`, `tasks.ts:192`). -/
+    2992 (`packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY_VOTE`, `packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY`). -/
 def majorityVoteDefectiveFloor : Floor :=
   { value := 2398, kind := .certificate, bestKnownHonest := 2992 }
 
-/-- The corrected floor, `n = 1200` (`tasks.ts:206`). -/
+/-- The corrected floor, `n = 1200` (`packages/test-utils/src/hard-tasks/tasks.ts#MAJORITY_VOTE`). -/
 def majorityVoteCorrectedFloor : Floor :=
   { value := 1200, kind := .certificate, bestKnownHonest := 2992 }
 

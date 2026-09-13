@@ -1,6 +1,12 @@
 /-
   Kinu.Execution.Capabilities — Capability subsumption and routing correctness.
-  Models: packages/core/src/execution/types.ts, router.ts
+  Historical static lattice; current sources are
+  packages/core/src/execution/types.ts#ExecutorKind and
+  packages/core/src/execution/router.ts#DefaultExecutionRouter.
+  The source ships sandbox/laptop/parent and runtime-dependent capability sets;
+  its router does not search by required capabilities. The old container/ssh
+  lattice and its subsumption chain are NOT a refinement of those bodies.
+  The routing theorems remain conditional facts about the abstract route below.
   0 sorry.
 -/
 
