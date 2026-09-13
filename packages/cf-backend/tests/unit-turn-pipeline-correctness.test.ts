@@ -11,7 +11,8 @@ import {
 } from '@kinu.run/core';
 import { SDK_SESSION_DDL } from '../../core/tests/helpers';
 import {
-  hostedExplorationHarness, hostedMainActor, orchestratorHarness, reactivateOrchestratorHarness,
+  declareShadowCandidate, hostedExplorationHarness, hostedMainActor, orchestratorHarness,
+  reactivateOrchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { createHeadRuntime } from '../src/head-runtime';
@@ -228,7 +229,7 @@ describe('turn-pipeline correctness wiring', () => {
     const document = v.parse(v.string(), await runtime.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
     await runtime.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
     await expect(runtime.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
-    agent.harnessDeclareShadowCandidate();
+    declareShadowCandidate(runtime);
     runtime.actor.config.setShadowSampleRate(1);
     const prepared = await agent.beforeTurn(turn([first, reply, next]));
     await agent.onChatResponse({

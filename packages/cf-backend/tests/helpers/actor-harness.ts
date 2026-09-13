@@ -232,16 +232,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return shadowTrialPlan(this.scaffoldControl, messageId);
   }
 
-  /** A candidate under trial, so sampling has something to sample against.
-   *  Seeded under `rt.actor` — the pointer is per-actor and that is the handle
-   *  every reader under test scopes by, so a row filed anywhere else is
-   *  invisible to the gate this is arming. */
-  harnessDeclareShadowCandidate(): void {
-    this.config.setShadowSampleRate(0.5);
-    void this.sql`INSERT OR REPLACE INTO scaffold_versions
-      (actor_id, version, written_at, rationale, status)
-      VALUES (${this.rt.actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
-  }
   /** The activation's wake-row reconcile, AWAITED. Production detaches it —
    *  `onStart` runs inside the init gate and arming a row is I/O — so a test
    *  that wants its outcome rather than its timing calls it here. */
@@ -893,6 +883,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessAwaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
     return this.awaitDeviceConsent(req);
   }
+}
+
+/** A candidate under trial, so sampling has something to sample against.
+ *  Seeded under `runtime.actor` — the pointer is per-actor and that is the handle
+ *  every reader under test scopes by, so a row filed anywhere else is
+ *  invisible to the gate this is arming. */
+export function declareShadowCandidate(runtime: AgentRuntime): void {
+  runtime.actor.config.setShadowSampleRate(0.5);
+  void runtime.storage.sql`INSERT OR REPLACE INTO scaffold_versions
+    (actor_id, version, written_at, rationale, status)
+    VALUES (${runtime.actor.actorId}, 1, ${Date.now()}, 'a harness candidate', 'pending')`;
 }
 
 /** An actor's stored naming state as a test reads it — the same two rows

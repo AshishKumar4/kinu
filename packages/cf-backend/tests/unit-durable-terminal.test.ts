@@ -19,6 +19,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
+  declareShadowCandidate,
   orchestratorHarness,
   reactivateOrchestratorHarness,
   type ActorHarness,
@@ -900,7 +901,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     // The completed build turn: the trial IS owed, which is what makes the three
     // refusals below a gate rather than a broken declaration.
     const open = orchestratorHarness();
-    open.agent.harnessDeclareShadowCandidate();
+    declareShadowCandidate(open.agent.observeRuntime());
     const openId = sampled(open);
     open.agent.declareTurnCheckpoint('u-shadow-ok');
     await open.agent.onChatResponse(settledResponse(openId));
@@ -909,7 +910,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     for (const shut of ['error', 'aborted', 'plan'] as const) {
       const harness = orchestratorHarness();
-      harness.agent.harnessDeclareShadowCandidate();
+      declareShadowCandidate(harness.agent.observeRuntime());
       const messageId = sampled(harness);
       harness.agent.declareTurnCheckpoint(`u-shadow-${shut}`);
 
@@ -936,7 +937,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('one turn always makes the same sampling decision', async () => {
     const harness = orchestratorHarness();
-    harness.agent.harnessDeclareShadowCandidate();
+    declareShadowCandidate(harness.agent.observeRuntime());
 
     const first = harness.agent.harnessShadowPlan('a-sample');
 

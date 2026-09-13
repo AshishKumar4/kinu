@@ -24,7 +24,7 @@ import {
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { openWorkspaceMainActor } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { declareShadowCandidate, orchestratorHarness } from './helpers/actor-harness';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 
 /** A scripted judge model: answers a valid verdict, reports real usage. */
@@ -156,7 +156,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     const runtime = agent.observeRuntime();
     const first = await agent.runOutcomeEnsemble(['fake-a/m1', 'fake-b/m1']);
     expect(first.run?.judged.map((row) => row.stored)).toEqual([3, 3]);
-    agent.harnessDeclareShadowCandidate();
+    declareShadowCandidate(runtime);
     await runtime.storage.vfs.writeFile(`${runtime.identity.scaffold.path}.v1`,
       'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }');
     expect(await agent.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });
