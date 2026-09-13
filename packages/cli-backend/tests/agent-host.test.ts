@@ -1,4 +1,6 @@
 import { scratchDir } from '../../test-utils/src/scratch';
+import { HIRE_FORK_PARENT, HIRE_FORK_REQUEST, HIRE_FORK_PREFIX, HIRE_FORK_MISSION,
+  hireForkModel, hireConversation } from '../../test-utils/src/hire-fork';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 
@@ -597,6 +599,38 @@ describe('LocalAgentHost', () => {
     expect(orphanRows?.n).toBe(0);
     check.close();
   });
+
+  for (const context of ['inherit', 'fresh', undefined] as const) {
+    test(`a cli hire context=${String(context)} starts from its birth-time conversation`, async () => {
+      const { state, project } = makeRoots();
+      await seedAgent(state, 'root');
+      const { model, childRequests } = hireForkModel(context);
+      const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+      try {
+        const session = await host.acquire('root');
+        await session.send(HIRE_FORK_PARENT);
+        const answered = awaitTurns(host, 'root/forked-reader', 1);
+        await session.send(HIRE_FORK_REQUEST);
+        await answered;
+        expect(childRequests).toHaveLength(1);
+        const first = childRequests[0];
+
+        if (!first) throw new Error('The hired child never reached its model.');
+        const conversation = hireConversation(first);
+
+        if (context === 'inherit') {
+          expect(conversation.slice(0, 3)).toEqual(HIRE_FORK_PREFIX);
+          expect(conversation.findIndex((message) => message.content.includes(`task: ${HIRE_FORK_MISSION}`))).toBeGreaterThan(2);
+        } else {
+          expect(conversation[0]?.content).toContain(`task: ${HIRE_FORK_MISSION}`);
+          expect(conversation).not.toContainEqual(HIRE_FORK_PREFIX[1]);
+        }
+      } finally {
+        await host.close();
+      }
+    });
+  }
 
   test('subordinates are durable children with non-blocking assignment, status, reports, and dismissal', async () => {
     const { state, project } = makeRoots();

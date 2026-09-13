@@ -45,6 +45,8 @@ import {
   EventLog, HeadCapture, runHeadInference,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
+  subordinateForkContext, type SubordinateInheritedContext,
+  inheritedAsModelMessage,
   terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
@@ -203,7 +205,7 @@ export function hostedDelegationBudget(
  */
 function delegatedHeadInput(
   record: WorkspaceActor,
-  task: { readonly body: string; readonly mode: WorkMode },
+  task: { readonly body: string; readonly mode: WorkMode; readonly inheritedContext?: SubordinateInheritedContext },
 ): HeadInput {
   return {
     id: record.name,
@@ -213,13 +215,7 @@ function delegatedHeadInput(
     task: task.body,
     mode: task.mode,
     rationale: task.body,
-    // EMPTY, and not the admission's `inherited_context`. That field is PROSE a
-    // hirer wrote for the brief; `HeadInput.inheritedContext` is
-    // `SerializedMessage[]` — a conversation. Coercing one into the other would
-    // fabricate a message nobody sent, so the prose stays where the ingress
-    // renders it into the body and this stays honestly empty: a delegated
-    // turn's framing is its brief, not a transcript.
-    inheritedContext: [],
+    inheritedContext: subordinateForkContext(task.inheritedContext),
     mergeStrategy: 'synthesize',
     budget: { maxDepth: 0, spawnedAt: Date.now() },
     loop: defaultLoopOrigin('subordinate'),
@@ -265,7 +261,7 @@ export async function admitHostedTask(
     readonly body: string;
     readonly mode: WorkMode;
     readonly deliverable?: string;
-    readonly inheritedContext?: string;
+    readonly inheritedContext?: SubordinateInheritedContext;
     readonly creationId?: string;
   },
 ): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
@@ -372,6 +368,7 @@ export async function runHostedTask(
     readonly body: string;
     readonly mode: WorkMode;
     readonly sequenceId: string;
+    readonly inheritedContext?: SubordinateInheritedContext;
   },
 ): Promise<{ readonly text: string; readonly relayed: SubordinateEventResult | null }> {
   return await seams.host.run(reference, async (actor) => {
@@ -426,7 +423,10 @@ export async function runHostedTask(
       runId: crypto.randomUUID(),
       model: turn.model,
       tools: profile.tools,
-      framing: profile.framing,
+      framing: {
+        system: profile.framing.system,
+        messages: [...input.inheritedContext.map(inheritedAsModelMessage), ...profile.framing.messages],
+      },
       capture,
       workspaceLayout: 'shared-workspace',
       // Cancellation is the session's. A delegated turn is not cancelled by the

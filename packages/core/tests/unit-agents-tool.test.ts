@@ -16,6 +16,7 @@ import { hostedSeatsOver } from './helpers-actor-host';
 
 import * as v from 'valibot';
 import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
+import { DELEGATION_CONTEXT_DESCRIPTION } from '../src/tools/registry';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,
@@ -276,6 +277,15 @@ function makePeers(overrides: Partial<PeersToolDeps> = {}) {
 // ── Structural gating ───────────────────────────────────────────────────────
 
 describe('agents tool — registration and dep-gating', () => {
+  test('hire accepts a birth-time context choice and refuses it on existing agents', async () => {
+    expect(parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'Continue', context: 'inherit' }))
+      .toMatchObject({ context: 'inherit' });
+    const { deps } = makeTeam();
+    await expect(agentsTool({ team: deps, profile: testProfile }).execute({
+      action: 'hire', agent: 'researcher', message: 'Continue', context: 'inherit',
+    })).rejects.toMatchObject({ code: 'bad_input' });
+  });
+
   test('no deps groups → no agents tool at all', () => {
     const { rt } = createTestRuntime();
     const tools = buildBuiltinTools({ rt });
@@ -431,6 +441,14 @@ describe('agents tool — the field contract', () => {
 
     return property.description;
   }
+
+  test('hire context and swarm config describe inheritance from one source', () => {
+    const tool = agentsTool({ team: makeTeam().deps, swarm: swarmDeps(), profile: testProfile });
+    expect(propertyDescription({ value: tool.inputSchema }, 'context')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
+    expect(propertyDescription({ value: tool.inputSchema }, 'config')).toContain(DELEGATION_CONTEXT_DESCRIPTION);
+    expect(parseAgentsToolInput({ action: 'hire', role: 'researcher', mission: 'Read' })).not.toHaveProperty('context');
+    expect(() => parseAgentsToolInput({ action: 'swarm', task: 'Read', context: 'inherit' })).toThrow('hire');
+  });
 
   test('the preset list reaches the model where `preset` is filled, from the one constant', () => {
     // ONE constant, rendered where the field is typed. Four hand-written copies
