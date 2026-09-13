@@ -841,10 +841,10 @@ function chainShell(exec: ContainerExec, root: string) {
     mountBlockLower: async (generation: string, delta: string, baseSource: string, deltaSource: string): Promise<void> => {
       await must('read-only block lower mount', '# devbox-block-lower-v2\n'
         + `mkdir -p ${shellPath(blockLower)}\n`
-        + `/usr/local/bin/devbox-block-lower --base ${shellPath(lowerBase)} --delta ${shellPath(delta)} `
+        + `setsid nohup /usr/local/bin/devbox-block-lower --base ${shellPath(lowerBase)} --delta ${shellPath(delta)} `
         + `--mount ${shellPath(blockLower)} --generation ${shellPath(generation)} `
         + `--base-source ${shellPath(baseSource)} --delta-source ${shellPath(deltaSource)} `
-        + `--stats ${shellPath(blockStats)} >${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} 2>&1 &\n`
+        + `--stats ${shellPath(blockStats)} </dev/null >${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} 2>&1 &\n`
         + `block_pid=$!; for _ in $(seq 1 100); do mountpoint -q ${shellPath(blockLower)} && break; `
         + `kill -0 "$block_pid" 2>/dev/null || break; sleep 0.05; done\n`
         + `mountpoint -q ${shellPath(blockLower)} || { cat ${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} >&2; false; }`);
