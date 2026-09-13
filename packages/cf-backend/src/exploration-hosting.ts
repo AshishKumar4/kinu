@@ -46,7 +46,7 @@
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   HeadCapture, buildHeadToolSet, runHeadInference,
-  collectDynamicContext, craftedToolDeclarations, explorationActorKey, headStatusUnsettled, resolveModelRoute,
+  collectDynamicContext, explorationActorKey, headStatusUnsettled, resolveModelRoute,
   storedHeadReportStatus, subordinateDelegatesOf,
   type ActorHost, type ActorReference, type BranchExploration, type BranchHandle,
   type BranchReflection, type CraftedTool, type HeadId, type HeadInferenceDeps,
@@ -254,7 +254,7 @@ function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProf
     rt: actor.runtime,
     stores: actor.stores,
     profile,
-    craftedTools: () => craftedToolDeclarations(tools, profile),
+    tools,
     memoryTail: undefined,
     missingCapabilities: [],
     subordinateDelegates: () => subordinateDelegatesOf([]),

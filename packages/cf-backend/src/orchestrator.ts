@@ -19,7 +19,7 @@ import {
   type ExperienceEntry, type ExperienceKind, type PublishableCandidate,
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
-  explorationActorKey, collectDynamicContext, craftedToolDeclarations, subordinateDelegatesOf,
+  explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
   activePromptSectionOverrides,
@@ -1060,7 +1060,7 @@ export class OrchestratorAgent extends ActorAgent {
       rt: actor.runtime,
       stores: actor.stores,
       profile,
-      craftedTools: () => craftedToolDeclarations(tools, profile),
+      tools,
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(

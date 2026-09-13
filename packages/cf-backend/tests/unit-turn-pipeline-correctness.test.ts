@@ -19,7 +19,7 @@ import {
 import { createHeadRuntime } from '../src/head-runtime';
 import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
-import { jsonSchema, tool } from 'ai';
+import { jsonSchema, streamText, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { ChatResponseResult, PrepareStepContext } from '@cloudflare/think';
 import * as v from 'valibot';
@@ -485,6 +485,59 @@ describe('turn-pipeline correctness wiring', () => {
     expect(admitted.filter(isDynamicContextBlock)).toHaveLength(0);
     expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
     expect((await stepMessages(agent, 4, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
+  });
+
+  test('root mode facts describe submit_plan on the actual provider surface', async () => {
+    const cases: readonly { mode: 'build' | 'plan'; installed: boolean; available: boolean }[] = [
+      { mode: 'build', installed: true, available: false },
+      { mode: 'plan', installed: true, available: true },
+      { mode: 'plan', installed: false, available: false },
+    ];
+
+    for (const { mode, installed, available } of cases) {
+      const { agent } = orchestratorHarness();
+      agent.harnessDrivingUserMessage(`Run the ${mode} turn`, { kinuMode: mode });
+
+      const model = scriptedTurnModel({ doGenerate: () => ({
+        content: [{ type: 'text', text: 'done' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+      }) });
+
+      agent.modelFactory = () => model;
+      const handed: ModelMessage[] = [{ role: 'user', content: `Run the ${mode} turn` }];
+
+      const turn = await agent.beforeTurn({
+        system: 'sys', messages: handed, tools: installed ? agent.getTools() : {},
+        model: 'harness-model', continuation: false, body: {},
+      });
+
+      if (!turn) throw new Error('the root turn must prepare a configuration');
+      const messages = await stepMessages(agent, 0, turn.messages ?? handed);
+      await streamText({ model, system: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools }).text;
+
+      expect(agent.observeResolvedTurnProfile()?.allowedTools).toContain('submit_plan');
+      expect(model.doStreamCalls).toHaveLength(1);
+      const request = model.doStreamCalls[0];
+      expect(request?.tools?.some((entry) => entry.name === 'submit_plan') ?? false).toBe(available);
+      expect(JSON.stringify(request?.prompt.filter((message) => message.role === 'user').at(-1)))
+        .toContain(`Mode: ${mode}; submit_plan: ${available ? 'available' : 'unavailable'}.`);
+    }
+  });
+
+  test('a rejected new preparation cannot reuse a previous turn dynamic snapshot', async () => {
+    const { agent } = orchestratorHarness();
+    const handed: ModelMessage[] = [{ role: 'user', content: 'prepare one turn' }];
+    const context = { system: 'sys', messages: handed, tools: {}, model: 'harness-model', continuation: false, body: {} };
+    const turn = await agent.beforeTurn(context);
+    const admitted = turn?.messages ?? handed;
+
+    expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
+    const abort = new AbortController();
+    abort.abort(new Error('rejected preparation'));
+    await expect(agent.beforeTurn({ ...context, signal: abort.signal })).rejects.toThrow('rejected preparation');
+    await expect(stepMessages(agent, 0, admitted)).rejects.toThrow('a model step requires a prepared profile and tool surface');
   });
 
   test('beforeTurn merges profile reasoning effort with cache provider options', () => {
