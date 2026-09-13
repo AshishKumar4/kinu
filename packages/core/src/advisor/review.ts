@@ -23,9 +23,7 @@
  */
 
 import * as v from 'valibot';
-import type { LLM, SqlExecutor, VFS } from '../types/primitives';
-import { admitAgentsMd, renderInstructionOmission } from '../prompting/agents-md';
-import type { ModelWindow } from '../prompting/step-prune';
+import type { LLM, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { AgentSignal, SignalOutcome } from '../types/signals';
@@ -759,27 +757,6 @@ export function markAdvisorLaneStarted(
  * throws; an unclassified one is definitive without being classified — one
  * attempt, one report, no advice — since retrying it would be a guess.
  */
-export interface AdvisorWorkspace {
-  readonly vfs: VFS;
-  readonly limits: () => Promise<ModelWindow>;
-}
-
-/** Optional workspace guidance is admitted before its bytes are read. */
-async function workspaceAdvisorGuidance(workspace: AdvisorWorkspace | undefined): Promise<string> {
-  if (workspace === undefined) return '';
-  const path = 'ADVISOR.md';
-  const stat = await workspace.vfs.stat(path);
-
-  if (stat === null || stat.isDir) return '';
-  const admission = admitAgentsMd([{ path, bytes: stat.size }], await workspace.limits());
-
-  if (admission.referenced.length > 0) return renderInstructionOmission(admission.referenced, path);
-  const raw = await workspace.vfs.readFile(path, { encoding: 'utf8' });
-  const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
-
-  return text.trim();
-}
-
 export async function reviewRecordedTurn(deps: {
   readonly snapshot: AdvisorRecoverySnapshot;
   readonly llm: LLM | undefined;
@@ -787,7 +764,10 @@ export async function reviewRecordedTurn(deps: {
   readonly gateOpen: boolean;
   readonly deliver: AdvisorLaneDeps['deliver'];
   readonly record: AdvisorLaneDeps['record'];
-  readonly workspace?: AdvisorWorkspace;
+  /** The workspace's advisor guidance, already admitted by the caller's own
+   *  context assembly (advisorWorkspaceGuidance) — a string, the way the turn
+   *  record is data: the review lane reads no files. */
+  readonly guidance?: string;
   readonly actor?: ActorHandle;
   readonly parent?: AdvisorLaneDeps['parent'];
 }): Promise<AdvisorDisposition | null> {
@@ -806,7 +786,7 @@ export async function reviewRecordedTurn(deps: {
         recent: snapshot.recent,
         gateOpen: deps.gateOpen,
         reachable: snapshot.reachable,
-        guidance: await workspaceAdvisorGuidance(deps.workspace),
+        guidance: deps.guidance ?? '',
         deliver: deps.deliver,
         record: deps.record,
         actor: deps.actor,
