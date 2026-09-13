@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="950" viewBox="0 0 640 950" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="workspace-current-title workspace-current-desc">
 <title id="workspace-current-title">CURRENT: Hosted workspace ownership</title>
-<desc id="workspace-current-desc">Current hosted ownership. One workspace root Durable Object holds the main agent and every subordinate and exploration actor as logical actors over one workspace SQLite, with actor_id leading every actor-owned row. The same database backs the canonical Nimbus files. Shared storage is not shared authority.</desc>
+<desc id="workspace-current-desc">One workspace root Durable Object holds the main agent, hires and exploration actors over one workspace SQLite. Actor-scoped records and the canonical Nimbus files share that database. Shared storage is not shared authority.</desc>
 <!-- Sources: docs/ARCHITECTURE.md#the-actor-hierarchy; packages/core/src/state/actor-host.ts; packages/cf-backend/src/subordinate-hosting.ts; packages/cf-backend/src/exploration-hosting.ts. Current-source baseline: 7ec50001f. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
@@ -38,7 +38,7 @@
 </text>
 <text x="68" y="380" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Own session, queue,</tspan>
-<tspan x="68" dy="30">home — rows, not a database</tspan>
+<tspan x="68" dy="30">home and actor rows</tspan>
 </text>
 </g>
 <g>
@@ -47,19 +47,19 @@
 <tspan x="350" dy="0">Exploration actor</tspan>
 </text>
 <text x="350" y="380" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="350" dy="0">Head, node or branch —</tspan>
-<tspan x="350" dy="30">rows, not a database</tspan>
+<tspan x="350" dy="0">Head, swarm node</tspan>
+<tspan x="350" dy="30">or branch</tspan>
 </text>
 </g>
 <path d="M320 431 V462" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#workspace-current-arrow)" />
 <g>
 <path d="M48 479 C48 457,592 457,592 479 L592 546 C592 568,48 568,48 546 Z" fill="#EEE0C2" stroke="#7A5514" stroke-width="1.5" />
 <path d="M48 479 C48 501,592 501,592 479" fill="none" stroke="#7A5514" stroke-width="1.2"/>
-<text x="68" y="520" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
+<text x="68" y="518" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">One workspace SQLite</tspan>
 </text>
-<text x="330" y="520" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="330" dy="0">actor_id-led rows for every actor</tspan>
+<text x="68" y="543" font-size="18" font-weight="400" fill="#29231C" text-anchor="start">
+<tspan x="68" dy="0">Actor-scoped records</tspan>
 </text>
 </g>
 <text x="320" y="620" font-size="21" font-weight="400" fill="#355B6A" text-anchor="middle">
@@ -71,8 +71,8 @@
 <tspan x="60" dy="0">Canonical Nimbus files</tspan>
 </text>
 <text x="60" y="717" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="60" dy="0">The same database backs the one workspace filesystem.</tspan>
-<tspan x="60" dy="30">Actor homes and temporary paths are views in that plane.</tspan>
+<tspan x="60" dy="0">One SQLite backs the workspace filesystem.</tspan>
+<tspan x="60" dy="30">Actor homes and temporary paths share that plane.</tspan>
 </text>
 </g>
 <g>

@@ -222,7 +222,7 @@ and on POSIX over `bun:sqlite` and real processes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/backend-dark.svg">
-  <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it the AgentRuntime and BackendHost interfaces are implemented twice: by cf-backend on Cloudflare Durable Objects, and by cli-backend on your own machine." src="docs/diagrams/backend.svg" width="900">
+  <img alt="Web, CLI and autonomous ingress reach the shared core. AgentRuntime and BackendHost connect it to Cloudflare or local services. Hosted hires and swarm nodes are logical actors in one workspace Durable Object; local hires and branch processes share their workspace database." src="docs/diagrams/backend.svg" width="900">
 </picture>
 
 To add a backend, implement those interfaces and connect its available services.
@@ -232,7 +232,7 @@ live workspace state between model steps.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
-  <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once, as a system prompt plus transformed history, where the compaction ladder fires, then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
+  <img alt="A serialized turn assembles typed Markdown prompt sections with runtime context last, transforms history, and reads dynamic context between model and tool steps. Signals reach a compatible live turn or queue another. Terminal effects handle eligible turn recording, improvement lanes and event draining, without a generic step cap or silence deadline." src="docs/diagrams/turn.svg" width="900">
 </picture>
 
 Three extension points live inside that loop: an actor kind, a `ModelProvider`,
