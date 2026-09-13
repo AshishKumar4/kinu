@@ -57,6 +57,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   httpCalls(): Promise<HttpCall[]>;
   httpReset(): Promise<void>;
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
+  queuedConversation(mode: 'chat' | 'peer'): Promise<HttpCall[]>;
 }
 
 

@@ -86,7 +86,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
   }
   observeRawTools(): ToolSet { return this.getRawTools(); }
-  harnessInstallChatIntake(): void { this.installClientMessageGate(); }
+
   harnessAdmitChat(trigger = 'ws-chat'): void {
     this._emit('chat:turn:start', { requestId: 'harness-admitted', trigger, admission: 'queue' });
   }

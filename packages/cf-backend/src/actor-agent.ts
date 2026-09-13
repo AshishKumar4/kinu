@@ -2382,7 +2382,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private _turnDurableInput: readonly ModelMessage[] = [];
   private _turnRequestId: string | null = null;
-  private _turnInputMessage: { readonly id: string; readonly metadata?: unknown } | null = null;
+  private _turnInputMessage: Pick<UIMessage, 'id' | 'metadata'> | null = null;
   private _turnIngress: { readonly requestId: string; readonly trigger: string } | null = null;
 
   /** Think emits this inside the admitted slot, before constructing ctx.body.
@@ -6165,32 +6165,40 @@ export abstract class ActorAgent extends Think<Env> {
     const ids = this._turnIngress?.trigger === 'ws-chat' && this._activeProgrammaticUserMessage === null && requestId !== null
       ? this.stores.claims.input(requestId) : null;
 
-    let input: Omit<UIMessage, 'id'>[];
-    let turnId: string;
+    let input: UIMessage[];
 
     if (this._activeProgrammaticUserMessage !== null) {
       input = [this._activeProgrammaticUserMessage];
-      this._turnInputMessage = this._activeProgrammaticUserMessage;
-      turnId = this._activeProgrammaticUserMessage.id;
     } else if (ids !== null && ids.length > 0) {
       input = ids.map((id) => {
         const row = this.sql<{ content: string }>`SELECT content FROM assistant_messages WHERE id = ${id}`[0];
 
         if (row === undefined) throw new KinuError('missing', 'The admitted chat input is absent from the transcript.');
         const parsed = recordedUiMessage(v.parse(v.pipe(v.string(), v.parseJson(), JsonValueSchema), row.content));
-        this._turnInputMessage = { id, metadata: parsed.metadata };
 
-        return parsed;
+        return { ...parsed, id };
       });
-      turnId = ids[ids.length - 1];
       this._turnRequestId = requestId;
+    } else if (this._turnIngress?.trigger === 'submission') {
+      const row = this.sql<{ messages_json: string }>`SELECT messages_json FROM cf_think_submissions
+        WHERE request_id = ${this._turnIngress.requestId} AND status = 'running'`[0];
+
+      if (row === undefined) throw new KinuError('missing', 'The admitted durable submission is absent from the SDK ledger.');
+      const stored = v.parse(v.pipe(v.string(), v.parseJson(), v.array(JsonValueSchema)), row.messages_json);
+      input = stored.map((value) => ({
+        ...recordedUiMessage(value), id: v.parse(v.object({ id: v.string() }), value).id,
+      }));
     } else {
       return ctx.messages;
     }
 
+    const driving = input.filter((message) => message.role === 'user').at(-1) ?? input.at(-1);
+
+    if (driving === undefined) throw new KinuError('missing', 'The admitted turn has no input messages.');
+    this._turnInputMessage = driving;
     const messages = await convertToModelMessages(input, { ignoreIncompleteToolCalls: true });
 
-    return this.stores.claims.historyForInput(turnId, messages, []);
+    return this.stores.claims.historyForInput(driving.id, messages, []);
   }
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
