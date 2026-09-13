@@ -20,7 +20,7 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import { tierIdsOf,
-  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
+  DEFAULT_ROLE_ID, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
   composerVisibleRows, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type TierId,
 } from '@kinu.run/core';
@@ -83,11 +83,16 @@ import { useShellApproval } from './use-shell-approval';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
+import { consentKeyDecision } from './approval-keys';
+import { composerKeyHandlers } from './draft-keys';
+import { modalKeyHandlers, sceneKeyHandlers } from './surface-keys';
+import type { ComposerKeyDeps } from './draft-keys';
+import type { SurfaceKeyDeps } from './surface-keys';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
 import { agentDisplayLabel, clipText } from './format';
-import { createKeyDispatcher, openTuiKeyBindings, type TuiActionId } from './actions';
+import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import { buildAgentHubEntries, HubOverlay, type TuiHubData, type TuiHubView } from './hubs';
 import { useTuiTheme, type ThemeSelection } from './theme';
 import {
@@ -146,7 +151,7 @@ export interface ChatAppOpts {
   readHub?: (client: AgentClient) => Promise<TuiHubData>;
 }
 
-type ActiveSurface =
+export type ActiveSurface =
   | { kind: 'commands' }
   | { kind: 'history' }
   | { kind: 'settings' }
@@ -156,6 +161,38 @@ type ActiveSurface =
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
   | null;
+
+/** The composer title names the open surface — the one line a person reads to
+ *  know where they are. */
+function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
+  if (surface === null) return walkbackOpen ? 'Walk back ›' : null;
+
+  switch (surface.kind) {
+    case 'settings': return 'Settings ›';
+    case 'theme': return 'Theme ›';
+    case 'commands': return 'Commands ›';
+    case 'hub': return `${surface.view[0]!.toUpperCase()}${surface.view.slice(1)} ›`;
+    case 'model': return 'Model picker ›';
+    case 'changelog': return 'Changelog ›';
+    case 'takes': return 'Takes ›';
+    case 'history': return 'Prompt history ›';
+  }
+}
+
+/** Any overlay that takes the composer's keys: a named surface, the
+ *  navigation drawer, walk-back, or a consent ask. */
+function anyOverlayOpen(input: {
+  activeSurface: ActiveSurface;
+  navigationOpen: boolean;
+  walkbackOpen: boolean;
+  pendingConsent: unknown;
+  shellApproval: unknown;
+  deviceConnect: unknown;
+}): boolean {
+  return Boolean(
+    input.activeSurface || input.navigationOpen || input.walkbackOpen || input.pendingConsent || input.shellApproval || input.deviceConnect,
+  );
+}
 
 
 interface CaughtFailure {
@@ -180,14 +217,6 @@ export function ChatApp(props: ChatAppOpts) {
       <ChatScene {...props} />
     </TuiProductProvider>
   );
-}
-
-/** The tier `delta` steps from `current` in the catalog's order, wrapping; an
- *  unknown or absent current starts from the first. */
-function cycledTier(tiers: readonly TierId[], current: TierId | undefined, delta: 1 | -1): TierId {
-  const index = (Math.max(0, current === undefined ? -1 : tiers.indexOf(current)) + delta + tiers.length) % tiers.length;
-
-  return tiers[index] ?? 'default';
 }
 
 function ChatScene({
@@ -1477,10 +1506,10 @@ function ChatScene({
     consentDecisionRef.current?.(decision);
   }, []);
 
-  const overlayOpen = Boolean(
-    activeSurface || navigationOpen || inputState.walkbackOpen || pendingConsent || shellApproval.pending || deviceConnect.state,
-  );
-
+  const overlayOpen = anyOverlayOpen({
+    activeSurface, navigationOpen, walkbackOpen: inputState.walkbackOpen,
+    pendingConsent, shellApproval: shellApproval.pending, deviceConnect: deviceConnect.state,
+  });
 
   // Auto-copy selected text to clipboard (OSC 52) on mouse release.
   useEffect(() => {
@@ -1522,17 +1551,64 @@ function ChatScene({
     return () => { rendererInstance.root.onMouseUp = undefined; };
   }, [rendererInstance]);
 
+  const surfaceKeys: SurfaceKeyDeps = {
+    activeSurface,
+    setActiveSurface,
+    walkbackOpen: inputState.walkbackOpen,
+    closeWalkback: () => dispatchInput({ type: 'walkback-closed' }),
+    settingsOpen,
+    commandPalette,
+    wideLayout: tuiLayoutForWidth(width) === 'wide',
+    setNavigationOpen,
+    toggleWideSidebar: () => updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen })),
+    busy: () => machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0,
+    addMessage,
+    lastUrl: () => lastUrlFromMessages(messagesRef.current),
+    openBrowser,
+    openModelPicker,
+    hub,
+    nextTier,
+    turnTier: status?.tierId,
+    setNextTier,
+    toggleToolDetails: () => setToolDetailsExpanded((expanded) => !expanded),
+    cycleReasoningEffort: () => selectReasoningEffort(nextReasoningEffort(efforts, status?.reasoningEffort ?? 'medium')),
+    history: historyRef.current,
+    rememberScroll: scrollAnchor.remember,
+    createNewAgent: onNewAgent === undefined ? undefined : createNewAgent,
+    bumpModelRequest: () => { modelRequestRef.current += 1; },
+  };
+
+  const composerKeys: ComposerKeyDeps = {
+    input: inputRef,
+    promptHistory,
+    promptCursor: () => promptCursorRef.current,
+    setPromptCursor: (cursor) => { promptCursorRef.current = cursor; },
+    setInputText,
+    undoDraft: draftEditing.undo,
+    externalDraft: draftEditing.external,
+    expandPastes,
+    rememberPrompt,
+    setSelectionPending: (pending) => { selectionPendingRef.current = pending; },
+    focusInput: () => inputRef.current?.focus(),
+    addError,
+    dispatchInput,
+    runInputEffects,
+    hasUserMessages: () => messages.some((message) => message.role === 'user'),
+    openSurface: setActiveSurface,
+  };
+
+  const sceneKeys = { ...sceneKeyHandlers(surfaceKeys), ...composerKeyHandlers(composerKeys) };
+  const modalKeys = modalKeyHandlers(surfaceKeys);
   useKeyboard(async (key) => {
     draftEditing.changed();
 
     if (shellApproval.pending) {
       key.preventDefault();
-      const actionId = keyDispatcher.feed(key, ['consent']).actionId;
-      const canApprove = shellApprovalCanApprove(shellApproval.pending, { width: sceneWidth, height });
+      const decision = consentKeyDecision(key, keyDispatcher, shellApprovalCanApprove(shellApproval.pending, { width: sceneWidth, height }));
 
-      if (actionId === 'consent.once' && canApprove) shellApproval.decide('allow');
-      else if (actionId === 'consent.always' && canApprove) shellApproval.decide('allow_always');
-      else if (actionId === 'consent.deny') shellApproval.decide('deny');
+      if (decision === 'once') shellApproval.decide('allow');
+      else if (decision === 'always') shellApproval.decide('allow_always');
+      else if (decision === 'deny') shellApproval.decide('deny');
 
       return;
     }
@@ -1545,12 +1621,11 @@ function ChatScene({
 
     if (pendingConsent) {
       key.preventDefault();
-      const actionId = keyDispatcher.feed(key, ['consent']).actionId;
-      const canApprove = deviceConsentCanApprove(pendingConsent, { width, height });
+      const decision = consentKeyDecision(key, keyDispatcher, deviceConsentCanApprove(pendingConsent, { width, height }));
 
-      if (actionId === 'consent.once' && canApprove) resolvePendingConsent('once');
-      else if (actionId === 'consent.always' && canApprove) resolvePendingConsent('always');
-      else if (actionId === 'consent.deny') resolvePendingConsent('deny');
+      if (decision === 'once') resolvePendingConsent('once');
+      else if (decision === 'always') resolvePendingConsent('always');
+      else if (decision === 'deny') resolvePendingConsent('deny');
 
       return;
     }
@@ -1571,221 +1646,13 @@ function ChatScene({
       return;
     }
 
-    const actionId = result.actionId;
+    if (result.actionId === null) return;
 
-    if (actionId === null) return;
-
-    if (modalActive) {
-      if (actionId === 'hub.new-agent' && activeSurface?.kind === 'hub'
-        && activeSurface.view === 'agents' && onNewAgent !== undefined) {
-        key.preventDefault();
-        setActiveSurface(null);
-
-        return createNewAgent();
-      }
-
-      if (actionId === 'modal.close') {
-        key.preventDefault();
-
-        if (activeSurface?.kind === 'model') modelRequestRef.current += 1;
-        setActiveSurface(null);
-
-        if (inputState.walkbackOpen) dispatchInput({ type: 'walkback-closed' });
-      }
-
-      return;
-    }
-
-    if (actionId === 'settings.toggle') {
-      key.preventDefault();
-      setActiveSurface(settingsOpen ? null : { kind: 'settings' });
-
-      return;
-    }
-
-    if (actionId === 'palette.toggle') {
-      key.preventDefault();
-      setActiveSurface(commandPalette ? null : { kind: 'commands' });
-
-      return;
-    }
-
-    if (actionId === 'workspace.toggle') {
-      key.preventDefault();
-
-      if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
-        addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
-      } else if (tuiLayoutForWidth(width) === 'wide') {
-        updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen }));
-      } else {
-        setNavigationOpen((open) => !open);
-      }
-
-      return;
-    }
-
-    if (actionId === 'link.open-last') {
-      key.preventDefault();
-      const url = lastUrlFromMessages(messagesRef.current);
-
-      if (url) openBrowser(url);
-
-      return;
-    }
-
-    if (actionId === 'model.open') {
-      key.preventDefault();
-
-      return openModelPicker();
-    }
-
-    if (actionId === 'tier.cycle' || actionId === 'tier.cycle-reverse') {
-      key.preventDefault();
-      setNextTier(cycledTier(
-        hub ? tierIdsOf(hub.data.profile.envelope.catalog) : TIER_IDS,
-        nextTier ?? status?.tierId,
-        actionId === 'tier.cycle' ? 1 : -1,
-      ));
-
-      return;
-    }
-
-    if (actionId === 'hub.agents' || actionId === 'hub.roles' || actionId === 'hub.tiers'
-      || actionId === 'tier.quick') {
-      // The key opens the hub even while its read is still in flight. Dropping
-      // it instead made a workspace switch swallow the next Alt+A outright:
-      // the switch clears the hub, the re-read is asynchronous (the profile
-      // authority is a network read on a signed-in machine), and a key that
-      // lands in that window left the surface closed with nothing said. The
-      // overlay paints as soon as the read answers; the composer hint carries
-      // the open surface meanwhile.
-      key.preventDefault();
-
-      const view: TuiHubView = actionId === 'hub.agents'
-        ? 'agents'
-        : actionId === 'hub.roles' ? 'roles' : 'tiers';
-
-      setActiveSurface({ kind: 'hub', view });
-
-      return;
-    }
-
-    if (actionId === 'tool.toggle') {
-      key.preventDefault();
-      setToolDetailsExpanded((expanded) => !expanded);
-
-      return;
-    }
-
-    if (actionId === 'effort.cycle') {
-      key.preventDefault();
-
-      return selectReasoningEffort(nextReasoningEffort(efforts, status?.reasoningEffort ?? 'medium'));
-    }
-
-    if (actionId === 'editor.history-search') {
-      key.preventDefault();
-      setActiveSurface({ kind: 'history' });
-
-      return;
-    }
-
-    if (actionId === 'editor.undo') {
-      key.preventDefault();
-      draftEditing.undo();
-
-      return;
-    }
-
-    if (actionId === 'editor.external') {
-      key.preventDefault();
-      selectionPendingRef.current = true;
-
-      try {
-        const edited = await draftEditing.external(expandPastes(inputRef.current?.plainText ?? ''));
-        setInputText(edited);
-        inputRef.current?.gotoBufferEnd();
-      } catch (cause) {
-        addError({ cause });
-      } finally {
-        selectionPendingRef.current = false;
-        inputRef.current?.focus();
-      }
-
-      return;
-    }
-
-    if (actionId === 'editor.history-previous' || actionId === 'editor.history-next') {
-      const input = inputRef.current;
-
-      if (!input) return;
-      const previous = actionId === 'editor.history-previous';
-      const row = input.logicalCursor.row;
-
-      if (input.plainText !== '' && (previous ? row !== 0 : row !== input.lineCount - 1)) return;
-      key.preventDefault();
-
-      if (promptHistory.length === 0 || (!previous && promptCursorRef.current === null)) return;
-      const saved = promptCursorRef.current ?? { index: promptHistory.length, draft: input.plainText };
-      const index = Math.max(0, Math.min(promptHistory.length, saved.index + (previous ? -1 : 1)));
-      setInputText(promptHistory[index] ?? saved.draft);
-      input.gotoBufferEnd();
-      promptCursorRef.current = index === promptHistory.length ? null : { index, draft: saved.draft };
-
-      return;
-    }
-
-    if (actionId === 'editor.clear') {
-      key.preventDefault();
-      const text = inputRef.current?.plainText ?? '';
-
-      if (text !== '') {
-        rememberPrompt(expandPastes(text));
-        setInputText('');
-
-        return;
-      }
-
-      return runInputEffects(dispatchInput({ type: 'escape', now: Date.now(), draft: text,
-        hasUserMessages: messages.some((message) => message.role === 'user') }));
-    }
-
-    if (actionId === 'conversation.branch') {
-      key.preventDefault();
-
-      return runInputEffects(dispatchInput({ type: 'branch', draft: expandPastes(inputRef.current?.plainText ?? '') }));
-    }
-
-    if (actionId === 'queue.add') {
-      key.preventDefault();
-
-      return runInputEffects(dispatchInput({ type: 'queue', text: expandPastes(inputRef.current?.plainText ?? '') }));
-    }
-
-    if (actionId === 'queue.edit-last') {
-      dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' });
-
-      return;
-    }
-
-    if (actionId === 'history.page-up' || actionId === 'history.page-down' || actionId === 'history.line-up' || actionId === 'history.line-down') {
-      if (handleHistoryScrollAction(actionId, historyRef.current)) {
-        key.preventDefault();
-        scrollAnchor.remember();
-      }
-
-      return;
-    }
-
-    if (actionId !== 'conversation.cancel') return;
-    key.preventDefault();
-
-    return runInputEffects(dispatchInput({
-      type: 'escape',
-      now: Date.now(),
-      draft: inputRef.current?.plainText ?? '',
-      hasUserMessages: messages.some((message) => message.role === 'user'),
-    }));
+    // What each action id does lives in the concern's own table: draft-keys
+    // for the composer, surface-keys for the scene and the modal. A handler
+    // owns its preventDefault — whether the editor still sees the key is
+    // behaviour, not bookkeeping.
+    return await (modalActive ? modalKeys : sceneKeys)[result.actionId]?.(key);
   });
 
   const onInputSubmit = useCallback(() => {
@@ -1810,24 +1677,7 @@ function ChatScene({
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
 
-  const surfaceTitle = settingsOpen
-    ? 'Settings ›'
-    : themePickerOpen
-      ? 'Theme ›'
-    : commandPalette
-      ? 'Commands ›'
-      : hubView !== null
-        ? `${hubView[0]!.toUpperCase()}${hubView.slice(1)} ›`
-        : modelPicker
-          ? 'Model picker ›'
-          : changelogView
-            ? 'Changelog ›'
-            : takesView
-              ? 'Takes ›'
-              : inputState.walkbackOpen
-                ? 'Walk back ›'
-                : activeSurface?.kind === 'history' ? 'Prompt history ›' : null;
-
+  const surfaceTitle = surfaceTitleFor(activeSurface, inputState.walkbackOpen);
   // The composer identifies an open surface. Turn progress stays in the
   // transcript's phase line, so one state is never announced twice.
   const composerTitle = surfaceTitle ?? undefined;
@@ -2044,26 +1894,6 @@ function ChatScene({
   );
 }
 
-interface HistoryScrollTarget {
-  scrollTop: number;
-  viewport: { height: number };
-  scrollTo(position: number): void;
-}
-
-function handleHistoryScrollAction(
-  actionId: Extract<TuiActionId, 'history.page-up' | 'history.page-down' | 'history.line-up' | 'history.line-down'>,
-  history: HistoryScrollTarget | null,
-): boolean {
-  const page = actionId === 'history.page-up' || actionId === 'history.page-down';
-
-  if (history === null) return false;
-  const direction = actionId === 'history.page-up' || actionId === 'history.line-up' ? -1 : 1;
-  const viewportFraction = page ? 0.5 : 0.2;
-  const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));
-  history.scrollTo(history.scrollTop + direction * delta);
-
-  return true;
-}
 
 /** A failure as a transcript entry: the provider's own words, plus the next
  *  command when the failure class implies one. Plain text — the TUI styles
