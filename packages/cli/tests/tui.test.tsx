@@ -407,15 +407,15 @@ describe('CLI TUI layout', () => {
       expect(captureCharFrame()).not.toContain('line-00');
       const bottom = topVisibleTranscriptLine(captureCharFrame());
 
-      // Up with an empty composer belongs to the transcript, not the composer.
-      mockInput.pressArrow('up');
+      // Alt+arrows keep transcript scrolling independent of prompt history.
+      mockInput.pressArrow('up', { meta: true });
       await renderSettled(renderOnce);
       expect(captureCharFrame()).not.toContain('line-59');
       const lineStep = bottom - topVisibleTranscriptLine(captureCharFrame());
       expect(lineStep).toBeGreaterThan(0);
 
       // Down returns to the bottom, so both steps are measured from one place.
-      mockInput.pressArrow('down');
+      mockInput.pressArrow('down', { meta: true });
       await renderSettled(renderOnce);
       expect(topVisibleTranscriptLine(captureCharFrame())).toBe(bottom);
 

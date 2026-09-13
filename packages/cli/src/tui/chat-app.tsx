@@ -67,6 +67,9 @@ import {
   CommandPaletteOverlay,
   DeviceConnectOverlay,
   DeviceConsentOverlay,
+  ShellApprovalOverlay,
+  PromptHistoryOverlay,
+  shellApprovalCanApprove,
   ModelPickerOverlay,
   PhaseLine,
   TakesOverlay,
@@ -76,6 +79,10 @@ import {
   WalkbackOverlay,
 } from './overlays';
 import { useDeviceConnectPrompt } from './use-device-connect';
+import { useShellApproval } from './use-shell-approval';
+import { useComposerPaste } from './use-composer-paste';
+import { useDraftEditing } from './use-draft-editing';
+import { composerHelp } from './help-view';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
@@ -141,6 +148,7 @@ export interface ChatAppOpts {
 
 type ActiveSurface =
   | { kind: 'commands' }
+  | { kind: 'history' }
   | { kind: 'settings' }
   | { kind: 'theme' }
   | { kind: 'hub'; view: TuiHubView }
@@ -195,6 +203,7 @@ function ChatScene({
   readHub,
 }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
+  const rendererInstance = useRenderer();
   const { colors, definition: activeTheme } = useTuiTheme();
   const { keybindings, preferences, updatePreferences } = useTuiProduct();
   const sceneWidth = sceneWidthFor(width, preferences.wideSidebarOpen);
@@ -210,6 +219,7 @@ function ChatScene({
   // The client can be swapped mid-session: a cloud walk-back fork returns a
   // sibling client pointed at the forked agent.
   const [client, setClient] = useState(initialClient);
+  const shellApproval = useShellApproval(client);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -238,6 +248,23 @@ function ChatScene({
   );
 
   const [draft, setDraft] = useState('');
+  const draftValueRef = useRef('');
+  const projectRoot = useMemo(() => canonicalProjectRoot(), []);
+  const promptHistoryKey = JSON.stringify([client.mode, projectRoot, client.agentName]);
+  const promptHistory = preferences.promptHistory?.[promptHistoryKey] ?? [];
+  const promptCursorRef = useRef<{ index: number; draft: string } | null>(null);
+
+  const rememberPrompt = useCallback((text: string) => {
+    if (!text.trim()) return;
+    updatePreferences((current) => {
+      const entries = current.promptHistory?.[promptHistoryKey] ?? [];
+
+      if (entries.at(-1) === text) return current;
+
+      return { ...current, promptHistory: { ...current.promptHistory, [promptHistoryKey]: [...entries, text].slice(-500) } };
+    });
+  }, [promptHistoryKey, updatePreferences]);
+
   // What the composer SHOWS of that draft. The editor wraps it over display
   // columns, so these are visual rows, not typed lines — read back from the
   // editor after anything that re-wraps it.
@@ -260,7 +287,10 @@ function ChatScene({
   const msgIdRef = useRef(0);
   const historyRef = useRef<ScrollBoxRenderable | null>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
+  const draftEditing = useDraftEditing(inputRef, rendererInstance);
   const scrollAnchor = usePreservedScrollAnchor(historyRef);
+
+  useEffect(draftEditing.reset, [client, draftEditing.reset]);
 
   const handleNavigationFocusChange = useCallback((focused: boolean) => {
     if (focused) inputRef.current?.blur();
@@ -369,6 +399,11 @@ function ChatScene({
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
 
+  const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
+
+  const expandPastes = useComposerPaste({ renderer: rendererInstance, input: inputRef,
+    enabled: inputShouldFocusRef, limitBytes: client.inlineAttachmentLimitBytes, note: pasteNote });
+
   // ── Live assistant text segments — the key to chronological interleaving.
   // Streamed text-deltas flow into a `live` assistant message that sits at its
   // real position in the array. A tool-call SEALS the active segment so the
@@ -436,15 +471,18 @@ function ChatScene({
   }, []);
 
   const setInputText = useCallback((text: string) => {
-    inputRef.current?.setText(text);
+    promptCursorRef.current = null;
+    draftValueRef.current = text;
+    draftEditing.replace(text);
     setDraft(text);
     syncComposerRows();
-  }, [syncComposerRows]);
+  }, [draftEditing.replace, syncComposerRows]);
 
   /** Send (or steer) one user prompt. @path mentions (plus quoted/~ path
    *  tokens) become attachments: images and PDFs inline as file parts, other
    *  files stay path references. */
   const sendPrompt = useCallback(async (input: string) => {
+    rememberPrompt(input);
     const generation = clientGenerationRef.current;
     clientActionCountRef.current += 1;
 
@@ -482,7 +520,7 @@ function ChatScene({
     } finally {
       clientActionCountRef.current -= 1;
     }
-  }, [addError, addMessage, client, nextTier]);
+  }, [addError, addMessage, client, nextTier, rememberPrompt]);
 
   /** Run the draft as a parallel branch of the live turn — never interrupts
    *  it; progress lands in the status bar and settles into /takes. Falls back
@@ -746,8 +784,6 @@ function ChatScene({
   // The hub's agent rows, live: the current virtual workspace's members from
   // the same roster the navigator reads, with the open agent's role/tier from
   // its loaded profile row and its status from this scene.
-  const projectRoot = useMemo(() => canonicalProjectRoot(), []);
-
   const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
     ...hub.data,
     agents: buildAgentHubEntries({
@@ -947,6 +983,7 @@ function ChatScene({
           settings: 'Settings closed.',
           theme: 'Theme picker closed. Your theme is unchanged.',
           commands: 'Command palette closed.',
+          history: 'Prompt history closed.',
           hub: 'Agent hub closed.',
           model: 'Model selection cancelled.',
           changelog: 'Changelog closed. Everything kept.',
@@ -1040,6 +1077,12 @@ function ChatScene({
 
       try {
         const outcome = await executeSlashCommand(client, submitted);
+
+        if (submitted === '/help' && outcome.kind === 'text') {
+          addMessage({ role: 'system', content: `${outcome.text}\n\n${composerHelp(keybindings)}` });
+
+          return;
+        }
 
         if (clientGenerationRef.current !== generation) return;
 
@@ -1435,12 +1478,11 @@ function ChatScene({
   }, []);
 
   const overlayOpen = Boolean(
-    activeSurface || navigationOpen || inputState.walkbackOpen || pendingConsent || deviceConnect.state,
+    activeSurface || navigationOpen || inputState.walkbackOpen || pendingConsent || shellApproval.pending || deviceConnect.state,
   );
 
 
   // Auto-copy selected text to clipboard (OSC 52) on mouse release.
-  const rendererInstance = useRenderer();
   useEffect(() => {
     if (!rendererInstance?.root) return;
     let copied = false;
@@ -1480,7 +1522,21 @@ function ChatScene({
     return () => { rendererInstance.root.onMouseUp = undefined; };
   }, [rendererInstance]);
 
-  useKeyboard((key) => {
+  useKeyboard(async (key) => {
+    draftEditing.changed();
+
+    if (shellApproval.pending) {
+      key.preventDefault();
+      const actionId = keyDispatcher.feed(key, ['consent']).actionId;
+      const canApprove = shellApprovalCanApprove(shellApproval.pending, { width: sceneWidth, height });
+
+      if (actionId === 'consent.once' && canApprove) shellApproval.decide('allow');
+      else if (actionId === 'consent.always' && canApprove) shellApproval.decide('allow_always');
+      else if (actionId === 'consent.deny') shellApproval.decide('deny');
+
+      return;
+    }
+
     if (deviceConnect.handleKey(key)) {
       key.preventDefault();
 
@@ -1627,16 +1683,83 @@ function ChatScene({
       return selectReasoningEffort(nextReasoningEffort(efforts, status?.reasoningEffort ?? 'medium'));
     }
 
+    if (actionId === 'editor.history-search') {
+      key.preventDefault();
+      setActiveSurface({ kind: 'history' });
+
+      return;
+    }
+
+    if (actionId === 'editor.undo') {
+      key.preventDefault();
+      draftEditing.undo();
+
+      return;
+    }
+
+    if (actionId === 'editor.external') {
+      key.preventDefault();
+      selectionPendingRef.current = true;
+
+      try {
+        const edited = await draftEditing.external(expandPastes(inputRef.current?.plainText ?? ''));
+        setInputText(edited);
+        inputRef.current?.gotoBufferEnd();
+      } catch (cause) {
+        addError({ cause });
+      } finally {
+        selectionPendingRef.current = false;
+        inputRef.current?.focus();
+      }
+
+      return;
+    }
+
+    if (actionId === 'editor.history-previous' || actionId === 'editor.history-next') {
+      const input = inputRef.current;
+
+      if (!input) return;
+      const previous = actionId === 'editor.history-previous';
+      const row = input.logicalCursor.row;
+
+      if (input.plainText !== '' && (previous ? row !== 0 : row !== input.lineCount - 1)) return;
+      key.preventDefault();
+
+      if (promptHistory.length === 0 || (!previous && promptCursorRef.current === null)) return;
+      const saved = promptCursorRef.current ?? { index: promptHistory.length, draft: input.plainText };
+      const index = Math.max(0, Math.min(promptHistory.length, saved.index + (previous ? -1 : 1)));
+      setInputText(promptHistory[index] ?? saved.draft);
+      input.gotoBufferEnd();
+      promptCursorRef.current = index === promptHistory.length ? null : { index, draft: saved.draft };
+
+      return;
+    }
+
+    if (actionId === 'editor.clear') {
+      key.preventDefault();
+      const text = inputRef.current?.plainText ?? '';
+
+      if (text !== '') {
+        rememberPrompt(expandPastes(text));
+        setInputText('');
+
+        return;
+      }
+
+      return runInputEffects(dispatchInput({ type: 'escape', now: Date.now(), draft: text,
+        hasUserMessages: messages.some((message) => message.role === 'user') }));
+    }
+
     if (actionId === 'conversation.branch') {
       key.preventDefault();
 
-      return runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
+      return runInputEffects(dispatchInput({ type: 'branch', draft: expandPastes(inputRef.current?.plainText ?? '') }));
     }
 
     if (actionId === 'queue.add') {
       key.preventDefault();
 
-      return runInputEffects(dispatchInput({ type: 'queue', text: inputRef.current?.plainText ?? '' }));
+      return runInputEffects(dispatchInput({ type: 'queue', text: expandPastes(inputRef.current?.plainText ?? '') }));
     }
 
     if (actionId === 'queue.edit-last') {
@@ -1646,7 +1769,7 @@ function ChatScene({
     }
 
     if (actionId === 'history.page-up' || actionId === 'history.page-down' || actionId === 'history.line-up' || actionId === 'history.line-down') {
-      if (handleHistoryScrollAction(actionId, inputRef.current?.plainText ?? '', historyRef.current)) {
+      if (handleHistoryScrollAction(actionId, historyRef.current)) {
         key.preventDefault();
         scrollAnchor.remember();
       }
@@ -1666,13 +1789,15 @@ function ChatScene({
   });
 
   const onInputSubmit = useCallback(() => {
+    if (overlayOpen) return;
     const value = inputRef.current?.plainText ?? '';
 
     if (!value.trim()) return;
     setInputText('');
+    draftEditing.reset();
 
-    return handleSubmit(value);
-  }, [handleSubmit, setInputText]);
+    return handleSubmit(expandPastes(value));
+  }, [draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
 
   const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
     && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
@@ -1701,7 +1826,7 @@ function ChatScene({
               ? 'Takes ›'
               : inputState.walkbackOpen
                 ? 'Walk back ›'
-                : null;
+                : activeSurface?.kind === 'history' ? 'Prompt history ›' : null;
 
   // The composer identifies an open surface. Turn progress stays in the
   // transcript's phase line, so one state is never announced twice.
@@ -1809,9 +1934,15 @@ function ChatScene({
             ...openTuiKeyBindings(keybindings, 'editor.newline'),
           ]}
           onContentChange={() => {
-            setDraft(inputRef.current?.plainText ?? '');
+            draftEditing.changed();
+            const text = inputRef.current?.plainText ?? '';
+
+            if (text !== draftValueRef.current) promptCursorRef.current = null;
+            draftValueRef.current = text;
+            setDraft(text);
             syncComposerRows();
           }}
+          onCursorChange={draftEditing.cursorMoved}
           onSubmit={onInputSubmit}
           style={{
             backgroundColor: colors.background.user,
@@ -1824,7 +1955,13 @@ function ChatScene({
         />
       </box>
 
-      {themePickerOpen ? (
+      {activeSurface?.kind === 'history' ? (
+        <PromptHistoryOverlay entries={promptHistory} terminal={{ width: sceneWidth, height }} onSelect={(text) => {
+          setActiveSurface(null);
+          setInputText(text);
+          inputRef.current?.gotoBufferEnd();
+        }} />
+      ) : themePickerOpen ? (
         <ThemePickerOverlay
           terminal={{ width: sceneWidth, height }}
           selection={preferences.theme}
@@ -1901,6 +2038,7 @@ function ChatScene({
       )}
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width: sceneWidth, height }} />}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
+      {shellApproval.pending && <ShellApprovalOverlay request={shellApproval.pending} terminal={{ width: sceneWidth, height }} />}
     </box>
     </TuiShell>
   );
@@ -1914,12 +2052,11 @@ interface HistoryScrollTarget {
 
 function handleHistoryScrollAction(
   actionId: Extract<TuiActionId, 'history.page-up' | 'history.page-down' | 'history.line-up' | 'history.line-down'>,
-  draft: string,
   history: HistoryScrollTarget | null,
 ): boolean {
   const page = actionId === 'history.page-up' || actionId === 'history.page-down';
 
-  if (history === null || (!page && draft.length > 0)) return false;
+  if (history === null) return false;
   const direction = actionId === 'history.page-up' || actionId === 'history.line-up' ? -1 : 1;
   const viewportFraction = page ? 0.5 : 0.2;
   const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));

@@ -15,6 +15,7 @@ import { createCliSession } from '../../src/session';
 import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
 import type { TuiHubData } from '../../src/tui/hubs';
 import type { TuiAgentSource } from '../../src/tui/tui-shell';
+import { createMemoryTuiPreferenceStore } from './tui-preferences';
 
 const EVOLUTION: EvolutionConfigView = {
   autoPromoteScaffold: false,
@@ -79,6 +80,7 @@ export function fakeClient(options: FakeClientOptions) {
   const listeners = new Set<(event: AgentClientEvent) => void>();
   const state = { closed: 0 };
   let evolution: EvolutionConfigView = { ...EVOLUTION };
+  let shellApprovalHandler: Parameters<LocalSessionControls['setShellApprovalHandler']>[0] = null;
   const mode = options.mode ?? 'local';
 
   const client: AgentClient = {
@@ -91,7 +93,11 @@ export function fakeClient(options: FakeClientOptions) {
       setAlwaysActiveSkills: () => {},
       getShellApprovalMode: () => 'strict',
       setShellApprovalMode: (approval) => approval,
-      setShellApprovalHandler: () => () => {},
+      setShellApprovalHandler: (handler) => {
+        shellApprovalHandler = handler;
+
+        return () => { shellApprovalHandler = null; };
+      },
       listDeferredApprovals: async () => [],
       decideDeferredApprovals: async () => ({ decided: [] }),
       listModelProviders: async () => [],
@@ -165,6 +171,11 @@ export function fakeClient(options: FakeClientOptions) {
   return {
     client,
     state,
+    requestShellApproval(request: Parameters<NonNullable<typeof shellApprovalHandler>>[0]) {
+      if (!shellApprovalHandler) throw new Error('No shell approval handler installed');
+
+      return shellApprovalHandler(request);
+    },
     /** What still listens to this client. A mounted chat surface holds one; a
      *  torn-down one holds none, because its effect cleanup ran. */
     listenerCount: () => listeners.size,
@@ -177,6 +188,7 @@ export function fakeClient(options: FakeClientOptions) {
 export async function mountChat(
   client: AgentClient,
   options: {
+    tui?: ChatAppOpts['tui'];
     listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string; cwd?: string; workspaceId?: string }>;
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
     hubData?: TuiHubData;
@@ -219,6 +231,7 @@ export async function mountChat(
   root.render(
     <ChatApp
       client={client}
+      tui={options.tui ?? { preferenceStore: createMemoryTuiPreferenceStore() }}
       onExit={() => {}}
       workspaceSource={workspaceSource}
       onWorkspaceSelect={options.onWorkspaceSelect}

@@ -5,7 +5,7 @@ import { formatContextWindow, CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_M
 import { takeEvidence } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import { filterModels, type AgentModelEntry } from '../model-catalog';
-import type { ProviderFailure } from '@kinu.run/core';
+import type { ProviderFailure, ShellApprovalRequest } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from './format';
@@ -666,6 +666,39 @@ interface DeviceConsentOverlayProps {
   terminal: OverlayGeometry;
 }
 
+export function PromptHistoryOverlay({ entries, terminal, onSelect }: {
+  entries: readonly string[];
+  terminal: OverlayGeometry;
+  onSelect(text: string): void;
+}) {
+  const { colors } = useTuiTheme();
+  const [filter, setFilter] = useState('');
+  const selectRef = useRef<SelectRenderable | null>(null);
+  const filtered = [...entries].reverse().filter((text) => text.toLowerCase().includes(filter.toLowerCase()));
+  const paletteWidth = boundedPaletteWidth(terminal, 0.7, 42, 88);
+  const paletteHeight = Math.min(Math.max(8, filtered.length + 6), 18, Math.max(3, terminal.height - 2));
+  const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+  const innerWidth = Math.max(1, paletteWidth - 4);
+
+  return (
+    <PaletteFrame title="Prompt history" width={paletteWidth} height={paletteHeight} left={position.left} top={position.top}>
+      <PaletteSearchInput placeholder="Search sent and cleared prompts…" onInput={setFilter} selectRef={selectRef} />
+      {filtered.length === 0 ? <PaletteLine text="No matching prompts" width={innerWidth} color={colors.text.muted} /> : (
+        <select id="prompt-history-results" ref={selectRef} focused={false} showDescription={false} showScrollIndicator={true}
+          options={filtered.map((text) => ({ name: clipText(text.replace(/\s+/g, ' '), innerWidth), description: '', value: text }))}
+          onSelect={(index) => {
+            const text = filtered[index];
+
+            if (text !== undefined) onSelect(text);
+          }}
+          style={{ height: Math.max(1, paletteHeight - 6), backgroundColor: colors.background.overlay,
+            textColor: colors.text.primary, selectedBackgroundColor: colors.background.selection,
+            selectedTextColor: colors.text.strong }} />
+      )}
+    </PaletteFrame>
+  );
+}
+
 interface DeviceConsentLayout {
   paletteWidth: number;
   paletteHeight: number;
@@ -750,6 +783,35 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
 interface DeviceConnectOverlayProps {
   prompt: DeviceConnectPromptState;
   terminal: OverlayGeometry;
+}
+
+function shellApprovalDetails(request: ShellApprovalRequest): string {
+  return `${request.command}\nExecutor: ${request.executor}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
+}
+
+export function shellApprovalCanApprove(request: ShellApprovalRequest, terminal: OverlayGeometry): boolean {
+  return deviceConsentCanApprove({ command: shellApprovalDetails(request) }, terminal);
+}
+
+export function ShellApprovalOverlay({ request, terminal }: { request: ShellApprovalRequest; terminal: OverlayGeometry }) {
+  const { colors } = useTuiTheme();
+  const keybindings = useKeybindingRegistry();
+  const details = shellApprovalDetails(request);
+  const layout = deviceConsentLayout({ command: details }, terminal);
+  const position = centeredPosition(terminal, layout.paletteWidth, layout.paletteHeight, 'center');
+
+  return (
+    <PaletteFrame title="Run this command?" width={layout.paletteWidth} height={layout.paletteHeight} left={position.left} top={position.top}>
+      <box style={{ width: '100%', height: layout.canApprove ? layout.commandRows : Math.max(1, layout.paletteHeight - 8) }}>
+        <text wrapMode="word"><span fg={colors.text.strong}>Command: {details}</span></text>
+      </box>
+      <PaletteLine text={layout.canApprove
+        ? `${keybindings.hint('consent.once')} approve once · ${keybindings.hint('consent.always')} remember grant · ${keybindings.hint('consent.deny')} deny`
+        : `Resize to inspect the full command · ${keybindings.hint('consent.deny')} deny`}
+        width={layout.innerWidth} color={layout.canApprove ? colors.intent.accentStrong : colors.intent.danger} />
+      <PaletteLine text="Remember grants these rules on this executor only." width={layout.innerWidth} color={colors.text.muted} />
+    </PaletteFrame>
+  );
 }
 
 function wrappedTextRows(text: string, width: number): number {
