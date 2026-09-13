@@ -4,25 +4,11 @@ import type { Browser, Page } from 'puppeteer';
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
 
-// The walkthrough's deterministic drive, declared here rather than imported:
-// the timeline module lives in component-land (its story quotes the product's
-// fixtures), and importing it would drag the product's DOM components under
-// this gate's own JSX runtime. The shape below is kept identical to
-// `LandingMovieHandle` in `landing-movie-timeline.ts`.
-interface LandingMovieHandle {
-  readonly duration: number;
-  readonly cues: Record<string, number>;
-  seek(at: number): Promise<void>;
-  play(): void;
-  pause(): void;
-  state(): { t: number; playing: boolean; settled: boolean };
-}
-
-declare global {
-  interface Window {
-    __kinuLandingMovie?: LandingMovieHandle;
-  }
-}
+// The shared contract is dependency-free: this gate reads the handle shape
+// and its `declare global` without typechecking the timeline's
+// component-land imports, and the drive cannot drift from the product's own
+// declaration.
+import type { LandingMovieHandle } from '@kinu.run/core';
 
 const PHONE = { width: 390, height: 844 } as const;
 
@@ -83,6 +69,10 @@ interface MovieFact {
   readonly decided: boolean;
   readonly slate: boolean;
   readonly settled: boolean;
+  /** Read while the story is mid-investigation: nothing to review yet. */
+  readonly noPlanYet: { status: string | null; decisions: boolean; plansList: boolean };
+  /** Read after seeking back to 0: the decided plan must leave the pane. */
+  readonly cleared: { status: string | null; plansList: boolean };
 }
 
 interface MovieReducedFact {
@@ -323,9 +313,12 @@ beforeAll(async () => {
       await page.waitForFunction(
         () => document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
       );
-      // The plan frame is the walkthrough movie, and every beat below is a DOM
-      // or computed-style read off the seek the handle settles first.
-      const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues);
+
+      // Only the cue table crosses the boundary — the handle's methods are
+      // not serializable, so asking for it would read a lie.
+      const cues = await page.evaluate(
+        (): LandingMovieHandle['cues'] | undefined => window.__kinuLandingMovie?.cues,
+      );
 
       if (cues === undefined) throw new Error('the walkthrough publishes no cues');
 
@@ -363,8 +356,21 @@ beforeAll(async () => {
       ));
 
       // The agent's tool calls stream into the transcript the way a real turn
-      // renders them.
+      // renders them — and before the plan exists the Work pane must not
+      // advertise one: the Plans read serves the timeline's plan, not a
+      // fixture's.
       await seek(cues.searchDone + 100);
+
+      const noPlanYet = await page.evaluate(() => {
+        const frame = document.querySelector('[data-landing-frame="plan"]');
+
+        return {
+          status: frame?.querySelector('[data-plan-status]')?.textContent ?? null,
+          decisions: frame?.querySelector('[data-plan-decisions]') !== null,
+          plansList: frame?.querySelector('[data-work-plans]') !== null,
+        };
+      });
+
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-tool-group]') !== null
         && document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true
@@ -391,6 +397,43 @@ beforeAll(async () => {
       // The build lands a slate, opened in its own tab: the settled state.
       await seek(cues.end);
       await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]', { timeout: 15_000 });
+
+      const settled = await page.$eval('[data-landing-frame="plan"]', (frame) => (
+        frame.getAttribute('data-movie-settled') === 'true'
+      ));
+
+      // Seeking back to the story's start clears the plan the pane served:
+      // the read model and the pane share one source. The Plans read refires
+      // on the cleared prop, so the empty answer is awaited, not sampled.
+      await seek(0);
+      await page.waitForFunction(() => (
+        document.querySelector('[data-landing-frame="plan"] [data-plan-status]') === null
+        && document.querySelector('[data-landing-frame="plan"] [data-work-plans]') === null
+      ), { timeout: 15_000 });
+
+      const cleared = { status: null, plansList: false };
+
+      // The clear check parked the story at t0 with no plan under review;
+      // the interactions read still asserts the approved one, so the pane
+      // has to re-decide it: seek the review back in, then a real click on
+      // the product's Approve runs decidePlanReview again.
+      await seek(cues.planReady + 200);
+      await page.waitForSelector(
+        '[data-landing-frame="plan"] [data-plan-decisions] button:not([disabled])',
+        { timeout: 15_000 },
+      );
+      await page.evaluate(() => {
+        const stage = document.querySelector('[data-landing-frame="plan"]');
+
+        const approve = [...(stage?.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button') ?? [])]
+          .find((button) => !button.disabled && /approve/i.test(button.textContent ?? ''));
+
+        approve?.click();
+      });
+      await page.waitForFunction(() => (
+        document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
+      ), { timeout: 15_000 });
+
       facts.movie = {
         typing: typing.length > 0,
         tools: true,
@@ -398,9 +441,9 @@ beforeAll(async () => {
         cursorShown,
         decided: true,
         slate: true,
-        settled: await page.$eval('[data-landing-frame="plan"]', (frame) => (
-          frame.getAttribute('data-movie-settled') === 'true'
-        )),
+        settled,
+        noPlanYet,
+        cleared,
       };
       expect(await page.evaluate(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
@@ -856,6 +899,15 @@ describe('the plan frame walks through the session', () => {
     expect(movie.decided).toBeTrue();
     expect(movie.slate).toBeTrue();
     expect(movie.settled).toBeTrue();
+  });
+
+  test('no plan is advertised before the story submits one, and seeking back clears it', () => {
+    const movie = required(facts.movie, 'walkthrough');
+
+    // Mid-investigation: no status, no decisions row, no Plans list.
+    expect(movie.noPlanYet).toEqual({ status: null, decisions: false, plansList: false });
+    // Back at t0 after approval: the approved plan is gone from the pane.
+    expect(movie.cleared).toEqual({ status: null, plansList: false });
   });
 
   test('reduced motion holds the settled state with no cursor and no playback', () => {

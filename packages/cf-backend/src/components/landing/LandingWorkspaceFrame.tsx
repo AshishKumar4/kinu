@@ -40,11 +40,12 @@ import {
   SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
   checkoutWorkFixture, planRpc, superviseRpc,
 } from './landing-fixtures';
+import { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from '@kinu.run/core';
 import {
-  CURSOR_ENTER_AT, MOVIE_CUES, MOVIE_END,
+  CURSOR_ENTER_AT,
   composerTextAt, cueCountAt, cursorAt, discreteAt,
   MOVIE_PLAN,
-  type LandingMovieHandle, type MovieTarget,
+  type MovieTarget,
 } from './landing-movie-timeline';
 import { SlateDashboard } from './SlateDashboard';
 
@@ -141,11 +142,15 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       : null
   ));
 
-  const decidePlan = useMemo(() => planRpc(setDecided, MOVIE_PLAN), []);
+  // One source for the plan: the decided override, else the timeline's. The
+  // rpc serves THIS plan, so the Plans read and the pane agree — a workspace
+  // that has not submitted a plan answers [] rather than advertising the
+  // fixture's.
+  const plan = isMovie ? (decided ?? discrete.plan) : null;
+  const decidePlan = useMemo(() => planRpc(setDecided, plan), [plan]);
   const [, setWorkVersion] = useState(0);
   const work = useMemo(() => checkoutWorkFixture(() => setWorkVersion((version) => version + 1)), []);
   const rpc = kind === 'plan' ? decidePlan : work.rpc;
-  const plan = isMovie ? (decided ?? discrete.plan) : null;
   const planLocked = planReviewAwaitingDecision(plan);
   const [mode, setMode] = useState<ChatMode>(frame.mode);
   useEffect(() => {
