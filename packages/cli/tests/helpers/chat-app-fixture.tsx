@@ -92,6 +92,8 @@ export function fakeClient(options: FakeClientOptions) {
       getShellApprovalMode: () => 'strict',
       setShellApprovalMode: (approval) => approval,
       setShellApprovalHandler: () => () => {},
+      listDeferredApprovals: async () => [],
+      decideDeferredApprovals: async () => ({ decided: [] }),
       listModelProviders: async () => [],
       listInstructionApprovals: async () => ({ status: 'end' as const, items: [] }),
       readInstructionApproval: async () => null,

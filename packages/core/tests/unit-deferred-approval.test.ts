@@ -7,7 +7,7 @@
 // wake through the ONE signal-delivery seam every asynchronous producer uses.
 // The tests that matter most are the honesty ones — a queued action is never
 // reported as a success, and an approval is never reported as an effect.
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { toolExecute } from '@kinu.run/test-utils';
 import {
@@ -20,7 +20,7 @@ import {
 import { buildPendingActions } from '../src/read-models/pending-actions';
 import { gateProviderExec } from '../src/execution/approval';
 import { commandResult, formatExecResult, type CommandResult } from '../src/execution/exec-result';
-import { KinuError, refusalOf } from '../src/obs/index';
+import { diagnostics, KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createTestRuntime } from './helpers';
 import { makeSql, makeExecRaw } from './helpers';
@@ -125,6 +125,31 @@ function setup(opts: {
 
 
 describe('a gated action nobody is there to approve', () => {
+  test('a failed consumption audit is reported without changing an executed command into a refusal', async () => {
+    const { sql, actor } = approvalsDb();
+    const failure = spyOn(diagnostics, 'failure');
+
+    const queue = new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(sql, actor),
+      signals: { deliver: async () => 'queued' }, remember: () => {},
+      audit: () => { throw new Error('audit unavailable'); },
+    });
+
+    const shell = withApprovalGatedShell({
+      exec: async () => ({ stdout: 'executed', stderr: '', exitCode: 0 }),
+    }, { mode: () => 'strict', requestApproval: null, deferrals: queue.channel });
+
+    try {
+      await shell.exec(GATED);
+      await queue.decide(queue.list().map((action) => action.id), 'approved');
+      expect(await shell.exec(GATED)).toEqual({ stdout: 'executed', stderr: '', exitCode: 0 });
+      expect(failure.mock.calls[0]?.[0]).toBe('approval.audit_emit_failed');
+      expect(queue.list()).toEqual([]);
+    } finally {
+      failure.mockRestore();
+    }
+  });
+
   test('is parked, and the model is told it did NOT run — in one line', async () => {
     const { run, executed, queue } = setup();
 

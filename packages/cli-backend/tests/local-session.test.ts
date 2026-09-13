@@ -1302,6 +1302,94 @@ describe('LocalAgentSession — context window', () => {
 });
 
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
+  test('deferred approval survives a session restart and grants one execution across both runtime surfaces', async () => {
+    const { db, rt, session, events } = setup();
+    const command = 'git push --force origin main';
+    const shell = rt.shell;
+    const router = rt.executionRouter;
+
+    if (!shell || !router) throw new Error('local runtime must expose both execution surfaces');
+
+    const executed: string[] = [];
+
+    router.register({
+      name: 'sandbox', kind: 'sandbox', capabilities: new Set(['shell']), isAvailable: () => true,
+      homeDir: async () => '/', connect: async () => {}, disconnect: async () => {},
+      tools: { exec: { description: 'record execution', execute: async (input) => {
+        executed.push(String(input));
+
+        return 'executed';
+      } } },
+    });
+
+    const exec = router.getProvider('sandbox')?.tools.exec;
+
+    if (!exec) throw new Error('sandbox.exec is missing');
+
+    const first = await shell.exec(command);
+    const [parked] = await session.listDeferredApprovals();
+
+    if (!parked) throw new Error('unattended command was not queued');
+
+    expect(first.exitCode).not.toBe(0);
+    expect(first.stderr).toContain(`NOT RUN — queued for owner approval (${parked.id})`);
+    expect(JSON.stringify(await exec.execute(command))).toContain('NOT RUN — queued for owner approval');
+    expect(await session.listDeferredApprovals()).toHaveLength(2);
+    const sandboxAction = (await session.listDeferredApprovals()).find((action) => action.executor === 'sandbox');
+
+    if (!sandboxAction) throw new Error('sandbox command was not queued');
+
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
+    await session.end();
+
+    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+
+    try {
+      expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
+      expect(await reopened.decideDeferredApprovals([parked.id, sandboxAction.id, sandboxAction.id], 'approved'))
+        .toEqual({ decided: [parked.id, sandboxAction.id] });
+      expect(executed).toEqual([]);
+      await exec.execute(command);
+      expect(executed).toEqual([command]);
+      await exec.execute(command);
+      expect(executed).toEqual([command]);
+      const [next] = await reopened.listDeferredApprovals();
+
+      expect(next?.id).not.toBe(parked.id);
+      expect(next?.command).toBe(command);
+      expect(reopened.getRunEvents(WORKSPACE_RUN_ID).some((event) => event.type === 'approval_consumed'))
+        .toBe(true);
+    } finally {
+      await reopened.end();
+    }
+  });
+
+  test('deferred approval retains interactive denial and never queues deny_all commands', async () => {
+    const { rt, session } = setup();
+    const shell = rt.shell;
+
+    if (!shell) throw new Error('local runtime must expose its shell');
+
+    try {
+      const detach = session.setShellApprovalHandler(async () => 'deny');
+      const command = 'git push --force origin main';
+      const denied = await shell.exec(command);
+
+      expect(denied.exitCode).not.toBe(0);
+      expect(await session.listDeferredApprovals()).toEqual([]);
+      detach();
+      session.setShellApprovalMode('deny_all');
+      expect((await shell.exec(command)).stderr).toContain('deny_all');
+      expect(await session.listDeferredApprovals()).toEqual([]);
+      session.setShellApprovalMode('strict');
+      expect((await shell.exec(command)).stderr).toContain('queued for owner approval');
+      expect(await session.listDeferredApprovals()).toHaveLength(1);
+    } finally {
+      await session.end();
+    }
+  });
+
   test('always-active skills round-trip through actor_config', () => {
     const { session } = setup();
     expect(session.getAlwaysActiveSkills()).toEqual([]);
