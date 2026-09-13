@@ -2,7 +2,6 @@ import { type FormEvent, useCallback, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
-import { KinuMark } from "@/components/ui/KinuLogo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   CONNECT_AI_MESSAGE,
@@ -41,10 +40,6 @@ export default function HomePage() {
     <div className="h-full overflow-y-auto p-bg">
       <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
-          <div className="mb-3.5 flex items-center gap-2.5">
-            <KinuMark size={22} />
-            <span className="p-eyebrow">New workspace</span>
-          </div>
           {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
           <h1 className="font-serif text-[clamp(38px,4vw,46px)] font-medium leading-[1.12] tracking-[-.015em] p-text">
             What do you wanna work on?
