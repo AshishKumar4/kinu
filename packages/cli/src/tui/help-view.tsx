@@ -15,6 +15,8 @@ export function composerHelp(registry: KeybindingRegistry): string {
     ['editor.history-next', 'Next prompt at last line'],
     ['editor.history-search', 'Search prompt history'],
     ['editor.clear', 'Save and clear draft; interrupt when empty'],
+    ['editor.undo', 'Undo draft edit'],
+    ['editor.external', 'Edit draft in VISUAL or EDITOR'],
     ['history.line-up', 'Scroll transcript up'],
     ['history.line-down', 'Scroll transcript down'],
     ['history.page-up', 'Page transcript up'],

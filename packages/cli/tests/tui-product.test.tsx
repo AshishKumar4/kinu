@@ -27,6 +27,7 @@ import {
   type TuiThemeDefinition,
 } from '../src/tui/theme';
 import { createFileTuiPreferenceStore } from '../src/tui/preferences';
+import { composerHelp } from '../src/tui/help-view';
 import {
   TuiProductProvider,
   TuiShell,
@@ -63,8 +64,14 @@ describe('TUI product registries', () => {
       expect(resolve(registry, key('down'), EDITING)).toBe('editor.history-next');
       expect(resolve(registry, key('r', { ctrl: true }), EDITING)).toBe('editor.history-search');
       expect(resolve(registry, key('c', { ctrl: true }), EDITING)).toBe('editor.clear');
+      expect(resolve(registry, key('-', { ctrl: true }), EDITING)).toBe('editor.undo');
+      expect(resolve(registry, key('_', { ctrl: true }), EDITING)).toBe('editor.undo');
       expect(resolve(registry, key('up', { alt: true }), EDITING)).toBe('history.line-up');
       expect(resolve(registry, key('down', { alt: true }), EDITING)).toBe('history.line-down');
+      const help = composerHelp(registry);
+      expect(help).toContain(registry.hint('editor.undo'));
+      expect(help).toContain(registry.hint('editor.external'));
+      expect(help).toContain(registry.hint('editor.history-search'));
     }
   });
 

@@ -39,6 +39,70 @@ function enterSubmits(label: string, enterBytes: string) {
 }
 
 describe('the composer on a real terminal', () => {
+  test('EDITOR is the fallback and a failed editor preserves the original draft', () => {
+    const script = scratchPath('composer-editor-failure', 'edit.sh');
+    const received = scratchPath('composer-editor-failure', 'received.txt');
+    const sent = scratchPath('composer-editor-failure', 'sent.json');
+    writeFileSync(script, 'cp "$1" "$KINU_PTY_EDITOR_RECEIVED"\nexit 7\n');
+
+    const run = runTuiInPty(entry, {
+      env: { VISUAL: '', EDITOR: `/bin/sh ${script}`, KINU_PTY_EDITOR_RECEIVED: received, KINU_PTY_SENT_FILE: sent },
+      steps: [
+        { wait: 'Connected to pty', timeout: 15 },
+        { send: 'draft survives editor failure' },
+        { wait: 'draft survives editor failure', timeout: 3 },
+        { send: '\x07' },
+        { wait: 'Draft retained at', timeout: 3 },
+        { send: '\r' },
+        { wait: 'agent prose reply', timeout: 3 },
+      ],
+    });
+
+    expect(readFileSync(received, 'utf8')).toBe('draft survives editor failure');
+    expect(JSON.parse(readFileSync(sent, 'utf8'))).toBe('draft survives editor failure');
+    expect(run.screen).toContain('agent prose reply');
+  }, 60_000);
+
+  test('an external editor receives the draft and returns its edits to the composer', () => {
+    const script = scratchPath('composer-editor', 'edit.sh');
+    const received = scratchPath('composer-editor', 'received.txt');
+    const sent = scratchPath('composer-editor', 'sent.json');
+    writeFileSync(script, 'cp "$1" "$KINU_PTY_EDITOR_RECEIVED"\nprintf "edited in external editor" > "$1"\n');
+
+    const run = runTuiInPty(entry, {
+      env: { VISUAL: `/bin/sh ${script}`, EDITOR: 'exit 99', KINU_PTY_EDITOR_RECEIVED: received, KINU_PTY_SENT_FILE: sent },
+      steps: [
+        { wait: 'Connected to pty', timeout: 15 },
+        { send: 'draft before editor' },
+        { wait: 'draft before editor', timeout: 3 },
+        { send: '\x07' },
+        { wait: 'edited in external editor', timeout: 3 },
+        { send: '\r' },
+        { wait: 'agent prose reply', timeout: 3 },
+      ],
+    });
+
+    expect(readFileSync(received, 'utf8')).toBe('draft before editor');
+    expect(JSON.parse(readFileSync(sent, 'utf8'))).toBe('edited in external editor');
+    expect(run.screen).toContain('agent prose reply');
+  }, 60_000);
+
+  test('legacy Ctrl+- bytes undo a deletion', () => {
+    const run = runTuiInPty(entry, {
+      steps: [
+        { wait: 'Connected to pty', timeout: 15 },
+        { send: 'keep this draft' },
+        { wait: 'keep this draft', timeout: 3 },
+        { send: '\x7f\x7f' },
+        { gone: 'keep this draft', timeout: 3 },
+        { send: '\x1f' },
+        { wait: 'keep this draft', timeout: 3 },
+      ],
+    });
+
+    expect(run.screen).not.toContain('agent prose reply');
+  }, 60_000);
+
   test('an image path paste uses the existing attachment resolver', () => {
     const sent = scratchPath('composer-image-path', 'sent.json');
     const path = scratchPath('composer-image-path', 'shot.png');
