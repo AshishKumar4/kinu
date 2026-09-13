@@ -42,7 +42,7 @@ import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } fro
 import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
 import type { DeviceAccount } from '../evals/device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
-import { approvalClearsSelection } from './approval-observation';
+import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -285,7 +285,16 @@ async function drive(
   try {
     const panel = await page.waitForFunction(parkedCommandPanel, { timeout: PAINT_MS }, command);
     const element = panel.asElement();
-    button = element === null ? null : await element.$('button::-p-text(Approve)');
+
+    if (element !== null) {
+      for (const candidate of await element.$$('button')) {
+        const label = await candidate.evaluate((node) => node.textContent ?? '');
+
+        if (!isApprovalButtonLabel(label)) continue;
+        button = candidate;
+        break;
+      }
+    }
   } catch (cause) {
     // THE WAIT EXPIRING, and nothing else. Puppeteer names that one rejection
     // `TimeoutError`; an expiry is a finding about the product's card, which
