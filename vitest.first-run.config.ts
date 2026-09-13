@@ -30,6 +30,7 @@
  * ci and at deploy, before anything is deployed and at no cost.
  */
 import { defineConfig } from 'vitest/config';
+import { promptText } from './packages/cf-backend/vite-prompt-text';
 
 /** The one glob that decides what this tier runs. `wiring.test.ts` holds it
  *  equal to the corpus on disk, so a case file that lands outside it is a
@@ -37,6 +38,7 @@ import { defineConfig } from 'vitest/config';
 export const FIRST_RUN_INCLUDE = 'tests/first-run/**/*.first-run.ts';
 
 export default defineConfig({
+  plugins: [promptText()],
   test: {
     name: 'first-run',
     include: [FIRST_RUN_INCLUDE],

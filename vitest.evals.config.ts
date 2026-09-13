@@ -9,6 +9,7 @@
  * correctly; this note exists so a hand-run does too.
  */
 import { defineConfig } from 'vitest/config';
+import { promptText } from './packages/cf-backend/vite-prompt-text';
 
 /**
  * The eval tier's runner. Separate from `packages/cf-backend/vitest.config.ts`
@@ -51,6 +52,7 @@ import { defineConfig } from 'vitest/config';
  * is also gitignored so an accidental recording cannot become a tracked file.
  */
 export default defineConfig({
+  plugins: [promptText()],
   test: {
     name: 'evals',
     include: ['tests/evals/**/*.eval.ts'],
