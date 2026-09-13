@@ -218,7 +218,7 @@ const SHARED_TRANSPORTS = {
   listRefinements: 'refinementDebt',
   makeScaffoldCallTool: 'createScaffoldCallTool',
   makeScaffoldHistory: 'createScaffoldHistory',
-  makeScaffoldLLMStream: 'createScaffoldLLMStream',
+
   markChangelogSeen: 'markChangelogSeen',
   pickAlternateTake: 'pickAlternateTake',
   proposeCurriculumTasks: 'proposeCurriculumTasks',

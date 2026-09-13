@@ -123,7 +123,7 @@ import { TierIdSchema,
   proposeScaffold, runScaffoldGepaOptimization,
   queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldVersionView,
+  type ScaffoldDecisionResult, type ScaffoldVersionView, createScaffoldCandidateSurface,
   type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
   // Continual refinement — `/refine` and the automatic evolution-debt trigger.
@@ -138,7 +138,7 @@ import { TierIdSchema,
   latestAlternateTakeSet,
   type ScaffoldRunOptions,
   bootstrapScaffold,
-  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
+  createScaffoldCallTool, createScaffoldHistory,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId,
   type PendingBranch, type BranchStatusEvent,
@@ -4042,17 +4042,20 @@ export class LocalAgentSession implements BackendHost {
       events: this.eventRecorder,
       sql: this.rt.storage.sql,
       config: this.config,
-      surface: (task, context, callScope) => {
-        const model = this.ensureModelState();
+      surface: (task, context, callScope) => createScaffoldCandidateSurface({
+        rt: this.rt,
+        profile: () => this.routingProfile(),
+        bindModel: spec => this.modelResolver?.resolveModel(spec) ?? this.defaultModel('scaffold model lane'),
+        tools: this.tools,
+        callTool: this.makeScaffoldCallTool(this.tools, callScope),
+        history: this.makeScaffoldHistory(),
+        spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+      }, task, context),
+      model: async () => {
+        const route = resolveModelRoute('scaffold', await this.routingProfile());
 
-        return {
-          llmStream: this.makeScaffoldLLMStream(model, this.tools),
-          callTool: this.makeScaffoldCallTool(this.tools, callScope),
-          history: this.makeScaffoldHistory(),
-          defaultInference: () => this.scaffoldDefaultInference(task, model, context),
-        };
+        return this.bindRouteModel(route).model;
       },
-      model: () => this.ensureModelState(),
       judge: createLlmJsonJudge(this.rt.judgeModel ?? this.rt.llm),
       reportModelCall: this.modelCallSink,
       operations: this.modelOperations,
@@ -4155,34 +4158,6 @@ export class LocalAgentSession implements BackendHost {
     };
   }
 
-  /** `host.defaultInference()` for a scaffold run outside a live turn — the
-   *  ordinary local loop over this session's whole tool surface, which is what
-   *  the cloud backend's streamText bridge gives a candidate there. `context`
-   *  is the conversation a queued trial's turn was asked in, replayed so a
-   *  delegating candidate is judged on the scaffold delta rather than on a
-   *  handicap; without one the task is all there is. */
-  private async *scaffoldDefaultInference(
-    task: string, model: LanguageModel, context?: ScaffoldReplayContext,
-  ): ReturnType<NonNullable<ScaffoldRunOptions['defaultInference']>> {
-    const stream = runChat({
-      model,
-      modelContext: {
-        id: this.effectiveModelSpec(),
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      },
-      system: buildSystemPromptSync(this.rt, {
-        backend: 'cli-local',
-        model: { id: this.effectiveModelSpec() },
-        currentDate: currentDateForPrompt(),
-      }),
-      history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
-      tools: this.tools,
-    });
-
-    for await (const event of stream) yield { event };
-  }
-
   /** The pending scaffold's rollout state — trials so far and what the
    *  promotion gate currently says. */
   getShadowStatus(): ShadowStatus {
@@ -4220,21 +4195,6 @@ export class LocalAgentSession implements BackendHost {
     maxIterations?: number; evalSize?: number; maxMetricCalls?: number;
   }): Promise<GepaOptimizationResult> {
     return runScaffoldGepaOptimization(this.scaffoldControl, opts);
-  }
-
-  /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
-   *  over THIS turn's tool surface. */
-  private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet, signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({
-      model,
-      tools: () => turnTools,
-      signal,
-      spend: {
-        source: 'scaffold',
-        report: this.modelCallSink,
-        operations: this.modelOperations,
-      },
-    });
   }
 
   /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
