@@ -160,6 +160,21 @@ describe('a pending reaction always has a durable successor wake', () => {
 });
 
 describe('every drain path re-establishes the wake', () => {
+  test('a host that derives its next wake leaves durable work readable without claiming a platform alarm', async () => {
+    const log = newEventLog();
+    const { host, durableArms, debounces, enqueued } = watchedHost();
+    host.reconcileDurableWake = null;
+    const orch = new AgentOrchestrator({ host, engine: inertEngine(), eventLog: log });
+    log.publish({ descriptor: webhook('derived-wake'), now: Date.now() });
+    orch.scheduleDrain();
+    expect(debounces).toHaveLength(1);
+    expect(durableArms()).toBe(0);
+    expect(log.nextPendingDrainAt(Date.now())).not.toBeNull();
+    await orch.drainPendingEvents();
+    expect(enqueued).toHaveLength(1);
+    expect(log.nextPendingDrainAt(Date.now())).toBeNull();
+  });
+
   test('admitting work arms the durable wake, not only the in-memory debounce', () => {
     const log = newEventLog();
     const { host, durableArms, debounces } = watchedHost();
