@@ -9,6 +9,7 @@
  * snapshot of "it ran" would pass on an empty file.
  */
 import { describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -77,4 +78,24 @@ describe('plan-demo-film', () => {
       }
     });
   }, 120_000);
+
+  test('the shipped film\'s first frame is fully opaque', () => {
+    const film = 'docs/assets/kinu-plan-demo.gif';
+    const facts = probeGif(film);
+    // Decoding, not the GCE flag: a transparent index in the palette says
+    // nothing about whether the base frame's pixels use it. Every pixel of
+    // frame 0 must carry its own colour, or whatever the compositor keeps
+    // beneath it shows through the whole loop.
+
+    const rgba = execFileSync('ffmpeg', [
+      '-v', 'error', '-i', film,
+      '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-',
+    ], { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
+
+    expect(rgba.byteLength, 'the decode must yield width*height RGBA pixels')
+      .toBe(facts.width * facts.height * 4);
+    expect(rgba.every((byte, i) => i % 4 !== 3 || byte === 0xff), 'frame 0 has a transparent pixel')
+      .toBe(true);
+  }, 60_000);
 });
+

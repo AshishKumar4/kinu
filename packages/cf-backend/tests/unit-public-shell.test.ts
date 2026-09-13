@@ -407,15 +407,19 @@ describe('the mark', () => {
 /**
  * The README opens on the planning-walkthrough film.
  *
- * A GIF paints frame over frame, so its failure mode is a leak: a frame that
- * restores-to-previous, offsets its rectangle, or marks pixels transparent
- * lets earlier states show through — the same smear an earlier landing film
- * shipped when the chat, the approval card and the tree rendered all at
- * once. The invariant asserted here is stronger: every frame paints the
- * whole canvas with no transparency, so no frame depends on any other. The
- * final assertion is layout: the declared width and height are the canvas's
- * own, so the page reserves the space before the bytes arrive and nothing
- * below the film moves when it loads.
+ * A GIF paints frame over frame, so its failure mode is a leak: a frame
+ * whose disposal asks the compositor to blank or restore the canvas beneath
+ * it, a frame rectangle that escapes the canvas, or a base frame that does
+ * not cover it all show states that were never photographed — the same smear
+ * an earlier landing film shipped when the chat, the approval card and the
+ * tree rendered all at once. The invariant here is GIF's real
+ * self-consistency: frame 0 covers the canvas, every frame stays inside it,
+ * and no frame carries disposal 2 (restore-to-background) or 3
+ * (restore-to-previous). Transparency on a later frame is legal — under
+ * disposal 0/1 it means "keep the pixel beneath", ffmpeg's delta encoding —
+ * and frame 0's opacity is proven by decoding it in
+ * `scripts/plan-demo-film.test.ts`, since a GCE flag cannot say whether the
+ * transparent index is ever used.
  *
  * `readFilm` validates framing and metadata only — never pixels; ffprobe's
  * independent decode in `plan-demo-film.ts` remains the content evidence.
@@ -427,10 +431,10 @@ describe('the README demo film', () => {
   interface Frame {
     readonly x: number; readonly y: number;
     readonly width: number; readonly height: number;
-    /** Disposal 3 (restore-to-previous) or a transparent flag would let an
-     *  earlier frame bleed into this one; the film must carry neither. */
-    readonly restores: boolean;
-    readonly transparent: boolean;
+    /** The graphic-control extension's disposal: 2 blanks the canvas under
+     *  the frame, 3 restores the previous state — both rewrite pixels this
+     *  frame does not carry, so the film must carry neither. */
+    readonly disposal: number;
   }
 
   interface Film {
@@ -485,9 +489,9 @@ describe('the README demo film', () => {
     let at = 13 + gctSize;
     let loops: number | null = null;
     const frames: Frame[] = [];
-    // The graphic-control extension carries the NEXT image's disposal and
-    // transparency, so it is staged between descriptors.
-    let gce = { restores: false, transparent: false };
+    // The graphic-control extension carries the NEXT image's disposal, so it
+    // is staged between descriptors.
+    let gce = { disposal: 0 };
 
     const skipSubBlocks = (what: string): void => {
       for (;;) {
@@ -518,7 +522,7 @@ describe('the README demo film', () => {
           width: descriptor.readUInt16LE(4), height: descriptor.readUInt16LE(6),
           ...gce,
         });
-        gce = { restores: false, transparent: false };
+        gce = { disposal: 0 };
         at += 10;
 
         const lctSize = (localPacked & 0x80) !== 0 ? 3 * (2 ** ((localPacked & 7) + 1)) : 0;
@@ -539,12 +543,8 @@ describe('the README demo film', () => {
           }
 
           const body = takeBlock(gif, at + 1, 4, 'graphic-control extension').body;
-          const packedGce = body.readUInt8(0);
 
-          gce = {
-            restores: ((packedGce >> 2) & 0x07) === 3,
-            transparent: (packedGce & 0x01) === 1,
-          };
+          gce = { disposal: (body.readUInt8(0) >> 2) & 0x07 };
           at += 5;
 
           if (byteAt(gif, at, 'graphic-control terminator') !== 0) {
@@ -580,8 +580,8 @@ describe('the README demo film', () => {
     }
   }
 
-  /** The self-contained-frame invariant as named reasons — the same check
-   *  the shipped film and the negative fixtures are held to. */
+  /** GIF's self-consistency invariant as named reasons — the same check the
+   *  shipped film and the negative fixtures are held to. */
   function selfContained(film: Film): string[] {
     const problems: string[] = [];
     const [base] = film.frames;
@@ -591,16 +591,12 @@ describe('the README demo film', () => {
       problems.push('the first frame must paint the whole canvas, or frame one shows through');
     }
 
-    if (film.frames.some((frame) => frame.restores)) {
-      problems.push('restore-to-previous frames composite every earlier state into the current one');
+    if (film.frames.some((frame) => frame.disposal === 2 || frame.disposal === 3)) {
+      problems.push('a restore disposal rewrites pixels the frame does not carry');
     }
 
-    if (film.frames.some((frame) => frame.transparent)) {
-      problems.push('transparent pixels let the frame beneath bleed through');
-    }
-
-    if (film.frames.some((f) => f.x !== 0 || f.y !== 0 || f.width !== film.width || f.height !== film.height)) {
-      problems.push('a cropped or offset frame depends on the one beneath it');
+    if (film.frames.some((f) => f.x < 0 || f.y < 0 || f.x + f.width > film.width || f.y + f.height > film.height)) {
+      problems.push('a frame paints outside the canvas');
     }
 
     return problems;
@@ -611,12 +607,10 @@ describe('the README demo film', () => {
   test('the film is an animated GIF that loops forever', () => {
     expect(film.frames.length, 'a film needs more than one frame').toBeGreaterThan(1);
     expect(film.loops, 'the film stops instead of looping').toBe(0);
-    // Full opaque frames pay more than transdiff's differencing — 5 MB is
-    // still the heaviest asset on the README by an order of magnitude.
-    expect(FILM.byteLength, 'the README film exceeds 5 MB').toBeLessThan(5_000_000);
+    expect(FILM.byteLength, 'the README film exceeds 2.5 MB').toBeLessThan(2_500_000);
   });
 
-  test('every frame paints the whole canvas with no transparency', () => {
+  test('no frame can smear the one before it', () => {
     expect(selfContained(film)).toEqual([]);
   });
 
@@ -631,9 +625,12 @@ describe('the README demo film', () => {
       .toBeLessThan(README.indexOf('## Using it'));
   });
 
-  /** A minimal well-formed GIF89a: 2x2 canvas, global palette of 2, then the
-   *  one-frame image stream the caller composes around. */
-  function fixtureGif(frame: { gce?: { transparent?: boolean; disposal?: number }; x?: number; y?: number; w?: number; h?: number }): Buffer {
+  /** Minimal well-formed GIF89a frames on a 2x2 canvas with a two-colour
+   *  global palette — one descriptor per entry, each with its own optional
+   *  graphic-control extension. */
+  function fixtureGif(
+    ...frames: { gce?: { transparent?: boolean; disposal?: number }; x?: number; y?: number; w?: number; h?: number }[]
+  ): Buffer {
     const head = Buffer.from([
       0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
       0x02, 0x00, 0x02, 0x00, // 2x2 canvas
@@ -641,23 +638,24 @@ describe('the README demo film', () => {
       0x00, 0x00, 0x00, 0xff, 0xff, 0xff, // palette
     ]);
 
-    const gce = frame.gce === undefined ? Buffer.alloc(0) : Buffer.from([
-      0x21, 0xf9, 0x04,
-      ((frame.gce.disposal ?? 0) << 2) | (frame.gce.transparent === true ? 1 : 0),
-      0x0a, 0x00, // 10cs delay
-      0x00, // transparent index
-      0x00,
-    ]);
+    const parts = frames.map((frame) => Buffer.concat([
+      frame.gce === undefined ? Buffer.alloc(0) : Buffer.from([
+        0x21, 0xf9, 0x04,
+        ((frame.gce.disposal ?? 0) << 2) | (frame.gce.transparent === true ? 1 : 0),
+        0x0a, 0x00, // 10cs delay
+        0x00, // transparent index
+        0x00,
+      ]),
+      Buffer.from([
+        0x2c,
+        frame.x ?? 0, 0x00, frame.y ?? 0, 0x00, // left, top
+        frame.w ?? 2, 0x00, frame.h ?? 2, 0x00, // width, height
+        0x00, // no local table
+        0x02, 0x02, 0x44, 0x01, 0x00, // LZW stream
+      ]),
+    ]));
 
-    const image = Buffer.from([
-      0x2c,
-      frame.x ?? 0, 0x00, frame.y ?? 0, 0x00, // left, top
-      frame.w ?? 2, 0x00, frame.h ?? 2, 0x00, // width, height
-      0x00, // no local table
-      0x02, 0x02, 0x44, 0x01, 0x00, // LZW stream
-    ]);
-
-    return Buffer.concat([head, gce, image, Buffer.from([0x3b])]);
+    return Buffer.concat([head, ...parts, Buffer.from([0x3b])]);
   }
 
   test('the parser throws promptly on truncated, untrailered, or malformed input', () => {
@@ -674,16 +672,25 @@ describe('the README demo film', () => {
     expect(() => readFilm(badGce), 'a malformed GCE must throw').toThrow('graphic-control');
   });
 
-  test('the self-contained invariant fails transparency at frame 0 and a cropped frame', () => {
-    const transparentFirst = readFilm(fixtureGif({ gce: { transparent: true } }));
-    expect(selfContained(transparentFirst)).toEqual([
-      'transparent pixels let the frame beneath bleed through',
+  test('the self-consistency invariant fails restore disposals and out-of-canvas frames', () => {
+    const restoring = readFilm(fixtureGif({}, { gce: { disposal: 3 } }));
+    expect(selfContained(restoring)).toEqual([
+      'a restore disposal rewrites pixels the frame does not carry',
     ]);
 
-    const cropped = readFilm(fixtureGif({ x: 1, y: 0, w: 1, h: 2 }));
-    expect(selfContained(cropped)).toEqual([
+    const blanking = readFilm(fixtureGif({}, { gce: { disposal: 2 } }));
+    expect(selfContained(blanking)).toEqual([
+      'a restore disposal rewrites pixels the frame does not carry',
+    ]);
+
+    const croppedBase = readFilm(fixtureGif({ x: 1, y: 0, w: 1, h: 2 }));
+    expect(selfContained(croppedBase)).toEqual([
       'the first frame must paint the whole canvas, or frame one shows through',
-      'a cropped or offset frame depends on the one beneath it',
+    ]);
+
+    const escaping = readFilm(fixtureGif({}, { x: 1, y: 0, w: 2, h: 2 }));
+    expect(selfContained(escaping)).toEqual([
+      'a frame paints outside the canvas',
     ]);
   });
 });
