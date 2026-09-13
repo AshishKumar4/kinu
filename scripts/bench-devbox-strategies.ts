@@ -115,6 +115,7 @@ import {
  */
 interface ChainGeneration {
   readonly baseId: string | null;
+  readonly deltaId?: string | null;
   readonly hasDelta: boolean;
   readonly rev: number | null;
 }
@@ -205,6 +206,7 @@ function chainGenerationFromState(reply: StateReply): ChainGeneration {
 
   return {
     baseId: chain?.base?.id ?? null,
+    deltaId: chain?.delta?.id ?? null,
     hasDelta: chain?.delta !== undefined && chain?.delta !== null,
     rev: chain?.rev ?? null,
   };
@@ -1841,6 +1843,10 @@ async function postBoundedHttps(
 
 const STARTUP_POLL_INTERVAL_MS = 250;
 
+/** Observer ceiling settled by the bounded block-attach runs on 2026-09-13.
+ * This ends measurement, not the product's restore or container-start budget. */
+export const CELL_STARTUP_MS = 55_000;
+
 
 
 export interface StartupRecord {
@@ -1979,12 +1985,8 @@ export async function pollForAttach(
   allowedKinds: readonly string[],
   bounds: StartupBounds = {},
 ): Promise<StartupPoll> {
-  // UNBOUNDED BY DEFAULT, because the benchmark's own budget is the container
-  // start budget and a poll that gave up early would report a refusal the box
-  // never made. A caller whose SUBJECT is the wait — the deployed lifecycle
-  // suite, whose oracle is a settle ceiling — supplies its own deadline and
-  // gets a refusal naming the last reading instead of a poll nobody stops.
-  const deadline = bounds.deadlineMs === undefined ? null : Date.now() + bounds.deadlineMs;
+  bounds = { deadlineMs: CELL_STARTUP_MS, ...bounds };
+  const deadline = Date.now() + (bounds.deadlineMs ?? CELL_STARTUP_MS);
   let redrives = 0;
   let lastReading = 'no /state reply has been decoded yet';
   /** The one drive in flight, HELD rather than floated: the loop that started
@@ -2089,6 +2091,7 @@ export async function startupOperation(
   bounds: StartupBounds = {},
 ): Promise<StartupCompletion> {
   const started = Date.now();
+  bounds = { deadlineMs: CELL_STARTUP_MS, ...bounds };
   // THE CALLER'S CEILING COVERS THE KICK TOO. The capacity retry below is
   // unbounded by design for the benchmark, and a bounded caller that inherited
   // it spent its whole window re-kicking a box that never admitted a container
@@ -2127,7 +2130,8 @@ export async function startupOperation(
     await delay(15_000);
   }
 
-  const attached = await pollForAttach(fixture, box, operation, allowedKinds, bounds);
+  const attached = await pollForAttach(fixture, box, operation, allowedKinds,
+    { ...bounds, deadlineMs: Math.max(0, (deadline ?? started + CELL_STARTUP_MS) - Date.now()) });
 
   return { ...attached, ms: Date.now() - started, startedAt: started };
 }
@@ -3126,8 +3130,8 @@ export interface WitnessCheck {
   readonly detail: string;
 }
 
-/** The normal run requires chunked absorption and observes the mutable delta.
- * Full-upper and stuck-sidecar collapse remain explicit layered-profile tests.
+/** The normal run requires composed restore and immutable delta publication.
+ * Legacy full-upper collapse remains an explicit layered-profile test.
  * The profile is fixed before the run, never selected from its observations. */
 const PREREGISTERED_WITNESSES = {
   'snapshot-chain': ['mutable-delta', 'chunked-absorption'],
@@ -3145,6 +3149,8 @@ export interface ChunkedAbsorptionFacts {
   readonly markerInMerged: FileObservation | null;
   readonly markerInUpper: FileObservation | null;
   readonly sidecarMounted: boolean | null;
+  readonly blockMounted: boolean | null;
+  readonly blockReads: BlockAttachMetrics | null;
   readonly mounts: ExecReply | null;
   readonly before: string | null;
   readonly after: string | null;
@@ -3200,18 +3206,20 @@ export interface ControlWitnessFacts {
   };
   readonly mutableDelta?: {
     readonly key: string;
+    readonly previousKey: string;
     readonly etagBefore: string;
     readonly etagAfter: string;
     readonly bytesBefore: number;
     readonly bytesAfter: number;
+    readonly retainedHead: HeadReply;
+    readonly beforeState: StateReply;
+    readonly afterState: StateReply;
+    readonly checkpoint: CheckpointReply;
   };
 }
 
-/** The chunked-absorption witness: the marker committed into a delta reads
- *  back through the merged view AND sits inside the published upper — the
- *  chunked manifest was absorbed rather than copied to the store as one whole
- *  object. A cell that produced no facts proves nothing and answers
- *  unobserved. */
+/** A committed marker reads through the composed lower on a new boot, stays
+ * out of the fresh upper, and attaches without payload or index-page reads. */
 function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | undefined): WitnessCheck {
   if (cell === undefined) return absentCell(name);
 
@@ -3222,18 +3230,30 @@ function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | u
   const merged = cell.markerInMerged?.path === `${DEVBOX_WORK_DIR}/${cell.markerPath}`
     && witnessMatches(cell.markerInMerged, cell.markerDigest) === true;
 
-  const upper = cell.markerInUpper?.path === `${CHAIN_UPPER_DIR}/${cell.markerPath}`
-    && witnessMatches(cell.markerInUpper, cell.markerDigest) === true;
+  const upperAbsent = cell.markerInUpper?.path === `${CHAIN_UPPER_DIR}/${cell.markerPath}`
+    && cell.markerInUpper.error === null && cell.markerInUpper.reply?.ok === true
+    && cell.markerInUpper.reply.exitCode === 0 && cell.markerInUpper.evidence?.kind === 'missing';
 
-  const observed = manifest && merged && upper && cell.sidecarMounted === false
+  const boot = cell.wake?.state.state?.bootId;
+
+  const cold = boot !== undefined && cell.beforeState?.state?.bootId !== undefined
+    && boot !== cell.beforeState.state.bootId && cell.wake?.attach.kind === 'attached'
+    && cell.wake.state.state?.chain?.deltaFormat === 'chunked';
+
+  const zeroPayload = cell.blockReads !== null && cell.blockReads.payloadBytes === 0
+    && cell.blockReads.indexPages === 0 && cell.blockReads.readRequests === 0;
+
+  const observed = manifest && merged && upperAbsent && cold && zeroPayload
+    && cell.sidecarMounted === true && cell.blockMounted === true
     && cell.mounts?.ok === true && cell.mounts.exitCode === 0
     && cell.before !== null && cell.after === cell.before && cell.afterNamesDelta === true
     && cell.nextCheckpoint?.ok === true && cell.nextCheckpoint.outcome?.kind === 'committed';
 
   return {
     name, observed,
-    detail: `chunked manifest ${manifest ? 'confirmed' : 'unobserved'}; marker merged=${merged} upper=${upper}; `
-      + `sidecar mounted=${String(cell.sidecarMounted)}; next checkpoint=${cell.nextCheckpoint?.outcome?.kind ?? 'unobserved'}; `
+    detail: `chunked manifest ${manifest ? 'confirmed' : 'unobserved'}; marker merged=${merged} upper absent=${upperAbsent}; `
+      + `cold=${cold} sidecar mounted=${String(cell.sidecarMounted)} block mounted=${String(cell.blockMounted)} zero attach payload=${zeroPayload}; `
+      + `next checkpoint=${cell.nextCheckpoint?.outcome?.kind ?? 'unobserved'}; `
       + `generation ${cell.before ?? 'unobserved'} to ${cell.after ?? 'unobserved'}`,
   };
 }
@@ -3279,24 +3299,36 @@ function deltaLayerCollapseWitness(
   };
 }
 
-/** The mutable-delta witness: one store key was rewritten in place — a
- *  non-empty etag before and after, and the two etags differ. */
+/** The historical witness name now requires two immutable objects and a
+ * CAS-published record advance. A retained mounted key must not change. */
 function mutableDeltaWitness(
   name: string,
   cell: NonNullable<ControlWitnessFacts['mutableDelta']> | undefined,
 ): WitnessCheck {
   if (cell === undefined) return absentCell(name);
 
-  const rewritten = cell.etagBefore.length > 0
-    && cell.etagAfter.length > 0
-    && cell.etagBefore !== cell.etagAfter;
+  const before = cell.beforeState.state?.chain;
+  const after = cell.afterState.state?.chain;
+
+  const preserved = cell.etagBefore.length > 0 && cell.retainedHead.ok === true
+    && cell.retainedHead.exists === true && cell.retainedHead.etag === cell.etagBefore
+    && cell.retainedHead.size === cell.bytesBefore && cell.bytesBefore > 0;
+
+  const advanced = before?.rev !== undefined && after?.rev === before.rev + 1
+    && before.base?.id !== undefined && after.base?.id === before.base.id
+    && before.delta?.id !== undefined && after.delta?.id !== undefined
+    && before.delta.id !== after.delta.id
+    && cell.previousKey === `${cell.beforeState.storePrefix ?? ''}backups/${before.delta.id}/delta.sqsh`
+    && cell.key === `${cell.afterState.storePrefix ?? ''}backups/${after.delta.id}/delta.sqsh`
+    && cell.key !== cell.previousKey && cell.etagAfter.length > 0 && cell.bytesAfter > 0
+    && cell.checkpoint.ok === true && cell.checkpoint.outcome?.kind === 'committed';
 
   return {
     name,
-    observed: cell.key.length > 0 && rewritten,
-    detail: `${cell.key}: ${cell.bytesBefore}B etag ${cell.etagBefore || '(none)'} then `
-      + `${cell.bytesAfter}B etag ${cell.etagAfter || '(none)'} — one key, `
-      + `${rewritten ? 'rewritten in place' : 'NOT rewritten'}`,
+    observed: preserved && advanced,
+    detail: `${cell.previousKey}: ${cell.bytesBefore}B etag ${cell.etagBefore || '(none)'} `
+      + `retained unchanged=${preserved}; new key ${cell.key}: ${cell.bytesAfter}B etag ${cell.etagAfter || '(none)'}; `
+      + `record rev ${before?.rev ?? 'unobserved'} to ${after?.rev ?? 'unobserved'}, advanced=${advanced}`,
   };
 }
 
@@ -3464,27 +3496,32 @@ async function runControlWitnessCells(
   const headKey = async (key: string): Promise<HeadReply> =>
     await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
 
-  // MUTABLE-DELTA FIRST, and the order is load-bearing: the collapse cell
-  // below drops this arm's measured trees and recycles the box, so running it
-  // first would leave this cell comparing two heads of a generation that had
-  // just been superseded.
+  // Pin the first archive in a live mount, so the next publication's sweep
+  // must retain it and its exact pre-publication etag remains observable.
   await cell('mutable-delta', async () => {
     const before = await deltaAfterOneChange(fixture, box, 'a');
+    await destroyBox(fixture, box);
+    await startupOperation(fixture, box, '/wake', 'immutable-delta retained mount', ['attached']);
     const after = await deltaAfterOneChange(fixture, box, 'b');
 
     if (before.chainId !== after.chainId) {
       throw new Error(
         `the chain rebased between the two heads (${before.chainId} then ${after.chainId}), so the `
-        + 'cell compared two generations rather than one key',
+        + 'cell compared two bases rather than successive immutable deltas',
       );
     }
 
     facts.mutableDelta = {
       key: after.key,
+      previousKey: before.key,
       etagBefore: before.etag,
       etagAfter: after.etag,
       bytesBefore: before.bytes,
       bytesAfter: after.bytes,
+      retainedHead: await headKey(before.key),
+      beforeState: before.state,
+      afterState: after.state,
+      checkpoint: after.checkpoint,
     };
   });
   // Priced workloads are finished. Publish a small marker delta, then destroy
@@ -3497,7 +3534,7 @@ async function runControlWitnessCells(
     const sample: ChunkedAbsorptionSample = {
       markerPath: markerFile, markerDigest: createHash('sha256').update(marker).digest('hex'),
       manifest: null, manifestRead: null, markerInMerged: null, markerInUpper: null,
-      sidecarMounted: null, mounts: null, before: null, after: null, afterNamesDelta: null,
+      sidecarMounted: null, blockMounted: null, blockReads: null, mounts: null, before: null, after: null, afterNamesDelta: null,
       nextCheckpoint: null, wake: null, errors,
     };
 
@@ -3530,10 +3567,13 @@ async function runControlWitnessCells(
 
     if (chainId === undefined || !/^[a-zA-Z0-9-]+$/.test(chainId)) throw new Error('the committed chain id is missing or invalid');
     sample.before = chainId;
-    sample.deltaHead = await headKey(`${sample.beforeState.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
+    const deltaId = sample.beforeState.state?.chain?.delta?.id;
+
+    if (deltaId === undefined || !/^[a-zA-Z0-9-]+$/.test(deltaId)) throw new Error('the committed delta id is missing or invalid');
+    sample.deltaHead = await headKey(`${sample.beforeState.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`);
     const manifestPoint = `${dirname(CHAIN_UPPER_DIR)}/witness-manifest`;
     sample.manifestRead = await execInBox(fixture, box,
-      `mkdir -p '${manifestPoint}' && squashfuse '${CHAIN_STORE_MOUNT_DIR}/${chainId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
+      `mkdir -p '${manifestPoint}' && devbox-squashfuse '${CHAIN_STORE_MOUNT_DIR}/${deltaId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
 
     if (sample.manifestRead.ok === true && sample.manifestRead.exitCode === 0 && sample.manifestRead.stdout !== undefined) {
       try {
@@ -3552,10 +3592,13 @@ async function runControlWitnessCells(
     const startupObservations: StartupObservation[] = [];
     sample.startupObservations = startupObservations;
     sample.wake = await startupOperation(fixture, box, '/wake', 'chunked-absorption wake', ['attached'], { observations: startupObservations });
+    sample.blockReads = await readBlockAttachMetrics(fixture, box);
     sample.mounts = await execInBox(fixture, box, 'cat /proc/mounts');
 
     if (sample.mounts.ok === true && sample.mounts.exitCode === 0 && sample.mounts.stdout !== undefined) {
       sample.sidecarMounted = mountAt(sample.mounts.stdout, `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null;
+      const block = mountAt(sample.mounts.stdout, `${dirname(CHAIN_UPPER_DIR)}/block-lower`);
+      sample.blockMounted = block?.fstype === 'fuse';
     }
 
     sample.markerInMerged = await readBoxFile(fixture, box, `${DEVBOX_WORK_DIR}/${markerFile}`);
@@ -3563,7 +3606,7 @@ async function runControlWitnessCells(
 
     // A new write makes the next publication observable rather than a no-op.
     await execInBox(
-      fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-collapse.txt && sync`,
+      fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
     );
     await delay(MIN_CHECKPOINT_INTERVAL_MS);
     sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
@@ -3780,7 +3823,7 @@ async function readChainCutCell(
     ? null : gen.baseId !== null && gen.baseId.length > 0;
 
   const rows = recordPresent && gen.baseId !== null
-    ? chainArchiveExpectations(gen.baseId, gen.hasDelta, prefix)
+    ? chainArchiveExpectations(gen.baseId, gen.deltaId ?? undefined, prefix)
     : [];
 
   const baseRow = rows[0];
@@ -3809,6 +3852,8 @@ async function readChainCutCell(
 
   const facts: ChainCutFacts = {
     recordPresent,
+    preDeltaId: chainPre?.deltaId ?? null,
+    postDeltaId: gen.deltaId ?? null,
     preBaseId: chainPre?.baseId ?? null,
     preHasDelta: chainPre?.hasDelta ?? false,
     preRev: chainPre?.rev ?? null,
@@ -3934,7 +3979,7 @@ async function runFaultCutCell(
   let chainPreDeltaEtag: string | null = null;
 
   if (chainPre.hasDelta && chainPre.baseId !== null) {
-    const preRows = chainArchiveExpectations(chainPre.baseId, true, prefix);
+    const preRows = chainArchiveExpectations(chainPre.baseId, chainPre.deltaId ?? undefined, prefix);
     const preDelta = preRows[1];
 
     if (preDelta !== undefined) {
@@ -3991,21 +4036,24 @@ async function deltaAfterOneChange(
   fixture: Fixture,
   box: string,
   label: string,
-): Promise<{ chainId: string; key: string; etag: string; bytes: number }> {
+): Promise<{ chainId: string; key: string; etag: string; bytes: number; state: StateReply; checkpoint: CheckpointReply }> {
   await execInBox(fixture, box, `printf %s mutable-delta-${label} > /workspace/witness-delta-${label}.txt && sync`);
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
-  await checkpointOperation(fixture, box, 'tick', `mutable-delta cell ${label}`);
+  const checkpoint = await checkpointOperation(fixture, box, 'tick', `mutable-delta cell ${label}`);
   const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
   const chainId = state.state?.chain?.base?.id ?? '';
 
   if (chainId.length === 0) throw new Error('/state reported no chain generation');
-  const key = `${state.storePrefix ?? ''}backups/${chainId}/delta.sqsh`;
+  const deltaId = state.state?.chain?.delta?.id;
+
+  if (deltaId === undefined) throw new Error('/state reported no immutable delta identity');
+  const key = `${state.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`;
 
   const head = await call(
     fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
   );
 
-  return { chainId, key, etag: head.etag ?? '', bytes: head.size ?? 0 };
+  return { chainId, key, etag: head.etag ?? '', bytes: head.size ?? 0, state, checkpoint };
 }
 
 /**
@@ -4035,7 +4083,7 @@ export interface ChainArchiveExpectation {
 
 export function chainArchiveExpectations(
   chainId: string | undefined,
-  recordNamesDelta: boolean,
+  deltaId: string | undefined,
   /** The box's own store prefix, as `/state` reports it (`boxes/<id>/`). Chain
    *  generations live under it — one prefix per box rather than a namespace
    *  shared by every box — so a key built without it names nothing. */
@@ -4050,10 +4098,10 @@ export function chainArchiveExpectations(
       key: `${root}/data.sqsh`,
       present: true,
     },
-    recordNamesDelta
+    deltaId !== undefined
       ? {
           name: 'the delta object the record names exists in the store with non-zero size',
-          key: `${root}/delta.sqsh`,
+          key: `${storePrefix}backups/${deltaId}/delta.sqsh`,
           present: true,
         }
       : {
@@ -4933,7 +4981,7 @@ async function measureArm(
 
     const expectations = chainArchiveExpectations(
       chain?.base?.id,
-      chain?.delta !== undefined && chain?.delta !== null,
+      chain?.delta?.id,
       afterWake.storePrefix ?? '',
     );
 
@@ -6515,6 +6563,7 @@ export function verifyRestoreBound(
  */
 const WAKE_MOUNT_POINTS: readonly string[] = [
   DEVBOX_WORK_DIR, CHAIN_STORE_MOUNT_DIR, CHAIN_LOWER_BASE_DIR, CHAIN_DELTA_LAYER_ROOT,
+  `${dirname(CHAIN_UPPER_DIR)}/block-lower`,
 ];
 
 /**
@@ -6638,7 +6687,7 @@ export interface CutJudgment {
  */
 const CHAIN_SERVED_PATTERN = /^chain \S+ \d+B (.+)$/;
 
-const CHAIN_SERVED_WORDS = ['base', 'base+delta already in this upper', 'base+delta absorbed into the upper', 'base+delta layered'] as const;
+const CHAIN_SERVED_WORDS = ['base', 'base+delta already in this upper', 'base+delta block-composed', 'base+delta layered'] as const;
 
 /** The served word of a chain attach detail, or null when the detail speaks
  *  an shape the judges do not cover — a fallback path, or a rewording. */
@@ -6648,6 +6697,8 @@ export function chainServedWord(detail: string): string | null {
 
 export interface ChainCutFacts {
   readonly recordPresent: boolean | null;
+  readonly preDeltaId: string | null;
+  readonly postDeltaId: string | null;
   readonly preBaseId: string | null;
   readonly preHasDelta: boolean;
   readonly preRev: number | null;
@@ -6673,13 +6724,13 @@ function cutObservationsMissing(facts: ChainCutFacts): boolean {
   return facts.recordPresent === null || facts.observersComplete === false
     || facts.unexpectedDelta === null || facts.cutMarkerPresent === null || facts.baseExists === null
     || facts.preRev === null || facts.postRev === null
-    || (facts.preHasDelta && facts.preDeltaEtag === null)
-    || (facts.postHasDelta && (facts.postDeltaEtag === null || facts.deltaExists === null));
+    || (facts.preHasDelta && (facts.preDeltaId === null || facts.preDeltaEtag === null))
+    || (facts.postHasDelta && (facts.postDeltaId === null || facts.postDeltaEtag === null || facts.deltaExists === null));
 }
 
 /**
  * Judge a chain cut. The record is append-only-forward (`rev` monotonic), the
- * delta object is replaced atomically, and the cut wake serves a fresh upper —
+ * delta object is immutable, and the cut wake serves a fresh upper —
  * so an unchanged record with the cut marker present is bytes no commit
  * names, and a moved record serving the marker over existing archives is new.
  */
@@ -6700,8 +6751,13 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
 
   const changed = facts.preBaseId !== facts.postBaseId
     || facts.preHasDelta !== facts.postHasDelta
-    || facts.preDeltaEtag !== facts.postDeltaEtag
+    || facts.preDeltaId !== facts.postDeltaId
     || (facts.preRev !== null && facts.postRev !== null && facts.preRev !== facts.postRev);
+
+  const rewritten = facts.preHasDelta && facts.postHasDelta
+    && facts.preDeltaId === facts.postDeltaId && facts.preDeltaEtag !== facts.postDeltaEtag;
+
+  const movedWithoutRevision = changed && facts.preRev === facts.postRev;
 
   const servedKnown = facts.servedWord !== null && CHAIN_SERVED_WORDS.some((word) => word === facts.servedWord);
   let verdict: CutVerdict;
@@ -6716,6 +6772,9 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
   } else if (!facts.baseExists || (facts.postHasDelta && facts.deltaExists === false)) {
     verdict = 'mixed';
     note = 'a named archive is missing or empty';
+  } else if (rewritten || movedWithoutRevision) {
+    verdict = 'mixed';
+    note = rewritten ? 'an immutable delta key was rewritten' : 'the record changed without a CAS revision advance';
   } else if (!changed && facts.cutMarkerPresent) {
     verdict = 'mixed';
     note = 'the cut marker is served but the record never moved: bytes no commit names';
