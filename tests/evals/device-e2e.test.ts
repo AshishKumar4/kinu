@@ -135,6 +135,7 @@ describe('the daemon is installed under a throwaway home, never the developer\'s
     // every `*.eval.ts` process falls back to `~/.kinu`, where this arm would
     // install a daemon and overwrite a live device credential.
     expect(evalsConfig.test?.setupFiles).toContain('./scripts/test-preload-vitest.ts');
+    expect(evalsConfig.plugins).toContainEqual(expect.objectContaining({ name: 'kinu:prompt-text' }));
   });
 });
 

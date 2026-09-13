@@ -60,6 +60,12 @@
     "claimed_at",
     "settled_at"
   ],
+  "actor_turn_inputs@packages/core/src/orchestrator/actor-claims.ts": [
+    "actor_id",
+    "request_id",
+    "message_ids",
+    "settled"
+  ],
   "actor_working_revisions@packages/core/src/orchestrator/working-context.ts": [
     "actor_id",
     "revision",

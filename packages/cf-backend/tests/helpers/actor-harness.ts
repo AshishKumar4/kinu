@@ -86,6 +86,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
   }
   observeRawTools(): ToolSet { return this.getRawTools(); }
+
+  harnessAdmitChat(trigger = 'ws-chat'): void {
+    this._emit('chat:turn:start', { requestId: 'harness-admitted', trigger, admission: 'queue' });
+  }
   /** The head-stream broadcaster, which is `protected` because only this
    *  actor's own reporters call it — `reportNodeDelta` and the exploration
    *  seams' `publishDelta`. Exposed so a suite asserting what a client

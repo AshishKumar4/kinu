@@ -61,6 +61,7 @@
  * probes in vitest.config.ts.
  */
 import { Agent, getAgentByName } from 'agents';
+import { subscribe } from 'agents/observability';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
@@ -81,6 +82,7 @@ import type {
   DriveOnceResult,
   ExerciseResult,
   HttpCall,
+  QueueProbeMode,
 } from './two-turn-shapes';
 import {
   DriveOnceInputSchema,
@@ -238,6 +240,11 @@ export class FakeAI extends WorkerEntrypoint {
 }
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
+
+type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>;
+
+const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
 /** The drive result shapes live in `./two-turn-shapes` — same schemas, same
  *  InferOutput types, but importable from the workerd typecheck project,
@@ -457,6 +464,116 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Clear the HTTP log before a drive, so each test's wire proof is its own. */
   async httpReset(): Promise<void> {
     await fetch('http://probe-control.invalid/reset', { method: 'POST' });
+  }
+
+  /** Real socket intake and Think queue; only the remote model response is
+   * held. Peer ingress queues a durable event-drain submission while both
+   * socket inputs are pending, so its inherited lastBody belongs to B. */
+  async queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]> {
+    const workspace = `queue-${mode}-workspace`;
+    const owner = `queue-${mode}-owner`;
+
+    const target: QueueTarget = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
+      this.env.OrchestratorAgent, workspace,
+    );
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Queue Probe');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-queue');
+    await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST' });
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    const submission = Promise.withResolvers<void>();
+
+    const unsubscribe = subscribe('message', (event) => {
+      if (event.name === workspace && event.type === 'submission:status' && event.payload.status === 'running') {
+        submission.resolve();
+      }
+    });
+
+    let socket: WebSocket | null = null;
+
+    try {
+      const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+        headers: { Upgrade: 'websocket' },
+      }));
+
+      socket = response.webSocket;
+
+      if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
+      socket.accept();
+
+      const send = async (text: string): Promise<void> => {
+        if (socket === null) throw new Error('queue probe socket is closed');
+        socket.send(JSON.stringify({
+          type: 'cf_agent_use_chat_request', id: text,
+          init: { method: 'POST', body: JSON.stringify({
+            messages: [{ id: `input-${text}`, role: 'user', parts: [{ type: 'text', text }] }],
+            trigger: 'submit-message',
+          }) },
+        }));
+        const began = Date.now();
+
+        for (;;) {
+          const response = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+          const history = v.parse(SocketHistorySchema, await response.json());
+
+          if (history.some((row) => row.role === 'user' && row.id === `input-${text}`)) break;
+
+          if (Date.now() - began > 20000) throw new Error(`socket input ${text} was not persisted`);
+          await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        }
+      };
+
+      if (mode === 'yield') {
+        await send('QUEUE-OWNER');
+        await fetch('http://probe-control.invalid/queue/arrived');
+        await target.beginGenesisTurn();
+      } else {
+        const genesis = await target.beginGenesisTurn();
+
+        if (!genesis.started) throw new Error('queue probe genesis did not start');
+        await fetch('http://probe-control.invalid/queue/arrived');
+        await send('QUEUE-A');
+        await send('QUEUE-B');
+      }
+
+      if (mode === 'peer') {
+        const peer = await target.receivePeerMessage({
+          sender_event_id: 'queue-peer-input', sender_agent_name: 'queue-peer', sender_user_id: owner,
+          topic: 'queue-probe', body: 'QUEUE-PROGRAMMATIC', mode: 'build', reply_expected: false,
+        });
+
+        if (!peer.admitted) throw new Error(`queue probe peer input refused: ${peer.reason}`);
+        await submission.promise;
+        await send('QUEUE-C');
+      }
+
+      if (mode === 'signal') await target.runTaskFromMcp('QUEUE-PROGRAMMATIC');
+
+      const heldCalls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
+
+      if (heldCalls.length !== 1) throw new Error('queued requests ran before the held genesis response was released');
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+
+      await awaitFactsCompressed(recording, { chat: 3, peer: 5, signal: 4, yield: 1 }[mode]);
+      await awaitQuiet(recording);
+
+      return await this.httpCalls();
+    } finally {
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      socket?.close(1000, 'queue probe complete');
+      unsubscribe();
+      restore();
+    }
   }
 
 

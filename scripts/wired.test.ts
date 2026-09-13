@@ -679,6 +679,16 @@ describe('entrypoint discovery', () => {
 /* ── The measurement cannot be quietly zero ────────────────────────────── */
 
 describe('the analysis refuses to shrink in silence', () => {
+  test('a root config resolves its relative helper from the repository root', () => {
+    const graph = buildGraph(new Map([
+      ['vitest.first-run.config.ts', "import { text } from './shared/text'; text();"],
+      ['shared/text.ts', "export function text() { return 'prompt'; }"],
+    ]));
+
+    expect(graph.dangling).toEqual([]);
+    expect(graph.modules.get('vitest.first-run.config.ts')?.edges).toEqual(['shared/text.ts']);
+  });
+
   test('an import that resolves to no file is fatal, not a dropped edge', () => {
     // A dropped edge makes a file unreachable and every export in it a finding.
     // The `@/*` alias was exactly this: 33 specifiers in one page, 3 resolved,

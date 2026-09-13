@@ -343,7 +343,7 @@ export interface FirstRunSession extends EpisodeEvidenceReader {
 }
 
 export interface FirstRunPlan<Session extends FirstRunSession> {
-  open(request: { subject: string; purpose: string }): Promise<Session>;
+  open(request: { subject: string; purpose: string; genesis?: boolean }): Promise<Session>;
 }
 
 export interface FirstRunRun<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
@@ -355,6 +355,8 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
   readonly id: FirstRunCase;
   /** The mission the REST create is given — what this workspace is FOR. */
   readonly purpose: string;
+  /** Omit the autonomous opening turn when the fixture needs an untouched fleet. */
+  readonly genesis?: boolean;
   /** Whether the case drives the model. `expected` fails the case when its
    *  store accounted for no call, because a green over zero calls is the
    *  vacuous tier this suite was rebuilt to remove; `none` records a measured
@@ -400,7 +402,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
 
   try {
     await withEpisodeEvidence(async () => {
-      opened = await plan.open({ subject: spec.id, purpose: spec.purpose });
+      opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
     }, { transcripts: TRANSCRIPTS, taskId: spec.id, modelCalls: spec.modelCalls }, async (session, collect) => {

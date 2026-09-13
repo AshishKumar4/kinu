@@ -48,6 +48,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -162,6 +163,13 @@ export interface ConsumedContext {
 }
 
 export function initActorClaimTables(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS actor_turn_inputs (
+    actor_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    message_ids TEXT NOT NULL,
+    settled INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (actor_id, request_id)
+  )`);
   execRaw(`CREATE TABLE IF NOT EXISTS actor_turn_claims (
     actor_id        TEXT NOT NULL,
     turn_id         TEXT NOT NULL,
@@ -275,6 +283,45 @@ export class ActorClaimStore {
    */
   get working(): ActorWorkingContextStore {
     return this.workingStore ??= new ActorWorkingContextStore(this.sql, this.actor, this.transactionSync);
+  }
+
+  recordInput(requestId: string, messageIds: readonly string[]): void {
+    this.actor.assertCurrent();
+    void this.sql`INSERT INTO actor_turn_inputs (actor_id, request_id, message_ids)
+      VALUES (${this.actorId}, ${requestId}, ${JSON.stringify(messageIds)})`;
+  }
+
+  requestForInput(messageId: string): string | null {
+    this.actor.assertCurrent();
+
+    return this.sql<{ request_id: string }>`SELECT request_id FROM actor_turn_inputs, json_each(message_ids)
+      WHERE actor_id = ${this.actorId} AND settled = 0 AND json_each.value = ${messageId} LIMIT 1`[0]?.request_id ?? null;
+  }
+
+  input(requestId: string): readonly string[] | null {
+    this.actor.assertCurrent();
+
+    const row = this.sql<{ message_ids: string }>`SELECT message_ids FROM actor_turn_inputs
+      WHERE actor_id = ${this.actorId} AND request_id = ${requestId} AND settled = 0`[0];
+
+    return row === undefined ? null : v.parse(v.array(v.string()), JSON.parse(row.message_ids));
+  }
+
+  settleInput(requestId: string): void {
+    this.actor.assertCurrent();
+    void this.sql`UPDATE actor_turn_inputs SET settled = 1
+      WHERE actor_id = ${this.actorId} AND request_id = ${requestId}`;
+  }
+
+  /** A delivery opens on the actor's settled working history, never on rows
+   * that another queued delivery has already persisted into the transcript. */
+  historyForInput(turnId: string, messages: readonly ModelMessage[], fallback: readonly ModelMessage[]): readonly ModelMessage[] {
+    const working = this.working.active();
+    const history = working?.messages ?? fallback;
+
+    if (this.read(turnId) !== null || working?.turnId === turnId) return history;
+
+    return [...history, ...messages];
   }
 
   /**

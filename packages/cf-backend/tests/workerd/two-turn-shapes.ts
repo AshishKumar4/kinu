@@ -102,6 +102,7 @@ export const HttpCallSchema = v.object({
   model: v.string(),
   stream: v.boolean(),
   users: v.array(v.string()),
+  conversation: v.array(v.object({ role: v.string(), content: v.string() })),
   authHeader: v.nullable(v.string()),
   offeredTools: v.array(v.string()),
   toolCalls: v.array(v.object({ id: v.string(), name: v.string() })),
@@ -109,6 +110,8 @@ export const HttpCallSchema = v.object({
 });
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
+
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield';
 
 export const ExerciseResultSchema = v.object({
   register: RegisterSchema,

@@ -73,6 +73,7 @@ describe('the first-run corpus is the set this tier runs', () => {
     // sweep the eval suites into a post-deploy tier that cannot pay for them.
     expect(firstRunConfig.test?.include).toEqual([FIRST_RUN_INCLUDE]);
     expect(FIRST_RUN_INCLUDE).toBe('tests/first-run/**/*.first-run.ts');
+    expect(firstRunConfig.plugins).toContainEqual(expect.objectContaining({ name: 'kinu:prompt-text' }));
 
     for (const file of onDisk) expect(file.startsWith('tests/first-run/')).toBe(true);
 

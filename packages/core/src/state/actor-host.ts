@@ -690,7 +690,9 @@ export function childContextResolver(deps: {
  * provide a resumable execution or prove that the turn finished. */
 export async function recoverActorTurns(
   host: Pick<ActorHost, 'resumable'> & {
-    acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores' | 'session'>>;
+    acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores'> & {
+      readonly session: Pick<ActorSession, 'inFlight'>;
+    }>;
   },
   limit?: number,
 ): Promise<{
@@ -719,6 +721,11 @@ export async function recoverActorTurns(
         (source) => sha256Hex(source),
         () => actor.stores.claims.consumedContext(turn.claim.turnId),
       );
+
+      if (actor.session.inFlight) {
+        active.push(turn.claim.turnId);
+        continue;
+      }
 
       if (verdict.kind === 'verified') {
         verified.push(turn.claim.turnId);

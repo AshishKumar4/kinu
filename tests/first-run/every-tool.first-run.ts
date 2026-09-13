@@ -24,6 +24,7 @@ import { BUILTIN_TOOLS, DEPS_GATED_TOOLS, type JsonValue, type RunEvent } from '
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { firstRunTurnEvents } from './turn-settlement';
 
 const SUITE = 'First-run · every-tool';
 
@@ -140,9 +141,8 @@ describe(SUITE, () => {
         const subgoals: EvalSubgoal[] = [];
 
         // ── Turn 1: the agent names what it sees, and touches nothing. ──────
-        const beforeList = (await session.runEvents()).filter(isToolCallEnd).length;
         await session.prompt(LIST_ASK);
-        const listedCalls = (await session.runEvents()).filter(isToolCallEnd).length - beforeList;
+        const listedCalls = firstRunTurnEvents(await session.runEvents(), LIST_ASK).filter(isToolCallEnd).length;
         const listed = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';
         const unseen = ROOT_TOOLS.filter((name) => !listed.includes(name));
 
