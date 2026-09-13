@@ -19,7 +19,7 @@ import {
 } from '@kinu.run/core';
 import { createWorkersAIProvider } from '../src/providers/workers-ai';
 import { createMyGatewayProvider } from '../src/providers/my-gateway';
-import { createAIGatewayProvider, resolvePlatformGateway } from '../src/providers/ai-gateway';
+import { createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
 
 const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({

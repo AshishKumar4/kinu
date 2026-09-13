@@ -57,13 +57,14 @@ import {
   ControlActionSchema, describeAction, runControlAction, UserIdSchema,
   type ActionEnv, type ActionIdentity,
 } from './actions';
-import { controlPlaneMetrics, type MetricsRequest } from './metrics';
+import { controlPlaneMetrics } from './metrics';
+import type { MetricsRequest } from '@kinu.run/core/control-plane';
 import type {
   AuditOutcome, AuditSettlement, ControlAuditRow, OperationMarker,
 } from './control-plane-do';
 import type {
   AuditDraft, RosterWorkspace, WorkspaceFilter,
-} from './store';
+} from '@kinu.run/core/control-plane';
 
 /** Bound on the per-workspace detail reads. Each is a separate Durable Object
  *  query and the panel shows a recent window, not a history — the history has

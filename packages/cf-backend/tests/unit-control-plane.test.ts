@@ -13,16 +13,17 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { Page, PageRequest } from '@kinu.run/core';
-import type { ControlPlaneSql } from '../src/control-plane/sql';
+import type { ControlPlaneSql } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 import type { AccessIdentity } from '../src/control-plane/access-gate';
 import {
   adminCaller, adminDenialStatus, authorizeAdmin as authorizeAdminGate, internalCaller,
   type AdminAuthorization, type AdminGateEnv,
 } from '../src/control-plane/admin-caller';
-import { requireControl } from '../src/control-plane/capability';
-import * as store from '../src/control-plane/store';
-import { MalformedCursorError } from '../src/control-plane/store';
+import { requireControl } from '@kinu.run/core/control-plane';
+import * as store from '@kinu.run/core/control-plane';
+import * as feedbackStore from '../src/control-plane/store';
+import { MalformedCursorError } from '@kinu.run/core/control-plane';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
@@ -474,7 +475,7 @@ describe('paging', () => {
     const auditIds: string[] = [];
 
     for (let i = 0; i < 5; i += 1) {
-      store.recordFeedback(sql, {
+      feedbackStore.recordFeedback(sql, {
         id: `f${String(i)}`, createdAt: 1_000 + i, userId: 'u1', email: 'a@x',
         note: `note ${String(i)}`, route: '/workspace/x', workspace: 'x',
         objectKey: null, contentType: null, bytes: null, userAgent: null,
@@ -486,7 +487,7 @@ describe('paging', () => {
       }, 1_000 + i).id);
     }
 
-    const feedback = store.listFeedback(sql, { limit: 2 });
+    const feedback = feedbackStore.listFeedback(sql, { limit: 2 });
     expect(feedback.status).toBe('more');
     expect(feedback.items.map((row) => row.id)).toEqual(['f4', 'f3']);
 
@@ -500,12 +501,12 @@ describe('paging', () => {
 describe('feedback rows', () => {
   test('a note-only report is a first-class row', () => {
     const { sql, close } = freshStore();
-    store.recordFeedback(sql, {
+    feedbackStore.recordFeedback(sql, {
       id: 'f1', createdAt: 1_000, userId: 'u1', email: 'a@x',
       note: 'the sidebar overlaps at 640px', route: '/workspace/alpha', workspace: 'alpha',
       objectKey: null, contentType: null, bytes: null, userAgent: 'Mozilla/5.0',
     });
-    const row = store.listFeedback(sql).items[0];
+    const row = feedbackStore.listFeedback(sql).items[0];
     expect(row?.objectKey).toBe(null);
     expect(row?.bytes).toBe(null);
     expect(row?.note).toBe('the sidebar overlaps at 640px');
@@ -514,13 +515,13 @@ describe('feedback rows', () => {
 
   test('the store declines to hold a row wider than its declared shape', () => {
     const { sql, close } = freshStore();
-    store.recordFeedback(sql, {
+    feedbackStore.recordFeedback(sql, {
       id: 'f2', createdAt: 1_000, userId: 'u1', email: 'a@x',
       note: 'x'.repeat(9_000), route: 'y'.repeat(2_000), workspace: null,
       objectKey: 'feedback/u1/f2.png', contentType: 'image/png', bytes: 12_345,
       userAgent: 'z'.repeat(2_000),
     });
-    const row = store.listFeedback(sql).items[0];
+    const row = feedbackStore.listFeedback(sql).items[0];
     expect(row?.note.length).toBe(4_000);
     expect(row?.route.length).toBe(512);
     expect(row?.userAgent?.length).toBe(512);
@@ -535,9 +536,9 @@ describe('feedback rows', () => {
       route: '/', workspace: null, objectKey: null, contentType: null, bytes: null, userAgent: null,
     };
 
-    store.recordFeedback(sql, row);
-    store.recordFeedback(sql, { ...row, note: 'twice' });
-    const rows = store.listFeedback(sql).items;
+    feedbackStore.recordFeedback(sql, row);
+    feedbackStore.recordFeedback(sql, { ...row, note: 'twice' });
+    const rows = feedbackStore.listFeedback(sql).items;
     expect(rows.length).toBe(1);
     expect(rows[0]?.note).toBe('once');
     close();

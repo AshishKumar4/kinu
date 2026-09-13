@@ -5,15 +5,14 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
-import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@kinu.run/core';
-import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
-import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
-import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
+
 import {
-  WORKERS_AI_FALLBACK_MODEL_CATALOG,
-  WORKERS_AI_PREFERRED_MODEL_IDS,
+  DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels,
+  createCloudflareAIFetch, createDirectWorkersAIFetch,
+  WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS,
   WORKERS_AI_REASONING_EFFORTS,
-} from './workers-ai-catalog';
+} from '@kinu.run/core';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 
 export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */

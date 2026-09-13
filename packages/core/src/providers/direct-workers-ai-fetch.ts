@@ -37,15 +37,11 @@
  * arrives once the answer is finished is a lie about latency, and it hid this
  * defect for as long as it was the fallback.
  */
-import {
-  JsonObjectSchema,
-  asFetchFunction,
-  toolCallIdFor,
-  withRateLimitRetry,
-  type JsonObject,
-  type RateLimitRetryOptions,
-} from '@kinu.run/core';
-import { diagnostics, renderCauseChain, toKinuError, tolerate } from '@kinu.run/core/obs';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { asFetchFunction } from './fetch-shim';
+import { toolCallIdFor } from './tool-call-id';
+import { withRateLimitRetry, type RateLimitRetryOptions } from './rate-limit-retry';
+import { diagnostics, renderCauseChain, toKinuError, tolerate } from '../obs/index';
 import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
@@ -135,7 +131,11 @@ export function createDirectWorkersAIFetch(
 
 function directWorkersAIFetch(binding: DirectWorkersAIRunner): typeof globalThis.fetch {
   return asFetchFunction(async (input, init) => {
-    const request = input instanceof Request ? input : new Request(input, init);
+    // `input` is narrowed to a string URL rather than passed as-is: ambient
+    // `Request` declarations that name a narrower first parameter (the
+    // workers-types one takes `Request | string`) reject the `string | URL`
+    // union this signature carries.
+    const request = input instanceof Request ? input : new Request(input instanceof URL ? input.href : input, init);
     const body = v.parse(JsonObjectSchema, JSON.parse(await request.text()));
     const route = v.parse(ChatCompletionRequestSchema, body);
 

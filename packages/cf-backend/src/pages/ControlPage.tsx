@@ -23,7 +23,7 @@ import {
   type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow, type ControlWorkspaceRow,
   type ReconcileReport,
 } from '../lib/control-api';
-import { METRICS_WINDOWS } from '../control-plane/metrics';
+import { METRICS_WINDOWS } from '@kinu.run/core/control-plane';
 import {
   bytes, Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';

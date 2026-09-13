@@ -12,14 +12,11 @@
 // logged-in user's account, and a binding call would silently move it here.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding, GatewayTarget } from '@kinu.run/core';
-import {
-  DEFAULT_WORKERS_AI_MODEL_SPEC,
-  createGatewayBindingFetch,
-  listModelsDevProviderModels,
-  parseGatewayTarget,
-  withRateLimitRetry,
-} from '@kinu.run/core';
+import type { ModelProvider, ModelInfo, ProviderEnv, WorkersAIBinding } from './types';
+import { createGatewayBindingFetch, parseGatewayTarget, type GatewayTarget } from './gateway-binding-fetch';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
+import { listModelsDevProviderModels } from './models-dev';
+import { withRateLimitRetry } from './rate-limit-retry';
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,

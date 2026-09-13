@@ -11,7 +11,7 @@
  * way (a second reader on the upstream acquires cleanly).
  */
 import { describe, test, expect } from 'bun:test';
-import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
+import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import type { JsonObject } from '@kinu.run/core';
 
 const encoder = new TextEncoder();

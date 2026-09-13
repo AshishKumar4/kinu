@@ -8,7 +8,7 @@ import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import { halfBornOrchestratorHarness, HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
 import type { UserCaller } from '@kinu.run/core';
-import type { PresentedCaller } from '../src/control-plane/capability';
+import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import type { AuthIdentity } from '../src/auth/session';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
