@@ -57,7 +57,8 @@ port wait runs outside the block with real timers. Probe source:
 ## Decisions
 
 D1. Admission is port-proven. The container-start path proves the control
-listener answers before the block opens, then restores inside the block.
+listener answers before calling the budgeted restore hook. D8 supersedes the
+input-block portion of this decision; the listener proof remains required.
 Decided 2026-09-09 (`6e96741cc`, "admit only through startAndWaitForPorts"),
 reversed 2026-09-09 (`bde0047cb`, on the mistaken premise that port 3000 was
 an app port), re-decided 2026-09-13 on P3. Status: rebuilding on
@@ -85,7 +86,8 @@ stack copies none. The sparse-inode counterexample still fails:
 or trigger its copy-up before lifecycle readiness. Publication stays D4.
 
 D3. `onStart` reaches the container only through the budgeted restore path
-after a port-proven start. `scripts/do-init-gate.ts` pins this. Its previous
+after a port-proven start, outside SDK input blocks (D8).
+`scripts/do-init-gate.ts` pins this. Its previous
 invariant (the hook reaches no container) enforced the withdrawn P2
 hypothesis and is replaced, with red fixtures in both directions.
 
@@ -161,6 +163,32 @@ The eager counterexamples `c3_attach_copies_the_whole_64mib_base` and
 `attach_materialization_has_no_constant_bound` are retired with the eager
 implementation. They do not describe v2 storage attach. No product deployment,
 full-hook latency guarantee or callback-only publication bound is claimed.
+
+D8. SDK input blocks contain storage work only. This supersedes D1/D3's
+in-block restore placement and the input-block part of R1, as authorized by
+the lifecycle-defect assignment on 2026-09-13. Restore still runs once per
+fresh container in the awaited `onStart` hook, after port-proven admission.
+Public operations join that hook's singleflight; status cannot report ready
+while it remains pending. Neither the restore budget nor the platform cap
+was increased.
+
+Control `b20260913105359` retained block/await entry and exit logs. The
+SDK's `container.js:641` block entered at 1789296874570; `setHealthy` at :643
+finished in 0 ms. Its `onStart` await at :644 and Devbox's boot-id
+`super.exec` at :3495 never exited. The next constructor appeared 30,650 ms
+later. All Devbox storage blocks exited. A second such SDK block held the
+same boot-id RPC during the sparse cell. Port proof permits the first RPC;
+it does not make subsequent RPC replies deliverable through a held DO input
+gate. The control lost its C3 witness file before baseline publication.
+
+The outside-block control `b20260913110816` completed its first two
+post-empty-attach execs in 117 and 67 ms. Its third repeated same-box start
+was refused with `stale-owner → retry`; this run is not full lifecycle
+acceptance. Raw source instrumentation and observations are under
+`bench-artifacts/block-attach/`. `scripts/do-init-block-bodies.test.ts` fails
+against the old installed SDK and passes the storage-only blocks. It follows
+named methods, virtual hooks and direct callback arguments; computed names
+and imported/indirect callbacks remain outside its static claim.
 
 ## Measurement contract for a strategy comparison
 
