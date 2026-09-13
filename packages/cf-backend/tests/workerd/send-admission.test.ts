@@ -21,7 +21,8 @@
  * the submission ledger, the durable count of provider requests actually issued,
  * and the stored transcript. Nothing here reads our source.
  */
-import { env, SELF } from 'cloudflare:test';
+import { abortAllDurableObjects, env, SELF } from 'cloudflare:test';
+import { getAgentByName } from 'agents';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 
@@ -150,6 +151,24 @@ describe('two sends that overlap inside one tick', () => {
 });
 
 describe('a send replayed after the socket dropped', () => {
+  it('deduplicates an ordinary signal by its server card identity after a cold reset', async () => {
+    const name = 'signal-cold-replay';
+    const first = await probe(name).deliverSignal('signal work');
+    expect(first.accepted).toBe(true);
+    expect((await untilSettled(name, 1))[0]?.status).toBe('completed');
+    expect(await probe(name).answers()).toHaveLength(1);
+    await abortAllDurableObjects();
+    const fresh = await getAgentByName(env.SEND_ADMISSION_PROBE, name);
+    const replay = await fresh.replaySignal();
+
+    expect(replay.submissionId).toBe(first.submissionId);
+    expect(replay.accepted).toBe(false);
+    expect(first.idempotencyKey).toBe(first.signalId);
+    expect(await probe(name).submissions()).toHaveLength(1);
+    expect(await probe(name).providerCalls()).toBe(1);
+    expect(await probe(name).answers()).toHaveLength(1);
+  });
+
   it('is recognised as the same send, and does not run a second turn', async () => {
     const name = 'reconnect-replay';
 

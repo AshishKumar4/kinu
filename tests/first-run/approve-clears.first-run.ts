@@ -42,6 +42,7 @@ import { scratchDir, workerSession, type EvalObservation, type EvalSubgoal } fro
 import { webHeaders, type PublicSessionPlan } from '../evals/public-session';
 import type { DeviceAccount } from '../evals/device-session';
 import { attachMachine, detachMachine, grantDeviceConsent, type AttachedMachine } from './daemon';
+import { approvalClearsSelection, isApprovalButtonLabel } from './approval-observation';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -138,10 +139,16 @@ describe(SUITE, () => {
           // directory, same rule.
           const alsoDoomed = join(machine.home, 'doomed-by-click');
           mkdirSync(alsoDoomed, { recursive: true });
-          await session.execute('laptop', `rm -r ${JSON.stringify(alsoDoomed)}`);
+          const clickCommand = `rm -r ${JSON.stringify(alsoDoomed)}`;
+          await session.execute('laptop', clickCommand);
           const browser = await openBrowser();
           held.browser = browser;
-          const clicked = await approveThroughTheButton(browser, PLAN, session.workspace);
+          const clicked = await approveThroughTheButton(browser, PLAN, session.workspace, clickCommand);
+          const clickStillQueued = (await session.parkedCommands()).some((entry) => entry.command === clickCommand);
+
+          // The RPC/browser work can finish before genesis makes its first
+          // model call. Drain through an explicit turn before collecting spend.
+          await session.prompt('The approval checks are finished. Reply with only OK. Do not run commands or use tools.');
 
           return [
             {
@@ -182,11 +189,14 @@ describe(SUITE, () => {
             },
             {
               what: 'button-clears-every-box',
-              reached: clicked.approved && clicked.checkedAfter === 0,
+              reached: clicked.approved && !clickStillQueued && approvalClearsSelection(
+                { boxes: clicked.boxesBefore, checked: clicked.checkedBefore },
+                { boxes: clicked.boxesAfter, checked: clicked.checkedAfter },
+              ),
               detail: clicked.approved
                 ? `after the click the card shows ${String(clicked.checkedAfter)} checked box(es) `
                   + `of ${String(clicked.boxesAfter)} (before: ${String(clicked.checkedBefore)} `
-                  + `of ${String(clicked.boxesBefore)})`
+                  + `of ${String(clicked.boxesBefore)}); command ${clickStillQueued ? 'remains queued' : 'left the queue'}`
                 : `the Approve button was never reached: ${clicked.why}`,
             },
           ] satisfies EvalSubgoal[];
@@ -236,7 +246,7 @@ interface ButtonRun {
  * the component believed about `selected` is not the claim.
  */
 async function approveThroughTheButton(
-  browser: Browser, plan: PublicSessionPlan, workspace: string,
+  browser: Browser, plan: PublicSessionPlan, workspace: string, command: string,
 ): Promise<ButtonRun> {
   const empty = { boxesBefore: 0, checkedBefore: 0, boxesAfter: 0, checkedAfter: 0 };
   const page = await browser.newPage();
@@ -248,7 +258,7 @@ async function approveThroughTheButton(
 
     if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
 
-    return await drive(page, plan.origin, workspace, empty);
+    return await drive(page, plan.origin, workspace, command, empty);
   } finally {
     await page.close();
   }
@@ -257,11 +267,14 @@ async function approveThroughTheButton(
 /** The page's own walk to the queue and back. Split out so the header, the
  *  navigation and the failure wording are one readable sequence. */
 async function drive(
-  page: Page, origin: string, workspace: string, empty: Omit<ButtonRun, 'approved' | 'why'>,
+  page: Page, origin: string, workspace: string, command: string, empty: Omit<ButtonRun, 'approved' | 'why'>,
 ): Promise<ButtonRun> {
   await page.goto(`${origin}/workspace/${encodeURIComponent(workspace)}`, {
     waitUntil: 'domcontentloaded', timeout: PAINT_MS,
   });
+  // The tab exists offscreen while the inspector opens. The locator waits
+  // for stable click geometry; CSS visibility alone does not establish it.
+  await page.locator('button[aria-label="Work"]').setTimeout(PAINT_MS).click();
   // A selector that never appears is this case's finding, not an error to
   // propagate: "the parked card never rendered" is a product answer and the
   // subgoal below states it. Anything that is NOT the wait expiring — a closed
@@ -270,7 +283,18 @@ async function drive(
   let button: Awaited<ReturnType<Page['waitForSelector']>> = null;
 
   try {
-    button = await page.waitForSelector('::-p-text(Approve)', { timeout: PAINT_MS });
+    const panel = await page.waitForFunction(parkedCommandPanel, { timeout: PAINT_MS }, command);
+    const element = panel.asElement();
+
+    if (element !== null) {
+      for (const candidate of await element.$$('button')) {
+        const label = await candidate.evaluate((node) => node.textContent ?? '');
+
+        if (!isApprovalButtonLabel(label)) continue;
+        button = candidate;
+        break;
+      }
+    }
   } catch (cause) {
     // THE WAIT EXPIRING, and nothing else. Puppeteer names that one rejection
     // `TimeoutError`; an expiry is a finding about the product's card, which
@@ -288,7 +312,7 @@ async function drive(
     };
   }
 
-  const before = await countBoxes(page);
+  const before = await countBoxes(page, command);
   await button.click();
 
   // The click issues an RPC and re-renders. Settling is observed on the CARD —
@@ -309,7 +333,7 @@ async function drive(
     if (!(cause instanceof Error) || cause.name !== 'TimeoutError') throw cause;
   }
 
-  const after = await countBoxes(page);
+  const after = await countBoxes(page, command);
 
   return {
     approved: true,
@@ -321,9 +345,22 @@ async function drive(
   };
 }
 
-async function countBoxes(page: Page): Promise<{ boxes: number; checked: number }> {
-  return page.evaluate(() => {
-    const boxes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+function parkedCommandPanel(command: string): HTMLElement | null {
+  const row = [...document.querySelectorAll('label')].find((label) => label.textContent?.includes(command)
+    && label.querySelector('input[type="checkbox"]') !== null);
+
+  return row?.closest('section') ?? null;
+}
+
+async function countBoxes(page: Page, command: string): Promise<{ boxes: number; checked: number }> {
+  const panel = await page.evaluateHandle(parkedCommandPanel, command);
+  const selected = panel.asElement();
+
+  if (selected === null) return { boxes: 0, checked: 0 };
+
+  return selected.evaluate((element) => {
+    const boxes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+      .filter((box) => element.contains(box));
 
     return { boxes: boxes.length, checked: boxes.filter((box) => box.checked).length };
   });
@@ -335,6 +372,7 @@ async function countBoxes(page: Page): Promise<{ boxes: number; checked: number 
  *  declaration for the same reason. */
 async function openBrowser(): Promise<Browser> {
   const options: LaunchOptions = {
+    defaultViewport: { width: 1440, height: 900 },
     args: [
       '--no-sandbox',
       '--disable-dev-shm-usage',

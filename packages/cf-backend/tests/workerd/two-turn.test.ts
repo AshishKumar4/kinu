@@ -56,6 +56,89 @@ const FailuresSchema = v.array(DiagnosticFailureSchema);
 const HttpSchema = v.array(HttpCallSchema);
 
 describe('two real turns over the HTTP model seam', () => {
+  it('an ordinary signal arriving at the final model step is not lost at settlement', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('signal-queue-driver'));
+
+    const calls = v.parse(HttpSchema, await root.queuedConversation('signal'))
+      .filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(4);
+    const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
+
+    expect(calls[3]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'))).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A' },
+      { role: 'assistant', content: 'echo:QUEUE-A' },
+      { role: 'user', content: 'QUEUE-B' },
+      { role: 'assistant', content: 'echo:QUEUE-B' },
+      { role: 'user', content: 'QUEUE-PROGRAMMATIC' },
+    ]);
+  });
+
+  it('a genesis offer still yields inside its slot to an already admitted owner message', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('yield-queue-driver'));
+
+    const calls = v.parse(HttpSchema, await root.queuedConversation('yield'))
+      .filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.users.filter((text) => !text.startsWith('<'))).toEqual(['QUEUE-OWNER']);
+  });
+
+  it('admits two websocket asks after held genesis through the installed Think queue', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('queue-driver'));
+
+    const calls = v.parse(HttpSchema, await root.queuedConversation('chat'))
+      .filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(3);
+    const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
+    expect(genesis).toContain('This workspace has just been created.');
+    expect(calls[0]?.users).not.toContain('QUEUE-A');
+    expect(calls[0]?.users).not.toContain('QUEUE-B');
+
+    const visible = (index: number) => calls[index]?.conversation
+      .filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
+
+    expect(visible(1)).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A' },
+    ]);
+    expect(visible(2)).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A' },
+      { role: 'assistant', content: 'echo:QUEUE-A' },
+      { role: 'user', content: 'QUEUE-B' },
+    ]);
+  });
+
+  it('a durable programmatic submission excludes a later pending chat from its provider prefix', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('peer-queue-driver'));
+
+    const calls = v.parse(HttpSchema, await root.queuedConversation('peer'))
+      .filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(5);
+    const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
+    const programmatic = calls[3]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
+
+    expect(programmatic).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A' },
+      { role: 'assistant', content: 'echo:QUEUE-A' },
+      { role: 'user', content: 'QUEUE-B' },
+      { role: 'assistant', content: 'echo:QUEUE-B' },
+      { role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') },
+    ]);
+    expect(calls[3]?.users).not.toContain('QUEUE-C');
+    expect(calls[4]?.users.filter((text) => !text.startsWith('<')).at(-1)).toBe('QUEUE-C');
+    expect(calls[4]?.users.filter((text) => text === 'QUEUE-C')).toEqual(['QUEUE-C']);
+  });
+
   it('spikes the service-binding RPC, then runs A and B end to end', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('driver'));
 

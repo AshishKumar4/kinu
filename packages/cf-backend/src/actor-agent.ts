@@ -27,6 +27,7 @@ import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage } from "agents/chat";
+import { bindChatInput } from './chat-intake';
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
@@ -1518,10 +1519,14 @@ export abstract class ActorAgent extends Think<Env> {
       }
 
       try {
-        return await dispatchMessage.call(this, connection, message);
+        const bound = v.is(v.string(), message) ? bindChatInput(message, this.stores.claims,
+          (id) => this.sql<{ id: string }>`SELECT id FROM assistant_messages WHERE id = ${id}`.length > 0) : message;
+
+        return await dispatchMessage.call(this, connection, bound);
       } finally {
         if (event?.type === 'clear') {
           this.dynamicLedger.reset();
+          this.contextPlane.hydrate([]);
           this._pendingDrainReplyTurns.clear();
 
           try {
@@ -1544,7 +1549,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  reply dispatch with this turn's answer, and whatever the model never saw
    *  re-delivers through the same seam (which queues it, since the turn is
    *  over) — so the event card and reply dispatch work unchanged. */
-  protected settleTurnEvents(result: ChatResponseResult): SettledTurnEvents {
+  protected async settleTurnEvents(result: ChatResponseResult): Promise<SettledTurnEvents> {
     // Three sources, in order of how close each is to the turn that ran:
     // the in-memory stash of a turn this activation itself enqueued, the
     // re-delivery map of a batch whose replies were still pending, and — for a
@@ -1566,41 +1571,33 @@ export abstract class ActorAgent extends Think<Env> {
     // trail.
     const errorText = result.error?.slice(0, 500);
     this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status);
-    // Clear the in-flight flag once the turn is durably completed — forkAgent
-    // is allowed again from here forward. Evolution (the orchestrator's detached engine.reviewTurn)
-    // runs fire-and-forget and does NOT extend the busy window.
-    this._inFlight = false;
-    this._turnOperation = null;
-    this._cliCwd = null;
     // The turn's durable claim closes here, named by what the response did.
     // The claim carries an OUTCOME rather than vanishing, so a later reader can
     // tell a turn that completed from one an eviction left open — which a
     // deleted row could not say, and which is what recovery has to know.
-    // THE CONTEXT BOUNDARY, on EVERY ending — completed, aborted and errored
-    // alike, which is why it sits here in the actor-generic front half rather
-    // than in a concrete actor's success path. The plane records the durable
-    // half of what this turn ran on as the revision the NEXT turn composes
-    // from: its `startTurn` lays that revision over the array Think assembles
-    // then, and everything past the revision's own length — this turn's
-    // answer, and the message that starts the next turn — rides after it.
-    //
-    // The durable half, not the whole request: the turn-local tail is never
-    // persisted, so a snapshot that carried it would not be a prefix of the
-    // next turn's array and the plane would splice the next turn's input at
-    // the wrong offset. And the SNAPSHOT is the hand-off, never a copy held on
-    // this instance: the one held here was handed to the next `startTurn` as
-    // its whole history, which dropped the message that turn was started with
-    // — measured on the deployed 234ed5d7d, where every second turn answered
-    // the genesis signal again.
+    // Snapshot this turn's input and response, including landed steers. The
+    // SDK transcript can already hold later queued inputs; none belongs in
+    // the working revision until its own request is admitted.
     const claimedTurn = this._turnClaim;
 
     if (claimedTurn !== null) {
-      this.contextPlane.endTurn({ turnId: claimedTurn.turnId, history: this._turnDurableInput });
+      const response = await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true });
+      this.contextPlane.endTurn({
+        turnId: claimedTurn.turnId,
+        history: [...this._turnDurableInput, ...this.userSteer.replayInto(response)],
+      });
     }
+
+    if (this._turnRequestId !== null) this.stores.claims.settleInput(this._turnRequestId);
 
     this.settleTurnClaim(result.status === 'completed'
       ? 'completed'
       : result.status === 'aborted' ? 'aborted' : 'error');
+    // Conversion and the durable context/claim close still belong to this
+    // foreground owner. Requeues begin only after that ownership is released.
+    this._inFlight = false;
+    this._turnOperation = null;
+    this._cliCwd = null;
     // Order matters: the flag is already clear, so the leftover steer enqueues
     // as a turn of its own instead of buffering for a turn that is over.
     this.rerunLeftoverSteers();
@@ -2383,6 +2380,22 @@ export abstract class ActorAgent extends Think<Env> {
    * only names what to record there.
    */
   private _turnDurableInput: readonly ModelMessage[] = [];
+  private _turnRequestId: string | null = null;
+  private _turnInputMessage: Pick<UIMessage, 'id' | 'metadata'> | null = null;
+  private _turnIngress: { readonly requestId: string; readonly trigger: string } | null = null;
+
+  /** Think emits this inside the admitted slot, before constructing ctx.body.
+   * Programmatic turns inherit lastBody, so that body alone cannot identify
+   * whether a pending chat token belongs to the turn now running. */
+  protected override _emit(
+    type: Parameters<Think<Env>['_emit']>[0], payload?: Parameters<Think<Env>['_emit']>[1],
+  ): void {
+    if (type === 'chat:turn:start') {
+      this._turnIngress = v.parse(v.object({ requestId: v.string(), trigger: v.string() }), payload);
+    }
+
+    super._emit(type, payload);
+  }
 
   /**
    * THE actor's context plane, ONE per activation.
@@ -6074,9 +6087,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  steers, and rows from a finished turn stay with terminal leftover
    *  routing, never spliced into a later conversation. */
   private restoreTurnCheckpoint(): void {
-    let lastUserId: string | undefined;
+    let lastUserId: string | undefined = this._turnInputMessage?.id;
 
-    for (let i = this.messages.length - 1; i >= 0; i--) {
+    for (let i = this.messages.length - 1; lastUserId === undefined && i >= 0; i--) {
       const candidate = this.messages[i];
 
       if (candidate.role !== 'user') continue;
@@ -6139,8 +6152,57 @@ export abstract class ActorAgent extends Think<Env> {
     ];
   }
 
+  private async turnInputHistory(ctx: TurnContext): Promise<readonly ModelMessage[]> {
+    this._turnRequestId = null;
+    this._turnInputMessage = null;
+
+    if (ctx.continuation) return ctx.messages;
+
+    const body = jsonObject(ctx.body);
+    const requestId = v.is(v.string(), body.kinuRequestId) ? body.kinuRequestId : null;
+
+    const ids = this._turnIngress?.trigger === 'ws-chat' && this._activeProgrammaticUserMessage === null && requestId !== null
+      ? this.stores.claims.input(requestId) : null;
+
+    let input: UIMessage[];
+
+    if (this._activeProgrammaticUserMessage !== null) {
+      input = [this._activeProgrammaticUserMessage];
+    } else if (ids !== null && ids.length > 0) {
+      input = ids.map((id) => {
+        const row = this.sql<{ content: string }>`SELECT content FROM assistant_messages WHERE id = ${id}`[0];
+
+        if (row === undefined) throw new KinuError('missing', 'The admitted chat input is absent from the transcript.');
+        const parsed = recordedUiMessage(v.parse(v.pipe(v.string(), v.parseJson(), JsonValueSchema), row.content));
+
+        return { ...parsed, id };
+      });
+      this._turnRequestId = requestId;
+    } else if (this._turnIngress?.trigger === 'submission') {
+      const row = this.sql<{ messages_json: string }>`SELECT messages_json FROM cf_think_submissions
+        WHERE request_id = ${this._turnIngress.requestId} AND status = 'running'`[0];
+
+      if (row === undefined) throw new KinuError('missing', 'The admitted durable submission is absent from the SDK ledger.');
+      const stored = v.parse(v.pipe(v.string(), v.parseJson(), v.array(JsonValueSchema)), row.messages_json);
+      input = stored.map((value) => ({
+        ...recordedUiMessage(value), id: v.parse(v.object({ id: v.string() }), value).id,
+      }));
+    } else {
+      return ctx.messages;
+    }
+
+    const driving = input.filter((message) => message.role === 'user').at(-1) ?? input.at(-1);
+
+    if (driving === undefined) throw new KinuError('missing', 'The admitted turn has no input messages.');
+    this._turnInputMessage = driving;
+    const messages = await convertToModelMessages(input, { ignoreIncompleteToolCalls: true });
+
+    return this.stores.claims.historyForInput(driving.id, messages, []);
+  }
+
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     return runOperationProfile(null, async () => {
+      const turnMessages = await this.turnInputHistory(ctx);
       this._turnProgram = null;
       ctx.signal?.throwIfAborted();
       // The scaffold and the soul are both files this turn is about to read, and
@@ -6188,7 +6250,7 @@ export abstract class ActorAgent extends Think<Env> {
       // at `beginTurn`, and the recorded turn carries it so a recovering host's
       // own engine cannot re-judge a turn it did not run.
       this._turnEvolutionEnabled = this.turnRecordsEvolution();
-      this._turnOriginContext = Object.freeze(structuredClone([...ctx.messages]));
+      this._turnOriginContext = Object.freeze(structuredClone([...turnMessages]));
       // Fresh splice coordinates for this streamText call. Steers already
       // buffered survive — they were typed for the turn that is about to run.
       this.userSteer.beginTurn();
@@ -6199,7 +6261,7 @@ export abstract class ActorAgent extends Think<Env> {
       // concurrently with this turn; never blocks it. Programmatic turns
       // (reactor / job wake) are not user verdicts.
       if (!this.lastUserTurnIsProgrammatic()) {
-        this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
+        this.orch.observeUserTurn(extractLastUserText(turnMessages), this._turnContinuity);
       }
 
       // Start a new run for the event log, with provenance so cross-run history
@@ -6212,7 +6274,7 @@ export abstract class ActorAgent extends Think<Env> {
       openTurnRun(this.eventRecorder, this._currentRunId, {
         agentId: this.actorHandle().actorId,
         causedBy: 'chat',
-        userMessage: extractLastUserText(ctx.messages),
+        userMessage: extractLastUserText(turnMessages),
         turnIndex: this.orch.sessionTurnIndex,
       });
 
@@ -6231,7 +6293,7 @@ export abstract class ActorAgent extends Think<Env> {
       const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
         vfs: this.getSkillsVfs(),
         config: this.config,
-        userText: extractLastUserText(ctx.messages),
+        userText: extractLastUserText(turnMessages),
         roleSkills,
         trust,
         limits: {
@@ -6400,7 +6462,7 @@ export abstract class ActorAgent extends Think<Env> {
       // sanitization is copy-on-write per message with per-part replacement, so
       // the raw count IS the sanitized durable length — and it is stashed because
       // recordTurnTelemetry writes the next measurement against the same number.
-      const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+      const rawMessages = this._cliCwd ? withCliCwdContext(turnMessages, this._cliCwd) : turnMessages;
       this._turnDurableLength = rawMessages.length;
       this._turnContextWindow = this.sessionContextWindow();
       const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
@@ -6553,17 +6615,19 @@ export abstract class ActorAgent extends Think<Env> {
       // prefix this array shares with it and keeps the rest — the previous
       // answer and the message that started this turn — after it. Handing it a
       // copy of the previous boundary instead made that copy the whole history.
-      const admitted = this.contextPlane.startTurn({ turnId, history: cfg.messages });
+      const admitted = this.contextPlane.startTurn({ turnId, history: this._turnDurableInput });
+      this._turnDurableInput = admitted.messages;
+      const requestMessages = [...admitted.messages, ...turnLocal];
 
       this._turnClaim = this.stores.claims.admit({
         runId: this._currentRunId,
         turnId,
         workMode: mode,
         program: programIdentityOf(program, this.installedBuildIdentity()),
-        context: admitted.messages,
+        context: requestMessages,
         workingRevision: admitted.workingRevision,
       });
-      cfg.messages = [...admitted.messages];
+      cfg.messages = requestMessages;
 
       const lastTurnOpts: Parameters<typeof streamText>[0] = {
         model: cfg.model ?? ctx.model,
@@ -6775,6 +6839,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  — a signal's `kinuEvent` / `signalId` / mission labels, or nothing at
    *  all for a chat turn the operator typed. */
   protected turnUserMetadata(): JsonObject | undefined {
+    if (this._turnInputMessage !== null) {
+      const parsed = v.safeParse(JsonObjectSchema, this._turnInputMessage.metadata);
+
+      return parsed.success ? parsed.output : undefined;
+    }
+
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const candidate = this.messages[i];
 

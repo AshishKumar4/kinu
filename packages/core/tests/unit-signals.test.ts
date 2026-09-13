@@ -110,6 +110,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     expect(signals.prepareStep({ stepNumber: 1, messages: [user('q')] })).toBeUndefined();
     expect(queued).toEqual([{
       text: 'mail from bob',
+      idempotencyKey: cards[0]!.id,
       metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', signalId: cards[0]!.id },
     }]);
   });
@@ -315,6 +316,16 @@ describe('SignalDelivery — the mid-turn splice', () => {
 });
 
 describe('SignalDelivery — settlement', () => {
+  test('an ordinary requeue uses the original server card as its durable identity', async () => {
+    const { signals, queued, cards } = setup({ turnInFlight: true });
+    await signals.deliver(wake('late ordinary signal'));
+    signals.settle({ completed: true });
+    await Promise.resolve();
+
+    expect(queued[0]?.idempotencyKey).toBe(cards[0]?.id);
+    expect(queued[0]?.metadata?.signalId).toBe(cards[0]?.id);
+  });
+
   test('a signal that never reached a step boundary re-delivers as a queued turn', async () => {
     const { signals, queued, cards } = setup({ turnInFlight: true });
     signals.prepareStep({ stepNumber: 0, messages: [user('q')] });
@@ -323,6 +334,7 @@ describe('SignalDelivery — settlement', () => {
     await Promise.resolve();
     expect(queued).toEqual([{
       text: 'arrived at the final step',
+      idempotencyKey: cards[0]!.id,
       metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness', drainTurnId: 'evt-late', signalId: cards[0]!.id },
     }]);
     // Settle reset the state — the next turn starts clean.
@@ -470,6 +482,7 @@ describe('the workspace genesis signal', () => {
     expect(queued).toHaveLength(1);
     expect(queued[0]!.yieldsToUserMessage).toBe(true);
     expect(queued[0]!.metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(queued[0]!.idempotencyKey).toBeUndefined();
     expect(lifecycle(cards)).toEqual(['pending', 'undelivered']);
   });
 

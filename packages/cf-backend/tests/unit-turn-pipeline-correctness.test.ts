@@ -230,7 +230,7 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const first: ModelMessage = { role: 'user', content: 'first: list your tools' };
-    const reply: ModelMessage = { role: 'assistant', content: 'execute_tools, run, file' };
+    const reply: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'execute_tools, run, file' }] };
     const second: ModelMessage = { role: 'user', content: 'second: now use each one' };
 
     const turn = (messages: ModelMessage[]) => ({
@@ -639,7 +639,7 @@ describe('turn-pipeline correctness wiring', () => {
     const hook = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
     const preEarlyReturn = hook.slice(0, hook.indexOf('if (result.status !== "completed")'));
     expect(preEarlyReturn).toContain('this.settleTurnEvents(result)');
-    const helper = actor.slice(actor.indexOf('protected settleTurnEvents(result: ChatResponseResult)'));
+    const helper = actor.slice(actor.indexOf('protected async settleTurnEvents(result: ChatResponseResult)'));
     expect(helper).toContain('this.orch.signals.settle({ completed })');
     // No second re-delivery path on this side — the seam owns it.
     expect(actor).not.toContain('reenqueue');
@@ -938,7 +938,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(host).toContain('this._activeProgrammaticUserMessage = message');
     expect(host).toContain('finally {');
     expect(host).toContain('this._activeProgrammaticUserMessage === message');
-    const settle = actor.slice(actor.indexOf('protected settleTurnEvents(result: ChatResponseResult)'));
+    const settle = actor.slice(actor.indexOf('protected async settleTurnEvents(result: ChatResponseResult)'));
     // Three sources for one identity, and the third is what a DURABLY ADMITTED
     // drain needs: the activation that runs it is not the one that submitted it,
     // so it holds neither the stash nor the re-delivery entry, and the only
@@ -1082,7 +1082,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('the settle spine persists the provider error text into the activity log and the run_end event', () => {
-    const spine = actor.slice(actor.indexOf('protected settleTurnEvents(result: ChatResponseResult)'));
+    const spine = actor.slice(actor.indexOf('protected async settleTurnEvents(result: ChatResponseResult)'));
     const errorCapture = spine.indexOf('const errorText = result.error?.slice(0, 500)');
     const logRow = spine.indexOf('this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status)');
     // The run bracket is the shared core closeTurnRun (turn_end + run_end);

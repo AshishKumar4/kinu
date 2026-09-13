@@ -27,6 +27,7 @@ export interface CapturedHttpCall {
   readonly model: string;
   readonly stream: boolean;
   readonly users: string[];
+  readonly conversation: ReadonlyArray<{ role: string; content: string }>;
   readonly authHeader: string | null;
   /** Tool definitions the request offered, by function name — the real
    *  registry surface as it reached the wire. */
@@ -38,6 +39,8 @@ export interface CapturedHttpCall {
 }
 
 const log: CapturedHttpCall[] = [];
+
+let heldFirstRequest: { readonly arrived: PromiseWithResolvers<void>; readonly release: PromiseWithResolvers<void> } | null = null;
 
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
@@ -133,6 +136,7 @@ function recordCall(url: URL, request: Request, body: OutboundBody): void {
     model: body.model ?? '',
     stream: body.stream === true,
     users: messages.filter((m) => m.role === 'user').map((m) => textOf(m.content)),
+    conversation: messages.map((m) => ({ role: m.role ?? '', content: textOf(m.content) })),
     authHeader: request.headers.get('authorization'),
     offeredTools: (body.tools ?? []).map((t) => t.function.name),
     toolCalls: messages.flatMap((m) => (m.tool_calls ?? [])
@@ -274,6 +278,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-tools' },
       { id: 'probe-tools-only' },
       { id: 'probe-error' },
+      { id: 'probe-queue' },
     ],
   });
 }
@@ -287,6 +292,25 @@ export async function probeOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.host === 'probe-control.invalid') {
+    if (url.pathname === '/queue/hold' && request.method === 'POST') {
+      heldFirstRequest = { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/queue/arrived' && request.method === 'GET') {
+      if (heldFirstRequest === null) throw new Error('queue model hold was not armed');
+      await heldFirstRequest.arrived.promise;
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/queue/release' && request.method === 'POST') {
+      heldFirstRequest?.release.resolve();
+
+      return Response.json({ ok: true });
+    }
+
     if (url.pathname === '/log' && request.method === 'GET') {
       return Response.json({ calls: [...log] });
     }
@@ -314,6 +338,16 @@ export async function probeOutbound(request: Request): Promise<Response> {
       recordCall(url, request, body);
 
       switch (body.model) {
+        case 'probe-queue': {
+          if (log.filter((call) => call.model === 'probe-queue').length === 1) {
+            if (heldFirstRequest === null) throw new Error('queue model hold was not armed');
+            heldFirstRequest.arrived.resolve();
+            await heldFirstRequest.release.promise;
+          }
+
+          return echoBody(body);
+        }
+
         case 'probe': return echoBody(body);
         case 'probe-early-done': return earlyDoneBody();
         case 'probe-tools': return toolBody(body, 'call_probe_1', 'I will read that fixture file.');
