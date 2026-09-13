@@ -1320,6 +1320,44 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(session.getShellApprovalMode()).toEqual({ mode: 'deny_all' });
   });
 
+  test('a runtime lane after a completed public session turn sees revised profile authority', async () => {
+    let tierModel = 'local/a';
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: spec => spec?.trim() || 'local/a',
+      resolveModel: spec => fakeModel(spec ?? 'local/a'),
+      listProviders: async () => [],
+      listModels: async () => ({ models: ['a', 'b'].map(id => ({
+        provider: 'local', id, label: id, capabilities: ['streaming' as const],
+      })), failures: [] }),
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const profileAuthority = (): ProfileCatalogEnvelope => {
+      const catalog = { roles: {}, tiers: { default: { model: tierModel } } };
+
+      return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
+    };
+
+    const { session, rt } = setupWithResolver(resolver, { profileAuthority });
+    await session.send('complete turn A');
+    tierModel = 'local/b';
+    const seen: string[] = [];
+    rt.setModelForRoute?.(route => ({
+      async *stream() { yield ''; },
+      complete: async () => {
+        seen.push(route.model);
+
+        return 'classified';
+      },
+    }));
+    await rt.fastLlm?.complete('an operation between chat turns');
+
+    expect(seen).toEqual(['local/b']);
+    await session.end();
+  });
+
   test('a provider connected in another process reaches the next turn, with no restart and no TTL', async () => {
     // What a provider sweep would find right now. Another process editing
     // ~/.kinu/config.json changes this; nothing inside the session can see that

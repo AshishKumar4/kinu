@@ -111,6 +111,14 @@ function tierResolution(
  *  only for the explicit platform exception — callers there construct their
  *  binding-bound client directly, and nowhere else may bypass this table. */
 export function resolveModelRoute(
+  source: ProfileRoutedSource,
+  profile: ResolvedTurnProfile,
+): ModelRouteResolution;
+export function resolveModelRoute(
+  source: SpendSource,
+  profile: ResolvedTurnProfile,
+): ModelRouteResolution | null;
+export function resolveModelRoute(
   source: SpendSource,
   profile: ResolvedTurnProfile,
 ): ModelRouteResolution | null {
