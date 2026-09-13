@@ -81,14 +81,12 @@ import type {
   DriveOnceResult,
   ExerciseResult,
   HttpCall,
-  PendingCancelResult,
 } from './two-turn-shapes';
 import {
   DriveOnceInputSchema,
   DriveOnceResultSchema,
   ExerciseResultSchema,
   HttpCallSchema,
-  PendingCancelResultSchema,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
 import { ownerCaller } from '../../src/user/workspace-capability';
@@ -461,59 +459,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     await fetch('http://probe-control.invalid/reset', { method: 'POST' });
   }
 
-  /** Pending-cancel through the real HTTP path: parks a request on the fake's
-   *  `probe-park` arm, aborts it once the handler logs the entry, and reports
-   *  what the handler observed. The arm rejects with the abort reason and
-   *  removes its listener in `finally`; the observation is read back from the
-   *  log entry, not trusted from the handler. Awaited joins only: the entry
-   *  is polled (bounded) so the abort can never precede the park it ends. */
-  async cancelHttpPark(): Promise<PendingCancelResult> {
-    await this.httpReset();
-
-    const controller = new AbortController();
-
-    const started = Date.now();
-
-    const flight = fetch('http://fake-models.invalid/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'probe-park', stream: false, messages: [] }),
-      signal: controller.signal,
-    });
-
-    for (;;) {
-      const calls = await this.httpCalls();
-      const entered = calls.some((c) => c.model === 'probe-park' && !c.aborted);
-
-      if (entered) break;
-
-      if (Date.now() - started > 5000) {
-        throw new Error('two-turn probe: park arm never entered; nothing to cancel');
-      }
-
-      const tick = Promise.withResolvers<void>();
-
-      setTimeout(tick.resolve, 20);
-      await tick.promise;
-    }
-
-    controller.abort(new Error('probe cancels the parked request'));
-
-    let rejection = '';
-
-    try {
-      await flight;
-    } catch (cause) {
-      rejection = cause instanceof Error ? cause.message : String(cause);
-    }
-
-    const calls = await this.httpCalls();
-
-    return v.parse(PendingCancelResultSchema, {
-      observedAbort: calls.some((c) => c.model === 'probe-park' && c.aborted),
-      rejection,
-    });
-  }
 
   /** One parameterized drive for the lifecycle variants: its own workspace so
    *  Think state never crosses between experiments. The early-[DONE] variant
