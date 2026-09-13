@@ -1448,11 +1448,13 @@ function checkpointCommand(
   return undefined;
 }
 
-/** The container's mounts and releases: a layer mounted, an overlay composed,
- *  a mount point or every delta layer released. Undefined for any other
- *  command. */
+/** The container's mounts and releases: the live mount table read, a layer
+ *  mounted, an overlay composed, a mount point or every delta layer released.
+ *  Undefined for any other command. */
 function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
+
+  if (command === 'cat /proc/mounts') return shellOk(disk.procMounts());
 
   // Releasing every delta layer this container serves, whichever generation
   // mounted it.
@@ -1512,6 +1514,21 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
   return undefined;
 }
 
+/** The container's process fault policy, in one place: a fault only fires on
+ *  a live container (a dead or stopped one answers nothing it scripted), the
+ *  first match wins, the command is recorded as reached, and the reply is the
+ *  fault's own stderr and exit code — never the shell's. */
+function processFaultReply(disk: ContainerDisk, command: string): ShellReply | undefined {
+  const fault = disk.dead || disk.stopped ? undefined : disk.processFaults.find((entry) => entry.match.test(command));
+
+  if (fault === undefined) return undefined;
+
+  disk.processFaultsReached.push(command);
+
+  return { stdout: '', stderr: fault.stderr, exitCode: fault.exitCode };
+}
+
+
 function chainExec(
   disk: ContainerDisk,
   deaths: DeathWatch,
@@ -1528,13 +1545,9 @@ function chainExec(
     const refused = sessionShellRefusal(command);
 
     if (refused !== undefined) throw refused;
-    const fault = disk.dead || disk.stopped ? undefined : disk.processFaults.find((entry) => entry.match.test(command));
+    const fault = processFaultReply(disk, command);
 
-    if (fault !== undefined) {
-      disk.processFaultsReached.push(command);
-
-      return { stdout: '', stderr: fault.stderr, exitCode: fault.exitCode };
-    }
+    if (fault !== undefined) return fault;
 
     const ok = shellOk;
     // The chunked delta's own shell, answered with real bytes. See
@@ -1542,8 +1555,6 @@ function chainExec(
     const delta = deltaCommand(command, disk);
 
     if (delta !== undefined) return delta;
-
-    if (command === 'cat /proc/mounts') return ok(disk.procMounts());
 
     const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
 
