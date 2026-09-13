@@ -1646,6 +1646,7 @@ export {
 // Background-job system — auto-background long tool calls + wake-on-completion.
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
+  backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   // Per-invocation device-request ownership: the tool reports each durable
   // identity it issues, and the job that detaches the call takes them over.

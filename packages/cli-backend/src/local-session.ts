@@ -48,6 +48,7 @@ import { TierIdSchema,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
+  backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
@@ -1032,6 +1033,12 @@ export class LocalAgentSession implements BackendHost {
       eventLog: this.eventLog,
       scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
+      onDetached: null,
+      onCancelled: null,
+      onSettled: (job) => {
+        const notice = backgroundJobNotice(job);
+        this.emit({ type: 'background', event: 'background_job_notice', message: notice.body });
+      },
       // Process exit is the local analogue of a DO eviction: re-drive an
       // interrupted job from its durable checkpoint instead of failing it.
       resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal),

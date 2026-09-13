@@ -5,9 +5,7 @@
   "asymmetry AgentsSwarmDeps.runtimeForNodeWorkspace#absent-in-cf",
   "asymmetry ArchiveExportOptions.files#absent-in-cli",
 
-  "asymmetry BackgroundJobRunnerDeps.onCancelled#absent-in-cli",
-  "asymmetry BackgroundJobRunnerDeps.onDetached#absent-in-cli",
-  "asymmetry BackgroundJobRunnerDeps.onSettled#absent-in-cli",
+
   "asymmetry ChatHistoryEntry.metadata#absent-in-cli",
   "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli",
 

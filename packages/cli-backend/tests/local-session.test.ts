@@ -25,6 +25,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
+  backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
   profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
@@ -2128,6 +2129,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const order = events.filter((e) => e.type === 'turn-start' || e.type === 'turn-end');
     const wakeStartIdx = order.findIndex((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job');
     expect(wakeStartIdx).toBeGreaterThanOrEqual(0);
+    const noticeAt = events.findIndex((event) => event.type === 'background' && event.event === 'background_job_notice');
+    const wakeAt = events.findIndex((event) => event.type === 'turn-start' && event.event === 'background_job');
+    expect(noticeAt).toBeGreaterThanOrEqual(0);
+    expect(noticeAt).toBeLessThan(wakeAt);
+    expect(JSON.stringify(events[noticeAt])).toContain('bgjob-w failed');
     // A turn-end follows the wake's turn-start: it completed, not truncated.
     expect(order.slice(wakeStartIdx + 1).some((e) => e.type === 'turn-end')).toBe(true);
     // Quiescent: no background work left in flight once settle returned.
@@ -2290,9 +2296,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('the same call detaches once it crosses the policy threshold', async () => {
-    const { db, session, events } = setup(
+    const { db, rt, session, events } = setup(
       'unused',
-      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"computed late"'),
+      executeToolsModel('await new Promise(r => setTimeout(r, 200));\nreturn "computed late";'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000, wakesAfterTurn: true } },
     );
 
@@ -2301,6 +2307,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(true);
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 1 });
+    const [job] = new BackgroundJobStore(rt.storage.sql, rt.actor).list(2);
+
+    if (!job) throw new Error('detached job is missing');
+
+    const notices = events.filter((event) => event.type === 'background' && event.event === 'background_job_notice');
+    expect(notices).toEqual([{ type: 'background', event: 'background_job_notice', message: backgroundJobNotice(job).body }]);
+    expect(JSON.stringify(notices)).toContain('computed late');
   });
 
   test('past the concurrent-job cap a crossing call stays foreground and settles', async () => {

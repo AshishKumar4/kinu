@@ -22,7 +22,7 @@ import {
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
@@ -4043,12 +4043,10 @@ export abstract class ActorAgent extends Think<Env> {
         onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
         // Mission Inbox: a settled background job also notifies the owner
         // (email on the orchestrator; skips silently when pieces are absent).
-        onSettled: (job) => this.notifyOwner(
-          `Background ${job.kind} job ${job.status}`,
-          job.status === 'completed'
-            ? `Background ${job.kind} job ${job.id} completed.\n\nResult:\n${job.result ?? '(empty)'}`
-            : `Background ${job.kind} job ${job.id} ${job.status}${job.error ? `:\n\n${job.error}` : '.'}`,
-        ),
+        onSettled: (job) => {
+          const notice = backgroundJobNotice(job);
+          this.notifyOwner(notice.subject, notice.body);
+        },
         // Evict-resume (B6): re-drive an interrupted job from its durable
         // checkpoint. A fork re-runs the raw agents tool — MCTS continues its
         // remaining search budget via the search store; heads re-run from input.

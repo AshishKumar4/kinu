@@ -2,6 +2,7 @@ export {
   BackgroundJobStore,
   initBackgroundJobsTable,
   serializeJobResult,
+  backgroundJobNotice,
   type BackgroundJob,
   type BackgroundJobStatus,
   type JobClaim,
