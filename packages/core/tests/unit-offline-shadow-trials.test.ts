@@ -31,6 +31,7 @@ import { decodeJsonValue } from '../src/utils/json';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime } from './helpers';
 import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const TASK = 'what did we decide about the codename?';
 
@@ -105,6 +106,7 @@ function countedControl(
   const verdict = opts?.verdict ?? 'pending';
 
   const control: ScaffoldControl = {
+    events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,
     config: {

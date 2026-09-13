@@ -35,9 +35,10 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   const extensions = new ExtensionHost().register({
     name: 'record-invocation',
     onToolResult: (event) => {
+      if (event.toolCallId === undefined) throw new Error('the SDK result lost its invocation identity');
       accumulator.recordToolCall(event.success
-        ? { toolName: event.toolName, input: event.args, output: event.result, success: true }
-        : { toolName: event.toolName, input: event.args, error: event.result,
+        ? { toolCallId: event.toolCallId, toolName: event.toolName, input: event.args, output: event.result, success: true }
+        : { toolCallId: event.toolCallId, toolName: event.toolName, input: event.args, error: event.result,
             success: false, reason: event.reason, execution: event.execution });
     },
   });

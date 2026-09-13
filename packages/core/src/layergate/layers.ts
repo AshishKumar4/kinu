@@ -1700,10 +1700,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the graded CompletedTurn: explicit invocation outcomes, hadError from a failed tool, origin, no fabricated usage, conditional turnId',
         observe: (s) => {
           const clean = new TurnAccumulator();
-          clean.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
+          clean.recordToolCall({ toolCallId: 'layer-clean', toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
           clean.recordStep({ usage: { input: 7, output: 3 } });
           const failed = new TurnAccumulator();
-          failed.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'exit 1' });
+          failed.recordToolCall({ toolCallId: 'layer-failed', toolName: 'run', success: false, reason: null, error: 'exit 1' });
           failed.recordStep({});
 
           return {

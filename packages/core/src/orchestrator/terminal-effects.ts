@@ -161,7 +161,7 @@ export function terminalEffectBackoffMs(attempts: number): number {
  *  schema: a row naming anything else was written by a build this one is not,
  *  and is blocked. Which of them an actor actually owes is that actor's
  *  {@link TerminalEffectTable}. */
-export const TERMINAL_EFFECT_NAMES = [
+const TERMINAL_EFFECT_NAMES = [
   'takes', 'craft_usage', 'event_reply', 'branches',
   // The mechanical completion gate. Its armed/fired state lives in RAM, so the
   // ledger row is the only thing that survives a restart saying whether the one
@@ -634,11 +634,8 @@ type ResolvedTarget =
   | { readonly kind: 'runnable'; readonly name: TerminalEffectName; readonly effect: TerminalEffect }
   | { readonly kind: 'blocked'; readonly name: TerminalEffectName | null; readonly reason: string };
 
-/** One owed row with its dispatch decision already made, for the two paths that
- *  attempt it. The effect itself is carried so nothing re-looks-it-up and
- *  nothing asserts it is there. Exported because the transition claims a roster
- *  and drives it in two steps, with its own commit around the first. */
-export interface PendingRow {
+/** One stored obligation with its dispatch decision made. */
+interface PendingRow {
   readonly key: string;
   readonly rawName: string;
   readonly scope: string;
@@ -647,10 +644,6 @@ export interface PendingRow {
   readonly status: TerminalEffectStatus;
   readonly attempts: number;
   readonly nextAttemptAt: number;
-  /** Whether this row existed before the current activation touched it. A
-   *  pre-existing row is a RESUMED attempt and its schedule governs it; a claim
-   *  this activation just wrote is due by construction. */
-  readonly preExisting: boolean;
   /** PERSISTED, because a replay must schedule the way the forward path did.
    *  Read off the row and not re-derived: recovery has no caller to ask, and
    *  walking a roster serially lets a detached reply that hangs block the
@@ -760,11 +753,13 @@ export class TerminalEffectLedger {
    * transition closes on a complete suffix or not at all.
    */
   async run(sequenceId: string, owed: readonly OwedEffect[]): Promise<TerminalSequenceRun> {
-    return await this.drive(sequenceId, this.claim(sequenceId, owed));
+    this.claim(sequenceId, owed);
+
+    return await this.drive(sequenceId);
   }
 
   /**
-   * Write this roster's rows, SYNCHRONOUSLY, and report what is now owed.
+   * Write this roster's rows synchronously, without issuing effects.
    *
    * Separated from {@link drive} so a caller can put the outer transition's own
    * claim in the same commit: the rows and the claim that gates them are one
@@ -774,9 +769,8 @@ export class TerminalEffectLedger {
    * No transaction of its own for the same reason. The caller supplies the
    * boundary because the caller knows what else belongs inside it.
    */
-  claim(sequenceId: string, owed: readonly OwedEffect[]): PendingRow[] {
+  claim(sequenceId: string, owed: readonly OwedEffect[]): void {
     this.deps.actor.assertCurrent();
-    const claimed: PendingRow[] = [];
     const now = this.deps.now();
     owed.forEach((effect, index) => {
       const key = terminalEffectKey(effect.name, effect.scope);
@@ -786,31 +780,13 @@ export class TerminalEffectLedger {
       // a forward path that missed it would insert a second row and dispatch the
       // effect while recovery, reading the stored row, would block it on the
       // version mismatch — one piece of work routed two different ways.
-      const existing = this.deps.sql<{
-        effect_key: string; input_json: string; lane: string;
-        status: string; attempts: number; next_attempt_at: number;
-      }>`
-        SELECT effect_key, input_json, lane, status, attempts, next_attempt_at FROM terminal_effects
+      const existing = this.deps.sql<{ effect_key: string }>`
+        SELECT effect_key FROM terminal_effects
         WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
           AND effect_name = ${effect.name} AND scope = ${effect.scope}
         LIMIT 1`[0];
 
-      if (existing !== undefined) {
-        if (existing.status === 'completed') return;
-        claimed.push({
-          key: existing.effect_key, rawName: effect.name, scope: effect.scope, seq: index,
-          input: existing.input_json,
-          status: existing.status === 'blocked' ? 'blocked' : 'pending',
-          attempts: existing.attempts, nextAttemptAt: existing.next_attempt_at,
-          preExisting: true,
-          // The RECORDED lane, not this caller's: the row's own scheduling is
-          // what a recovery will reproduce, and the two must not disagree.
-          lane: existing.lane === 'detached' ? 'detached' : 'inline',
-          target: this.resolve(effect.name, effect.scope, existing.effect_key),
-        });
-
-        return;
-      }
+      if (existing !== undefined) return;
 
       const encoded = JSON.stringify(effect.input);
       void this.deps.sql`INSERT INTO terminal_effects
@@ -818,18 +794,12 @@ export class TerminalEffectLedger {
          attempts, next_attempt_at, claimed_at, settled_at)
         VALUES (${this.actorId}, ${sequenceId}, ${key}, ${effect.name}, ${effect.scope}, ${index},
                 ${encoded}, ${effect.lane}, 'pending', ${null}, 0, ${now}, ${now}, ${null})`;
-      claimed.push({
-        key, rawName: effect.name, scope: effect.scope, seq: index, input: encoded,
-        status: 'pending', attempts: 0, nextAttemptAt: now, preExisting: false,
-        target: this.resolve(effect.name, effect.scope, key), lane: effect.lane,
-      });
     });
-
-    return claimed;
   }
 
   /** Run a claimed roster: arm, inline pass, then the detached tail. */
-  async drive(sequenceId: string, claimed: readonly PendingRow[]): Promise<TerminalSequenceRun> {
+  async drive(sequenceId: string): Promise<TerminalSequenceRun> {
+    const claimed = this.pending(sequenceId);
     // ARMED HERE, before the first attempt. The rows now exist, so a recovery
     // for them must exist too: an eviction inside the inline pass would otherwise
     // leave a claimed suffix with no wake and no fiber behind it, and a
@@ -883,25 +853,8 @@ export class TerminalEffectLedger {
    * activation back for them.
    */
   async replayOwed(sequenceId: string): Promise<void> {
-    const rows = this.pending(sequenceId);
-    // ARMED FIRST, exactly as the forward path arms before its inline pass. A
-    // retry wake is one-shot: an interruption while a replayed reply, parent RPC
-    // or model lane is in flight consumes the alarm that brought us here and
-    // would leave the still-owed suffix with no carrier at all.
-    await this.armWake();
-
-    // The RECORDED lanes, reproducing the forward scheduler. Walking the roster
-    // serially let a detached reply that hangs block the recording behind it —
-    // work the live path had already committed before it ever started the reply.
-    for (const row of rows) {
-      if (row.lane === 'inline') await this.attempt(sequenceId, row);
-    }
-
-    await Promise.all(
-      rows.filter((row) => row.lane === 'detached')
-        .map(async (row) => await this.attempt(sequenceId, row)),
-    );
-    await this.armWake();
+    const run = await this.drive(sequenceId);
+    await run.reported;
   }
 
   /** Every sequence with an owed row, the most overdue first. The recovery
@@ -979,7 +932,6 @@ export class TerminalEffectLedger {
         status: row.status === 'blocked' ? 'blocked' : 'pending',
         attempts: row.attempts,
         nextAttemptAt: row.next_attempt_at,
-        preExisting: true,
         lane: row.lane === 'detached' ? 'detached' : 'inline',
         target: this.resolve(row.effect_name, row.scope, row.effect_key),
       } satisfies PendingRow));
@@ -1037,15 +989,11 @@ export class TerminalEffectLedger {
    * are untouched.
    */
   private async attempt(sequenceId: string, row: PendingRow): Promise<void> {
-    // A resumed row is governed by the schedule its last failure armed, however
-    // this activation reached it: a duplicate callback arriving inside that
-    // window must leave it owed rather than re-run a boundary the ledger
-    // deliberately deferred. Only a claim written by this pass is due by
-    // construction, which is what `preExisting` says and what keeps that
-    // invariant here instead of in the insert's choice of instant.
+    // The stored schedule governs every attempt, including a freshly recorded
+    // row, whose initial nextAttemptAt makes it due immediately.
     this.deps.actor.assertCurrent();
 
-    if (row.preExisting && row.nextAttemptAt > this.deps.now()) return;
+    if (row.nextAttemptAt > this.deps.now()) return;
     const attempts = row.attempts + 1;
     // Armed BEFORE the side effect, not after it. An eviction mid-effect never
     // comes back to write anything, so a schedule pushed afterwards would leave

@@ -45,6 +45,7 @@ export const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
   userMessage: v.string(),
   assistantResponse: v.string(),
   toolCalls: v.array(v.object({
+    toolCallId: v.optional(v.string()),
     name: v.string(),
     args: JsonObjectSchema,
     result: v.optional(JsonValueSchema),

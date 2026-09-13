@@ -43,6 +43,7 @@ import {
 } from '../src/index';
 import { stageImport } from '../src/experience/imports';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { RunEventRecorder } from '../src/events/recorder';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -192,7 +193,7 @@ async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
   const pending = getPendingScaffold(ws.rt.storage.sql, ws.rt.actor);
 
   if (!pending) throw new Error('the proposal did not land as pending');
-  await applyPromotionDecision(ws.rt, pending, 'promote');
+  await applyPromotionDecision(ws.rt, pending, 'promote', new RunEventRecorder(ws.rt.storage.sql, ws.rt.actor));
 
   return proposed.version;
 }
@@ -792,7 +793,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
 
     if (!pending) throw new Error('the import did not land as a pending version');
     winShadowTrials(beta, pending.version);
-    const applied = await applyPromotionDecision(beta.rt, pending, 'promote');
+    const applied = await applyPromotionDecision(beta.rt, pending, 'promote', new RunEventRecorder(beta.rt.storage.sql, beta.rt.actor));
 
     expect(applied.action).toBe('promote');
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v1'));

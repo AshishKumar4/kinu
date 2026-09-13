@@ -6,7 +6,7 @@ import {
   MERGE_POLICY_BINDING, memberBody, mergePolicyProfile, scriptedTurnModel, toolExecute,
 } from '@kinu.run/test-utils';
 import {
-  MergeOutputSchema, WORKSPACE_RUN_ID,
+  MergeOutputSchema, WORKSPACE_RUN_ID, listQueuedShadowTrials,
   type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
 } from '@kinu.run/core';
 import { SDK_SESSION_DDL } from '../../core/tests/helpers';
@@ -205,6 +205,42 @@ describe('turn-pipeline correctness wiring', () => {
     // the second message would pass a bare `toContain`.
     expect(request.filter((message) => message.role === 'user')).toEqual([first, second]);
     expect(request.filter((message) => message.role === 'assistant')).toEqual([reply]);
+  });
+
+  test('a managed context edit reaches the hosted request and retained trial together', async () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    const runtime = agent.observeRuntime();
+    const first: ModelMessage = { role: 'user', content: 'use the OLD premise' };
+    const reply: ModelMessage = { role: 'assistant', content: 'answer' };
+    const next: ModelMessage = { role: 'user', content: 'follow-up input' };
+
+    const turn = (messages: ModelMessage[]) => ({
+      system: 'sys', messages, tools: {} satisfies ToolSet, model: 'harness-model',
+      continuation: false, body: {},
+    });
+
+    await agent.beforeTurn(turn([first]));
+    await agent.onChatResponse({
+      message: { id: 'edited-answer-1', role: 'assistant', parts: [{ type: 'text', text: 'answer' }] },
+      requestId: 'edited-req-1', continuation: false, status: 'completed',
+    });
+    const document = v.parse(v.string(), await runtime.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
+    await runtime.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
+    await expect(runtime.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    agent.harnessDeclareShadowCandidate();
+    runtime.actor.config.setShadowSampleRate(1);
+    const prepared = await agent.beforeTurn(turn([first, reply, next]));
+    await agent.onChatResponse({
+      message: { id: 'edited-answer-2', role: 'assistant', parts: [{ type: 'text', text: 'second answer' }] },
+      requestId: 'edited-req-2', continuation: false, status: 'completed',
+    });
+    const trial = listQueuedShadowTrials(runtime.storage.sql, runtime.actor, 1)[0];
+
+    if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
+    expect(prepared.messages[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
+    expect(trial.context).toEqual(prepared.messages);
+    expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
   });
 
   test('a catalog the turn cannot reach runs on builtins; any other failure is the turn\'s own', async () => {

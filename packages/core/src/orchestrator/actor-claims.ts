@@ -506,6 +506,18 @@ export class ActorClaimStore {
     return this.consumedContext(turnId, 0);
   }
 
+  /** The immutable admission an issued claim names, before provider transforms. */
+  admittedFor(claim: ActorTurnClaim): ContextRevision {
+    const context = this.admittedContext(claim.turnId);
+
+    if (claim.actorId !== this.actorId || context === null
+      || context.epoch !== claim.epoch || context.workingRevision !== claim.workingRevision) {
+      throw new KinuError('denied', 'the claimed context admission is no longer available');
+    }
+
+    return context;
+  }
+
   /** Drop one turn's claim and revisions. Called only once the turn's answer is
    *  durably persisted and its effects are settled: until then these rows are
    *  what a recovery reads instead of guessing. */

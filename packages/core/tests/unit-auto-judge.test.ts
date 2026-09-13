@@ -12,6 +12,7 @@ import {
 } from '../src/index';
 import { createTestRuntime } from './helpers';
 import type { ChatEvent } from '../src/chat';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const noOpLlmStream = async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; };
 
@@ -86,6 +87,7 @@ describe('runAutoShadowEval', () => {
     initShadowTables(rt.storage.execRaw);
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 'hello', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('current', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
@@ -101,6 +103,7 @@ describe('runAutoShadowEval', () => {
     let judgeCalls = 0;
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 'compute 2+2', currentOutput: LIVE_OUTPUT,
       judge: async (prompt, schema) => {
         judgeCalls++;
@@ -125,6 +128,7 @@ describe('runAutoShadowEval', () => {
     const rt = await setup();
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
@@ -146,6 +150,7 @@ describe('runAutoShadowEval', () => {
     }
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
@@ -182,6 +187,7 @@ describe('runAutoShadowEval', () => {
     }
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('current', LIVE_OUTPUT), // the regression
       llmStream: noOpLlmStream,
@@ -218,6 +224,7 @@ describe('runAutoShadowEval', () => {
     );
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
@@ -249,6 +256,7 @@ describe('runAutoShadowEval', () => {
     // Explicitly DO NOT write 'scaffold/agent.js'.
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
@@ -305,6 +313,7 @@ describe('runAutoShadowEval', () => {
     };
 
     const evalPromise = runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 'slow candidate', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
@@ -353,6 +362,7 @@ describe('order-swapped double-win judging', () => {
     const rt = await setup();
 
     return runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge,
       llmStream: noOpLlmStream,
@@ -436,6 +446,7 @@ describe('order-swapped double-win judging', () => {
   test('the recorded trial keeps the current/pending contract the promotion rule reads', async () => {
     const rt = await setup();
     await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
