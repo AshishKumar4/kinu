@@ -24,7 +24,7 @@ import {
 } from "@phosphor-icons/react";
 import type { ChangelogEntryKind, DiffLine } from "@kinu.run/core";
 import * as v from "valibot";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
@@ -34,7 +34,7 @@ import {
   changelogFactKey, changelogToolName, withToolDetails,
   type ChangelogEntryView, type CraftedToolDetail,
 } from "./shared";
-import { timeAgo } from "@/lib/format";
+import { timeAgo } from "@kinu.run/core";
 
 export interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
 

@@ -33,7 +33,7 @@ import {
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '../src/lib/preview-exposures';
-import type { KvStore } from '../src/lib/kv';
+import type { KvStore } from '@kinu.run/agent-utils';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import type { SandboxOptions } from '@cloudflare/sandbox';
 

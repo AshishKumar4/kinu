@@ -31,12 +31,12 @@ import {
   CircleIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, type MountInfo } from "@kinu.run/core";
-import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
+import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
 import {
   executorDescription, executorLabel, isExecutorActive,
   pickDefaultExecutor,
   type ExecutorInfo,
-} from "@/lib/executors";
+} from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-kinu";
 import { TerminalPane } from "@/components/TerminalPane";
 import type { UserDevice } from "@/lib/user-api";

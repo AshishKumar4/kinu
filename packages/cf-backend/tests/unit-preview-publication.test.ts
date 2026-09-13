@@ -26,7 +26,7 @@ import {
   type SandboxPreviewExposures,
 } from '../src/lib/preview-exposures';
 import { makeKv, type FakeKv } from './helpers/kv';
-import type { KvStore } from '../src/lib/kv';
+import type { KvStore } from '@kinu.run/agent-utils';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';

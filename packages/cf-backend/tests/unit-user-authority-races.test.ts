@@ -33,7 +33,7 @@ import {
   sessionBearerConnectionTag,
   sessionBearerFromTags,
 } from '../src/cli/rpc-gate';
-import { sha256Hex } from '../src/lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import type { Connection } from 'agents';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

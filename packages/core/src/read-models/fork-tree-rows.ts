@@ -13,8 +13,8 @@
  * the root row from dispatch, so it is never empty, and the journal half holding
  * every node currently executing was therefore never read.
  */
-import { headStatusUnsettled, storedHeadReportStatus, type HeadRunView } from "@kinu.run/core";
-import type { ForkNode, ForkNodeLifecycle } from "./protocol";
+import { headStatusUnsettled, storedHeadReportStatus, type HeadRunView } from '../heads/types';
+import type { ForkNode, ForkNodeLifecycle } from '../protocol';
 
 /** One `search_nodes` row, as every transport serves it. */
 export interface MctsRow {

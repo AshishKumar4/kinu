@@ -40,8 +40,8 @@ import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import type { SeekCursor } from "@kinu.run/core";
-import { fmtTokens, timeAgo } from "@/lib/format";
-import type { ForkNode, Rpc } from "@/lib/protocol";
+import { fmtTokens, timeAgo } from "@kinu.run/core";
+import type { ForkNode, Rpc } from "@kinu.run/core";
 
 
 interface OlderPageLoad {

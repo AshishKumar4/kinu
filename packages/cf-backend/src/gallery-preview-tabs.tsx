@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { missingSubordinateHistory, SubordinateInspectionRequestSchema, WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
 import * as v from 'valibot';
-import type { Rpc } from '@/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
 import { useKinu, WorkspacePlanUpdatedFrameSchema } from '@/hooks/use-kinu';
 import { galleryServerPush } from '@/gallery-agent-stub';
 import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface';

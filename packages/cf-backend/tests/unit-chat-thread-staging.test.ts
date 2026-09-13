@@ -39,7 +39,7 @@ import {
 import type { UIMessage } from 'ai';
 
 import { useChatThread } from '../src/hooks/use-chat-thread';
-import type { Rpc } from '../src/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
 
 /** Stored rows the reader has paged back to — the half a token must not pay
  *  for. Large enough that a per-token re-walk is unmistakable in the counts. */

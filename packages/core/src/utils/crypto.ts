@@ -1,5 +1,20 @@
-/** Web-Crypto primitives shared by every path that checks a secret — core's
- *  webhook ingress, and the cf-backend session, capability and preview edges. */
+/** Web-Crypto primitives shared by every path that mints or checks a secret —
+ *  core's webhook ingress, and the session, capability and preview edges on
+ *  either backend. */
+
+/** URL-safe base64 token from `bytes` of CSPRNG output. */
+export function randomToken(bytes: number): string {
+  const data = crypto.getRandomValues(new Uint8Array(bytes));
+  let bin = '';
+
+  for (const b of data) bin += String.fromCharCode(b);
+
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+/** Lowercase-hex HMAC-SHA256 is below; SHA-256 digests live in
+ *  `safety/argument-digest.ts` (`sha256Hex`), sync over node:crypto, shared by
+ *  every backend under `nodejs_compat`. */
 
 /** Constant-time string comparison — guards secret checks against
  *  timing-side-channel enumeration. */

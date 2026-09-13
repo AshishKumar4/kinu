@@ -9,7 +9,7 @@ import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
 } from '../lib/deployed-assets';
 import { err, escapeHtml, json, safeJson } from '../lib/http';
-import { randomToken } from '../lib/crypto';
+import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '../events/webhook-route';
 import {

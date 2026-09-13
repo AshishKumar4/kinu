@@ -13,7 +13,7 @@ import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { statusOf } from '../src/components/surfaces/EnvironmentSurface';
 import type { MountInfo } from '@kinu.run/core';
-import type { ExecutorInfo } from '../src/lib/executors';
+import type { ExecutorInfo } from '@kinu.run/core';
 
 const LIVE: MountInfo = {
   name: 'laptop', prefix: 'laptop.*', live: true,

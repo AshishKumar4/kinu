@@ -9,7 +9,7 @@ import {
   type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
-import { retryTransientDO } from '../lib/do-rpc';
+import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from './workspace-capability';
 
 export interface ModelMenuEntry {

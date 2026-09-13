@@ -65,7 +65,7 @@ import {
 } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
 import { useElementSize } from "@/hooks/use-element-size";
-import type { ForkNode } from "@/lib/protocol";
+import type { ForkNode } from "@kinu.run/core";
 import {
 	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
 	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,

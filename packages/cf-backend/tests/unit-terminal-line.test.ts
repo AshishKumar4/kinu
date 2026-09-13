@@ -26,7 +26,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   LineTerminalState, feedInput, terminalLane, writeOutputRow,
   type TerminalPaneOutput, type TerminalWriter,
-} from '../src/lib/terminal-lane';
+} from '@kinu.run/core';
 
 /** A terminal that keeps its bytes. The pane hands xterm's `Terminal` here;
  *  the one method is all either of them uses. */

@@ -35,7 +35,7 @@
  */
 import { hmacSha256Hex, nanoid, timingSafeEqual, type SqlExec } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
-import { sha256Hex } from '../lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 
 /** What a capability requires of its caller.

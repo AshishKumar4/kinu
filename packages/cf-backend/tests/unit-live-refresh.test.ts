@@ -10,9 +10,9 @@ import {
   type LiveRefreshSource,
   type MctsProgress,
 } from '../src/hooks/use-kinu';
-import { explorationForkTree } from '../src/lib/fork-tree-rows';
+import { explorationForkTree } from '@kinu.run/core';
 import { pruneSlateReloads } from '../src/components/surfaces/presence';
-import type { ForkNode } from '../src/lib/protocol';
+import type { ForkNode } from '@kinu.run/core';
 import {
   activateMctsProgressActor,
   applyMctsProgress as applyMctsProgressOrder,

@@ -45,9 +45,8 @@ export function fmtPct(rate: number | null, digits = 0): string {
  * There were two of these — the jobs card counted seconds, the changelog said
  * "just now" and fell back to a date — and they render in the SAME feed,
  * where one row reading "8s ago" beside another reading "just now" is two
- * clocks, not one. Moved to `lib` when the home cards needed it: the surface
- * `shared.tsx` it lived in pulls in the markdown renderer, which a roster row
- * has no business loading.
+ * clocks, not one. Kept out of any surface file: `shared.tsx` pulls in the
+ * markdown renderer, which a roster row has no business loading.
  */
 export function timeAgo(at: number): string {
 	const s = Math.max(0, Math.floor((Date.now() - at) / 1000));

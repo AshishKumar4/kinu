@@ -47,7 +47,7 @@ import {
   type EgressRequestFacts,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { randomToken } from '../lib/crypto';
+import { randomToken } from '@kinu.run/core';
 import type { CredentialCipher } from './credential-envelope';
 
 /** A binding id is owner-authored and lands in a rule name and a SQL key, so

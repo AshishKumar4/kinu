@@ -33,15 +33,16 @@ import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
 import type { HeadDeltas } from "@/components/head-chat";
 import { cleanNodeLabel, type ExplorerSelection } from "@/components/swarm-tree-model";
-import { explorationForkTree, type MctsRow } from "@/lib/fork-tree-rows";
-import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
+import { explorationForkTree, type MctsRow } from "@kinu.run/core";
+import type { ForkNode, Rpc } from "@kinu.run/core";
+import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
 import { EmptyState, EMPTY_HINTS, formatScore } from "./shared";
-import { timeAgo } from "@/lib/format";
+import { timeAgo } from "@kinu.run/core";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
   useExplorationCanvas, type ExplorationFrontier, type ForkParamRow,

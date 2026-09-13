@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SlateSummary } from "@kinu.run/core";
-import type { ForkNode, Rpc } from "@/lib/protocol";
+import type { ForkNode, Rpc } from "@kinu.run/core";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SLATE_PREFIX } from "@/components/surfaces/presence";
 

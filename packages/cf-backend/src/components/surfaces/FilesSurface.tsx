@@ -32,8 +32,8 @@ import {
   joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import type { Rpc } from "@/lib/protocol";
-import { executorLabel, type ExecutorInfo } from "@/lib/executors";
+import type { Rpc } from "@kinu.run/core";
+import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useToggledSet } from "@/hooks/use-toggled-set";

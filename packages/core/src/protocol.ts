@@ -2,10 +2,13 @@
  * Shared UI domain types for the agent RPC surface (@callable methods).
  */
 
-import type {
-	ActivityLogEntry, ContextComposition, HeadReportStatus,
-	HeadUnsettledStatus, StepTelemetry, Usage, WorkspaceSpend, CommandResult,
-} from "@kinu.run/core";
+import type { ActivityLogEntry } from './identity/activity-log';
+import type { ContextComposition } from './context-meter';
+import type { HeadReportStatus, HeadUnsettledStatus } from './heads/types';
+import type { StepTelemetry } from './events/step-stats';
+import type { Usage } from './usage';
+import type { WorkspaceSpend } from './read-models/workspace-spend';
+import type { CommandResult } from './execution/exec-result';
 
 /**
  * A journalled branch's lifecycle, in the JOURNAL's own closed vocabulary —

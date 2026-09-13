@@ -13,7 +13,7 @@ import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ForkNode, Rpc, TabPresence } from '../src/lib/protocol';
+import type { ForkNode, Rpc, TabPresence } from '@kinu.run/core';
 import { WorkSurface } from '../src/components/surfaces/WorkSurface';
 import {
   resolveGatedSurface,

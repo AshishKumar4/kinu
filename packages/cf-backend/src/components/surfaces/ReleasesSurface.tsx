@@ -25,6 +25,7 @@ import {
   ArrowClockwiseIcon, CheckIcon, GitBranchIcon, GitDiffIcon,
   ShieldCheckIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
+import type { Rpc } from "@kinu.run/core";
 import type {
   ReleaseApproval,
   ReleaseBoard,
@@ -33,11 +34,10 @@ import type {
   ReleaseStatus,
   ReleaseDeployment,
   ReleaseSource,
-  Rpc,
-} from "@/lib/protocol";
+} from "@kinu.run/core/protocol";
 import { deployTargetAsCommand } from "@kinu.run/core";
 import { isPreviewUrl } from "@/lib/preview-origin";
-import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
+import { releaseSubstrate, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, CodeBlock } from "./shared";

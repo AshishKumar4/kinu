@@ -24,7 +24,7 @@
  */
 
 import { CLI_DIST_PATHS } from '../lib/deployed-assets';
-import { sha256Hex } from '../lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -186,7 +186,7 @@ async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {
 
     try {
       declared = ((await checksum.text()).trim().split(/\s+/)[0] ?? '');
-      actual = await sha256Hex(await archive.arrayBuffer());
+      actual = await sha256Hex(new Uint8Array(await archive.arrayBuffer()));
     } catch (err) {
       return fail(`the CLI download ${path} could not be read: ${renderThrownChain({ cause: err })}`);
     }

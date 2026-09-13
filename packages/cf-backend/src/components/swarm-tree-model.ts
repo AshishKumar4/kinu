@@ -5,7 +5,7 @@
  * label says) are testable without a DOM, and so the two surfaces that render
  * this tree share one copy of them.
  */
-import type { ForkNode } from "@/lib/protocol";
+import type { ForkNode } from "@kinu.run/core";
 
 /**
  * Which node, in which search, the reader is inspecting.

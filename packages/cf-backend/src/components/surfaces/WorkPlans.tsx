@@ -3,7 +3,7 @@ import { Loader } from '@cloudflare/kumo';
 import * as v from 'valibot';
 import { SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type PlanReview, type AgentTaskTree, type SeekCursor } from '@kinu.run/core';
 import type { WorkspacePlanArrival } from '@/hooks/use-kinu';
-import type { Rpc } from '@/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
 import { lastValue, useAsyncResource } from '@/hooks/use-async-resource';
 import { LoadFailure } from '@/components/ui/LoadFailure';
 import { renderThrownChain } from '@kinu.run/core/obs';

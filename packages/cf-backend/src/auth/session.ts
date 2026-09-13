@@ -11,7 +11,7 @@ import { DEVICE_CONNECT_PATH, timingSafeEqual } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession, type AuthStoreEnv,
 } from './store';
-import type { KvStore } from '../lib/kv';
+import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
 import type { OwnerCapabilityEnv } from '../user/workspace-capability';
 import type { AccessTokenScope } from '../cli/access-token-store';

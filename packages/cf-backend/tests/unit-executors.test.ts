@@ -7,7 +7,7 @@ import { join } from "node:path";
 import {
   executorLabel, executorSortKey, pickDefaultExecutor, releaseSubstrate,
   type ExecutorInfo,
-} from "../src/lib/executors";
+} from "@kinu.run/core";
 
 const avail = (...names: string[]) => names.map((name) => ({ name, available: true }));
 
@@ -50,7 +50,8 @@ describe("pickDefaultExecutor", () => {
  */
 describe("releaseSubstrate", () => {
   const exec = (over: Partial<ExecutorInfo>): ExecutorInfo => ({
-    name: "sandbox", kind: "sandbox", capabilities: [], available: true, ...over,
+    name: "sandbox", kind: "sandbox", capabilities: [], available: true,
+    configured: true, active: false, status: "idle", ...over,
   });
 
   test("says nothing before the executor list has loaded", () => {

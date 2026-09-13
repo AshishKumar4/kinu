@@ -7,26 +7,9 @@
  * describe environments in user terms only.
  */
 
-/** Live executor row as reported by the orchestrator's getExecutors RPC. */
-export interface ExecutorInfo {
-  name: string;
-  kind: string;
-  capabilities: string[];
-  /** Capabilities the environment could not answer for either way. Part of
-   *  the wire payload; consumed by the agent's own execution-status block. */
-  unmeasuredCapabilities?: string[];
-  /** The user's own display name for the environment, where one exists —
-   *  a registered device's chosen name on the laptop row. */
-  label?: string;
-  /** Whether the reading workspace holds this environment's access grant.
-   *  Only the device row answers; absent means the question does not arise. */
-  granted?: boolean;
-  available: boolean;
-  configured?: boolean;
-  active?: boolean;
-  status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
-  reason?: string;
-}
+import type { ExecutorInfo } from '../execution/types';
+
+export type { ExecutorInfo };
 
 /**
  * The human name beside each namespace. Not a copy of the namespace — `laptop.*`
@@ -77,7 +60,7 @@ export function executorSortKey(name: string): number {
 }
 
 export function isExecutorActive(exec: ExecutorInfo): boolean {
-  return exec.active === true || exec.status === "active";
+  return exec.active || exec.status === "active";
 }
 
 /** Devices worth offering as an explicit target (diff selector): the user's
