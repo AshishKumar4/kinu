@@ -1780,7 +1780,7 @@ export {
 } from './orchestrator/completion-gate';
 
 export {
-  assembleTurnMessages, measureCompactionTrigger,
+  assembleTurnMessages, measureCompactionTrigger, orderUserTurnMessages,
   type TurnContextInput, type CompactionTriggerReader, type MeasuredCompactionTrigger,
   type TurnAdmission,
 } from './orchestrator/turn-context';

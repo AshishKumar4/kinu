@@ -8,7 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { Database } from 'bun:sqlite';
-import { assembleTurnMessages, measureCompactionTrigger } from '../src/orchestrator/turn-context';
+import { assembleTurnMessages, measureCompactionTrigger, orderUserTurnMessages } from '../src/orchestrator/turn-context';
 import { ExtensionHost } from '../src/extension';
 import { createMemoryVFS } from './helpers';
 import type { MediaModality } from '../src/prompting/attachment-sanitizer';
@@ -22,6 +22,26 @@ const HISTORY: ModelMessage[] = [
 function base() {
   return { system: 'SYS', history: HISTORY, sessionKey: 'k', contextWindow: 200_000, trigger: 'auto' as const };
 }
+
+describe('queued user input ordering', () => {
+  test('only a new turn moves the user input past the preceding assistant answer', () => {
+    const queued: ModelMessage[] = [HISTORY[0], HISTORY[2], HISTORY[1]];
+    expect(orderUserTurnMessages(queued, false)).toEqual(HISTORY);
+    expect(queued).toEqual([HISTORY[0], HISTORY[2], HISTORY[1]]);
+    expect(orderUserTurnMessages(queued, true)).toBe(queued);
+    expect(orderUserTurnMessages(HISTORY, false)).toBe(HISTORY);
+  });
+
+  test('tool exchanges stay paired and a repeated question is moved, not deduplicated', () => {
+    const ask: ModelMessage = { role: 'user', content: 'again' };
+    const call: ModelMessage = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c', toolName: 'run', input: {} }] };
+    const result: ModelMessage = { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c', toolName: 'run', output: { type: 'text', value: 'result' } }] };
+    const answer: ModelMessage = { role: 'assistant', content: 'done' };
+    expect(orderUserTurnMessages([ask, ask, call, result, answer], false)).toEqual([ask, call, result, answer, ask]);
+    expect(orderUserTurnMessages([answer], false)).toEqual([answer]);
+    expect(orderUserTurnMessages([], false)).toEqual([]);
+  });
+});
 
 describe('assembleTurnMessages', () => {
   test('bare assembly returns the durable history plus nothing', async () => {
