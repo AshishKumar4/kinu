@@ -32,6 +32,7 @@ import { CONSECUTIVE_FAILURES_BEFORE_STEER } from '../src/orchestrator/turn-stee
 import type { LLM } from '../src/types/primitives';
 import type { SqlExecutor } from '../src/types/primitives';
 import { actorReferenceOf } from '../src/identity/actor-handle';
+import { ADVISOR_HEADER, type AdvisorSeverity } from '../src/advisor/review';
 
 const REFLECTION_PROMPT = 'should be done differently';
 
@@ -96,6 +97,74 @@ function windowRows(sql: SqlExecutor, actorId: string): number {
 }
 
 describe('a headless actor runs the step clock only', () => {
+  const severities: readonly AdvisorSeverity[] = ['nit', 'concern', 'blocker'];
+
+  for (const severity of severities) {
+    test(`${severity} advice reaches its actor; only blockers reach its parent`, async () => {
+      const { rt, testSql } = createTestRuntime();
+      rt.actor.config.setAdvisorEnabled(true);
+      rt.actor.config.setAdvisorMinSeverity('nit');
+      const prompts: string[] = [];
+      const note = 'The failing parser probe was reported as successful. Check its exit status.';
+      rt.advisorLlm = {
+        async *stream() { yield ''; },
+        complete: async (prompt) => {
+          prompts.push(prompt);
+
+          return JSON.stringify({ note, severity, class: 'wrong-work' });
+        },
+      };
+      await rt.storage.vfs.writeFile('ADVISOR.md', 'Watch parser outcomes.');
+      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
+      const requests: string[] = [];
+
+      const model = scriptedTurnModel({
+        doGenerate: async (options) => {
+          requests.push(JSON.stringify(options.prompt));
+
+          return {
+            content: [{ type: 'text', text: 'The parser probe succeeded.' }],
+            finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
+          };
+        },
+      });
+
+      for (const name of ['one', 'two']) {
+        const seat = await seats.seat(name, 'subordinate');
+        const before = windowRows(rt.storage.sql, rt.actor.actorId);
+
+        const report = await runHeadInference(headInput(), {
+          actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+          model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+          workspaceLayout: 'shared-workspace',
+        });
+
+        expect(report.status).toBe('completed');
+        expect(windowRows(rt.storage.sql, seat.actor.handle.actorId)).toBe(0);
+        expect(windowRows(rt.storage.sql, rt.actor.actorId)).toBe(before);
+
+        const notes = rt.storage.sql<{ message: string }>`SELECT message FROM evolution_events
+          WHERE actor_id = ${seat.actor.handle.actorId} AND type = 'advisor_note'`;
+
+        expect(notes).toEqual([{ message: note }]);
+      }
+
+      expect(requests).toHaveLength(4);
+      expect(requests[1]).toContain(ADVISOR_HEADER);
+      expect(requests[3]).toContain(note);
+      expect(prompts).toHaveLength(4);
+      expect(prompts.every((prompt) => prompt.includes('Watch parser outcomes.'))).toBe(true);
+      const parentAdvice = seats.enqueued.filter((turn) => turn.metadata?.kinuEvent === 'advisor');
+      expect(parentAdvice).toHaveLength(severity === 'blocker' ? 2 : 0);
+
+      if (severity === 'blocker') {
+        expect(parentAdvice.map((turn) => turn.idempotencyKey)).toHaveLength(2);
+        expect(new Set(parentAdvice.map((turn) => turn.idempotencyKey)).size).toBe(2);
+        expect(parentAdvice[0]?.text).toContain('[Actor one]');
+      }
+    });
+  }
+
   test('a head turn enters no conversational timescale; the same evidence recorded by the root does', async () => {
     const { llm, reflections } = reflectingLlm();
     const { rt, testSql } = createTestRuntime({ llm });

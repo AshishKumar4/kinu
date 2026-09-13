@@ -18,6 +18,20 @@ import {
 import { createActorContextPlane, type ActorContextPlane, type ContextEventRecorder } from './context-plane';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
+import type { AgentSignal, SignalOutcome } from '../types/signals';
+import type { VFS } from '../types/primitives';
+import type { AgentConfigStore } from '../config/store';
+import type { CompletedTurn } from '../evolution/types';
+import { reviewRecordedTurn, type AdvisorRecoverySnapshot, type AdvisorDisposition } from '../advisor/review';
+import { resolveModelRoute } from '../profiles/model-route';
+import { contextWindowForModel } from '../context-window';
+
+/** A hosted actor shares workspace priorities, but delivers feedback to itself. */
+export interface ActorAdvisorContext {
+  readonly config: AgentConfigStore;
+  readonly workspace: () => Promise<VFS>;
+  readonly parent: (signal: AgentSignal) => Promise<SignalOutcome>;
+}
 
 export interface ActorSessionOptions {
   readonly runtime: AgentRuntime;
@@ -46,6 +60,7 @@ export interface ActorSessionOptions {
    * fabricated one.
    */
   readonly events?: ContextEventRecorder | null;
+  readonly advisor?: ActorAdvisorContext;
 }
 
 /** Live-instance execution token, not a replacement for a durable turn/run claim. */
@@ -144,6 +159,54 @@ export class ActorSession {
   /** The admitted turn's durable claim, or null before it is written. A host
    *  reads it to settle the claim under the outcome IT named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
+
+  get advisorEnabled(): boolean {
+    return (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorEnabled();
+  }
+
+  advisorSnapshot(turn: CompletedTurn, reachable: readonly string[]): AdvisorRecoverySnapshot {
+    const profile = this.profile;
+
+    return {
+      turn: this.orchestrator.scopedTurn(turn),
+      reachable: [...reachable],
+      recent: [...this.options.orchestration.engine.recentAdvisorNotes()],
+      minSeverity: (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorMinSeverity(),
+      model: profile === null || !this.advisorEnabled ? undefined : resolveModelRoute('advisor', profile).model,
+    };
+  }
+
+  /** Per-turn feedback never calls recordTurn or changes the learning window. */
+  async reviewTurn(
+    snapshot: AdvisorRecoverySnapshot,
+    gateOpen = false,
+    deliver: (signal: AgentSignal) => Promise<SignalOutcome> = (signal) => this.orchestrator.signals.deliver(signal),
+  ): Promise<AdvisorDisposition | null> {
+    const { engine, budget } = this.options.orchestration;
+    const turnId = snapshot.turn.turnId;
+    const llm = this.runtime.advisorLlm;
+
+    if (!this.advisorEnabled || llm === undefined || (turnId && engine.hasAdvisorNoteForTurn(turnId))) return null;
+    const contextWindow = contextWindowForModel(snapshot.model ?? '');
+
+    const workspace = await this.options.advisor?.workspace()
+      ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
+
+    return reviewRecordedTurn({
+      snapshot,
+      actor: this.runtime.actor,
+      llm,
+      govern: (llm, labels) => budget?.govern(llm, labels) ?? llm,
+      gateOpen,
+      workspace: {
+        vfs: workspace,
+        limits: async () => ({ contextWindow, modelOutputLimit: contextWindow }),
+      },
+      deliver,
+      parent: this.options.advisor?.parent,
+      record: (note, id) => { engine.recordAdvisorNote(note, id); },
+    });
+  }
 
   /**
    * Replace this actor's working context.

@@ -120,6 +120,9 @@ export interface AgentOrchestratorDeps {
     | 'runDeferredTurnReviews'
     | 'onSessionComplete'
     | 'runDueShadowTrials'
+    | 'recentAdvisorNotes'
+    | 'recordAdvisorNote'
+    | 'hasAdvisorNoteForTurn'
   >;
   eventLog: EventLog;
   /** Per-turn accounting side-effects (activity log, durable run-event recorder). */

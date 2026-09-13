@@ -378,6 +378,23 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     const session = new ActorSession({
       runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
       events: deps.contextEvents(bound),
+      advisor: reference.parentActorId === null ? undefined : {
+        config: deps.directory.main().config,
+        // The root owns this file even when this actor has its own home.
+        workspace: async () => {
+          const root = await acquire(actorReferenceOf(deps.directory.main()));
+
+          return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
+        },
+        parent: async (signal) => {
+          const parentId = reference.parentActorId;
+
+          if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
+          const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
+
+          return parent.session.orchestrator.signals.deliver(signal);
+        },
+      },
     });
 
     return { actor: { ...bound, runtime, session }, fence };

@@ -120,6 +120,16 @@ export function admitAgentsMd(
  *  original force, everything else is labelled reference material. */
 export type InstructionPlacement = 'system' | 'unverified';
 
+/** The same metadata-only omission for every workspace instruction file. */
+export function renderInstructionOmission(
+  referenced: ReadonlyArray<AgentsMdReference>, name: string,
+): string {
+  if (referenced.length === 0) return '';
+  const listed = referenced.map((ref) => `${ref.path} (${ref.bytes} bytes)`).join(', ');
+
+  return `${referenced.length} ${name} file(s) are too large for this model's window to carry and are not included below. When the work touches one, read it with the file tool: ${listed}`;
+}
+
 /**
  * Render the AGENTS.md block for one trust tier. `sources.admitted` must be
  * ordered root-most first, nearest last. Returns '' when this tier has nothing.
@@ -159,13 +169,7 @@ export function renderAgentsMdSection(
     ];
 
   if (referenced.length > 0) {
-    const listed = referenced
-      .map((ref) => `${ref.path} (${ref.bytes} bytes)`)
-      .join(', ');
-
-    parts.push(
-      `${referenced.length} AGENTS.md file(s) are too large for this model's window to carry and are not included below. When the work touches one, read it with the file tool: ${listed}`,
-    );
+    parts.push(renderInstructionOmission(referenced, 'AGENTS.md'));
   }
 
   for (const file of present) parts.push(`### ${file.path}`, file.content);

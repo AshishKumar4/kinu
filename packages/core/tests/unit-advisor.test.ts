@@ -9,6 +9,12 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { createMemoryVfs } from '@kinu.run/test-utils';
+import { stepContextLimit } from '../src/prompting/step-prune';
+import { CHARS_PER_TOKEN } from '../src/llm';
+import { renderInstructionOmission } from '../src/prompting/agents-md';
+import type { AdvisorWorkspace } from '../src/advisor/review';
 import { KinuError } from '../src/obs/error';
 import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '../src/obs/index';
 import {
@@ -55,6 +61,7 @@ async function lane(over: {
   gateOpen?: boolean;
   turn?: CompletedTurn;
   reachable?: readonly string[];
+  workspace?: AdvisorWorkspace;
 } = {}) {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
@@ -75,10 +82,91 @@ async function lane(over: {
       return 'queued';
     },
     record: (note) => { recorded.push(note); },
+    workspace: over.workspace,
   });
 
   return { disposition, delivered, recorded };
 }
+
+describe('workspace advisor guidance', () => {
+  const limits = { contextWindow: 800, modelOutputLimit: 400 };
+  const budget = stepContextLimit(limits) * CHARS_PER_TOKEN;
+
+  async function promptWith(content?: string) {
+    const { vfs } = createMemoryVfs();
+
+    if (content !== undefined) await vfs.writeFile('ADVISOR.md', content);
+    const prompts: string[] = [];
+    const reads: string[] = [];
+
+    const workspace: AdvisorWorkspace = {
+      vfs: {
+        ...vfs,
+        stat: async (path) => {
+          const stat = await vfs.stat(path);
+
+          return stat === null || content === undefined
+            ? stat : { ...stat, size: new TextEncoder().encode(content).length };
+        },
+        readFile: async (path, options) => {
+          reads.push(path);
+
+          return vfs.readFile(path, options);
+        },
+      },
+      limits: async () => limits,
+    };
+
+    await lane({
+      workspace,
+      llm: {
+        ...saying('{}'),
+        complete: async (prompt) => {
+          prompts.push(prompt);
+
+          return '{}';
+        },
+      },
+    });
+    expect(prompts).toHaveLength(1);
+    const prompt = prompts[0];
+
+    if (prompt === undefined) throw new Error('Advisor made no review call');
+
+    return { prompt, reads };
+  }
+
+  test('absence preserves the pre-guidance prompt bytes', async () => {
+    const { prompt, reads } = await promptWith();
+    expect(reads).toEqual([]);
+    expect(prompt).toBe(buildAdvisorPrompt(aTurn()));
+    // Captured on main 078ec61d7, before adding workspace guidance.
+    expect(new TextEncoder().encode(prompt)).toHaveLength(3422);
+    expect(createHash('sha256').update(prompt).digest('hex'))
+      .toBe('56338df469cf99eb2b46b4c4edb446c369b132652636f2e20946e758558711a4');
+  });
+
+  test('an admitted file has its own review section, including at the exact byte budget', async () => {
+    const guidance = 'Watch the migration backup. '.padEnd(budget, 'x');
+    const { prompt, reads } = await promptWith(guidance);
+    expect(reads).toEqual(['ADVISOR.md']);
+    expect(prompt).toContain('## What this workspace asks its advisor to watch for\n\n' + guidance);
+  });
+
+  test('oversized guidance uses the shared omission and is never read or partially admitted', async () => {
+    const guidance = 'x'.repeat(budget + 1);
+    const { prompt, reads } = await promptWith(guidance);
+    expect(reads).toEqual([]);
+    expect(prompt).not.toContain(guidance);
+    expect(prompt).toContain(renderInstructionOmission([{ path: 'ADVISOR.md', bytes: budget + 1 }], 'ADVISOR.md'));
+  });
+
+  test('admission prices UTF-8 bytes, not JavaScript string length', async () => {
+    const { prompt, reads } = await promptWith('é'.repeat(budget));
+    expect(reads).toEqual([]);
+    expect(prompt).toContain(`ADVISOR.md (${budget * 2} bytes)`);
+  });
+});
 
 // ── The switch ──────────────────────────────────────────────────────────────
 
