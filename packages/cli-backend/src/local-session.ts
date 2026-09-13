@@ -72,6 +72,7 @@ import { TierIdSchema,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
+  subordinateTurnContext, inheritedAsModelMessage,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   // The terminal transition — core owns the vocabulary, the roster, the state
@@ -2843,6 +2844,14 @@ export class LocalAgentSession implements BackendHost {
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
 
+    const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
+
+    if (this.actorSession.history.length === 0 && drainTurn.success) {
+      for (const inherited of subordinateTurnContext(this.eventLog, drainTurn.output)) {
+        this.actorSession.appendInput(lease, inheritedAsModelMessage(inherited));
+      }
+    }
+
     this.actorSession.appendInput(lease, fileParts.length > 0
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
@@ -4468,7 +4477,7 @@ export class LocalAgentSession implements BackendHost {
       announceHeadActivity: () => this.headActivity,
       reportNodeDelta: () => this.publishHeadStream,
       model: this.cachedModel ?? this.defaultModel("an agents swarm"),
-      originContext: () => Object.freeze(structuredClone([...this.actorSession.history])),
+      originContext: () => this.actorSession.history,
       // Same catalog session that answers the context window and prices the
       // mission ledger — so a search's pre-run estimate and the ledger that
       // later debits it read one rate.

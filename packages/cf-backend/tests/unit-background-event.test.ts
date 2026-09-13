@@ -287,9 +287,9 @@ describe('drained event parsing', () => {
       id: 's1', ingress: 'subordinate', variant: 'subordinate_task' as const,
       payload: {
         from_workspace: 'atlas', kind: 'task' as const, body: 'check the CLI',
-        inherited_context: 'Context line one.\nContext line two.',
+        inherited_context: { kind: 'digest', text: 'Context line one.\nContext line two.' },
         kinu_mode: 'build',
-        sequence_id: 'seq-1',
+        creation_id: 'seq-1',
       },
     })])!;
 

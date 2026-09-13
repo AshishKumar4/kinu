@@ -32,6 +32,7 @@ import {
   SubordinateRosterStore,
   SubordinateIdentityStore,
   admitSubordinateTask,
+  type SubordinateInheritedContext,
   actorReferenceOf,
   canonicalConversationId,
   childContextResolver,
@@ -1465,6 +1466,7 @@ export class LocalAgentHost {
       runtime: this.childRuntime(parent.key),
       now: () => Date.now(),
       inheritedContext: (): SerializedMessage[] => readConversationTail(parent),
+      originContext: () => parent.actor.session.history,
       // What this agent is FOR, as its own workspace records it — inherited by
       // an additional agent the owner adds beneath it without saying anything.
       ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
@@ -1734,7 +1736,8 @@ export class LocalAgentHost {
       body: string;
       mode: WorkMode;
       deliverable?: string;
-      inheritedContext?: string;
+      inheritedContext?: SubordinateInheritedContext;
+      creationId?: string;
     },
   ): SubordinateHandoff {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
@@ -1745,6 +1748,7 @@ export class LocalAgentHost {
       body: input.body,
       deliverable: input.deliverable,
       inheritedContext: input.inheritedContext,
+      creationId: input.creationId,
       mode: input.mode,
       now: Date.now(),
     });

@@ -363,7 +363,7 @@ function briefForVariant(event: KinuEvent): string {
       // budget, same as peer messages.
       const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
-      const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
+      const inheritedContext = p.inherited_context?.kind === 'digest' ? `${p.inherited_context.text}\n\n` : '';
 
       return `${inheritedContext}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }

@@ -388,7 +388,7 @@ export function buildHeadMessages(input: HeadInput): ModelMessage[] {
  *     actually produces), not instructions to the head, so they are reported to
  *     the head as a user message instead of issued to it as policy.
  */
-function inheritedAsModelMessage(m: SerializedMessage): ModelMessage {
+export function inheritedAsModelMessage(m: SerializedMessage): ModelMessage {
   switch (m.role) {
     case 'user':
     case 'assistant':

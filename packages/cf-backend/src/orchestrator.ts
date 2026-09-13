@@ -1036,6 +1036,7 @@ export class OrchestratorAgent extends ActorAgent {
       now: () => Date.now(),
       // This actor's own transcript, capped — what a child it hires inherits.
       inheritedContext: () => this.readInheritedContext(actor.handle),
+      originContext: () => actor.session.history,
       // The WORKSPACE's purpose, which is the same fact for every actor in it:
       // an agent added here is here for what this workspace is for.
       ownMission: () => this.ownMission(),
@@ -1353,6 +1354,7 @@ export class OrchestratorAgent extends ActorAgent {
               body: event.payload.body,
               mode: event.payload.kinu_mode,
               sequenceId: event.id,
+              inheritedContext: event.payload.inherited_context,
             });
             log.markTurnCompleted(turnId);
           } catch (cause) {
