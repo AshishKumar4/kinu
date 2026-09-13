@@ -1356,8 +1356,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const block = findMount(mounts, blockLower);
     const base = findMount(mounts, lowerBase);
     const delta = findMount(mounts, deltaLayer);
+    ports.log(JSON.stringify({ event: 'devbox.attach.composition', token, blockType: block?.fstype,
+      blockSourceMatches: block?.source === `devbox-block:${token}`, storeMounted: findMount(mounts, CHAIN_STORE_MOUNT) !== undefined,
+      baseSourceMatches: base?.source === baseSource, baseType: base?.fstype,
+      deltaSourceMatches: delta?.source === deltaSource, deltaType: delta?.fstype }));
 
-    if (block?.source !== `devbox-block:${token}` || block.fstype !== 'fuse.devbox-block'
+    // Cloud b20260913141100 and the same pinned image in Docker report
+    // plain fuse. The exact source token still fences all three identities.
+    if (block?.source !== `devbox-block:${token}` || block.fstype !== 'fuse'
       || findMount(mounts, CHAIN_STORE_MOUNT) === undefined
       || base?.source !== baseSource || !base.fstype.includes('squashfuse')
       || delta?.source !== deltaSource || !delta.fstype.includes('squashfuse')) {

@@ -135,7 +135,9 @@ function composeBlockMount(command: string, disk: ContainerDisk): ShellReply {
     node.mode = file.mode;
   }
 
-  disk.mount(mount, { source: `devbox-block:${get('generation')}`, fstype: 'fuse.devbox-block', options: 'ro' });
+  // Cloud b20260913141100 and the same image in Docker report plain fuse;
+  // the generation-bearing source, not a synthetic subtype, identifies it.
+  disk.mount(mount, { source: `devbox-block:${get('generation')}`, fstype: 'fuse', options: 'ro' });
 
   return { stdout: '', stderr: '', exitCode: 0 };
 }

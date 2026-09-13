@@ -31,6 +31,8 @@ for attempt in $(seq 1 100); do
   sleep 0.05
 done
 mountpoint -q "$block"
+block_mount=$(awk -v point="$block" '$2 == point {print $1 " " $3}' /proc/mounts)
+test "$block_mount" = "devbox-block:$generation:probe fuse"
 fuse-overlayfs -o "lowerdir=$block:$delta/.devbox-delta/tree:$base,upperdir=$upper,workdir=$probe_dir/work" "$merged"
 node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1])); if(s.payloadBytes!==0||s.indexPages!==0)throw Error(JSON.stringify(s)); console.log("attach-payload-bytes="+s.payloadBytes)' "$probe_dir/stats.json"
 cmp /fixture/expected "$merged/dir/file"
