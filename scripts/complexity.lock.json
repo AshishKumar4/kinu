@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-13",
-  "files": 2196,
-  "functions": 54750,
+  "files": 2202,
+  "functions": 54844,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -146,6 +146,10 @@
       "complexity": 40
     },
     {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 40
+    },
+    {
       "key": "packages/core/src/tools/release-tool.ts#runReleaseAction",
       "complexity": 40
     },
@@ -234,15 +238,15 @@
       "complexity": 36
     },
     {
-      "key": "packages/cli/src/tui/input-state.ts#reduceInput",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
       "complexity": 36
     },
     {
       "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage",
+      "complexity": 36
+    },
+    {
+      "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 36
     },
     {

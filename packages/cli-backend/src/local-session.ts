@@ -2693,13 +2693,18 @@ export class LocalAgentSession implements BackendHost {
   /** A hired-for-context turn opens on an empty history but names the turn
    *  whose conversation it inherits (`metadata.drainTurnId`): seed those rows
    *  before the live prompt so the child reads its parent context in place. */
-  private seedDrainedTurnContext(item: QueueItem, lease: ActorTurnLease): void {
+  /** A delegated turn opens on the actor's working revision through the shared
+   *  rule; a root turn appends its input as before. */
+  private openTurnInput(item: QueueItem, lease: ActorTurnLease, message: ModelMessage): void {
     const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
 
-    if (this.actorSession.history.length === 0 && drainTurn.success) {
-      for (const inherited of subordinateTurnContext(this.eventLog, drainTurn.output)) {
-        this.actorSession.appendInput(lease, inheritedAsModelMessage(inherited));
-      }
+    if (drainTurn.success) {
+      this.actorSession.openDelegatedTurn(lease, {
+        messages: [message],
+        birthContext: subordinateTurnContext(this.eventLog, drainTurn.output).map(inheritedAsModelMessage),
+      });
+    } else {
+      this.actorSession.appendInput(lease, message);
     }
   }
   /** The turn itself: assemble it, stream it, finalize it. Everything here may
@@ -2857,9 +2862,7 @@ export class LocalAgentSession implements BackendHost {
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
 
-    this.seedDrainedTurnContext(item, lease);
-
-    this.actorSession.appendInput(lease, fileParts.length > 0
+    this.openTurnInput(item, lease, fileParts.length > 0
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
 
@@ -4735,7 +4738,15 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Restore the session's durable transcript into live context on open.
+   * Restore the working revision on open, falling back to the transcript only
+   * when the actor has never recorded a working revision.
+   */
+  private restoreHistory(): void {
+    this.actorSession.restoreWorkingHistory(() => this.restoreTranscript());
+  }
+
+  /**
+   * The transcript fallback is bounded by the model's context window.
    *
    * Bounded by what the model could ever be shown at once — the resolved
    * context window, LESS what is held back for the answer, since a restore that
@@ -4752,7 +4763,7 @@ export class LocalAgentSession implements BackendHost {
    * A session larger than the window still cannot be restored whole, so what
    * did not fit is STATED: the count, and where it is still readable from.
    */
-  private restoreHistory(): void {
+  private restoreTranscript(): readonly ModelMessage[] {
     const rows = this.rt.storage.sql<{ role: string; content: string }>`
       SELECT role, content
       FROM actor_messages
@@ -4784,9 +4795,9 @@ export class LocalAgentSession implements BackendHost {
       restored.push({ role: row.role, content: row.content });
     }
 
-    this.actorSession.restoreHistory(omitted > 0
+    return omitted > 0
       ? [olderHistoryNotice(omitted, this.sessionId), ...restored.reverse()]
-      : restored.reverse());
+      : restored.reverse();
   }
 
   /**

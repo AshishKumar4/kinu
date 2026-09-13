@@ -421,11 +421,15 @@ export async function runHostedTask(
     const inference: HeadInferenceDeps = {
       actor,
       runId: crypto.randomUUID(),
+      delegation: {
+        assignmentId: task.sequenceId,
+        birthContext: input.inheritedContext.map(inheritedAsModelMessage),
+      },
       model: turn.model,
       tools: profile.tools,
       framing: {
         system: profile.framing.system,
-        messages: [...input.inheritedContext.map(inheritedAsModelMessage), ...profile.framing.messages],
+        messages: profile.framing.messages,
       },
       capture,
       workspaceLayout: 'shared-workspace',
