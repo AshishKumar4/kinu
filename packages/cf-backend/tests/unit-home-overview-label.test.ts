@@ -26,59 +26,71 @@ function withRun(status: string | null): WorkspaceOverview {
 }
 
 /** The rendered label, decomposed into its words and the token it speaks in. */
-function renderLabel(overview: WorkspaceOverview, stale = false) {
+async function renderLabel(overview: WorkspaceOverview, stale = false): Promise<{ tone: string; text: string }> {
   const html = renderToStaticMarkup(createElement(OverviewLabel, { overview, stale }));
-  const match = html.match(/<span class="([^"]*)">([^<]*)<\/span>/);
+  const spans: { tone: string; text: string }[] = [];
 
-  if (match === null) throw new Error(`OverviewLabel rendered no span: ${html}`);
+  await new HTMLRewriter()
+    .on('span', {
+      element(el) { spans.push({ tone: el.getAttribute('class') ?? '', text: '' }); },
+      text(chunk) {
+        const last = spans.at(-1);
 
-  return { tone: match[1]!, text: match[2]! };
+        if (last) last.text += chunk.text;
+      },
+    })
+    .transform(new Response(html))
+    .text();
+
+  if (spans.length !== 1) throw new Error(`OverviewLabel rendered ${spans.length} spans: ${html}`);
+
+  return spans[0]!;
 }
 
 describe('OverviewLabel', () => {
-  test('a waiting decision outranks work in flight, with its count', () => {
-    const label = renderLabel({ ...BASE, decisionsWaiting: 3, activity: 'working' });
+  test('a waiting decision outranks work in flight, with its count', async () => {
+    const label = await renderLabel({ ...BASE, decisionsWaiting: 3, activity: 'working' });
 
     expect(label.text).toBe('Needs you · 3');
     expect(label.tone).toBe('p-warning');
   });
 
-  test('live work is "Working"; durable leftovers are "Work remains" — not active', () => {
-    expect(renderLabel({ ...BASE, activity: 'working' })).toEqual({ text: 'Working', tone: 'p-accent' });
-    expect(renderLabel({ ...BASE, activity: 'unfinished' })).toEqual({ text: 'Work remains', tone: 'p-warning' });
+  test('live work is "Working"; durable leftovers are "Work remains" — not active', async () => {
+    expect(await renderLabel({ ...BASE, activity: 'working' })).toEqual({ text: 'Working', tone: 'p-accent' });
+    expect(await renderLabel({ ...BASE, activity: 'unfinished' })).toEqual({ text: 'Work remains', tone: 'p-warning' });
   });
 
-  test('unfinished work is never settled by a completed last run', () => {
-    const label = renderLabel({ ...BASE, activity: 'unfinished', latestRun: { status: 'completed', task: null } });
+  test('unfinished work is never settled by a completed last run', async () => {
+    const label = await renderLabel({ ...BASE, activity: 'unfinished', latestRun: { status: 'completed', task: null } });
 
     expect(label.text).toBe('Work remains');
     expect(label.tone).not.toBe('p-success');
   });
 
-  test('green is reserved for a run the log sealed completed', () => {
-    expect(renderLabel(withRun('completed'))).toEqual({ text: 'Last run completed', tone: 'p-success' });
+  test('green is reserved for a run the log sealed completed', async () => {
+    expect(await renderLabel(withRun('completed'))).toEqual({ text: 'Last run completed', tone: 'p-success' });
 
     for (const status of ['error', 'aborted', 'cancelled', null] as const) {
-      const label = renderLabel(withRun(status));
+      const label = await renderLabel(withRun(status));
 
       expect(label.tone).not.toBe('p-success');
       expect(label.text).not.toContain('completed');
     }
   });
 
-  test('failed and cancelled ends are named, not lumped', () => {
-    expect(renderLabel(withRun('error')).text).toBe('Last run failed');
-    expect(renderLabel(withRun('error')).tone).toBe('p-danger');
-    expect(renderLabel(withRun('cancelled')).text).toBe('Last run cancelled');
-    expect(renderLabel(withRun(null)).text).toBe('Last run unfinished');
+  test('failed and cancelled ends are named, not lumped', async () => {
+    expect((await renderLabel(withRun('error'))).text).toBe('Last run failed');
+    expect((await renderLabel(withRun('error'))).tone).toBe('p-danger');
+    expect((await renderLabel(withRun('cancelled'))).text).toBe('Last run cancelled');
+    expect((await renderLabel(withRun(null))).text).toBe('Last run unfinished');
   });
 
-  test('no run at all is a quiet "No active work"', () => {
-    expect(renderLabel(BASE)).toEqual({ text: 'No active work', tone: 'p-text-4' });
+  test('no run at all is a quiet "No active work"', async () => {
+    expect(await renderLabel(BASE)).toEqual({ text: 'No active work', tone: 'p-text-4' });
   });
 
-  test('a stale answer keeps its words but speaks in the quiet token', () => {
-    const label = renderLabel({ ...BASE, decisionsWaiting: 2 }, true);
+  test('a stale answer keeps its words but speaks in the quiet token', async () => {
+    const label = await renderLabel({ ...BASE, decisionsWaiting: 2 }, true);
 
     expect(label.text).toBe('Needs you · 2');
     expect(label.tone).toBe('p-text-4');
