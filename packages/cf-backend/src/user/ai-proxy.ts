@@ -28,7 +28,7 @@ import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
 import { createDirectWorkersAIFetch } from '../providers/direct-workers-ai-fetch';
 import { listAvailableModels } from './available-models';
 import { json } from '@kinu.run/core';
-import { ownerCaller } from './workspace-capability';
+import { ownerCaller } from '@kinu.run/core';
 import { JsonObjectSchema, USER_AI_PROXY_PATH, type JsonObject } from '@kinu.run/core';
 import { classify } from '@kinu.run/core/obs';
 import * as v from 'valibot';

@@ -40,7 +40,7 @@ import {
   feedbackRouteFamily,
   type FeedbackMarker,
   type FeedbackRejectReason,
-} from '../analytics/feedback-marker';
+} from '@kinu.run/core/analytics';
 import {
   FEEDBACK_ENDPOINT,
   FEEDBACK_FIELDS,

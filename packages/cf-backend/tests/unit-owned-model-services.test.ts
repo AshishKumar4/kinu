@@ -13,8 +13,8 @@ import {
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import type { CredentialHeaders } from '../src/user/credential-headers';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { CredentialHeaders } from '@kinu.run/core';
+import type { UserCaller } from '@kinu.run/core';
 import { platformGatewayEnv } from './helpers/platform-gateway';
 import type { ProviderEnv } from '@kinu.run/core';
 

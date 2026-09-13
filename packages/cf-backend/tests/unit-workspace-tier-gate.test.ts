@@ -20,7 +20,7 @@ import {
   CapabilityDeniedError,
   type UserCaller,
   type WorkspaceCapability,
-} from '../src/user/workspace-capability';
+} from '@kinu.run/core';
 
 const WORKSPACE = 'workspace-a';
 

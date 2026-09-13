@@ -1,20 +1,19 @@
 // UserDO SQL schema. All tables live inside a single Durable Object instance
 // keyed by the stable Kinu userId the auth store derives from the email.
-// Idempotent — safe to call on every DO boot.
+// Idempotent — safe to call on every DO boot. The `user_access_tokens` table
+// is deliberately absent: `initAccessTokenTable` lives adapter-side and the
+// caller runs it beside this function.
 //
 // EVERY COLUMN BELOW IS IN ITS CREATE. The CREATE declares every column the
 // code reads or writes.
 
-import {
-  initExperienceLibraryTables,
-  initReleaseTables,
-  type SqlExec,
-} from '@kinu.run/core';
-import { diagnostics } from '@kinu.run/core/obs';
-import { initAccessTokenTable } from '../cli/access-token-store';
-import { initDeviceInflightTable } from './device-inflight';
-import { initEgressVaultTables } from './egress-vault';
-import { initWorkspaceCapabilityTables } from './workspace-capability';
+import type { SqlExec } from '../types/primitives';
+import { initExperienceLibraryTables } from '../experience/library';
+import { initReleaseTables } from '../release/sql-store';
+import { initDeviceInflightTable } from '../execution/device-inflight';
+import { initEgressVaultTables } from '../safety/egress-vault';
+import { initWorkspaceCapabilityTables } from '../safety/workspace-capability';
+import { diagnostics } from '../obs/log';
 
 /** The sole account profile-catalog row in user_config. */
 export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
@@ -366,10 +365,6 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_cli_tokens_active ON user_cli_tokens (expires_at, revoked_at)`);
-
-  // Long-lived, scoped CI access tokens (`pta_…`) — table shape owned by the
-  // access-token store next to the rest of the CLI bearer machinery.
-  initAccessTokenTable(sql);
 
   // Per-(workspace, device) BINDING. Ask-once-then-remember: a missing row
   // means ASK (the agent raises one card in chat the first time it reaches for

@@ -28,7 +28,7 @@ import {
   ownerCaller,
   type OwnerCapabilityEnv,
   type UserCaller,
-} from "./user/workspace-capability";
+} from "@kinu.run/core";
 import { diagnostics, KinuError, renderThrownChain } from "@kinu.run/core/obs";
 import { ingressAdmitted, ingressDenied, peerIp } from "@kinu.run/core";
 import type { KvStore } from "@kinu.run/agent-utils";

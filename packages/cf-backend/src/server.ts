@@ -68,7 +68,7 @@ import {
 } from "@kinu.run/core";
 import { withAppSecurityHeaders } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
-import { ownerCaller } from "./user/workspace-capability";
+import { ownerCaller } from "@kinu.run/core";
 import { AUTH_TIME_HEADER, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER, USER_ID_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "@kinu.run/core";
@@ -81,7 +81,7 @@ import {
   adminDenialMessage, adminDenialStatus, reportAdminDenial,
 } from "./control-plane/admin-caller";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
-import { installAnalyticsDiagnostics } from "./analytics/install";
+import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 
 // The ONE actor-bearing Durable Object class. Every logical actor in a
 // workspace — the main actor, a hired subordinate, an ask-by-role temporary, a

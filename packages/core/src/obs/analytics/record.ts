@@ -29,8 +29,9 @@
  * independent of which isolate the call happens in, which is the only way to be
  * sure of it.
  */
-import type { Usage } from '@kinu.run/core';
-import { diagnostics, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
+import type { Usage } from '../../usage';
+import { toKinuError, type ErrorCode } from '../error';
+import { diagnostics } from '../log';
 import { boundaryOf, eventFamily } from './boundaries';
 import { analyticsDigest } from './privacy';
 import {

@@ -29,7 +29,7 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   DeviceRequestLedger, initDeviceInflightTable,
   type DeviceCancelOutcome,
-} from '../../src/user/device-inflight';
+} from '@kinu.run/core';
 import type { SqlExec, SqlValue } from '@kinu.run/core';
 
 /** One request as the probe reports it across the RPC boundary. */

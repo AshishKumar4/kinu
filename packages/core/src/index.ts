@@ -49,6 +49,8 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
+export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
+
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -139,6 +141,8 @@ export {
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
   type WorkspaceTitleState,
+  isWorkspaceName,
+  validateWorkspaceName,
 } from './identity/naming';
 
 // Evolution engine (3-timescale auto-evolution)
@@ -1183,6 +1187,13 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
+  DeviceSocketHub, deviceIdFromSocket,
+  type DeviceSocket, type DeviceSocketCtx,
+  DeviceRequestLedger, initDeviceInflightTable,
+  type ClaimedDeviceRequest, type SweptDeviceRequest,
+  type DeviceCancelOutcome, type DeviceTransferOutcome,
+  DeviceTerminalHub, terminalFromSocket,
+  type TerminalHolder,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
@@ -1422,6 +1433,24 @@ export * from './providers/index';
 // CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store';
 
+// Credential store policy: at-rest sealing, header projection, and the
+// request validators that keep bad payloads out of the store.
+export {
+  createCredentialCipher,
+  type CredentialCipher,
+  type CredentialEncryptionEnv,
+} from './credentials/envelope';
+
+export {
+  credentialToHeaders,
+  type CredentialHeaders,
+} from './credentials/headers';
+
+export {
+  validateCredential,
+  validateCredentialKey,
+} from './credentials/validate';
+
 // Durable plan review — shared domain and the submit_plan edit contract.
 export {
   MAX_PLAN_ANNOTATIONS_BYTES,
@@ -1514,6 +1543,7 @@ export {
   type ApprovalSpend,
   EGRESS_PLACEHOLDER_PREFIX,
   EGRESS_PLACEHOLDER_BYTES,
+  PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
   EGRESS_EXECUTOR,
   grantedEgressBindings,
@@ -1544,7 +1574,35 @@ export {
   type DeferredApprovalAnswer,
   type DeferredApprovalVerdict,
   type DeferredApprovalNotice,
-  type DeferredApprovalQueueDeps,
+  initEgressVaultTables,
+  listEgressSecrets,
+  putEgressSecret,
+  revokeEgressSecret,
+  resolveEgressInjection,
+  rewrapEgressSecrets,
+  type EgressSecretSummary,
+  type PutEgressSecretInput,
+  type EgressInjection,
+  type EgressInjectionResult,
+  type EgressVaultDeps,
+  ownerCaller,
+  OwnerCapabilityUnavailableError,
+  CapabilityDeniedError,
+  initWorkspaceCapabilityTables,
+  pendingCapabilityReconcile,
+  armCapabilityReconcile,
+  clearCapabilityReconcile,
+  workspaceCapabilityHash,
+  freshWorkspaceCapability,
+  commitWorkspaceCapability,
+  revokeWorkspaceCapability,
+  requireTier,
+  type CapabilityFloor,
+  type WorkspaceCapability,
+  type UserCaller,
+  type ResolvedCaller,
+  type OwnerCapabilityEnv,
+  type CapabilityDenialReason,
   argumentDigest,
   sha256Hex,
   stableStringify,

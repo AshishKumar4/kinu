@@ -4,12 +4,12 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@kinu.run/core';
-import { createCredentialCipher } from '../src/user/credential-envelope';
+import { createCredentialCipher } from '@kinu.run/core';
 import {
   initEgressVaultTables, listEgressSecrets, putEgressSecret,
   resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets,
   type EgressVaultDeps,
-} from '../src/user/egress-vault';
+} from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec,

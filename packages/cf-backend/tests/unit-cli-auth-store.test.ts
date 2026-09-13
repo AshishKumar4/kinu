@@ -12,7 +12,7 @@ import { makeKv } from './helpers/kv';
 import { RateLimitError } from '../src/cli/auth-store';
 import { handleCliRequest } from '../src/cli/routes';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 

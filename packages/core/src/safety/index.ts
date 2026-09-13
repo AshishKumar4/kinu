@@ -31,6 +31,7 @@ export {
 export {
   EGRESS_PLACEHOLDER_PREFIX,
   EGRESS_PLACEHOLDER_BYTES,
+  PLACEHOLDER_BODY_LENGTH,
   EGRESS_EXECUTOR,
   grantedEgressBindings,
   isEgressPlaceholder,
@@ -49,6 +50,41 @@ export {
   type EgressPlan,
   type ScrubReplacement,
 } from './egress-gate';
+
+export {
+  initEgressVaultTables,
+  listEgressSecrets,
+  putEgressSecret,
+  revokeEgressSecret,
+  resolveEgressInjection,
+  rewrapEgressSecrets,
+  type EgressSecretSummary,
+  type PutEgressSecretInput,
+  type EgressInjection,
+  type EgressInjectionResult,
+  type EgressVaultDeps,
+} from './egress-vault';
+
+export {
+  ownerCaller,
+  OwnerCapabilityUnavailableError,
+  CapabilityDeniedError,
+  initWorkspaceCapabilityTables,
+  pendingCapabilityReconcile,
+  armCapabilityReconcile,
+  clearCapabilityReconcile,
+  workspaceCapabilityHash,
+  freshWorkspaceCapability,
+  commitWorkspaceCapability,
+  revokeWorkspaceCapability,
+  requireTier,
+  type CapabilityFloor,
+  type WorkspaceCapability,
+  type UserCaller,
+  type ResolvedCaller,
+  type OwnerCapabilityEnv,
+  type CapabilityDenialReason,
+} from './workspace-capability';
 
 export {
   DeferredApprovalQueue,
