@@ -332,7 +332,22 @@ async function sseResponse(
   // and parses every `data:` payload, so the cached-usage repair applies inside
   // it as a rule rather than as a second transform doing the same work again.
   return new Response(
-    source.pipeThrough(openAIChunkTransform(model)),
+    // The terminal frame has gone out: stop the upstream request the way a
+    // cancelled reader does, so the turn ends at [DONE] instead of at
+    // producer close — including a producer that never closes behind it.
+    // The terminal frame has gone out: stop the upstream request the way a
+    // cancelled reader does, so the turn ends at [DONE] instead of at
+    // producer close — including a producer that never closes behind it.
+    // Awaited inside the transform's own pull, so a rejection reaches the
+    // consumer's error path instead of floating; the lock releases either
+    // way, in `finally`.
+    source.pipeThrough(openAIChunkTransform(model, async () => {
+      try {
+        await reader.cancel();
+      } finally {
+        reader.releaseLock();
+      }
+    })),
     { headers: { 'content-type': 'text/event-stream' } },
   );
 }
@@ -355,7 +370,7 @@ async function sseResponse(
  * this transport needs, so comments and keep-alives are dropped and every
  * emitted frame is one `data:` line and a blank line.
  */
-function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8Array> {
+function openAIChunkTransform(model: string, onTerminal?: () => Promise<void>): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   const id = `chatcmpl-${crypto.randomUUID()}`;
@@ -388,7 +403,7 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     return encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
   };
 
-  const finalize = (controller: TransformStreamDefaultController<Uint8Array>): void => {
+  const finalize = async (controller: TransformStreamDefaultController<Uint8Array>): Promise<void> => {
     if (closed) return;
 
     // The final state leaves in exactly ONE frame. A finish reason that has not
@@ -409,6 +424,7 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     owedUsage = undefined;
     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
     closed = true;
+    await onTerminal?.();
   };
 
   /** The frames this adapter translates rather than forwards: a native delta,
@@ -455,12 +471,12 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     }
   };
 
-  const onData = (
+  const onData = async (
     payload: string,
     controller: TransformStreamDefaultController<Uint8Array>,
-  ): void => {
+  ): Promise<void> => {
     if (payload === '[DONE]') {
-      finalize(controller);
+      await finalize(controller);
 
       return;
     }
@@ -474,6 +490,7 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     if (!object.success) {
       failed = true;
       controller.error(new Error(`Workers AI ${model} streamed a data frame that is not a JSON object`));
+      await onTerminal?.();
 
       return;
     }
@@ -487,6 +504,8 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
 
     if (!chunk.success || chunk.output.choices.length === 0) {
       translate(object.output, controller);
+
+      if (failed) await onTerminal?.();
 
       return;
     }
@@ -505,30 +524,30 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     controller.enqueue(encoder.encode(`data: ${outgoing}\n\n`));
   };
 
-  const drain = (
+  const drain = async (
     line: string,
     controller: TransformStreamDefaultController<Uint8Array>,
-  ): void => {
+  ): Promise<void> => {
     if (failed) return;
     const field = line.trimEnd();
 
     if (!field.startsWith('data:')) return;
-    onData(field.slice('data:'.length).trim(), controller);
+    await onData(field.slice('data:'.length).trim(), controller);
   };
 
   return new TransformStream({
-    transform(bytes, controller) {
+    async transform(bytes, controller) {
       buffer += decoder.decode(bytes, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
 
-      for (const line of lines) drain(line, controller);
+      for (const line of lines) await drain(line, controller);
     },
-    flush(controller) {
+    async flush(controller) {
       buffer += decoder.decode();
-      drain(buffer, controller);
+      await drain(buffer, controller);
 
-      if (!failed) finalize(controller);
+      if (!failed) await finalize(controller);
     },
   });
 }

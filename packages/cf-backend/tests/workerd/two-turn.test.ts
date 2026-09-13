@@ -28,6 +28,11 @@
  * diagnostics: the test asserts zero failures and zero owed effects. A double
  * that fails the product code it serves is a defect, not a limitation — so a
  * failing lane would fail this test rather than pass behind an echo.
+ *
+ * No pending-cancel case lives here: the miniflare pool does not deliver
+ * subrequest abort into a Node-side outboundService handler (evidence in
+ * kinu-logs/two-turn/run16 through run19), so that arm now belongs to a
+ * bun-side test over the injected fetch instead.
  */
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -201,9 +206,7 @@ describe('two real turns over the HTTP model seam', () => {
   // answer whether or not the producer closes behind it. Over both seams this
   // wedges instead (the turn never returns, facts never fire) — a real defect
   // in who owns stream end, kept red here with its evidence in the run logs.
-  // Bounded at 60s: the wedge would otherwise hold the file to the pool's
-  // 120s default, and the bound changes nothing about the verdict.
-  it('completes a turn on a producer-open stream', { timeout: 60000 }, async () => {
+  it('completes a turn on a producer-open stream', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('early-done-driver'));
 
     const out = await root.driveOnce({
@@ -225,18 +228,4 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.factsCompressed).toBe(1);
   });
 
-  it('cancels a parked request through the HTTP path with cleanup', async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cancel-driver'));
-
-    const out = await root.cancelHttpPark();
-
-    // One assertion so a failure prints the whole verdict: whether the abort
-    // reached the parked handler (read back from its log entry), and what the
-    // parked fetch settled with. If the pool cannot propagate subrequest
-    // abort into the handler, this names that unsupported contract instead.
-    expect({
-      observedAbort: out.observedAbort,
-      rejected: out.rejection.length > 0,
-    }).toEqual({ observedAbort: true, rejected: true });
-  });
 });

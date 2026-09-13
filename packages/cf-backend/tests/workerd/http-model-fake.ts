@@ -35,9 +35,6 @@ export interface CapturedHttpCall {
   readonly toolCalls: ReadonlyArray<{ id: string; name: string }>;
   /** `role: 'tool'` contents in this request — the executed results. */
   readonly toolResults: string[];
-  /** True only for the abort-observation entry the park arm records when the
-   *  request's own signal fires. */
-  readonly aborted: boolean;
 }
 
 const log: CapturedHttpCall[] = [];
@@ -123,7 +120,6 @@ function recordCall(url: URL, request: Request, body: OutboundBody): void {
     toolResults: messages
       .filter((m) => m.role === 'tool')
       .map((m) => textOf(m.content)),
-    aborted: false,
   });
 }
 
@@ -270,44 +266,6 @@ async function errorBody(body: OutboundBody): Promise<Response> {
   );
 }
 
-async function parkBody(request: Request): Promise<Response> {
-  // The pending-cancel arm: never answers on its own, rejects when the
-  // request's own signal aborts — which is the contract the probe exercises
-  // from the cancellation side.
-  const gate = Promise.withResolvers<Response>();
-
-  const signal = request.signal;
-
-  const onAbort = (): void => {
-    // The abort observation is itself a log entry: the cancellation probe
-    // reads it back over the control surface rather than trusting the
-    // handler's word for it.
-    log.push({
-      url: request.url,
-      method: request.method,
-      host: new URL(request.url).host,
-      path: new URL(request.url).pathname,
-      model: 'probe-park',
-      stream: false,
-      users: [],
-      authHeader: request.headers.get('authorization'),
-      offeredTools: [],
-      toolCalls: [],
-      toolResults: [],
-      aborted: true,
-    });
-    gate.reject(signal.reason instanceof Error ? signal.reason : new Error('parked request aborted'));
-  };
-
-  if (signal.aborted) onAbort();
-  else signal.addEventListener('abort', onAbort, { once: true });
-
-  try {
-    return await gate.promise;
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
-}
 
 async function modelsBody(): Promise<Response> {
   return Response.json({
@@ -316,7 +274,6 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-early-done' },
       { id: 'probe-tools' },
       { id: 'probe-error' },
-      { id: 'probe-park' },
     ],
   });
 }
@@ -361,7 +318,6 @@ export async function probeOutbound(request: Request): Promise<Response> {
         case 'probe-early-done': return earlyDoneBody();
         case 'probe-tools': return toolBody(body);
         case 'probe-error': return errorBody(body);
-        case 'probe-park': return parkBody(request);
         default: throw new Error(`fake-models: unknown model ${JSON.stringify(body.model)}`);
       }
     }

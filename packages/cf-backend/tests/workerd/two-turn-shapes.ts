@@ -106,7 +106,6 @@ export const HttpCallSchema = v.object({
   offeredTools: v.array(v.string()),
   toolCalls: v.array(v.object({ id: v.string(), name: v.string() })),
   toolResults: v.array(v.string()),
-  aborted: v.boolean(),
 });
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
@@ -129,15 +128,6 @@ export const ExerciseResultSchema = v.object({
 
 export type ExerciseResult = v.InferOutput<typeof ExerciseResultSchema>;
 
-/** The HTTP pending-cancel verdict: the parked handler observed the abort
- *  (read back from its own log entry, not its word), and the parked fetch
- *  rejected with a reason. */
-export const PendingCancelResultSchema = v.object({
-  observedAbort: v.boolean(),
-  rejection: v.string(),
-});
-
-export type PendingCancelResult = v.InferOutput<typeof PendingCancelResultSchema>;
 
 /** One parameterized drive (the early-[DONE] variant): its own workspace so
  *  its turns never share Think state with the main drive. */
