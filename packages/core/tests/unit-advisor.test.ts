@@ -693,6 +693,38 @@ describe('advisor review retries', () => {
     expect(calls).toBe(3);
     expect(attempts(rec)).toEqual([{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }]);
   });
+  test('an unclassified failure is definitive: one attempt, one report, no advice', async () => {
+
+    let calls = 0;
+
+    const burning: LLM = {
+      async *stream() { yield ''; },
+      complete: async () => {
+        calls++;
+
+        // A bare Error carries no code: retrying it would guess 'transient'
+        // for a failure nothing recognised.
+        throw new Error('reviewer is on fire');
+      },
+    };
+
+    const rec = createRecordingLogger();
+    const restore = setDiagnosticsSink(rec);
+
+    try {
+      const disposition = await reviewRecordedTurn({
+        snapshot: snapshot(), llm: burning, govern: (llm) => llm, gateOpen: false,
+        deliver: async () => 'queued', record: () => {},
+      });
+
+      expect(disposition).toBeNull();
+    } finally {
+      restore();
+    }
+
+    expect(calls).toBe(1);
+    expect(attempts(rec)).toEqual([{ attempt: 1 }]);
+  });
 });
 
 // ── Secret obfuscation ────────────────────────────────────────────────────
