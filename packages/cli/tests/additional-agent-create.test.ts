@@ -1,16 +1,11 @@
-import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
+
 import { join } from 'node:path';
 
-const HOME = mkdtempSync(join(tmpdir(), 'kinu-additional-agent-home-'));
+const HOME = scratchDir('additional-agent-home');
 
-const PROJECT = mkdtempSync(join(tmpdir(), 'kinu-additional-agent-project-'));
-
-afterAll(() => {
-  rmSync(HOME, { recursive: true, force: true });
-  rmSync(PROJECT, { recursive: true, force: true });
-});
+const PROJECT = scratchDir('additional-agent-project');
 
 describe('local additional-agent creation', () => {
   test('inherits the stored placeholder mission when the workspace has no custom mission', () => {

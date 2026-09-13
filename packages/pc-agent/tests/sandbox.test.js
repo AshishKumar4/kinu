@@ -13,6 +13,8 @@
  */
 'use strict';
 
+const { scratchDir } = require('../../test-utils/src/scratch');
+
 const { describe, expect, test } = require('bun:test');
 
 const fs = require('node:fs');
@@ -29,7 +31,7 @@ const LINUX = process.platform === 'linux';
 
 /** One sandboxed command, run the way the supervisor runs it. */
 function runSandboxed(command, options = {}) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-case-'));
+  const base = scratchDir('sandbox-case');
   const agentHome = path.join(base, 'home');
   const agentTmp = path.join(base, 'tmp');
   const consented = path.join(base, 'consented');
@@ -54,13 +56,7 @@ function runSandboxed(command, options = {}) {
     env: plan.env, encoding: 'utf8',
   });
 
-  return {
-    base, agentHome, agentTmp, consented, plan,
-    status: run.status,
-    stdout: String(run.stdout ?? ''),
-    stderr: String(run.stderr ?? ''),
-    cleanup: () => fs.rmSync(base, { recursive: true, force: true }),
-  };
+  return { base, agentHome, agentTmp, consented, plan, status: run.status, stdout: String(run.stdout ?? ''), stderr: String(run.stderr ?? '') };
 }
 
 describe('the device sandbox, as the kernel enforces it', () => {
@@ -99,7 +95,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
       expect(listing).not.toContain('.kinu-sandbox-planted-secret');
       expect(listing).toContain('.');
     } finally {
-      run.cleanup();
+
       fs.rmSync(planted, { force: true });
     }
   });
@@ -116,7 +112,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     try {
       expect(run.stdout).toContain('owner-private-material');
     } finally {
-      run.cleanup();
+
       fs.rmSync(planted, { force: true });
     }
   });
@@ -126,12 +122,10 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const deviceHome = path.join(os.homedir(), '.kinu');
     const run = runSandboxed(`cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} 2>&1 | head -1`);
 
-    try {
-      // The kernel says the same thing the file methods say, because neither is
-      // asked to make an exception: ~/.kinu is never bound in.
-      expect(run.stdout).toContain('No such file');
-      expect(run.stdout).not.toContain('"token"');
-    } finally { run.cleanup(); }
+    // The kernel says the same thing the file methods say, because neither is
+    // asked to make an exception: ~/.kinu is never bound in.
+    expect(run.stdout).toContain('No such file');
+    expect(run.stdout).not.toContain('"token"');
   });
 
   test('writes land in the agent home and the consented directory, and nowhere else', () => {
@@ -143,21 +137,19 @@ describe('the device sandbox, as the kernel enforces it', () => {
       'touch /etc/should-not-exist 2>&1 | head -1',
     ].join('; '), {});
 
-    try {
-      expect(run.stdout).toContain('home-ok');
-      expect(run.stdout).toContain('Read-only file system');
-      expect(fs.existsSync(path.join(run.agentHome, 'in-agent-home'))).toBe(true);
-      expect(fs.existsSync('/usr/local/should-not-exist')).toBe(false);
-      // The consented root is writable, and the write is visible OUTSIDE:
-      // a root that only looked writable would be a tmpfs the owner never sees.
-      const second = runSandboxed(`touch ${JSON.stringify('/tmp/ignored')}; echo done`);
-      second.cleanup();
-    } finally { run.cleanup(); }
+    expect(run.stdout).toContain('home-ok');
+    expect(run.stdout).toContain('Read-only file system');
+    expect(fs.existsSync(path.join(run.agentHome, 'in-agent-home'))).toBe(true);
+    expect(fs.existsSync('/usr/local/should-not-exist')).toBe(false);
+    // The consented root is writable, and the write is visible OUTSIDE:
+    // a root that only looked writable would be a tmpfs the owner never sees.
+    runSandboxed(`touch ${JSON.stringify('/tmp/ignored')}; echo done`);
+
   });
 
   test('a consented directory is writable and the bytes are the machine\'s own', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
-    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-root-'));
+    const base = scratchDir('sandbox-root');
     const agentHome = path.join(base, 'home');
     const agentTmp = path.join(base, 'tmp');
     const consented = path.join(base, 'work');
@@ -172,13 +164,11 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
     const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
 
-    try {
-      expect(run.status).toBe(0);
-      // `--chdir` names the directory as the COMMAND sees it, which for a
-      // consented root is its own path.
-      expect(String(run.stdout).trim()).toBe(consented);
-      expect(fs.readFileSync(path.join(consented, 'report.txt'), 'utf8')).toBe('agent-wrote-this');
-    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+    expect(run.status).toBe(0);
+    // `--chdir` names the directory as the COMMAND sees it, which for a
+    // consented root is its own path.
+    expect(String(run.stdout).trim()).toBe(consented);
+    expect(fs.readFileSync(path.join(consented, 'report.txt'), 'utf8')).toBe('agent-wrote-this');
   });
 
   test('the GPU nodes this machine has are inside, and bash-only syntax runs', () => {
@@ -186,17 +176,15 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const nodes = sandbox.gpuNodes();
     const run = runSandboxed('set -o pipefail; [[ 1 == 1 ]] && ls -d /dev/nvidia* /dev/dri 2>/dev/null | tr "\\n" " "');
 
-    try {
-      expect(run.status).toBe(0);
+    expect(run.status).toBe(0);
 
-      // Only what this box actually has: `--dev /dev` alone is an empty
-      // devtmpfs, which is why a sandbox that stops there has no GPU.
-      for (const node of nodes) {
-        if (node.startsWith('/dev/nvidia') || node === '/dev/dri') {
-          expect(run.stdout).toContain(node);
-        }
+    // Only what this box actually has: `--dev /dev` alone is an empty
+    // devtmpfs, which is why a sandbox that stops there has no GPU.
+    for (const node of nodes) {
+      if (node.startsWith('/dev/nvidia') || node === '/dev/dri') {
+        expect(run.stdout).toContain(node);
       }
-    } finally { run.cleanup(); }
+    }
   });
 
   test('the command environment is the allow-list, with the sandbox\'s own values', () => {
@@ -210,14 +198,12 @@ describe('the device sandbox, as the kernel enforces it', () => {
       },
     });
 
-    try {
-      expect(run.stdout).not.toContain('ptc_leaked_cli_bearer');
-      expect(run.stdout).not.toContain('ghp_leaked_pat');
-      expect(run.stdout).not.toContain('SSH_AUTH_SOCK');
-      expect(run.stdout).not.toContain('NODE_OPTIONS');
-      expect(run.stdout).toContain('KINU_SANDBOX=1');
-      expect(run.stdout).toContain('LANG=C.UTF-8');
-    } finally { run.cleanup(); }
+    expect(run.stdout).not.toContain('ptc_leaked_cli_bearer');
+    expect(run.stdout).not.toContain('ghp_leaked_pat');
+    expect(run.stdout).not.toContain('SSH_AUTH_SOCK');
+    expect(run.stdout).not.toContain('NODE_OPTIONS');
+    expect(run.stdout).toContain('KINU_SANDBOX=1');
+    expect(run.stdout).toContain('LANG=C.UTF-8');
   });
 
   test('the raw tier is the machine as it was, minus Kinu\'s own directory', () => {
@@ -237,21 +223,16 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // `/tmp` came AFTER the agent-home bind and shadowed it, so the home
     // existed on the machine and not in the namespace. Order is the policy,
     // and this is the order the policy needs.
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-tmp-home-'));
+    const home = scratchDir('sandbox-tmp-home');
     const run = runSandboxed('pwd; touch "$HOME/marker"; echo reached', { home });
 
-    try {
-      expect(run.stderr).toBe('');
-      expect(run.status).toBe(0);
-      expect(run.stdout).toContain(`${home}\nreached`);
-      // `~/marker` is the AGENT's marker: the home path inside the namespace
-      // is the agent home, and the real directory under /tmp is untouched.
-      expect(fs.existsSync(path.join(run.agentHome, 'marker'))).toBe(true);
-      expect(fs.existsSync(path.join(home, 'marker'))).toBe(false);
-    } finally {
-      run.cleanup();
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+    expect(run.stderr).toBe('');
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain(`${home}\nreached`);
+    // `~/marker` is the AGENT's marker: the home path inside the namespace
+    // is the agent home, and the real directory under /tmp is untouched.
+    expect(fs.existsSync(path.join(run.agentHome, 'marker'))).toBe(true);
+    expect(fs.existsSync(path.join(home, 'marker'))).toBe(false);
   });
 
   test('a shim in ~/.local/bin answers sandboxed, because that is the PATH the plan builds', () => {
@@ -263,7 +244,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // answers the real host (measured 2026-09-05). This pins the directory
     // the tier may use, in the layout the tier runs: a scratch HOME the
     // machine consented, like each first-run daemon's own.
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-shim-home-'));
+    const home = scratchDir('sandbox-shim-home');
     const agentHome = path.join(home, '.kinu', 'agents', 'ws', 'home');
     const agentTmp = path.join(home, '.kinu', 'agents', 'ws', 'tmp');
 
@@ -273,31 +254,26 @@ describe('the device sandbox, as the kernel enforces it', () => {
     fs.writeFileSync(path.join(shimDir, 'hostname'),
       '#!/usr/bin/env bash\nprintf \'%s\\n\' kinu-first-run-alpha\n', { mode: 0o700 });
 
-    try {
-      const plan = sandbox.plan({
-        tier: 'sandboxed', home, agentHome, agentTmp,
-        deviceHome: path.join(home, '.kinu'), roots: [home],
-        cwd: agentHome, command: 'hostname', source: {},
-      });
+    const plan = sandbox.plan({
+      tier: 'sandboxed', home, agentHome, agentTmp,
+      deviceHome: path.join(home, '.kinu'), roots: [home],
+      cwd: agentHome, command: 'hostname', source: {},
+    });
 
-      let pathValue = null;
+    let pathValue = null;
 
-      for (let i = 0; i < plan.argv.length - 2; i++) {
-        if (plan.argv[i] === '--setenv' && plan.argv[i + 1] === 'PATH') pathValue = plan.argv[i + 2];
-      }
-
-      expect(pathValue).not.toBeNull();
-      const entries = String(pathValue).split(':');
-      expect(entries[0]).toBe(path.join(home, '.local', 'bin'));
-      expect(entries).not.toContain(path.join(home, 'bin'));
-      const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
-      expect(run.status).toBe(0);
-      expect(String(run.stdout).trim()).toBe('kinu-first-run-alpha');
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
+    for (let i = 0; i < plan.argv.length - 2; i++) {
+      if (plan.argv[i] === '--setenv' && plan.argv[i + 1] === 'PATH') pathValue = plan.argv[i + 2];
     }
-  });
 
+    expect(pathValue).not.toBeNull();
+    const entries = String(pathValue).split(':');
+    expect(entries[0]).toBe(path.join(home, '.local', 'bin'));
+    expect(entries).not.toContain(path.join(home, 'bin'));
+    const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+    expect(run.status).toBe(0);
+    expect(String(run.stdout).trim()).toBe('kinu-first-run-alpha');
+  });
 
   test('the daemon\'s own probe passes with HOME under /tmp, as the first-run tier runs it', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
@@ -305,21 +281,17 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // `os.homedir()` reads HOME once at start, so a swap here would probe the
     // real home and pass on any tree. The tier spawns the daemon with a
     // scratch HOME in its environment, and so does this.
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-tmp-home-'));
+    const home = scratchDir('sandbox-tmp-home');
 
-    try {
-      const script = 'const s = require(process.argv[1]); '
-        + 'process.stdout.write(JSON.stringify(s.probe({ deviceHome: process.env.KINU_HOME })))';
+    const script = 'const s = require(process.argv[1]); '
+      + 'process.stdout.write(JSON.stringify(s.probe({ deviceHome: process.env.KINU_HOME })))';
 
-      const run = spawnSync(process.execPath, ['-e', script, require.resolve('../src/sandbox.js')], {
-        env: { ...process.env, HOME: home, KINU_HOME: home }, encoding: 'utf8',
-      });
+    const run = spawnSync(process.execPath, ['-e', script, require.resolve('../src/sandbox.js')], {
+      env: { ...process.env, HOME: home, KINU_HOME: home }, encoding: 'utf8',
+    });
 
-      expect(run.stderr).toBe('');
-      expect(JSON.parse(run.stdout)).toEqual({ status: sandbox.SANDBOX_STATUS.OK, detail: null });
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+    expect(run.stderr).toBe('');
+    expect(JSON.parse(run.stdout)).toEqual({ status: sandbox.SANDBOX_STATUS.OK, detail: null });
   });
 });
 

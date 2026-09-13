@@ -24,10 +24,10 @@
  * measurement is real, and no model is involved anywhere. The corpus's difficulty
  * for an AGENT is a separate question that only a live run can answer.
  */
+import { scratchDir } from '../src/scratch';
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { minimumPairsForSignificance } from '../../core/src/index';
 import { createWorkspace } from '../../core/src/identity/index';
@@ -58,7 +58,7 @@ let ctx: VerifierContext;
 let db: Database;
 
 beforeAll(async () => {
-  dir = mkdtempSync(join(tmpdir(), 'kinu-hard-tasks-'));
+  dir = scratchDir('hard-tasks');
   const dbPath = join(dir, 'agent.db');
   db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
@@ -73,7 +73,6 @@ beforeAll(async () => {
 
 afterAll(() => {
   db.close();
-  rmSync(dir, { recursive: true, force: true });
 });
 
 /** Seed the task, overwrite the solution with `source`, and score it. Each task's

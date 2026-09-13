@@ -14,12 +14,13 @@
  * verified — asserted here by making the only Bun on the machine a stub that
  * records every path it was invoked through.
  */
+import { scratchDir } from '../../test-utils/src/scratch';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
@@ -28,8 +29,6 @@ import { bunResolutionShell } from '../src/cli/bun-runtime';
 import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
-
-const tempDirs: string[] = [];
 
 interface InstallSandbox {
   home: string;
@@ -56,10 +55,6 @@ const PtyResultSchema = v.object({
     echo: v.boolean(),
     isig: v.boolean(),
   }),
-});
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 async function installScript(): Promise<string> {
@@ -141,8 +136,7 @@ function makeDistTarballs(home: string): void {
  *  installer, and the two published build artifacts. */
 function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
   const ambientBun = options.ambientBun === undefined ? approvedBun() : options.ambientBun;
-  const home = mkdtempSync(join(tmpdir(), 'kinu-install-test-'));
-  tempDirs.push(home);
+  const home = scratchDir('install-test');
   const stubBin = join(home, 'stub-bin');
   mkdirSync(stubBin);
   const bunLog = join(home, 'bun-invocations.log');
@@ -636,29 +630,25 @@ describe('Bun runtime resolution is one source of truth', () => {
     // on a bare word resolves against the WORKING DIRECTORY. A file named
     // `bun` in whatever directory the user ran the installer from must never
     // become the runtime this CLI executes.
-    const cwd = mkdtempSync(join(tmpdir(), 'kinu-bun-cwd-'));
+    const cwd = scratchDir('bun-cwd');
 
-    try {
-      const decoy = join(cwd, 'bun');
-      writeFileSync(decoy, `#!/bin/sh\nprintf '%s\\n' '${approvedBun()}'\n`);
-      chmodSync(decoy, 0o755);
+    const decoy = join(cwd, 'bun');
+    writeFileSync(decoy, `#!/bin/sh\nprintf '%s\\n' '${approvedBun()}'\n`);
+    chmodSync(decoy, 0o755);
 
-      const probe = spawnSync('bash', ['-c', [
-        'set -eu',
-        'KINU_HOME="$PWD/.kinu"',
-        bunResolutionShell(),
-        'if kinu_bun_compatible bun; then echo TOOK-RELATIVE; else echo REFUSED; fi',
-        'if kinu_bun_compatible "$PWD/bun"; then echo TOOK-ABSOLUTE; else echo REFUSED-ABSOLUTE; fi',
-      ].join('\n')], { cwd, encoding: 'utf8', timeout: 20_000 });
+    const probe = spawnSync('bash', ['-c', [
+      'set -eu',
+      'KINU_HOME="$PWD/.kinu"',
+      bunResolutionShell(),
+      'if kinu_bun_compatible bun; then echo TOOK-RELATIVE; else echo REFUSED; fi',
+      'if kinu_bun_compatible "$PWD/bun"; then echo TOOK-ABSOLUTE; else echo REFUSED-ABSOLUTE; fi',
+    ].join('\n')], { cwd, encoding: 'utf8', timeout: 20_000 });
 
-      expect(probe.stdout).toContain('REFUSED');
-      expect(probe.stdout).not.toContain('TOOK-RELATIVE');
-      // The same file BY ABSOLUTE PATH still qualifies: the rule is about how a
-      // candidate is named, not about distrusting the user's own binaries.
-      expect(probe.stdout).toContain('TOOK-ABSOLUTE');
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
+    expect(probe.stdout).toContain('REFUSED');
+    expect(probe.stdout).not.toContain('TOOK-RELATIVE');
+    // The same file BY ABSOLUTE PATH still qualifies: the rule is about how a
+    // candidate is named, not about distrusting the user's own binaries.
+    expect(probe.stdout).toContain('TOOK-ABSOLUTE');
   }, 30_000);
 
   test('an existing compatible Bun is used as it is, and nothing is downloaded', async () => {

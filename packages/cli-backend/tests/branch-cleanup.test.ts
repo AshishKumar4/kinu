@@ -6,9 +6,10 @@
 // directory row. After the worker exits — success, abort, or a startup
 // refusal — that row has given up its name and no file bears the branch's
 // physical key.
+import { scratchDir } from '../../test-utils/src/scratch';
 import { test, expect, afterAll } from 'bun:test';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { JsonValueSchema } from '@kinu.run/core';
@@ -18,9 +19,9 @@ import { localActorDirectory } from '../src/actor-identity';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { initActorStateSchema } from '@kinu.run/core';
 
-const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-cleanup-'));
+const dir = scratchDir('branch-cleanup');
 
-const parentDbPath = `${dir}.db`;
+const parentDbPath = join(dir, 'parent.db');
 
 const parentDb = new Database(parentDbPath, { create: true });
 
@@ -30,8 +31,6 @@ initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
   parentDb.close();
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(parentDbPath, { force: true });
 });
 
 const HISTORY = [{ role: 'user', content: 'ship a parser' }];

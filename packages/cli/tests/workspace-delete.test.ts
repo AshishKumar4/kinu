@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 
@@ -13,19 +14,12 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-const tempDirs: string[] = [];
-
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('test-project');
 
   return dir;
 }
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe('kinu workspace delete', () => {
   test('deletes with the stored session token and prunes the cloud config entry', async () => {
@@ -113,8 +107,7 @@ describe('kinu workspace delete', () => {
 });
 
 function workspaceHome(origin: string): string {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-workspace-delete-'));
-  tempDirs.push(home);
+  const home = scratchDir('workspace-delete');
   writeFileSync(join(home, 'config.json'), JSON.stringify({
     origin,
     accessToken: 'ptc_stored_session',

@@ -25,15 +25,27 @@
 // vitest into every `bun test` process or sniff an environment variable that
 // vitest is free to rename, and a teardown that silently registers with the
 // wrong runner is the failure this module exists to prevent.
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { releaseScratch } from '../packages/test-utils/src/scratch';
+import { releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
 
-const home = mkdtempSync(join(tmpdir(), 'kinu-test-home-'));
+const tmp = tmpdir();
+
+// Minted through the same owner every suite uses, so `release` needs no
+// lifecycle of its own: `releaseScratch` removes this root along with
+// everything else this process owns, and a partial failure stays owned.
+const scratchRoot = scratchDir('test-home', tmp);
+
+const home = join(scratchRoot, 'home');
+
+mkdirSync(home);
 
 process.env.KINU_HOME = home;
+
+// Child processes inherit a temporary directory owned by this same invocation.
+process.env.TMPDIR = scratchRoot;
 
 // The daemon captures this path on its first require, before a later suite can set it.
 process.env.KINU_INFLIGHT_ROOT = join(home, 'inflight');
@@ -80,8 +92,9 @@ if (process.env.KINU_EVAL_LIVE !== '1') {
  * is loaded into every test process and has no business pulling that graph in.
  */
 export const release = (): void => {
+  // The runner's own root is minted through scratchDir above, so this is the
+  // whole release: every owned root attempted, failures reported and retained.
   releaseScratch();
-  rmSync(home, { recursive: true, force: true });
 };
 
 // The signal path stays: it is the `timeout <n> bun test` case that every agent
@@ -114,12 +127,10 @@ const STALE_HOME_MS = 30 * 60 * 1000;
 
 const cutoff = Date.now() - STALE_HOME_MS;
 
-const tmp = tmpdir();
-
 const ABANDONED = ['kinu-test-home-', 'kinu-scratch-'] as const;
 
 for (const name of readdirSync(tmp)) {
-  if (!ABANDONED.some((prefix) => name.startsWith(prefix)) || join(tmp, name) === home) continue;
+  if (!ABANDONED.some((prefix) => name.startsWith(prefix)) || join(tmp, name) === scratchRoot) continue;
   const path = join(tmp, name);
   // A racing peer may remove it between the stat and the rm; `force` covers
   // that. Anything else — a permission fault, a path that is not ours — must

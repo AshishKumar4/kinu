@@ -8,10 +8,11 @@
  * the export RPC out of a real SQLite workspace.
  */
 
-import { afterEach, describe, expect, test } from 'bun:test';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema } from '@kinu.run/core';
@@ -26,15 +27,8 @@ const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function scratch(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  tempDirs.push(dir);
+  const dir = scratchDir(prefix);
 
   return dir;
 }

@@ -2,18 +2,16 @@
 // model. A benchmark task OOM-died running `make -j$(nproc)` in a 1-CPU/2GB
 // container, so what matters here is (a) both hierarchies are actually read,
 // and (b) an environment with no limit says NOTHING rather than guessing.
-import { describe, test, expect, afterEach } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, test, expect } from 'bun:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { readCgroupLimits } from '../src/cgroup-limits';
 
-const roots: string[] = [];
+import { readCgroupLimits } from '../src/cgroup-limits';
 
 /** A cgroupfs fixture: paths relative to the mount, contents verbatim. */
 function cgroupfs(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), 'kinu-cgroup-'));
-  roots.push(root);
+  const root = scratchDir('cgroup');
 
   for (const [relative, content] of Object.entries(files)) {
     const path = join(root, relative);
@@ -26,17 +24,12 @@ function cgroupfs(files: Record<string, string>): string {
 
 /** A /proc/self/cgroup fixture. Its own file, outside the mount. */
 function procSelf(content: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-procself-'));
-  roots.push(dir);
+  const dir = scratchDir('procself');
   const path = join(dir, 'cgroup');
   writeFileSync(path, content);
 
   return path;
 }
-
-afterEach(() => {
-  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
-});
 
 const NAMESPACED = '0::/\n';
 

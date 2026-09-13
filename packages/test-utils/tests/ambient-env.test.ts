@@ -11,11 +11,12 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { join, resolve } from 'node:path';
+import { join, basename, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
   AMBIENT_CREDENTIAL_ENV, LIVE_MODEL_ENV, stripAmbientCredentials,
 } from '../src/ambient-env';
+import { SCRATCH_ROOT_PREFIX } from '../src/scratch';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
 
@@ -104,9 +105,13 @@ describe('the wiring', () => {
     const env = envAfterPreload(SIGNED_IN_SHELL);
 
     for (const name of AMBIENT_CREDENTIAL_ENV) expect(env[name]).toBeUndefined();
-    // And the isolation it already had is still in place, so this case cannot
-    // pass by having broken the throwaway home instead.
-    expect(env.KINU_HOME).toMatch(/kinu-test-home-/);
+    // And the ownership it already had is still in place: the throwaway home
+    // is the `home` child of the process TMPDIR, and TMPDIR itself sits in the
+    // shared `kinu-scratch-` namespace the release owns — not any incidental
+    // prefix spelling.
+    expect(basename(env.KINU_HOME)).toBe('home');
+    expect(env.KINU_HOME).toBe(join(env.TMPDIR, 'home'));
+    expect(basename(env.TMPDIR)).toStartWith(SCRATCH_ROOT_PREFIX);
   });
 
   test('the eval tier keeps them, because it is the one that consented', () => {

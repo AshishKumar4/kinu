@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+
 import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   initWorkspaceSchema, openWorkspaceMainActor,
   type LLMProviderConfig, type SpendSource, type Usage,
@@ -11,16 +12,13 @@ import {
 import { createWorkspace } from "@kinu.run/core/identity";
 import { makeSql, makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 
-const tempDirs: string[] = [];
-
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 const DUMMY_LLM: LLMProviderConfig = {
   name: "fake", baseURL: "http://localhost:0", headers: {}, model: "fake-model",
 };
 
 function newProjectDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
-  tempDirs.push(dir);
+  const dir = scratchDir("test-project");
 
   return dir;
 }
@@ -28,10 +26,6 @@ function newProjectDir(): string {
 const repoRoot = resolve(__dirname, "../../..");
 
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function runCli(home: string, args: string[], extraEnv: Record<string, string> = {}) {
   return Bun.spawnSync({
@@ -122,8 +116,7 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
 }
 
 test("a genuinely unreadable workspace names its cause instead of hiding it", () => {
-  const home = mkdtempSync(join(tmpdir(), "kinu-cli-unreadable-"));
-  tempDirs.push(home);
+  const home = scratchDir("cli-unreadable");
   const dir = join(home, "broken-ws");
   mkdirSync(dir, { recursive: true });
   // Not a database at all — the one condition that legitimately reaches the
@@ -161,8 +154,7 @@ const CLI_SPAWN_TIMEOUT_MS = 30_000;
 
 describe("CLI inspection commands", () => {
   test("inspect local durable state without model credentials", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-inspect-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-inspect");
     await createLocalAgent(home, "localtest");
 
     const memory = runCli(home, ["memory", "localtest"]);
@@ -187,8 +179,7 @@ describe("CLI inspection commands", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu model normalizes specs through the provider resolver", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-model-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-model");
     await createLocalAgent(home, "localtest");
     const llmEnv = { KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" };
 
@@ -216,8 +207,7 @@ describe("CLI inspection commands", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu effort updates the active profile authority and appears in status", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-effort-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-effort");
     await createLocalAgent(home, "localtest");
 
     const configured = runCli(home, ["model", "localtest", "fixture-model"], {
@@ -261,8 +251,7 @@ describe("CLI inspection commands", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu model validates known, uncatalogued, and unknown-provider specs", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-model-validation-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-model-validation");
     await createLocalAgent(home, "localtest");
     const knownSpec = "workers-ai/@cf/moonshotai/kimi-k2.6";
 
@@ -295,8 +284,7 @@ describe("CLI inspection commands", () => {
   // `jobs` and `triggers` branch on opts.json in their command bodies but were
   // never given the flag, so commander rejected the documented invocation.
   test("jobs and triggers accept --json like every sibling inspector", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-json-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-json");
     await createLocalAgent(home, "localtest");
 
     for (const args of [["jobs", "localtest"], ["triggers", "localtest", "list"]]) {
@@ -310,8 +298,7 @@ describe("CLI inspection commands", () => {
   // (`atMs`) where core keeps it in next_fire_at only. Both halves are
   // pinned: the stored row and the printed line.
   test("a one-shot local trigger stores its fire time in next_fire_at, not the spec", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-timer-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-timer");
     await createLocalAgent(home, "localtest");
 
     const at = "2030-01-02T03:04:05Z";
@@ -346,8 +333,7 @@ describe("CLI inspection commands", () => {
    * tell an estimate from a price, which is the whole gap.
    */
   test("kinu spend names BOTH reasons its dollar total is a floor", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-spend-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-spend");
     await createLocalAgent(home, "localtest");
 
     // Rows in the shape the producers write them: `buildModelCallEvent` sets
@@ -453,8 +439,7 @@ describe("kinu events rendering", () => {
   }
 
   test("a cloud workspace prints the rows a local one prints, character for character", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-events-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-events");
     await createLocalAgent(home, "localtest");
 
     const local = await runCliServed(home, ["events", "localtest"]);
@@ -467,8 +452,7 @@ describe("kinu events rendering", () => {
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("an enveloped answer is refused by name rather than dumped as raw JSON", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-events-envelope-"));
-    tempDirs.push(home);
+    const home = scratchDir("cli-events-envelope");
 
     const enveloped = await eventsAgainstCloud(home, { events: [CLOUD_ROW] });
 

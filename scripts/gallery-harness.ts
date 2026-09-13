@@ -19,7 +19,7 @@
  * gates on this shared tree ("Execution context was destroyed").
  */
 
-import { createReadStream, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
@@ -27,6 +27,7 @@ import puppeteer, { type Browser, type LaunchOptions, type Page } from 'puppetee
 import { build } from 'vite';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
+import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -118,9 +119,9 @@ function chromePath(): string | undefined {
  *  removed when the process exits. */
 let galleryDist: Promise<string> | null = null;
 
-/** `kinu-gallery-dist-<pid>-<random>`. The owner's pid is in the name so a
+/** The owner's pid is in the shared scratch name so a
  *  later run can tell a live sibling's build from a leaked one. */
-const DIST_NAME = /^kinu-gallery-dist-(\d+)-/;
+const DIST_NAME = new RegExp(`^${SCRATCH_ROOT_PREFIX}gallery-dist-(\\d+)-`);
 
 function processAlive(pid: number): boolean {
   try {
@@ -143,17 +144,17 @@ function processAlive(pid: number): boolean {
  * than by age is what lets the next build clean up after a killed one at
  * once, and a build whose owner is still running is left alone.
  */
-export function reclaimLeakedBuilds(): number {
+export function reclaimLeakedBuilds(directory = tmpdir()): number {
   let removed = 0;
 
-  for (const name of readdirSync(tmpdir())) {
+  for (const name of readdirSync(directory)) {
     const owner = DIST_NAME.exec(name)?.[1];
 
     if (owner === undefined) continue;
     const pid = Number(owner);
 
     if (pid === process.pid || processAlive(pid)) continue;
-    rmSync(join(tmpdir(), name), { recursive: true, force: true });
+    rmSync(join(directory, name), { recursive: true, force: true });
     removed += 1;
   }
 
@@ -168,8 +169,8 @@ function builtGalleryDist(): Promise<string> {
       process.stderr.write(`gallery-harness: removed ${String(leaked)} build(s) left by processes that are gone\n`);
     }
 
-    const outDir = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(process.pid)}-`));
-    process.once('exit', () => rmSync(outDir, { recursive: true, force: true }));
+    const outDir = scratchDir(`gallery-dist-${String(process.pid)}`);
+    process.once('exit', releaseScratch);
     await build({
       root: CF,
       configFile: join(CF, 'gallery.vite.config.ts'),

@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
+
 import { join } from 'node:path';
 import { asFetchFunction, workspaceSlug } from '@kinu.run/core';
 import {
@@ -155,13 +155,8 @@ const CreateStateSchema = v.object({
 });
 
 describe('local workspace creation publishes or leaves nothing', () => {
-  const HOME = mkdtempSync(join(tmpdir(), 'kinu-create-atomic-home-'));
-  const PROJECT = mkdtempSync(join(tmpdir(), 'kinu-create-atomic-project-'));
-
-  afterAll(() => {
-    rmSync(HOME, { recursive: true, force: true });
-    rmSync(PROJECT, { recursive: true, force: true });
-  });
+  const HOME = scratchDir('create-atomic-home');
+  const PROJECT = scratchDir('create-atomic-project');
 
   /** config.ts binds KINU_HOME at module load, so the isolated home is only
    *  authoritative in a fresh process. */

@@ -7,19 +7,14 @@
 //
 // Driven through the real `setupCommand` in a subprocess, because config.ts
 // binds KINU_HOME at import.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 const CLOUD_ORIGIN = 'https://kinu.example.com';
 
@@ -37,8 +32,7 @@ function signedInHome(extra: JsonObject = {}): string {
 }
 
 function home(config: JsonObject): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-setup-home-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('setup-home');
   writeFileSync(join(dir, 'config.json'), JSON.stringify(config), { mode: 0o600 });
 
   return dir;

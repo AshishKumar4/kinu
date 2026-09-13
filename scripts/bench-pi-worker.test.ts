@@ -1,17 +1,12 @@
-import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../packages/test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
+import { mkdirSync } from 'node:fs';
+
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { parseWorkerOutput } from './bench-worker-protocol';
 
 const REPO_ROOT = join(import.meta.dir, '..');
-
-const scratch: string[] = [];
-
-afterAll(() => {
-  for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
-});
 
 const RequestSchema = v.object({
   messages: v.array(v.object({ role: v.string(), content: v.unknown() })),
@@ -44,8 +39,7 @@ async function runWorker(verifierRetry: boolean): Promise<{
   requests: Array<v.InferOutput<typeof RequestSchema>>;
   authorizations: Array<string | null>;
 }> {
-  const dir = mkdtempSync(join(tmpdir(), 'pi-worker-test-'));
-  scratch.push(dir);
+  const dir = scratchDir('pi-worker-test');
   const home = join(dir, 'home');
   mkdirSync(home, { recursive: true });
   const requests: Array<v.InferOutput<typeof RequestSchema>> = [];

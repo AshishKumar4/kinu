@@ -41,11 +41,8 @@ server.registerTool(
 
 await server.connect(new StdioServerTransport());
 
-process.stdin.resume();
+const stop = () => process.exit(0);
 
-const keepAlive = setInterval(() => undefined, 60_000);
+process.stdin.once('end', stop);
 
-process.once('SIGTERM', () => {
-  clearInterval(keepAlive);
-  process.exit(0);
-});
+process.once('SIGTERM', stop);

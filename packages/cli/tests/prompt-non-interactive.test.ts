@@ -6,26 +6,19 @@
  * The CLI is spawned detached (its own session, no controlling terminal),
  * so /dev/tty is unopenable even when the test runner itself has a TTY.
  */
+import { scratchDir } from '../../test-utils/src/scratch';
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { tolerate } from "@kinu.run/core/obs";
 
 const repoRoot = resolve(__dirname, "../../..");
 
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function tempHome(): string {
-  const dir = mkdtempSync(join(tmpdir(), "kinu-prompt-test-"));
-  tempDirs.push(dir);
+  const dir = scratchDir("prompt-test");
 
   return dir;
 }

@@ -3,28 +3,22 @@
 // Timeline spine; locally there was no run_events table at all, so a local
 // workspace had no run history to read. These cover the CLI's readers over a
 // throwaway KINU_HOME — never the owner's real ~/.kinu.
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { mkdirSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { initRunEventTables, parseJsonValue, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
 import { createTestActor } from '../../core/tests/helpers';
 
-const tempDirs: string[] = [];
-
 const repoRoot = resolve(__dirname, '../../..');
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 /** Seed an agent.db carrying a recorded run, then read it back through the
  *  CLI's local-inspection module in a child process pinned to that home. */
 function readLocal(expression: string): JsonValue {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-run-events-'));
-  tempDirs.push(home);
+  const home = scratchDir('run-events');
   mkdirSync(join(home, 'jarvis'), { recursive: true });
   const db = new Database(join(home, 'jarvis', 'agent.db'));
   const execRaw = (ddl: string) => { db.exec(ddl); };
