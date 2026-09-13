@@ -16,7 +16,7 @@ import * as v from 'valibot';
 import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, SWARM_PRESETS } from '@kinu.run/core';
 import { handleCliRequest } from '../src/cli/routes';
 import { handleHealthRequest } from '../src/health-route';
-import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
+import { CLI_DIST_PATHS } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 

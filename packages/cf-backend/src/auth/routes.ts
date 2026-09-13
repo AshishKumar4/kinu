@@ -7,9 +7,9 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile,
 } from './store';
-import { escapeHtml, json, KINU_USER_AGENT } from '../lib/http';
-import { authDocument, loginDocument } from '../lib/public-pages';
-import { publicHtmlHeaders } from '../lib/security-headers';
+import { escapeHtml, json, KINU_USER_AGENT } from '@kinu.run/core';
+import { authDocument, loginDocument } from '@kinu.run/core';
+import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
   type OAuthProviderConfig,

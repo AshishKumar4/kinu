@@ -23,14 +23,14 @@
  */
 
 import { DEVICE_CONNECT_PATH } from "@kinu.run/core";
-import { json, readBounded } from "./lib/http";
+import { json, readBounded } from "@kinu.run/core";
 import {
   ownerCaller,
   type OwnerCapabilityEnv,
   type UserCaller,
 } from "./user/workspace-capability";
 import { diagnostics, KinuError, renderThrownChain } from "@kinu.run/core/obs";
-import { ingressAdmitted, ingressDenied, peerIp } from "./lib/ingress-budget";
+import { ingressAdmitted, ingressDenied, peerIp } from "@kinu.run/core";
 import type { KvStore } from "@kinu.run/agent-utils";
 import * as v from "valibot";
 

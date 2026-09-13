@@ -1,6 +1,6 @@
 import type { ReactElement } from 'react';
 
-import { mark } from '@/lib/public-shell';
+import { mark } from '@kinu.run/core';
 
 export interface KinuMarkProps {
   className?: string;

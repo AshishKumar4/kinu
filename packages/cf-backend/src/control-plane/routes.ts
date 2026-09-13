@@ -44,7 +44,7 @@ import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { err, json, safeJson } from '../lib/http';
+import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '../user/workspace-capability';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {

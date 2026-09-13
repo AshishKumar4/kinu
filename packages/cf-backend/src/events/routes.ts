@@ -31,8 +31,8 @@ import type { OrchestratorAgent } from '../orchestrator';
 import {
   boundEventQuery, DEFAULT_RATE_LIMIT_PER_MIN, normalizeWebhookRateLimitPerMin,
 } from '@kinu.run/core';
-import { err, json, readBounded, safeJson } from '../lib/http';
-import { ingressAdmitted, ingressDenied, peerIp } from '../lib/ingress-budget';
+import { err, json, readBounded, safeJson } from '@kinu.run/core';
+import { ingressAdmitted, ingressDenied, peerIp } from '@kinu.run/core';
 import { isFreshAuthTime } from '../auth/session';
 import { decodeJsonWire } from '../lib/orchestrator-wire';
 import {

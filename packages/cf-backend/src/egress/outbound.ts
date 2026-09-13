@@ -65,7 +65,7 @@ import {
 import type { OrchestratorAgent } from '../orchestrator';
 import { ownerCaller, type UserCaller } from '../user/workspace-capability';
 import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault';
-import { kinuUserAgent, reoriginateRequest } from '../lib/http';
+import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import {
   classifyErrorCode, diagnostics, renderThrownChain, toKinuError, KinuError,
   type Refusal,

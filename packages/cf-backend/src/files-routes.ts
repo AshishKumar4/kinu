@@ -36,7 +36,7 @@ import type { ExecutorWriteResult } from "@kinu.run/core";
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
 import type { OrchestratorAgent } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
-import { err, fileResponseHeaders, json, readBoundedStream } from "./lib/http";
+import { err, fileResponseHeaders, json, readBoundedStream } from "@kinu.run/core";
 
 /** The stub surface this route drives — narrowed so tests can stand in for
  *  the agent without impersonating the whole actor. */

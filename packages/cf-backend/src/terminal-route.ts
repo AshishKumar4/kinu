@@ -33,7 +33,7 @@ import { getAgentByName } from "agents";
 import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 import type { KinuSandbox } from "./kinu-sandbox";
-import { err, json } from "./lib/http";
+import { err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";

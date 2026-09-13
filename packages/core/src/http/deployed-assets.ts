@@ -7,7 +7,7 @@
 // every fresh install died on a checksum mismatch and nothing reported it.
 // So: one place owns "did this deployment actually publish that file?", and
 // the SPA shell is never an acceptable answer for a file we asked for by name.
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync } from '../obs/index';
 import * as v from 'valibot';
 
 /** The platforms the CLI distribution is built for. The launcher's `uname`
@@ -42,6 +42,13 @@ const BuildStampSchema = v.object({
   builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
 
+/** The slice of the static-assets binding this module needs, declared
+ *  structurally: a `Fetcher` (`env.ASSETS` on Cloudflare) satisfies it, and a
+ *  local fetch — cli-backend's — satisfies it too. */
+export interface AssetFetcher {
+  fetch(input: Request): Promise<Response>;
+}
+
 /**
  * Fetch a published asset, or null when this deployment does not contain it.
  *
@@ -50,11 +57,12 @@ const BuildStampSchema = v.object({
  * path). Callers ask only for non-HTML files, so HTML is always the impostor.
  */
 export async function fetchDeployedAsset(
-  env: Env,
+  env: { readonly ASSETS: AssetFetcher },
   base: string | URL,
   pathname: string,
 ): Promise<Response | null> {
-  const res = await env.ASSETS.fetch(new Request(new URL(pathname, base), { method: 'GET' }));
+  const target = new URL(pathname, base).href;
+  const res = await env.ASSETS.fetch(new Request(target, { method: 'GET' }));
 
   if (!res.ok) return null;
 
@@ -66,7 +74,7 @@ export async function fetchDeployedAsset(
 /** The served build's `{version, sha, builtAt}`, or null when the deployment
  *  shipped no (or a malformed) build stamp — which means its asset bundle is
  *  incomplete and its CLI download endpoints are broken. */
-export async function readBuildStamp(env: Env, base: string | URL): Promise<BuildStamp | null> {
+export async function readBuildStamp(env: { readonly ASSETS: AssetFetcher }, base: string | URL): Promise<BuildStamp | null> {
   const res = await fetchDeployedAsset(env, base, CLI_VERSION_PATH);
 
   if (!res) return null;

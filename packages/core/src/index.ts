@@ -2184,3 +2184,27 @@ export {
   BUSY, LINE_MODE_LABEL, LineTerminalState, type TerminalLane, type TerminalPaneOutput,
   type TerminalWriter, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
 } from './execution/terminal-lane';
+
+export {
+  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, json, kinuUserAgent,
+  readBounded, readBoundedStream, reoriginateRequest, safeJson,
+} from './http/http';
+
+export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
+
+export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
+
+export {
+  CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
+  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+} from './http/deployed-assets';
+
+export {
+  COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
+  mark, markDocument, publicFooter, publicPage,
+  type MarkId, type Mode, type PublicPageOptions, type PublicToken, type RadiusRole, type TokenSet,
+} from './http/public-shell';
+
+export {
+  approvalDocument, authDocument, installDocument, loginDocument, type LoginProvider,
+} from './http/public-pages';

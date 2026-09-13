@@ -10,7 +10,7 @@
 // cannot serve the CLI downloads.)
 
 import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, ORCHESTRATOR_AGENT_SLUG, SWARM_PRESETS } from '@kinu.run/core';
-import { readBuildStamp } from './lib/deployed-assets';
+import { readBuildStamp } from '@kinu.run/core';
 
 
 export async function handleHealthRequest(request: Request, env: Env): Promise<Response | null> {

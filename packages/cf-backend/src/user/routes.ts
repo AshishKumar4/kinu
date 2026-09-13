@@ -47,7 +47,7 @@ import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs'
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
 import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
-import { err, json, safeJson } from '../lib/http';
+import { err, json, safeJson } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
 import { isControlPlaneOperator } from '../control-plane/admin-caller';

@@ -66,12 +66,12 @@ import {
 import {
   containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
 } from "./lib/preview-origin";
-import { withAppSecurityHeaders } from "./lib/security-headers";
+import { withAppSecurityHeaders } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
 import { AUTH_TIME_HEADER, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER, USER_ID_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
-import { err } from "./lib/http";
+import { err } from "@kinu.run/core";
 import { handleFeedbackRequest } from "./feedback/routes";
 import { handleControlRequest } from "./control-plane/routes";
 import {

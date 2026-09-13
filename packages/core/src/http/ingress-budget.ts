@@ -30,7 +30,7 @@
 import * as v from 'valibot';
 import { json } from './http';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
-import { sha256Hex } from '@kinu.run/core';
+import { sha256Hex } from '../safety/argument-digest';
 
 const INGRESS_WINDOW_MS = 60_000;
 

@@ -20,7 +20,7 @@ import {
   isPreviewHostRequest,
   previewHostSuffix,
 } from '../src/lib/preview-origin';
-import { publicHtmlHeaders, withAppSecurityHeaders } from '../src/lib/security-headers';
+import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
 } from '../src/auth/session';
