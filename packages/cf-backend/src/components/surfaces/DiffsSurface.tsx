@@ -2,9 +2,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 import type { FileDiff } from "@kinu.run/core";
-import { executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor, type ExecutorInfo } from "@/lib/executors";
+import { executorLabel, executorSortKey, isActiveExecutionDevice, pickDefaultExecutor, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useToggledSet } from "@/hooks/use-toggled-set";

@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon } from './helpers/device-harness';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members';
-import { sha256Hex } from '../src/lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import { BUILTIN_PROFILE_CATALOG, decodeJsonValue } from '@kinu.run/core';
 import {
   CapabilityDeniedError,

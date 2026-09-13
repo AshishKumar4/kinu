@@ -24,10 +24,8 @@ import {
 } from "agents";
 import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
-import type {
-  SubordinateActivityEvent,
-  SubordinateRosterEntry as SubordinateView,
-} from './lib/protocol';
+import type { SubordinateActivityEvent } from '@kinu.run/core';
+import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage } from "agents/chat";
 import {
   CLI_BEARER_HEADER,
@@ -41,7 +39,7 @@ import {
   rejectOutOfScopeRpc, requiredRpcAccess,
   type CliSocketBearer,
 } from "./cli/rpc-gate";
-import { retryTransientDO } from "./lib/do-rpc";
+import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
 import {
@@ -290,7 +288,7 @@ import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCod
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import type { UserCaller } from "./user/workspace-capability";
-import { sha256Hex } from "./lib/crypto";
+import { sha256Hex } from "@kinu.run/core";
 import { installAnalyticsDiagnostics } from "./analytics/install";
 import { openAnalyticsWindow } from "./analytics/writer";
 import {

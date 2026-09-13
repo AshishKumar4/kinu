@@ -12,20 +12,19 @@ import {
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { explorationForkTree } from "../lib/fork-tree-rows";
+import { explorationForkTree } from "@kinu.run/core";
 import type {
   ToolInfo,
   MemoryEntry,
   ForkNode,
-  BackgroundJob,
   ExecutorCommandResult,
   PendingConsent,
   Rpc,
   SubordinateActivityEvent,
-  SubordinateRosterEntry,
   TabPresence,
-} from "../lib/protocol";
-import type { ExecutorInfo } from "../lib/executors";
+} from "@kinu.run/core";
+import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
+import type { ExecutorInfo } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,

@@ -19,7 +19,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '../src/lib/terminal-lane';
+import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
 import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';

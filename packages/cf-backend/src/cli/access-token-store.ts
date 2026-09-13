@@ -11,7 +11,7 @@
  * meaning intact; thrown errors are real infra failures.
  */
 import { nanoid, type SqlExec } from '@kinu.run/core';
-import { sha256Hex } from '../lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 
 // The scope vocabulary carries no back-compat aliases by design — pre-production,

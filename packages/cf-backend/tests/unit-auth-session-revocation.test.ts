@@ -16,9 +16,9 @@ import {
   AuthError, SESSION_COOKIE_NAME, authenticateRequest, type AuthEnv,
 } from '../src/auth/session';
 import { handleAuthRequest } from '../src/auth/routes';
-import type { KvStore } from '../src/lib/kv';
+import type { KvStore } from '@kinu.run/agent-utils';
 import { OwnerCapabilityUnavailableError } from '../src/user/workspace-capability';
-import { sha256Hex } from '../src/lib/crypto';
+import { sha256Hex } from '@kinu.run/core';
 import type { UserDO } from '../src/user/user-do';
 import {
   createRecordingLogger, renderThrownChain, setDiagnosticsSink, type RecordingLogger,

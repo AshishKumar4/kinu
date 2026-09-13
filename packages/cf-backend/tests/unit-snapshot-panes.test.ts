@@ -19,7 +19,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentSurface } from '../src/components/surfaces/AgentSurface';
 import type { AgentStatus } from '../src/hooks/use-kinu';
 import type { AsyncResource } from '../src/hooks/use-async-resource';
-import type { Rpc, ToolInfo } from '../src/lib/protocol';
+import type { Rpc, ToolInfo } from '@kinu.run/core';
 
 /** `Section` persists which sections a reader folded. Server rendering has no
  *  storage, so the suite gives it one rather than the component a branch. */

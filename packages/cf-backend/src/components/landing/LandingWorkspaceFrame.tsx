@@ -33,7 +33,7 @@ import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface
 import { SLATE_PREFIX } from '@/components/surfaces/presence';
 import { SupervisePage } from '@/pages/SupervisePage';
 import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
-import type { ForkNode } from '@/lib/protocol';
+import type { ForkNode } from '@kinu.run/core';
 
 import {
   CHECKOUT_MESSAGES, LANDING_MODEL, LANDING_MODELS, LANDING_SUBORDINATES, LANDING_WORKSPACE,

@@ -15,7 +15,7 @@ import {
 import type { AlternateTakeSet, TakePickOutcome } from "@kinu.run/core";
 import { branchHeadId, takeEvidence } from "@kinu.run/core";
 import type { BranchRun } from "@/hooks/use-kinu";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";

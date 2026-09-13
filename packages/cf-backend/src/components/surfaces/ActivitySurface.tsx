@@ -40,8 +40,8 @@ import {
 import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
-import { fmtTokens, fmtUsd, fmtPct } from "@/lib/format";
-import type { ActivitySnapshot, Rpc } from "@/lib/protocol";
+import { fmtTokens, fmtUsd, fmtPct } from "@kinu.run/core";
+import type { ActivitySnapshot, Rpc } from "@kinu.run/core";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
 import type {
   ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,

@@ -53,8 +53,8 @@
 import * as v from 'valibot';
 import { isWorkspaceName } from '../user/validate';
 import { timingSafeEqual } from '@kinu.run/core';
-import { sha256Hex } from './crypto';
-import { readKvJson, writeKvJson, type KvStore } from './kv';
+import { sha256Hex } from '@kinu.run/core';
+import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 
 /** Every container this deployment addresses is `kinu-<workspace>`. One
  *  spelling, in one place, because the edge refuses every id that is not it. */

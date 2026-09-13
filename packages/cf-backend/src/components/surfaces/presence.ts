@@ -4,7 +4,7 @@
  * so the contract is testable without mounting the strip.
  */
 import type { SlateSummary } from "@kinu.run/core";
-import type { ForkNode, TabPresence } from "@/lib/protocol";
+import type { ForkNode, TabPresence } from "@kinu.run/core";
 import type { SurfaceKind } from "./WorkSurface";
 
 export const SLATE_PREFIX = "slate:";

@@ -1589,7 +1589,7 @@ export { nanoid } from './utils/nanoid';
 // reason the search records.
 export { abortCause } from './utils/abort';
 
-export { hmacSha256Hex, timingSafeEqual } from './utils/crypto';
+export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
 
 // One POSIX quoting rule for every command this system composes, on either
 // backend — the shells the executors talk to are the same shells.
@@ -2162,3 +2162,25 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // Rendered from the preset table in the same module, so a surface reading this cannot
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
+
+export { fmtPct, fmtTokens, fmtUsd, timeAgo } from './utils/format';
+
+export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
+
+export {
+  type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
+  type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
+  type TabPresence, type ToolInfo,
+} from './protocol';
+
+export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
+
+export {
+  executorDescription, executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
+  pickDefaultExecutor, releaseSubstrate, type ExecutorAvailability, type ReleaseSubstrate,
+} from './read-models/executors';
+
+export {
+  BUSY, LINE_MODE_LABEL, LineTerminalState, type TerminalLane, type TerminalPaneOutput,
+  type TerminalWriter, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
+} from './execution/terminal-lane';

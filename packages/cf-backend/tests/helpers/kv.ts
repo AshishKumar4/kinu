@@ -1,4 +1,4 @@
-import type { KvStore } from '../../src/lib/kv';
+import type { KvStore } from '@kinu.run/agent-utils';
 
 interface Entry {
   value: string;

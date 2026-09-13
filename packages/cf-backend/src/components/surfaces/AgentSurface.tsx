@@ -26,9 +26,9 @@ import {
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
-import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
+import type { ToolInfo, MemoryEntry, Rpc } from "@kinu.run/core";
 import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
-import { timeAgo } from "@/lib/format";
+import { timeAgo } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { LoadFailure } from "@/components/ui/LoadFailure";

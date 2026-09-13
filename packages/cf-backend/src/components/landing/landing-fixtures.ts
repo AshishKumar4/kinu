@@ -11,7 +11,8 @@
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary } from '@kinu.run/core';
-import type { BackgroundJob, Rpc, SubordinateRosterEntry } from '@/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
+import type { BackgroundJob, SubordinateRosterEntry } from '@kinu.run/core/protocol';
 import type { ModelMenuEntry, UserProfile, WorkspaceEntry } from '@/lib/user-api';
 
 const NOW = Date.now();

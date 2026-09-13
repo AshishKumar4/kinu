@@ -8,4 +8,6 @@ export type { MemoryConfig } from "./memory/store";
 
 export { CraftStore, initCraftedToolsTables } from "./stores/craft";
 
+export { readKvJson, writeKvJson, type KvStore } from "./stores/kv";
+
 export { combineAbortSignals, isAbortError, normalizePath, raceAbort, readVfsText } from "./core/utils";

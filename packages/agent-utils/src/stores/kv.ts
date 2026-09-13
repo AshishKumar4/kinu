@@ -1,10 +1,9 @@
-// Typed, expiring JSON records in Workers KV — one home for the two rules every
+// Typed, expiring JSON records in KV — one home for the two rules every
 // KV caller here would otherwise restate.
 //
-// Bytes coming back out of KV were written by some earlier deployment of this
-// Worker, so they are outside the type system: every read is parsed against the
-// schema its writer used, and a record that does not parse is a real fault, not
-// an absent key.
+// KV were written by some earlier deployment, so they are outside the type
+// system: every read is parsed against the schema its writer used, and a
+// record that does not parse is a real fault, not an absent key.
 //
 // KV refuses an `expirationTtl` below 60 seconds. Callers hold an absolute
 // expiry, not a TTL, so the conversion lives here and floors at 60: a record

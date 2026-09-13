@@ -128,7 +128,7 @@ import {
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
 } from './egress-vault';
-import { randomToken, sha256Hex } from '../lib/crypto';
+import { randomToken, sha256Hex } from '@kinu.run/core';
 import { resolveWorkspaceTitle } from '../lib/agent-naming';
 import { installAnalyticsDiagnostics } from '../analytics/install';
 import { recordReleaseTransition } from '../analytics/record';

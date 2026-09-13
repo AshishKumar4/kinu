@@ -31,7 +31,7 @@ import { describeGpuNodes, sandboxReasonFix } from '@kinu.run/core';
 import { DeviceRow } from '../src/pages/UserSettingsPage';
 import { DeviceConsentCard } from '../src/pages/WorkspacePage';
 import { listDevices, type UserDevice } from '../src/lib/user-api';
-import type { PendingConsent } from '../src/lib/protocol';
+import type { PendingConsent } from '@kinu.run/core';
 
 const AT = Date.UTC(2026, 8, 1, 9, 0, 0);
 

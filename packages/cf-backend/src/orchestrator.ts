@@ -59,11 +59,8 @@ import {
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type {
-  ActivitySnapshot,
-  SubordinateRosterEntry,
-  TabPresence,
-} from "./lib/protocol";
+import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
+import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from "./lib/cron";
 import type { ChatResponseResult } from "@cloudflare/think";

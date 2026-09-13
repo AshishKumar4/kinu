@@ -155,11 +155,12 @@ import {
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
-import type { ActivitySnapshot, BackgroundJob, ExecutorCommandResult, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
-import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
+import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, Rpc, ToolInfo } from "@kinu.run/core";
+import type { BackgroundJob } from "@kinu.run/core/protocol";
+import { buildTree, type MctsRow } from "@kinu.run/core";
 import { formatWorkspaceError, type AgentStatus, type ExecutorOutput, type WorkspaceErrors } from "@/hooks/use-kinu";
 import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
-import type { ExecutorInfo } from "@/lib/executors";
+import type { ExecutorInfo } from "@kinu.run/core";
 import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun, ForkRunParams,
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
@@ -3879,7 +3880,7 @@ const releaseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T>
 };
 
 const RELEASE_EXECUTORS: ExecutorInfo[] = [
-  { name: "sandbox", kind: "sandbox", capabilities: [], available: true, configured: true, status: "idle" },
+  { name: "sandbox", kind: "sandbox", capabilities: [], available: true, configured: true, active: false, status: "idle" },
 ];
 
 /** The same board with the engine's substrate missing — the surface's honest
@@ -3887,7 +3888,7 @@ const RELEASE_EXECUTORS: ExecutorInfo[] = [
 const RELEASE_EXECUTORS_OFFLINE: ExecutorInfo[] = [
   {
     name: "sandbox", kind: "sandbox", capabilities: [], available: false, configured: false,
-    status: "not_configured",
+    active: false, status: "not_configured",
     reason: "Sandbox executor not configured. Add the @cloudflare/sandbox binding and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).",
   },
 ];

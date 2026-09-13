@@ -35,7 +35,7 @@ import type { OrchestratorAgent } from "./orchestrator";
 import type { KinuSandbox } from "./kinu-sandbox";
 import { err, json } from "./lib/http";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
-import { terminalLane } from "./lib/terminal-lane";
+import { terminalLane } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace } from "./lib/preview-exposures";
 

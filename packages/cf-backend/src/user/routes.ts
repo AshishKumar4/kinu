@@ -48,7 +48,7 @@ import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, norm
 import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
 import { err, json, safeJson } from '../lib/http';
-import { retryTransientDO } from '../lib/do-rpc';
+import { retryTransientDO } from '@kinu.run/core';
 import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
 import { isControlPlaneOperator } from '../control-plane/admin-caller';
 import * as v from 'valibot';

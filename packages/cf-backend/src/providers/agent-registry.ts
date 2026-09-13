@@ -27,7 +27,7 @@ import { createMyGatewayProvider } from './my-gateway';
 import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway';
 import type { CredentialSummary } from '../user/user-do';
 import type { UserCaller } from '../user/workspace-capability';
-import { retryTransientDO } from '../lib/do-rpc';
+import { retryTransientDO } from '@kinu.run/core';
 
 /** Stub for the per-user DO that owns this user's credentials, paired with the
  *  identity this context presents to it — a Worker route acting for the

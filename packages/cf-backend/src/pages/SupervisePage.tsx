@@ -30,8 +30,8 @@ import { EvolutionEntrySchema, EvolutionSection } from "@/components/surfaces/su
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
-import type { Rpc } from "@/lib/protocol";
-import { fmtTokens } from "@/lib/format";
+import type { Rpc } from "@kinu.run/core";
+import { fmtTokens } from "@kinu.run/core";
 import { pageSchema, UsageSchema, usageTotal, type SeekCursor } from "@kinu.run/core";
 import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';

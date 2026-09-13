@@ -29,8 +29,8 @@
  */
 import * as v from 'valibot';
 import { json } from './http';
-import { readKvJson, writeKvJson, type KvStore } from './kv';
-import { sha256Hex } from './crypto';
+import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
+import { sha256Hex } from '@kinu.run/core';
 
 const INGRESS_WINDOW_MS = 60_000;
 

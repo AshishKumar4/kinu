@@ -16,7 +16,7 @@ import { AnnotationType, type Annotation, type Block, type EditorMode } from "@p
 import {
   exportAnnotations, extractFrontmatter, parseMarkdownToBlocks,
 } from "@plannotator/ui/utils/parser";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "./plan-annotation-save";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";

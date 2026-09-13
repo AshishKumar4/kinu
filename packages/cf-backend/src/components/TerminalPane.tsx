@@ -45,8 +45,8 @@ import { useTheme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
   type TerminalPaneOutput,
-} from "@/lib/terminal-lane";
-import type { ExecutorCommandResult } from "@/lib/protocol";
+} from "@kinu.run/core";
+import type { ExecutorCommandResult } from "@kinu.run/core";
 
 // The row type is declared with the driver that paints it and named here
 // because this pane's props are what a reader looks at to find it.

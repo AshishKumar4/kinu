@@ -41,7 +41,7 @@ import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs, agentTitle, workspaceTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@/lib/protocol";
+import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
 // The model picker reads /api/user/models (which unions the connected
