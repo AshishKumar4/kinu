@@ -475,6 +475,13 @@ export interface HeadInferenceDeps {
    * the same turn rather than an untraceable second run.
    */
   runId: string;
+  /** A durable subordinate appends one assignment to its own working history.
+   * Heads and swarm nodes omit this: each invocation explicitly re-seeds their
+   * exploration, including a claim re-drive of the same branch. */
+  delegation?: {
+    readonly assignmentId: string;
+    readonly birthContext: readonly ModelMessage[];
+  };
   /**
    * How this actor's turn is profiled — the role, tier and allowed-tool
    * narrowing that an actor's chat turn already resolves.
@@ -783,12 +790,13 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // The array is the SESSION's, not a second copy: the session is what admits
   // the claim whose revisions record the exact array each step consumed, so a
   // private array here would be a working history no revision could be checked
-  // against. Seeding through `restoreHistory` with no admitted turn is its
-  // hydration arm.
+  // against. An exploration re-seeds through the hydration arm. A durable
+  // assignment instead opens its existing revision after acquiring its lease.
   const session = deps.actor.session;
   const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
-  session.restoreHistory(seed);
-  const seeded = seed.length;
+
+  if (!deps.delegation) session.restoreHistory(seed);
+  let seeded = seed.length;
 
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
@@ -879,14 +887,21 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       // minted: a recovered activation re-admits the SAME turn under the next
       // epoch, which is what the epoch fence is for, and a fresh id would make
       // the recovered turn a second turn nobody can reconcile.
+      const turnId = deps.delegation?.assignmentId ?? input.id;
+
       const lease = session.beginTurn(
-        { runId: deps.runId, turnId: index === 0 ? input.id : `${input.id}#${index}` },
+        { runId: deps.runId, turnId: index === 0 ? turnId : `${turnId}#${index}` },
         input.mode, Date.now(),
       );
 
       let turnFailed = false;
 
       try {
+        if (index === 0 && deps.delegation) {
+          session.openDelegatedTurn(lease, { messages: seed, birthContext: deps.delegation.birthContext });
+          seeded = session.history.length;
+        }
+
         const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
         session.bindProfile(lease, resolved.profile, resolved.inputs);
 

@@ -2846,15 +2846,18 @@ export class LocalAgentSession implements BackendHost {
 
     const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
 
-    if (this.actorSession.history.length === 0 && drainTurn.success) {
-      for (const inherited of subordinateTurnContext(this.eventLog, drainTurn.output)) {
-        this.actorSession.appendInput(lease, inheritedAsModelMessage(inherited));
-      }
-    }
-
-    this.actorSession.appendInput(lease, fileParts.length > 0
+    const message: ModelMessage = fileParts.length > 0
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-      : { role: 'user', content: item.text });
+      : { role: 'user', content: item.text };
+
+    if (drainTurn.success) {
+      this.actorSession.openDelegatedTurn(lease, {
+        messages: [message],
+        birthContext: subordinateTurnContext(this.eventLog, drainTurn.output).map(inheritedAsModelMessage),
+      });
+    } else {
+      this.actorSession.appendInput(lease, message);
+    }
 
     // Live state (facts, memory tail, executor status, running background work,
     // the open fork roster) rides the dynamic-context ledger — the shared step
@@ -4728,7 +4731,15 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Restore the session's durable transcript into live context on open.
+   * Restore the working revision on open, falling back to the transcript only
+   * when the actor has never recorded a working revision.
+   */
+  private restoreHistory(): void {
+    this.actorSession.restoreWorkingHistory(() => this.restoreTranscript());
+  }
+
+  /**
+   * The transcript fallback is bounded by the model's context window.
    *
    * Bounded by what the model could ever be shown at once — the resolved
    * context window, LESS what is held back for the answer, since a restore that
@@ -4745,7 +4756,7 @@ export class LocalAgentSession implements BackendHost {
    * A session larger than the window still cannot be restored whole, so what
    * did not fit is STATED: the count, and where it is still readable from.
    */
-  private restoreHistory(): void {
+  private restoreTranscript(): readonly ModelMessage[] {
     const rows = this.rt.storage.sql<{ role: string; content: string }>`
       SELECT role, content
       FROM actor_messages
@@ -4777,9 +4788,9 @@ export class LocalAgentSession implements BackendHost {
       restored.push({ role: row.role, content: row.content });
     }
 
-    this.actorSession.restoreHistory(omitted > 0
+    return omitted > 0
       ? [olderHistoryNotice(omitted, this.sessionId), ...restored.reverse()]
-      : restored.reverse());
+      : restored.reverse();
   }
 
   /**
