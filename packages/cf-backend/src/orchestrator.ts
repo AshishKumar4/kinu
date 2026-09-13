@@ -3078,17 +3078,9 @@ export class OrchestratorAgent extends ActorAgent {
         // the spending turn's own run log; outside any turn it falls back to
         // the workspace run so the audit still lands.
         audit: (record) => {
-          try {
-            this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
-              type: 'approval_consumed', ...record,
-            });
-          } catch (err) {
-            diagnostics.failure('approval.audit_emit_failed', toKinuError({
-              doing: 'recording an approval_consumed run event',
-              cause: err,
-              otherwise: 'io',
-            }));
-          }
+          this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
+            type: 'approval_consumed', ...record,
+          });
         },
         announce: (notice) => this.announceDeferral(notice),
       });

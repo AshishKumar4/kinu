@@ -575,6 +575,7 @@ export function createCFRuntime(
       // Standing grants, same live read as the mode: an 'always' the owner gave
       // in the needs-you queue takes effect on the very next command.
       granted: (grant) => holdsGrant(memoryConfig.getShellApprovalGrants(), grant),
+      requestApproval: null,
       get deferrals() { return hooks.deferrals?.(); },
     }
     : createInheritedApprovalPolicy({

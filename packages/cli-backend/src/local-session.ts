@@ -33,6 +33,7 @@ import type {
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
+  DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery, SettledSignals,
@@ -47,6 +48,7 @@ import { TierIdSchema,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
+  DeferredApprovalQueue, DeferredApprovalStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -598,6 +600,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
+  private readonly deferrals: DeferredApprovalQueue;
   /**
    * The host every LOGICAL ACTOR this session creates is acquired from —
    * heads, swarm nodes, and (through the team transport) hires.
@@ -1007,6 +1010,17 @@ export class LocalAgentSession implements BackendHost {
     // holds one turn file ledger and one approval channel.
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);
+    this.deferrals = new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
+      signals: this.actorSession.orchestrator.signals,
+      remember: (grants) => { this.config.grantShellApproval(grants); },
+      audit: (record) => {
+        this.eventRecorder.emit(this.currentRunId || WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
+      },
+      announce: () => { this.broadcast({ type: 'pending_actions_changed' }); },
+    });
+
+    this.rt.setApprovalDeferrals?.(this.deferrals.channel);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -1200,7 +1214,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Install the interactive approval channel for gated shell commands, or
    *  null to remove it. Surfaces that own a live user (ACP) set this; without
-   *  one, 'strict' keeps rejecting gate hits with its explanatory message.
+   *  one, 'strict' parks gate hits in the durable owner queue.
    *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
    *  `rt.shell` and every `rt.executionRouter` provider consult, so an
    *  approval answers `run` and every registered codemode executor's `exec()`
@@ -1216,6 +1230,18 @@ export class LocalAgentSession implements BackendHost {
         this.rt.setShellApprovalChannel?.(null);
       }
     };
+  }
+
+  async listDeferredApprovals(): Promise<DeferredApproval[]> {
+    return this.deferrals.list();
+  }
+
+  async decideDeferredApprovals(
+    ids: string[], decision: DeferredApprovalAnswer,
+  ): Promise<{ decided: string[] }> {
+    const decided = await this.deferrals.decide(ids, decision);
+
+    return { decided: decided.map((action) => action.id) };
   }
 
   /**
@@ -4262,7 +4288,9 @@ export class LocalAgentSession implements BackendHost {
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
-        const items = this.pendingShellApproval === null ? [] : [this.pendingShellApproval];
+        const items = [...this.deferrals.approvals()];
+
+        if (this.pendingShellApproval !== null) items.push(this.pendingShellApproval);
 
         return { items, total: items.length };
       },

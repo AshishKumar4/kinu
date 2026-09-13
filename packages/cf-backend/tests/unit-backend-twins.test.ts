@@ -156,6 +156,7 @@ const SHARED_TRANSPORTS = {
   armCompactNow: '.armForceCompaction',
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
+  decideDeferredApprovals: '.decide',
   createTimerTrigger: 'createTimerTrigger',
   // KINU continual refinement: the whole lane — stage machine, claim fencing,
   // owner routing, staged-skill promotion — is core's evolution/refinement*.
@@ -210,6 +211,7 @@ const SHARED_TRANSPORTS = {
   jobResult: 'jobResult',
   latestAlternateTakes: 'latestAlternateTakeSet',
   listBackgroundJobs: 'listBackgroundJobs',
+  listDeferredApprovals: '.list',
   listCurriculumTasks: 'listProposedTasks',
   listRuns: 'listRuns',
   listScaffoldVersions: 'listScaffoldVersions',
