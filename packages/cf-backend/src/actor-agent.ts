@@ -1290,6 +1290,7 @@ export abstract class ActorAgent extends Think<Env> {
       temporary: this.temporaryAgentPort(),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
+      originContext: () => this._turnOriginContext,
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
       broadcast: (event) => this.broadcastSubordinatesChanged(event),

@@ -3,6 +3,15 @@
 
 import type { FileStatus } from '../vfs/diff';
 
+/** A birth-time snapshot of one parent conversation message. */
+export interface SerializedMessage {
+  readonly id: string;
+  readonly role: 'system' | 'user' | 'assistant' | 'tool';
+  readonly content: string;
+  readonly createdAt: number;
+  readonly toolName?: string;
+}
+
 /** Opaque head identifier — kebab-case string, globally unique within a turn. */
 export type HeadId = string;
 

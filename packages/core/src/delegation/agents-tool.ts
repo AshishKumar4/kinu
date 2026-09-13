@@ -42,6 +42,7 @@ import {
   DELEGATION_CONVERSE,
   DELEGATION_FRAME,
   DELEGATION_INHERITANCE,
+  DELEGATION_CONTEXT_DESCRIPTION,
   DELEGATION_RUNGS,
   DELEGATION_TASK_LIFETIME,
   AGENTS_RESULT_PARTS,
@@ -56,6 +57,9 @@ import {
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateBirth } from '../subordinates/birth';
+import type { SerializedMessage } from '../types/heads';
+import { freezeInheritedContext } from '../orchestrator/heads-support';
+import { SWARM_CONTEXTS } from '../types/swarm';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
 import { readStartedSwarmProfile } from '../strategy/swarm-resume';
@@ -185,6 +189,8 @@ export interface SubordinateHandoff {
 }
 
 export interface TeamToolDeps {
+  /** The same bounded parent conversation handed to an exploration head. */
+  inheritedContext?(): SerializedMessage[];
   /**
    * Where the actor holding this roster sits in the subordinate tree, and how
    * much room is left below it (subordinates/depth.ts).
@@ -248,6 +254,7 @@ export interface TeamToolDeps {
     mission: string;
     tier?: TierId;
     mode: WorkMode;
+    inheritedContext?: SerializedMessage[];
   }): Promise<{
     name: string; displayName: string;
   }>;
@@ -684,6 +691,7 @@ export interface AgentsToolInput {
    * rows in the ONE roster, under the lifetime the row already carries.
    */
   lifetime?: SubordinateLifetime;
+  context?: 'fresh' | 'inherit';
 }
 
 /** Every input field except the discriminant. */
@@ -732,7 +740,7 @@ export const AGENTS_ACTION_FIELDS = {
   // Ordered by VARIANT, created target first: the codemode declaration renders
   // one object per variant and the union of those objects is held to this list,
   // so the order here is the order a reader meets the fields in.
-  hire: ['role', 'mission', 'agent', 'tier', 'lifetime', 'scope', 'message', 'deliverable', 'topic'],
+  hire: ['role', 'mission', 'agent', 'tier', 'lifetime', 'context', 'scope', 'message', 'deliverable', 'topic'],
   // ONE addressing action. `agent` names an agent, `event_id` names an inbound
   // question — the only thing `send` and `reply` ever differed on.
   msg: ['agent', 'event_id', 'message', 'topic'],
@@ -752,6 +760,7 @@ const fieldsOf = (action: AgentsToolAction): readonly string[] => AGENTS_ACTION_
  *  other does not. */
 const AgentsInputEntries = {
   action: v.picklist(AGENTS_TOOL_ACTIONS),
+  context: v.optional(v.picklist(SWARM_CONTEXTS)),
   task: v.optional(v.string()),
   budget_usd: v.optional(v.number()),
   budget_tokens: v.optional(v.number()),
@@ -799,6 +808,7 @@ const AgentsInputEntries = {
  * sandbox contract.
  */
 export const AGENTS_FIELD_TS_TYPES = {
+  context: `"${SWARM_CONTEXTS.join('" | "')}"`,
   task: 'string',
   budget_usd: 'number',
   budget_tokens: 'number',
@@ -847,7 +857,7 @@ export const AGENTS_ACTION_REQUIRED_FIELDS = {
 /** Creating a helper. `lifetime` joins only where the port that runs a
  *  `task` one is wired, and `scope` only beside `peers`. */
 const HIRE_CREATE_FIELDS = [
-  'role', 'mission', 'agent', 'tier',
+  'role', 'mission', 'agent', 'tier', 'context',
 ] as const satisfies readonly AgentsToolInputField[];
 
 const HIRE_WORKSPACE_FIELDS = [
@@ -1655,9 +1665,7 @@ async function runSwarmAction(
     mode,
     // Frozen at dispatch so `context:'inherit'` survives a background re-drive and a
     // DO eviction carrying the conversation the caller actually had.
-    originContext: origin === undefined
-      ? undefined
-      : Object.freeze(structuredClone([...origin])),
+    originContext: origin === undefined ? undefined : freezeInheritedContext(origin),
     // THE TIER'S OWN MODEL. Forwarded, never pre-resolved here: a re-drive's
     // profile comes off the claimed ledger row INSIDE the runner, so the runner
     // is the only place that can see both cases, and resolving one of them here
@@ -1830,7 +1838,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
         + 'A metric nothing can execute is not an objective, and a script path invented here is refused rather than run — if the thing you want cannot be measured by running code, leave this out. kind:"witness" is a checkable certificate and needs a scalar `proxy` to be searchable. kind:"instanced" and kind:"vector" declare a FRONT and run only with advance:"pareto": instanced measures ONE metric on every declared instance (at least two, {kind:"instanced", metric, unit, direction, scale, target, instances}); vector measures at least two scalar components that each keep their own metric/unit/direction ({kind:"vector", components:[...]}). Every declared axis must come back finite from the verifier or the run refuses, and expand:"aggregate" is refused with pareto because a merged node has no scalar re-grade. Field names are snake_case, like every field on this tool.',
     },
     key: { type: 'string', description: 'For action=swarm with advance:"archive": the coverage descriptor elites are binned into, required there and refused under every other advance. It must name a quantity the objective\'s own verifier REPORTS beside its value, because the cell a candidate lands in is witnessed by the measurement rather than claimed by the candidate — a key naming nothing that instrument reports is refused before any candidate is expanded, and a key that can only say "distinct idea" means the task wants preset:"ideate".' },
-    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused.' },
+    config: { type: 'object', description: 'For action=swarm with preset:"custom" only: the axes — unit, context, expand, score, advance, carry — as the OVERRIDE on `from`\'s shape, or all six when there is no `from`. Prohibited on a named preset, which is a tested path and cannot be refused. ' + DELEGATION_CONTEXT_DESCRIPTION },
     from: {
       type: 'string',
       enum: [...NAMED_SWARM_PRESETS],
@@ -1881,11 +1889,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       type: 'string',
       description: `Agent name: ${targets}. On hire, WITHOUT \`role\` it names an agent that already exists and hands it the workstream; WITH \`role\` it is the optional name to create the helper under (auto-generated from the role when omitted). Also the target for msg/dismiss and the detail filter for list.`,
     },
-    // Says what a mission is FOR, because the hire rung's context fact makes it
-    // load-bearing: this text plus a bounded digest of the caller's recent
-    // messages is the subordinate's whole starting knowledge. The sentence is
-    // DELEGATION_INHERITANCE.hire.brief — the swarm brief's opposite, from the
-    // same per-action source, so neither field can be handed the other's rule.
+    // The mission and rung read the same inheritance contract.
     mission: { type: 'string', maxLength: 20000, description: `For action=hire with \`role\`: the helper's mission — it seeds its identity and runs as its first turn, and at lifetime:"task" it IS the question. ${DELEGATION_INHERITANCE.hire.brief}` },
     message: {
       type: 'string', maxLength: 20000,
@@ -1908,6 +1912,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (deps.team) {
     const temporary = deps.team.temporary !== undefined;
     Object.assign(properties, {
+      context: { type: 'string', enum: [...SWARM_CONTEXTS], description: 'For action=hire with `role`: fresh (default) or inherit, for either lifetime. ' + DELEGATION_CONTEXT_DESCRIPTION },
       role: {
         type: 'string', maxLength: 64,
         description: 'For action=hire: the catalog role to create the helper under. `role` is what makes a hire CREATE; `agent` beside it is the optional name to create the durable helper under, and `agent` WITHOUT `role` hands the workstream to one that already exists. One of the ids listed below.'
@@ -1998,6 +2003,10 @@ function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: Wo
  */
 function assertHireVariant(input: AgentsToolInput): void {
   if (!input.role) {
+    if (input.context !== undefined) {
+      return badInput('field "context" belongs to a hire that creates with `role` — an existing agent already has its conversation');
+    }
+
     if (input.mission !== undefined) {
       return badInput('field "mission" is not available on a hire that names an existing agent — its brief is `message`');
     }
@@ -2124,6 +2133,7 @@ export async function dispatchAgentsAction(
         if (planBar) throw new KinuError(planBar.reason, planBar.error);
 
         if ((input.scope ?? 'subordinate') === 'workspace') {
+          if (input.context !== undefined) return badInput('field "context" belongs to a subordinate hire with `role`, not scope="workspace"');
           const workspaceDepth = spawnDepthRefusal();
 
           if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
@@ -2248,6 +2258,11 @@ export async function dispatchAgentsAction(
           throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
         }
 
+        const inheritedContext = input.context === 'inherit'
+          ? [...freezeInheritedContext(team.inheritedContext?.()
+            ?? badInput('context:"inherit" requires this actor\'s parent-conversation source'))]
+          : undefined;
+
         if (lifetime === 'task') {
           // A name would be accepted and ignored: a task agent is archived the
           // moment it answers, so the name never becomes addressable and the
@@ -2275,6 +2290,8 @@ export async function dispatchAgentsAction(
             mode,
           };
 
+          if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
+
           if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
 
           return await temporary.run(request);
@@ -2293,6 +2310,8 @@ export async function dispatchAgentsAction(
           mission: input.mission,
           mode,
         };
+
+        if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
 
         if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
 

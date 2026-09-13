@@ -257,6 +257,10 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
 });
 
 describe('inherited context is windowed at READ time, exactly once (C4)', () => {
+  test('plain text and SDK text parts inherit the same conversation bytes', () => {
+    expect(inheritedContextFromHistory([{ role: 'user', content: [{ type: 'text', text: 'Keep cents exact.' }] }]))
+      .toEqual(inheritedContextFromHistory([{ role: 'user', content: 'Keep cents exact.' }]));
+  });
   const cap = EVIDENCE_BUDGETS.inheritedMessage;
   // A stored assistant body is allowed to run to storedAssistantResponse
   // (16,000 chars); windowing it only at render time meant every spawned head

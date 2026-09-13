@@ -6,6 +6,35 @@ import type { ErrorCode } from '../obs/error';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { WorkMode } from './turn';
 import type { RoleId } from './profile';
+import * as v from 'valibot';
+import type { SerializedMessage } from './heads';
+
+export const SubordinateInheritedContextSchema = v.variant('kind', [
+  v.strictObject({ kind: v.literal('digest'), text: v.string() }),
+  v.strictObject({
+    kind: v.literal('fork'),
+    messages: v.array(v.strictObject({
+      id: v.string(),
+      role: v.picklist(['system', 'user', 'assistant', 'tool']),
+      content: v.string(),
+      createdAt: v.number(),
+      toolName: v.optional(v.string()),
+    })),
+  }),
+]);
+
+export type SubordinateInheritedContext = v.InferOutput<typeof SubordinateInheritedContextSchema>;
+
+/** A fork replaces the digest, rather than repeating the same context as prose. */
+export function subordinateBirthContext(
+  messages: SerializedMessage[] | undefined,
+  digest: () => string | undefined,
+): SubordinateInheritedContext | undefined {
+  if (messages !== undefined) return { kind: 'fork', messages };
+  const text = digest();
+
+  return text ? { kind: 'digest', text } : undefined;
+}
 
 /** The lifetime a task-lifetime hire is listed under. */
 export const TEMPORARY_LIFETIME = 'task';
@@ -17,6 +46,7 @@ export interface TemporaryRunRequest {
   /** The role as one label — what the roster shows and the name derives from. */
   readonly roleLabel: string;
   readonly task: string;
+  readonly inheritedContext?: SerializedMessage[];
   /**
    * Workspace paths the child reads ITSELF, named in its brief.
    *

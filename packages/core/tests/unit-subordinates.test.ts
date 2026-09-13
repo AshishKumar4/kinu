@@ -419,7 +419,7 @@ interface TeamHarness {
   actorReference(): ActorReference;
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
-  assignments: Array<{ body: string; inheritedContext?: string }>;
+  assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
   /** Every identity seed the facet substrate was handed, whole — the naming
    *  state a child is born with is only observable here. */
   seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
@@ -438,7 +438,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
   const roster = makeRosterStore();
   roster.ensureSchema();
   const calls: string[] = [];
-  const assignments: Array<{ body: string; inheritedContext?: string }> = [];
+  const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
   const seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
   const broadcasts: number[] = [];
   const events: SubordinatesChangedEvent[] = [];
@@ -676,7 +676,11 @@ describe('team action routing', () => {
 
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Repair the auth flow.' });
 
-    const digest = h.assignments[0]?.inheritedContext;
+    const context = h.assignments[0]?.inheritedContext;
+    expect(context?.kind).toBe('digest');
+
+    if (context?.kind !== 'digest') throw new Error('The fresh hire did not receive its digest.');
+    const digest = context.text;
     expect(digest).toContain('<inherited_context>');
     expect(digest).toContain('[user] Fix auth and billing in parallel.');
     expect(digest).toContain('[assistant] I will split the independent workstreams.');
@@ -691,7 +695,7 @@ describe('team action routing', () => {
       fromWorkspace: 'kinu-main',
       kind: 'task',
       body: 'Repair the auth flow.',
-      inheritedContext: digest,
+      inheritedContext: context,
       mode: 'build',
       now: 10,
     });
