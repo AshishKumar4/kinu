@@ -1,6 +1,7 @@
 import { scratchDir } from '../../test-utils/src/scratch';
 import { HIRE_FORK_PARENT, HIRE_FORK_REQUEST, HIRE_FORK_PREFIX, HIRE_FORK_MISSION,
-  hireForkModel, hireConversation } from '../../test-utils/src/hire-fork';
+  hireForkModel, hireConversation, hireRetentionModel, HIRE_FORK_FOLLOWUP_REQUEST,
+  HIRE_FORK_FOLLOWUP, HIRE_CHILD_CONTEXT } from '../../test-utils/src/hire-fork';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 
@@ -631,6 +632,57 @@ describe('LocalAgentHost', () => {
       }
     });
   }
+
+  test('a cli durable hire retains its working conversation after a cold restore', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { model, childRequests } = hireRetentionModel();
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const { host } = makeHost(state, model, refs);
+
+    try {
+      const session = await host.acquire('root');
+      await session.send(HIRE_FORK_PARENT);
+      const answered = awaitTurns(host, 'root/forked-reader', 1);
+      await session.send(HIRE_FORK_REQUEST);
+      await answered;
+      expect(childRequests).toHaveLength(2);
+    } finally {
+      await host.close();
+    }
+
+    const first = childRequests[1];
+
+    if (!first) throw new Error('The first child turn did not consume its tool response.');
+    const tool = first.prompt.find((message) => message.role === 'tool');
+
+    if (!tool) throw new Error('The first child turn has no tool response.');
+    expect(tool).toMatchObject({ content: [{ toolName: 'memory', output: {
+      type: 'json', value: { ok: true, key: 'CHILD-ONLY-TOOL-CONTEXT' },
+    } }] });
+    const { host: restored } = makeHost(state, model, refs);
+
+    try {
+      const session = await restored.acquire('root');
+      const answered = awaitTurns(restored, 'root/forked-reader', 1);
+      await session.send(HIRE_FORK_FOLLOWUP_REQUEST);
+      await answered;
+      expect(childRequests).toHaveLength(3);
+      const followup = childRequests[2];
+
+      if (!followup) throw new Error('The second assignment never reached the child provider.');
+      const conversation = hireConversation(followup);
+      expect(conversation.slice(0, 3)).toEqual(HIRE_FORK_PREFIX);
+      expect(conversation.filter((message) => message.content.includes(`task: ${HIRE_FORK_MISSION}`))).toHaveLength(1);
+      expect(conversation).toContainEqual({ role: 'assistant', content: HIRE_CHILD_CONTEXT });
+      expect(followup.prompt).toContainEqual(tool);
+      const next = conversation.findIndex((message) => message.content.includes(HIRE_FORK_FOLLOWUP));
+      expect(next).toBeGreaterThan(conversation.findIndex((message) => message.content === HIRE_CHILD_CONTEXT));
+      expect(conversation.filter((message) => message.content.includes(HIRE_FORK_FOLLOWUP))).toHaveLength(1);
+    } finally {
+      await restored.close();
+    }
+  });
 
   test('subordinates are durable children with non-blocking assignment, status, reports, and dismissal', async () => {
     const { state, project } = makeRoots();

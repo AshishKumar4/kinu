@@ -3,7 +3,7 @@
 // assembly is locked behind ONE test both backends rely on, rather than sitting
 // inside one backend's host where only that backend could prove it.
 import { describe, test, expect } from 'bun:test';
-import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import type { LanguageModel } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -139,6 +139,125 @@ describe('buildHeadAccumulatorTools', () => {
     expect(capture.decisions[0]!.choice).toBe('c');
     // Each tool also logs a tool call for telemetry.
     expect(capture.toolCalls.map((t) => t.name)).toEqual(['record_evidence', 'record_decision']);
+  });
+});
+
+describe('durable delegated turn opening', () => {
+  test('an explicitly empty working revision is authoritative, not a new birth', async () => {
+    const { rt, testSql } = createTestRuntime();
+    const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
+    first.actor.session.restoreHistory([]);
+    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
+
+    try {
+      restored.actor.session.restoreWorkingHistory(() => { throw new Error('A working revision must not consult the transcript.'); });
+
+      const report = await runHeadInference(headInput(), {
+        ...restored, model: fakeHeadModel('Child answer.'), tools: {}, capture: new HeadCapture(), isAborted: () => false,
+        workspaceLayout: 'shared-workspace',
+        framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'New assignment.' }] },
+        delegation: { assignmentId: 'assignment-a', birthContext: [{ role: 'user', content: 'Do not resurrect this birth prefix.' }] },
+      });
+
+      expect(report.status).toBe('completed');
+      expect(restored.actor.session.history).toEqual([
+        { role: 'user', content: 'New assignment.' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Child answer.' }] },
+      ]);
+    } finally {
+      testSql.close();
+    }
+  });
+
+  test('an exploration re-drive re-seeds its branch instead of appending its inherited prefix again', async () => {
+    const input = headInput();
+    const execution = await deps(fakeHeadModel('Exploration answer.'));
+    expect((await runHeadInference(input, execution)).status).toBe('completed');
+    expect((await runHeadInference(input, execution)).status).toBe('completed');
+    expect(execution.actor.session.history).toEqual([
+      ...buildHeadMessages(input),
+      { role: 'assistant', content: [{ type: 'text', text: 'Exploration answer.' }] },
+    ]);
+  });
+
+  for (const cold of [false, true]) {
+    test(`a claim re-drive keeps its assignment once; a distinct equal-text assignment appends, cold=${cold}`, async () => {
+      const { rt, testSql } = createTestRuntime();
+      const requests: ScriptedTurnOptions[] = [];
+
+      const model = scriptedTurnModel({ doGenerate: (request) => {
+        requests.push(request);
+
+        return {
+          content: [{ type: 'text', text: 'Prior child answer.' }],
+          finishReason: { unified: 'stop', raw: undefined },
+          usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+            outputTokens: { total: 1, text: 1, reasoning: undefined } },
+          warnings: [],
+        };
+      } });
+
+      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
+
+      const run = async (assignmentId: string) => runHeadInference(headInput(), {
+        ...seat, model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+        workspaceLayout: 'shared-workspace',
+        framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: 'Check this ledger.' }] },
+        delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Frozen birth prefix.' }] },
+      });
+
+      try {
+        expect((await run('assignment-a')).status).toBe('completed');
+
+        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
+        expect((await run('assignment-a')).status).toBe('completed');
+        expect((await run('assignment-b')).status).toBe('completed');
+
+        const texts = (request: ScriptedTurnOptions | undefined) => request?.prompt.flatMap((message) => message.role === 'system'
+          ? [] : message.content.flatMap((part) => part.type === 'text' ? [part.text] : [])) ?? [];
+
+        expect(texts(requests[1]).filter((text) => text === 'Check this ledger.')).toHaveLength(1);
+        expect(texts(requests[1])).toContain('Prior child answer.');
+        expect(texts(requests[2]).filter((text) => text === 'Check this ledger.')).toHaveLength(2);
+        expect(texts(requests[2]).filter((text) => text === 'Frozen birth prefix.')).toHaveLength(1);
+      } finally {
+        testSql.close();
+      }
+    });
+  }
+
+  test('a staged replacement survives delegation opening and cold restore without resurrecting the birth seed', async () => {
+    const { rt, testSql } = createTestRuntime();
+    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'subordinate');
+    const model = fakeHeadModel('Child answer.');
+
+    const run = (assignmentId: string, edit: boolean) => runHeadInference(headInput(), {
+      ...seat, model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
+      workspaceLayout: 'shared-workspace',
+      framing: { system: 'Read the ledger.', messages: [{ role: 'user', content: assignmentId }] },
+      delegation: { assignmentId, birthContext: [{ role: 'user', content: 'Original birth prefix.' }] },
+      profile: async (input) => {
+        if (edit) seat.actor.session.restoreHistory([{ role: 'user', content: 'Edited working prefix.' }]);
+
+        return seat.profile(input);
+      },
+    });
+
+    try {
+      expect((await run('assignment-a', false)).status).toBe('completed');
+      expect((await run('assignment-b', true)).status).toBe('completed');
+      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'subordinate');
+      expect((await run('assignment-c', false)).status).toBe('completed');
+      expect(seat.actor.session.history).toEqual([
+        { role: 'user', content: 'Edited working prefix.' },
+        { role: 'user', content: 'assignment-b' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Child answer.' }] },
+        { role: 'user', content: 'assignment-c' },
+        { role: 'assistant', content: [{ type: 'text', text: 'Child answer.' }] },
+      ]);
+    } finally {
+      testSql.close();
+    }
   });
 });
 
