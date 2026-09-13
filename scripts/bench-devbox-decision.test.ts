@@ -702,7 +702,7 @@ describe('the preregistered witness cells', () => {
       ...WITNESSED,
       chunkedAbsorption: {
         markerPath: 'witness.txt', markerDigest: digest,
-        manifest: { v: 1, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
+        manifest: { v: 2, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
         manifestRead: { ok: true, exitCode: 0 }, markerInMerged: marker,
         markerInUpper: { ...marker, path: '/var/tmp/devbox/upper/witness.txt' },
         sidecarMounted: false, mounts: { ok: true, exitCode: 0 },

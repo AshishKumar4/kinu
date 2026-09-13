@@ -22,7 +22,7 @@ import {
   DELTA_BLOCK_BYTES,
   DELTA_MANIFEST_NAME,
   DeltaManifestSchema,
-  buildDeltaMaterializeOps,
+  buildDeltaAttachOps,
   buildDeltaStageOps,
   deltaBaseStatCommand,
   deltaBlockHashCommand,
@@ -36,6 +36,7 @@ import {
   type DeltaProbeEntry,
 } from '../src/chunked-delta';
 import { deltaCommand, type ShellReply } from './support/delta-shell';
+import { readDeltaIndex } from '../src/chunked-delta';
 import { ContainerDisk } from './support/strategy-machine';
 import {
   compareTrees,
@@ -45,6 +46,7 @@ import {
   type PosixMetadata,
 } from './support/tree-model';
 import * as v from 'valibot';
+import { buildBlockImage, copyBlockProbe, removeBlockImage } from './support/block-image';
 
 const uid = process.getuid?.() ?? 0;
 
@@ -99,6 +101,9 @@ function fixture() {
     dense('node_modules/pruned.js', encoder.encode('never travels\n'), 12),
     dir('vol/node_modules', 13),
     dense('vol/node_modules/pruned.js', encoder.encode('never travels\n'), 14),
+    dir('opaque', 15),
+    dense('opaque/.wh..wh..opq', new Uint8Array(0), 16),
+    dense('opaque/new', encoder.encode('visible'), 17),
   ];
 
   return { base, upper };
@@ -167,7 +172,7 @@ function readReal(root: string): NodeEntry[] {
 /** The command as the container's shell runs it: `bash -c`, C collation for
  *  the `split` glob, the container's umask for what the shell creates. */
 function realShell(command: string): ShellReply {
-  const run = spawnSync('bash', ['-c', `umask 022\n${command}`], { env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 64 * 1024 * 1024 });
+  const run = spawnSync('bash', ['-c', `umask 022\n${command}`], { env: { ...process.env, LC_ALL: 'C', PATH: `${root}/bin:${process.env.PATH ?? ''}` }, maxBuffer: 64 * 1024 * 1024 });
 
   return { stdout: run.stdout.toString(), stderr: run.stderr.toString(), exitCode: run.status ?? 1 };
 }
@@ -179,11 +184,11 @@ function batch(ops: readonly string[]): string {
 
 /** Two trees compared, less what the running user decides rather than the
  *  format: the owner of a node the shell CREATES (a chunk, the manifest, the
- *  envelope directories) is the user's, root in a container and whoever runs
+ *  envelope directories and opacity markers) is the user's, root in a container and whoever runs
  *  this suite here. A node the delta CARRIES keeps the owner it carries. */
 function sameTree(expected: readonly NodeEntry[], served: readonly NodeEntry[], carriedUnder: string): string {
   return describeMismatches(compareTrees(expected, served, NOT_COMPARED)
-    .filter((row) => row.property !== 'owner' || row.path.startsWith(carriedUnder)));
+    .filter((row) => row.property !== 'owner' || (row.path.startsWith(carriedUnder) && !row.path.endsWith('/.wh..wh..opq'))));
 }
 
 /** A probe record with what a filesystem is free to choose dropped: inode
@@ -191,7 +196,7 @@ function sameTree(expected: readonly NodeEntry[], served: readonly NodeEntry[], 
 function comparable(entries: readonly DeltaProbeEntry[]): unknown[] {
   return [...entries]
     .sort((a, b) => (a.path < b.path ? -1 : 1))
-    .map(({ ino: _ino, ...rest }) => (rest.type === 'd' ? { ...rest, size: 0 } : rest));
+    .map(({ ino: _ino, ...rest }) => (rest.type === 'd' || rest.type === 'o' ? { ...rest, size: 0 } : rest));
 }
 
 const NOT_COMPARED = new Set(['times', 'sparse'] as const);
@@ -200,7 +205,15 @@ const excludes = ['node_modules'];
 
 const root = mkdtempSync(`${tmpdir()}/devbox-delta-parity-`);
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+const image = `kinu-block-probe:${process.pid}`;
+
+let built = false;
+
+afterAll(() => {
+  rmSync(root, { recursive: true, force: true });
+
+  if (built) removeBlockImage(image);
+});
 
 const real = { upper: `${root}/upper`, base: `${root}/base`, stage: `${root}/stage`, pkg: `${root}/stage/pkg`, upper2: `${root}/upper2` };
 
@@ -209,6 +222,10 @@ const disk = new ContainerDisk();
 let plan: DeltaPlan;
 
 beforeAll(() => {
+  buildBlockImage(image);
+  built = true;
+  mkdirSync(`${root}/bin`);
+  copyBlockProbe(image, `${root}/bin/devbox-block-lower`);
   const trees = fixture();
 
   for (const at of [real.upper, real.base, real.upper2]) mkdirSync(at, { recursive: true });
@@ -217,7 +234,7 @@ beforeAll(() => {
   disk.tree(real.upper).plant(trees.upper);
   disk.tree(real.base).plant(trees.base);
   disk.tree(real.upper2);
-});
+}, 300_000);
 
 describe('the delta shell against bash', () => {
   let probe: DeltaProbeEntry[];
@@ -263,7 +280,8 @@ describe('the delta shell against bash', () => {
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);
     const hashedByDisk = deltaCommand(hashCommand, disk)!;
-    expect(hashedByDisk.stdout).toBe(hashedByBash.stdout);
+    // find batches argv safely; directory iteration order is not wire order.
+    expect(parseDeltaBlockHashes(hashedByDisk.stdout, wanted)).toEqual(parseDeltaBlockHashes(hashedByBash.stdout, wanted));
     expect(hashedByDisk.exitCode).toBe(hashedByBash.exitCode);
     const hashes = parseDeltaBlockHashes(hashedByBash.stdout, wanted);
 
@@ -282,10 +300,12 @@ describe('the delta shell against bash', () => {
     // The plan itself: two changed blocks and one hole in the big file, the
     // grown file whole-overridden past its base, the file over a directory.
     const big = fromBash.manifest.files.find((file) => file.p === 'vol/big.bin');
-    expect(big?.kind === 'chunked' ? big.over.map((o) => [o.o / DELTA_BLOCK_BYTES, o.src]) : null).toEqual([[2, 'chunk'], [4, 'hole'], [7, 'chunk']]);
+    const index = big?.kind === 'chunked' ? fromBash.indexes.get(big.over.index) : undefined;
+    expect(big?.kind === 'chunked' && index !== undefined ? readDeltaIndex(big.over, big.s, index).map((o) => [o.o / DELTA_BLOCK_BYTES, o.src]) : null).toEqual([[2, 'chunk'], [4, 'hole'], [7, 'chunk']]);
     expect(fromBash.manifest.treplace).toEqual(['was-a-dir']);
     expect(fromBash.manifest.links).toEqual([['link-one.bin', 'link-two.bin']]);
-    expect(fromBash.manifest.dirs.map((row) => row.p)).toEqual(['empty', 'new', 'vol']);
+    expect(fromBash.manifest.dirs.map((row) => row.p)).toEqual(['empty', 'new', 'opaque', 'vol']);
+    expect(fromBash.manifest.dirs.find(row => row.p === 'opaque')?.opaque).toBe(true);
     plan = fromBash;
   });
 
@@ -298,28 +318,28 @@ describe('the delta shell against bash', () => {
     const packed = readReal(real.pkg);
     const first = plan.manifest.files[0]!.p;
     const carriedUnder = packed.find((entry) => entry.kind === 'file' && entry.path.endsWith(`/${first}`))!.path.slice(0, -first.length);
+    const marker = `${real.pkg}/${carriedUnder}opaque/.wh..wh..opq`;
+    expect(lstatSync(marker).uid).toBe(uid);
+    expect(lstatSync(marker).gid).toBe(gid);
+    expect(disk.node(marker)?.metadata).toMatchObject({ uid: 0, gid: 0 });
     expect(sameTree(packed, disk.snapshot(real.pkg), carriedUnder)).toBe('');
     const manifest = v.parse(DeltaManifestSchema, JSON.parse(readFileSync(`${real.pkg}/${DELTA_MANIFEST_NAME}`, 'utf8')));
     expect(manifest).toEqual(plan.manifest);
   });
 
-  test('the materialize leaves the same upper, and it is the editor\'s', () => {
-    const ops = buildDeltaMaterializeOps(plan.manifest, {
-      sideDir: real.pkg, upperDir: real.upper2, lowerBase: real.base, mergedDir: real.upper2,
-    });
-
-    for (const phase of [ops.pre, ops.post]) {
-      const command = batch(phase);
-      expect(realShell(command).exitCode).toBe(0);
-      expect(deltaCommand(command, disk)!.exitCode).toBe(0);
-    }
+  test('attach prepares exact directory metadata without copying a file into the upper', () => {
+    const command = batch(buildDeltaAttachOps(plan.manifest, real.upper2));
+    expect(realShell(command).exitCode).toBe(0);
+    expect(deltaCommand(command, disk)?.exitCode).toBe(0);
 
     const served = readReal(real.upper2);
     expect(sameTree(served, disk.snapshot(real.upper2), '')).toBe('');
     // THE PRODUCT'S OWN PROPERTY, on real bytes: base plus delta is the upper
     // the editor left, for every path the delta carries — the pruned
     // subtrees excepted, which no delta carries by policy.
-    const carried = fixture().upper.filter((entry) => !entry.path.split('/').includes('node_modules'));
+    const carried = fixture().upper.filter((entry) => entry.kind === 'dir' && !entry.path.split('/').includes('node_modules'));
     expect(sameTree(carried, served, '')).toBe('');
+    expect(served.every(entry => entry.kind === 'dir')).toBe(true);
+    expect(command).not.toMatch(/\b(cp|dd|truncate|rm)\b/);
   });
 });

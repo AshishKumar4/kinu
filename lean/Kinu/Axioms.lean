@@ -162,13 +162,10 @@ import Kinu
 #print axioms Kinu.Storage.SnapshotChain.c3_is_strictly_cheaper_than_whole_file
 #print axioms Kinu.Storage.SnapshotChain.chain_attach_layer_setup
 #print axioms Kinu.Storage.SnapshotChain.chain_attach_reads_manifest
-#print axioms Kinu.Storage.SnapshotChain.chain_attach_materializes_base_plus_delta
+#print axioms Kinu.Storage.SnapshotChain.chain_attach_reads_no_payload
 #print axioms Kinu.Storage.SnapshotChain.chain_attach_independent_of_n
 #print axioms Kinu.Storage.SnapshotChain.chain_attach_independent_of_pending
 #print axioms Kinu.Storage.SnapshotChain.attach_without_delta_materializes_nothing
-#print axioms Kinu.Storage.SnapshotChain.chunked_restore_copies_full_base
-#print axioms Kinu.Storage.SnapshotChain.c3_attach_copies_the_whole_64mib_base
-#print axioms Kinu.Storage.SnapshotChain.attach_materialization_has_no_constant_bound
 #print axioms Kinu.Storage.SnapshotChain.extract_attach_is_linear_in_n
 #print axioms Kinu.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
 #print axioms Kinu.Storage.SnapshotChain.first_base_upper_bound
@@ -193,6 +190,20 @@ import Kinu
 #print axioms Kinu.Storage.SnapshotChain.skipped_ticks_preserve_loss
 #print axioms Kinu.Storage.SnapshotChain.no_number_of_skipping_ticks_closes_the_window
 #print axioms Kinu.Storage.SnapshotChain.a_skipping_tick_leaves_the_window_open
+
+/-! ## Kinu/Storage/BlockLayer.lean -/
+
+#print axioms Kinu.Storage.BlockLayer.attach_metadata_bound
+#print axioms Kinu.Storage.BlockLayer.attach_payload_bytes
+#print axioms Kinu.Storage.BlockLayer.median_children_half
+#print axioms Kinu.Storage.BlockLayer.block_lookup_bound
+#print axioms Kinu.Storage.BlockLayer.composed_read_correct
+#print axioms Kinu.Storage.BlockLayer.hole_is_zero
+#print axioms Kinu.Storage.BlockLayer.absent_override_reads_base
+#print axioms Kinu.Storage.BlockLayer.ready_implies_all_composed_mounted
+#print axioms Kinu.Storage.BlockLayer.copyup_is_file_local
+#print axioms Kinu.Storage.BlockLayer.publication_accounting_unchanged
+#print axioms Kinu.Storage.BlockLayer.c3_publication_stays_bounded
 
 /-! ## Kinu/Exploration -- docs/EXPLORATION.md — "The Lean invariants" -/
 

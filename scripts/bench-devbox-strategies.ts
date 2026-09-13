@@ -61,7 +61,7 @@ import {
 export type { ExecReply, CheckpointReply, FileObservation, StateReply, StartupPoll, StartupCompletion, StartupObservation } from '../packages/devbox/bench/observation-schema';
 
 import { DELTA_MANIFEST_NAME, DeltaManifestSchema, type DeltaManifest } from '../packages/devbox/src/chunked-delta';
-import { evaluateLiveC3, type C3Identity, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
+import { BlockAttachMetricsSchema, evaluateLiveC3, type BlockAttachMetrics, type C3Identity, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import { PublicationWindowSchema, publicationTotals } from '../packages/devbox/bench/publication-meter';
 import { C3_BYTES_BOUND, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
 import { parseArgs } from 'node:util';
@@ -92,6 +92,7 @@ import {
 } from './fixtures/storage-matrix/cleanup';
 import { parseJsonc } from './jsonc';
 import { trackedFiles } from './sources';
+import blockImage from '../packages/devbox/block-lower/upstream.json';
 import {
   runSecurityFaultCells,
   securityNonce,
@@ -480,13 +481,13 @@ const HARNESS = '/workspace/.devbox-bench';
 
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
 
-/** The manifest digest the published sandbox tag resolved to on 2026-08-27. */
-export const SANDBOX_IMAGE_DIGEST = 'sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f';
+/** The built and registry-published block-lower image, pinned with its inputs. */
+export const SANDBOX_IMAGE_DIGEST = blockImage.digest;
 
 /** Every generated fixture config uses this immutable reference, so the image
  *  provenance row identifies the bytes that ran rather than a tag another
  *  publisher can repoint. */
-export const SANDBOX_IMAGE = `docker.io/cloudflare/sandbox@${SANDBOX_IMAGE_DIGEST}`;
+export const SANDBOX_IMAGE = blockImage.image;
 
 /**
  * The decisive experiment's arms, from the adopted research spec.
@@ -5165,6 +5166,7 @@ export async function measureLiveC3(
   runId: string,
   preparation: TeardownReply | null,
   observe: (row: LiveC3Observation) => void = () => {},
+  startupBounds: StartupBounds = {},
 ): Promise<LiveC3Observation> {
   const round: LiveC3Observation['rounds'][number] = {
     round: 1, checkpoint: null, published: { transport: { puts: null, putUploadBytes: null } },
@@ -5208,7 +5210,7 @@ export async function measureLiveC3(
   try {
     if (row.identity === null) throw new Error('live C3 requires the deployed build identity');
     row.preparation.destroy = await destroyBox(fixture, box);
-    row.initial = await startupOperation(fixture, box, '/create', 'C3 empty baseline', ['empty'], { observations: initialObservations });
+    row.initial = await startupOperation(fixture, box, '/create', 'C3 empty baseline', ['empty'], { ...startupBounds, observations: initialObservations });
     row.prefix = row.initial.state.storePrefix ?? null;
 
     if (row.prefix === null) throw new Error('the C3 box did not report its store prefix');
@@ -5250,8 +5252,9 @@ export async function measureLiveC3(
 
     row.beforeDestroy = await boxState(fixture, box);
     row.destroyReceipt = await destroyBox(fixture, box);
-    row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { observations: restorationObservations });
+    row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { ...startupBounds, observations: restorationObservations });
     row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', C3_WORKLOAD.baselineBytes, row.errors, row.restoration.startedAt);
+    row.blockReads = await readBlockAttachMetrics(fixture, box);
     observe(row);
     // Observer code is outside the one-file workload, and installed only after the cold clock ends.
     await installWitnessHarness(fixture, box, harness);
@@ -5267,6 +5270,16 @@ export async function measureLiveC3(
   }
 
   return row;
+}
+
+/** Capture before an observer reads the changed file. A missing counter is
+ * unmeasured, never a zero inferred from absence. */
+export async function readBlockAttachMetrics(fixture: Fixture, box: string): Promise<BlockAttachMetrics> {
+  const reply = await execInBox(fixture, box, 'cat /var/tmp/devbox/block-lower-stats.json');
+
+  if (reply.ok !== true || reply.exitCode !== 0 || reply.stdout === undefined) throw new Error(`block-read counters unobserved: ${reply.error ?? reply.stderr}`);
+
+  return v.parse(BlockAttachMetricsSchema, JSON.parse(reply.stdout));
 }
 
 /** How long a release is given after an arm already failed. Short on purpose:

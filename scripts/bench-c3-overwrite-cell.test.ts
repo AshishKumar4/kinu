@@ -153,6 +153,12 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
     if (url.pathname === '/exec') {
       const command = body.command ?? '';
 
+      if (command === 'cat /var/tmp/devbox/block-lower-stats.json') {
+        events.push('block-stats');
+
+        return Response.json({ ok: true, exitCode: 0, stdout: JSON.stringify({ generation: `chain:delta:boot-${boot}`, payloadBytes: 0, indexPages: 0, readRequests: 0 }) });
+      }
+
       if (command.includes(' baseline /workspace')) events.push('baseline-write');
 
       if (command.includes(' overwrite /workspace')) {
@@ -197,7 +203,7 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
       return Response.json({ ok: true, window });
     }
 
-    if (url.pathname === '/restore-probe') return Response.json({ ok: true, probe: { at: probeAt, wallMs: 1, phases: { attached: 1, bootId: 1 } } });
+    if (url.pathname === '/restore-probe') return Response.json({ ok: true, probe: { at: probeAt, wallMs: 1, phases: { containerStart: 0, attached: 1, bootId: 1 } } });
     throw new Error(`unexpected route ${url.pathname}`);
   };
 
@@ -218,7 +224,8 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
 test('the live producer brackets the isolated edit and checkpoint, then verifies cold', async () => {
   const { row, events, installed } = await driverC3Proof(false);
   expect(evaluateLiveC3(row)).toMatchObject({ admitted: true, correctness: 'passed', objectsPut: 1, bytesPut: 65_536 });
-  expect(events).toEqual(['destroy', 'create', 'baseline-write', 'checkpoint', 'open', 'overwrite-write', 'checkpoint', 'close', 'destroy', 'wake', 'file-read']);
+  expect(events).toEqual(['destroy', 'create', 'baseline-write', 'checkpoint', 'open', 'overwrite-write', 'checkpoint', 'close', 'destroy', 'wake', 'block-stats', 'file-read']);
+  expect(row.blockReads).toMatchObject({ payloadBytes: 0, indexPages: 0 });
   expect(installed.every((path) => path.startsWith('/tmp/kinu-c3-'))).toBe(true);
   expect(row.rounds[0]?.checkpoint?.outcome?.movedBytes).toBe(999_999);
   expect(row.rounds[0]?.published.transport.putUploadBytes).toBe(65_536);

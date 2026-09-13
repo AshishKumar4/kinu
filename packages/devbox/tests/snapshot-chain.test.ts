@@ -34,7 +34,9 @@ import {
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
+  isChainId,
   metadataObjectKey,
+  normalizeChainState,
   publishCommand,
   shouldRebase,
   snapshotChainStorage,
@@ -207,6 +209,22 @@ function deltaLayer(id: string, bytes: number): ChainLayer {
     digest: digestOf(deltaObjectKey(STORE_ROOT, id), bytes),
     objectVersion: versionOf(deltaObjectKey(STORE_ROOT, id), bytes),
   };
+}
+
+function publishedDeltaId(state: ChainState | null): string {
+  const id = state?.delta?.id;
+
+  if (id === undefined) throw new Error('published delta lacks its immutable identity');
+  expect(isChainId(id)).toBe(true);
+  expect(id).not.toBe(state?.base.id);
+
+  return id;
+}
+
+function publishedDeltaLayer(state: ChainState | null, bytes: number) {
+  const id = publishedDeltaId(state);
+
+  return { ...deltaLayer(id, bytes), id };
 }
 
 interface Harness {
@@ -816,7 +834,7 @@ function harness(overrides: {
     seed(baseObjectKey(STORE_ROOT, generation.base.id), generation.base);
 
     if (generation.delta !== undefined) {
-      seed(deltaObjectKey(STORE_ROOT, generation.base.id), generation.delta);
+      seed(deltaObjectKey(STORE_ROOT, generation.delta.id ?? generation.base.id), generation.delta);
     }
   }
 
@@ -1714,7 +1732,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
     // than on the generation would rebase here forever.
     expect(record.state?.base.id).toBe(collapsed);
     expect(record.state?.delta).toBeDefined();
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, collapsed)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
   });
 
   test('an ORPHAN delta the record does not name still forces the collapse', async () => {
@@ -1774,7 +1792,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
 
     expect(outcome.kind).toBe('committed');
     expect(record.state?.base.id).toBe(CHAIN_ID);
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
     expect(record.calls.some(call => call.startsWith(`makeSquashfs:${UPPER}:`))).toBe(true);
   });
 });
@@ -1887,7 +1905,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // execed a file into the work directory, `/stop` answered
       // `skipped: work directory is unchanged`, and nothing was ever stored.
       // Every call reported success.
-      const record = harness({ state: null, change: { status: 'unchanged', version: 'v1' } });
+      const calls: string[] = [];
+      const record = harness({ state: null, change: { status: 'unchanged', version: 'v1' }, calls, mounts: mountsAfterAttach(calls) });
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
       expect(outcome.bytes).toBeGreaterThan(0);
@@ -1986,8 +2005,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       });
       // The writes after the base landed in a delta, rather than being lost —
       // under the generation this box minted for itself.
-      const generation = record.state!.base.id;
-      expect(record.state?.delta).toEqual(deltaLayer(generation, DELTA_BYTES));
+      expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, DELTA_BYTES));
     });
 
   test('a delta that outgrew its base collapses onto a fresh generation at the stop',
@@ -2333,7 +2351,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // See the commit path: applying them to one side only delivered no saving
       // and made the rebase ratio compare incommensurable quantities.
       expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
-      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
       // The base is untouched: same id, same bytes, and nothing published to it.
       expect(record.state?.base).toEqual(baseLayer(CHAIN_ID, BASE_BYTES));
       expect(record.calls).not.toContain(`publishArchive:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
@@ -2378,8 +2396,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(outcome.movedBytes).toBe(DELTA_BYTES);
     // It moved the bytes the way it now moves them: the container copied the
     // archive onto a writable mount, and this side read the store's metadata.
-    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
-    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
+    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
   });
 
   test('a checkpoint publishes through a WRITABLE mount and never through the isolate',
@@ -2395,10 +2413,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // a wake (runs e2e20260902032038, e2e20260902032318).
       expect(record.calls).toContain(`mountStore:${storeMountOf(record.calls)}`);
       // The archive went in through that mount, under the key the record names.
-      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+      expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
       expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
       // And the ONLY thing this side learned about it is metadata.
-      expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+      expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
     });
 
   test('the flush happens through the held mount, before the record',
@@ -2415,8 +2433,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
       const mounted = record.calls.indexOf(`mountStore:${storeMountOf(record.calls)}`);
-      const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
-      const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+      const flushed = record.calls.indexOf(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
+      const read = record.calls.indexOf(`objectFacts:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
       const wrote = record.calls.findIndex(call => call.startsWith('writeState:2:'));
       expect(mounted).toBeGreaterThan(-1);
       expect(mounted).toBeLessThan(flushed);
@@ -2683,8 +2701,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(outcome.kind).toBe('committed');
 
       // The record agrees with the object, which is the whole point.
-      expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, 702791680));
-      expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(702791680);
+      expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, 702791680));
+      expect(record.objects.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state)))).toBe(702791680);
       // EVERY STATE SIZE COMES FROM A COMPLETED UPLOAD. There are four writers
       // of a size into the record — the commit's own layer, the extract path's
       // stored base, and the adoption below — and each one's provenance is an R2
@@ -2727,7 +2745,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       });
 
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
-      expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, landed));
+      expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, landed));
 
       const wokenCalls: string[] = [];
 
@@ -2955,6 +2973,18 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 // ── discard ─────────────────────────────────────────────────────────────────
 
 describe('discard — objects before the pointer', () => {
+  test('a committed base whose reseat is busy is a named checkpoint refusal', async () => {
+    const record = harness({ state: null, mounts: MOUNTED });
+    const exec = record.ports.exec;
+    record.ports.exec = async command => command.includes("/usr/bin/fusermount3 -u '/workspace'")
+      ? { stdout: '', stderr: 'Device or resource busy', exitCode: 1 } : await exec(command);
+    const result = await checkpointOf(record, 'quiesce');
+    expect(result.kind).toBe('failed');
+    expect(result.reason).toContain('reseating');
+    expect(result.reason).toContain('Device or resource busy');
+    expect(record.state?.base.id).toBeDefined();
+  });
+
   test('all three keys go, and only then the record', async () => {
     const record = harness({ state: chainState() });
     await snapshotChainStorage(record.ports).discard();
@@ -2964,6 +2994,7 @@ describe('discard — objects before the pointer', () => {
     // nothing would delete them.
     expect(deleted).toBeLessThan(cleared);
     expect(record.calls).toContain('deleteObjects:3');
+    expect(record.calls).not.toContain('deleteObjects:0');
 
     for (const key of [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID),
       metadataObjectKey(STORE_ROOT, CHAIN_ID)]) {
@@ -3455,7 +3486,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       });
 
       woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
-      woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
+      woken.objects.set(deltaObjectKey(STORE_ROOT, publishedDeltaId(first.state)), DELTA_BYTES);
       expect((await attachOf(woken)).kind).toBe('attached');
 
       // THE SECOND CHECKPOINT, and it commits. Under the two-setting design it
@@ -3485,7 +3516,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
 
       expect(one).toHaveLength(1);
       // Both publications landed, and the wake's attach proved the first one.
-      expect(second.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
+      expect(second.objects.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(second.state)))).toBe(DELTA_BYTES);
     });
 
   test('a REBASE across a container life mounts nothing new, and the fold commits',
@@ -3636,6 +3667,59 @@ describe('the generation lifecycle, against ONE box', () => {
     expect(record.state?.fallback).toBeUndefined();
     expect(record.objects.has(baseObjectKey(STORE_ROOT, rebased))).toBe(true);
   });
+});
+
+describe('a legacy delta publication carries its fallback evidence', () => {
+  test('unobserved directory opacity refuses publication instead of changing formats', async () => {
+    const record = harness({ state: chainState(), mounts: MOUNTED });
+    const exec = record.ports.exec;
+    record.ports.exec = async command => command.startsWith('# devbox-probe-v1')
+      ? { stdout: '78 ', stderr: 'unsupported opaque xattr value', exitCode: 0 } : await exec(command);
+    const before = record.state?.rev;
+    const priorDelta = record.state?.delta;
+    const outcome = await checkpointOf(record, 'tick');
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.reason).toContain('opaque-directory namespace could not be observed');
+    expect(outcome.reason).toContain('unsupported opaque xattr value');
+    expect(record.state?.rev).toBe(before);
+    expect(record.state?.delta).toEqual(priorDelta);
+  });
+
+  for (const reason of ['upper-probe-failed', 'upper-empty', 'whiteout-probe-failed', 'base-probe-failed', 'block-hash-failed', 'stage-failed'] as const) {
+    test(reason, async () => {
+      const record = harness({ state: chainState(), mounts: MOUNTED });
+      const exec = record.ports.exec;
+      const type = reason === 'whiteout-probe-failed' ? 'c' : 'f';
+      const size = reason === 'block-hash-failed' ? 65536 : 32;
+      const encoded = Buffer.from([type, '42', '1', '644', '0', '0', String(size), '0', '0', '', 'file', ''].join('\0')).toString('base64');
+      record.ports.exec = async command => {
+        let stdout: string | undefined;
+
+        if (command.startsWith('# devbox-probe-v1')) stdout = reason === 'upper-probe-failed' ? '1 failed' : reason === 'upper-empty' ? '0 ' : `0 ${encoded}`;
+
+        if (command.startsWith('# devbox-whiteout-v1')) stdout = '';
+
+        if (command.startsWith('# devbox-basestat-v1')) stdout = reason === 'base-probe-failed' ? 'garbled' : 'ABSENT';
+
+        if (command.startsWith('# devbox-blockhash-v1')) stdout = 'USIDE 0\n';
+
+        if (reason === 'stage-failed' && command.startsWith('# devbox-stage-v1')) return { stdout: '', stderr: 'stage refused', exitCode: 1 };
+
+        return stdout === undefined ? await exec(command) : { stdout, stderr: '', exitCode: 0 };
+      };
+
+      expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+      expect(record.state?.deltaFormat).toBeUndefined();
+      expect(record.state?.deltaFallback?.reason).toBe(reason);
+      expect(record.state?.deltaFallback?.detail.length).toBeGreaterThan(0);
+      const fallback = record.state?.deltaFallback;
+      expect(normalizeChainState({ mode: 'chain', rev: 2, at: 1, base: { id: CHAIN_ID, bytes: BASE_BYTES },
+        deltaFallback: fallback === undefined ? undefined : { ...fallback },
+      })?.deltaFallback).toEqual(fallback);
+      expect(record.calls.some(call => call.includes('"event":"devbox.checkpoint.delta.fallback"') && call.includes(`"reason":"${reason}"`))).toBe(true);
+      expect(record.calls.some(call => call.includes('"event":"devbox.checkpoint.published"') && call.includes(`"reason":"${reason}"`))).toBe(true);
+    });
+  }
 });
 
 describe('the retained fallback', () => {
@@ -3951,6 +4035,18 @@ const REPLACED_DIGEST = 'f'.repeat(64);
 const REPLACED_VERSION = 'upload-that-replaced-it';
 
 describe('an archive replaced at the same length is refused', () => {
+  test('an immutable delta also refuses replacement at a different length', async () => {
+    const id = '12345678-1111-4111-8111-123456789abc';
+    const calls: string[] = [];
+    const state = chainState();
+
+    const record = harness({ state: { ...state, delta: { ...deltaLayer(id, DELTA_BYTES), id } },
+      calls, mounts: mountsAfterAttach(calls) });
+
+    record.objects.set(deltaObjectKey(STORE_ROOT, id), DELTA_BYTES + 4096);
+    await expect(attachOf(record)).rejects.toThrow('state declares');
+  });
+
   test('the current generation is refused and the retained fallback serves', async () => {
     const calls: string[] = [];
     const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
@@ -4119,10 +4215,10 @@ describe('an archive replaced at the same length is refused', () => {
 
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
-      expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, DELTA_BYTES));
+      expect(record.state?.delta).toEqual(publishedDeltaLayer(record.state, DELTA_BYTES));
       // And the store was asked to verify it, which is what makes the pre-attach
       // comparison possible at all.
-      expect(record.digests.get(deltaObjectKey(STORE_ROOT, CHAIN_ID)))
+      expect(record.digests.get(deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))))
         .toBe(record.state?.delta?.digest);
     });
 });

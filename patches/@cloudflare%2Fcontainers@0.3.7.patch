@@ -1,20 +1,27 @@
 diff --git a/dist/lib/container.js b/dist/lib/container.js
-index b7567e230..6c9b0c485 100644
+index b7567e230..f6132d575 100644
 --- a/dist/lib/container.js
 +++ b/dist/lib/container.js
-@@ -581,6 +581,15 @@ export class Container extends DurableObject {
+@@ -581,8 +581,9 @@ export class Container extends DurableObject {
          this.setupMonitorCallbacks();
          // TODO: We should consider an onHealthy callback
          await this.ctx.blockConcurrencyWhile(async () => {
-+            // Kinu admission: mark healthy before the hook, the way
-+            // startAndWaitForPorts does after its port wait (:632-636). This
-+            // path waits only for the instance — startContainerIfNotRunning
-+            // tolerates a dark port while the container runs — so a command the
-+            // start hook issues routes straight to the container instead of
-+            // opening a nested start, which the runtime cannot grant while this
-+            // block is held. Waiting for app ports here instead would hold the
-+            // restore behind the app it has not started yet.
+-            await this.onStart();
 +            await this.state.setHealthy();
-             await this.onStart();
          });
++        await this.onStart();
      }
+     async startAndWaitForPorts(portsOrArgs, cancellationOptions, startOptions) {
+         // Parse arguments to handle different overload signatures
+@@ -632,8 +633,10 @@ export class Container extends DurableObject {
+         await this.ctx.blockConcurrencyWhile(async () => {
+             // All ports are ready
+             await this.state.setHealthy();
+-            await this.onStart();
+         });
++        // RPC replies need input delivery. Application readiness remains held
++        // by the awaited hook, never by a block that prevents its own reply.
++        await this.onStart();
+     }
+     /**
+      *

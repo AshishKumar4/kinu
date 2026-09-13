@@ -1,0 +1,370 @@
+diff --git a/packages/devbox/src/devbox.ts b/packages/devbox/src/devbox.ts
+index e192684d8..f56d74404 100644
+--- a/packages/devbox/src/devbox.ts
++++ b/packages/devbox/src/devbox.ts
+@@ -637,7 +637,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+     // Not awaited: a constructor cannot be. The gate holds every event until
+     // the activation settles, and a storage failure here is the object's own
+     // SQLite failing, which the first request will report on its own terms.
+-    void ctx.blockConcurrencyWhile(() => this.#activate())
++    void ctx.blockConcurrencyWhile(() => devboxLifecycleTrace('block', "devbox.ts:640", () => this.#activate()))
+       .catch((cause: LateStartFailure['cause']) => {
+         console.error(`[devbox] activation failed: ${describe({ cause })}`);
+       });
+@@ -645,11 +645,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+ 
+   /** Constructor work is storage-only; it does not yet have control-port proof. */
+   async #activate(): Promise<void> {
+-    await this.#sweepUnknownSchedules();
++    await devboxLifecycleTrace('await', "devbox.ts:648", async () => (this.#sweepUnknownSchedules()));
+ 
+     if (this.ctx.container?.running === true) {
+-      this.#adoptionPending = (await this.#durableClaim()) !== undefined;
+-      const settled = await this.ctx.storage.get<SettledRestoration>(SETTLED_KEY);
++      this.#adoptionPending = (await devboxLifecycleTrace('await', "devbox.ts:651", async () => (this.#durableClaim()))) !== undefined;
++      const settled = await devboxLifecycleTrace('await', "devbox.ts:652", async () => (this.ctx.storage.get<SettledRestoration>(SETTLED_KEY)));
+ 
+       if (settled?.phase === 'unattached' && isSettledRestoration(settled)) {
+         // Refusal is safe to retain even when identity stamping failed.
+@@ -661,10 +661,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+   /** The durable side's claim about the running instance: the boot id it
+    *  stamped and the phase it settled beside it, or undefined without both. */
+   async #durableClaim(): Promise<{ readonly expected: string; readonly settled: SettledRestoration } | undefined> {
+-    const [expected, settled] = await Promise.all([
++    const [expected, settled] = await devboxLifecycleTrace('await', "devbox.ts:664", async () => (Promise.all([
+       this.ctx.storage.get<string>(BOOT_ID_KEY),
+       this.ctx.storage.get<SettledRestoration>(SETTLED_KEY),
+-    ]);
++    ])));
+ 
+     if (expected === undefined || !isSettledRestoration(settled)) return undefined;
+ 
+@@ -720,10 +720,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+   async #adoptOrTurnOver(): Promise<void> {
+     const generation = this.#generation;
+     this.#adoptionPending = false;
+-    const claim = await this.#durableClaim();
++    const claim = await devboxLifecycleTrace('await', "devbox.ts:723", async () => (this.#durableClaim()));
+ 
+     if (claim === undefined || !this.#owns(generation)) return;
+-    const actual = await this.#readBootId();
++    const actual = await devboxLifecycleTrace('await', "devbox.ts:726", async () => (this.#readBootId()));
+ 
+     if (!this.#owns(generation)) return;
+ 
+@@ -921,12 +921,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+   async #restoreInStartGate(): Promise<void> {
+     const pending = this.#gateRestore;
+ 
+-    if (pending?.generation === this.#generation) return await pending.run;
++    if (pending?.generation === this.#generation) return await devboxLifecycleTrace('await', "devbox.ts:924", async () => (pending.run));
+     const run = this.#runStartHook();
+     this.#gateRestore = { generation: this.#generation, run };
+ 
+     try {
+-      await run;
++      await devboxLifecycleTrace('await', "devbox.ts:929", async () => (run));
+     } finally {
+       if (this.#gateRestore?.run === run) this.#gateRestore = undefined;
+     }
+@@ -938,30 +938,30 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+     const budget = openStartBudget(budgetMs);
+     let generation = this.#generation;
+ 
+-    const result = await runRestoreStep(
++    const result = await devboxLifecycleTrace('await', "devbox.ts:941", async () => (runRestoreStep(
+       budget.remainingMs(),
+       async () => {
+-        const previous = await this.ctx.storage.get<Restoration>(SETTLED_KEY);
++        const previous = await devboxLifecycleTrace('await', "devbox.ts:944", async () => (this.ctx.storage.get<Restoration>(SETTLED_KEY)));
+ 
+         if (!this.#owns(generation)) return;
+ 
+         if (previous?.phase === 'restoring') {
+-          const claim = await this.#claimRecovery();
+-          await this.#recover(generation, claim, { cause: new ContainerStartInterrupted() });
++          const claim = await devboxLifecycleTrace('await', "devbox.ts:949", async () => (this.#claimRecovery()));
++          await devboxLifecycleTrace('await', "devbox.ts:950", async () => (this.#recover(generation, claim, { cause: new ContainerStartInterrupted() })));
+ 
+           return;
+         }
+ 
+-        await this.#adoptOrTurnOver();
++        await devboxLifecycleTrace('await', "devbox.ts:955", async () => (this.#adoptOrTurnOver()));
+ 
+         if (this.#restoration.phase !== 'unstarted') return;
+         generation = this.#generation;
+-        const failure = await this.#restoreNow(generation, racedRestoreSteps(budget));
++        const failure = await devboxLifecycleTrace('await', "devbox.ts:959", async () => (this.#restoreNow(generation, racedRestoreSteps(budget))));
+ 
+         if (failure !== undefined) console.error(`[devbox] start refused: ${describe(failure)}`);
+       },
+       (failure) => console.error(`[devbox] abandoned start hook failed: ${describe(failure)}`),
+-    );
++    )));
+ 
+     if (!this.#owns(generation)) return;
+ 
+@@ -978,16 +978,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+ 
+       if (attached) {
+         const reason = `[deadline → repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
+-        await this.#settle({ phase: 'repair', incomplete: reason });
+-        await this.#record('process', reason);
++        await devboxLifecycleTrace('await', "devbox.ts:981", async () => (this.#settle({ phase: 'repair', incomplete: reason })));
++        await devboxLifecycleTrace('await', "devbox.ts:982", async () => (this.#record('process', reason)));
+       } else {
+         const generation = this.#generation;
+-        const claim = await this.#claimRecovery();
+-        await this.#recover(generation, claim, { cause });
++        const claim = await devboxLifecycleTrace('await', "devbox.ts:985", async () => (this.#claimRecovery()));
++        await devboxLifecycleTrace('await', "devbox.ts:986", async () => (this.#recover(generation, claim, { cause })));
+       }
+     }
+ 
+-    await this.#armContainerSchedules();
++    await devboxLifecycleTrace('await', "devbox.ts:990", async () => (this.#armContainerSchedules()));
+ 
+     if (this.#admission() !== undefined) this.deleteSchedules(STARTUP_CALLBACK);
+   }
+@@ -1212,7 +1212,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+   /** The id this container instance is carrying, or undefined when the file is
+    *  gone, which is what a replaced instance looks like. */
+   async #readBootId(): Promise<string | undefined> {
+-    const read = await this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null || true`, DEVBOX_RUNTIME_DIR);
++    const read = await devboxLifecycleTrace('await', "devbox.ts:1215", async () => (this.#rawExec(`cat ${BOOT_ID_PATH} 2>/dev/null || true`, DEVBOX_RUNTIME_DIR)));
+     const value = read.stdout.trim();
+ 
+     return value.length > 0 ? value : undefined;
+@@ -1401,55 +1401,57 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+ 
+     const pending = this.#startup;
+ 
+-    if (pending?.generation === this.#generation) return await pending.run;
++    if (pending?.generation === this.#generation) return await devboxLifecycleTrace('await', "devbox.ts:1404", async () => (pending.run));
+     const run = this.#recoverAndStart();
+     this.#startup = { generation: this.#generation, run };
+ 
+     try {
+-      await run;
++      await devboxLifecycleTrace('await', "devbox.ts:1409", async () => (run));
+     } finally {
+       if (this.#startup?.run === run) this.#startup = undefined;
+     }
+   }
+ 
+   async #recoverAndStart(): Promise<void> {
+-    const recovery = await this.ctx.storage.get<{
++    const recovery = await devboxLifecycleTrace('await', "devbox.ts:1416", async () => (this.ctx.storage.get<{
+       readonly owner: string;
+       readonly action: 'retry' | 'replace';
+       readonly reason: string;
+-    }>(RECOVERY_ACTION_KEY);
++    }>(RECOVERY_ACTION_KEY)));
+ 
+     if (recovery !== undefined) {
+-      const claim = parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY));
++      const claim = parseRecoveryRow(await devboxLifecycleTrace('await', "devbox.ts:1423", async () => (this.ctx.storage.get(ATTACH_RECOVERY_KEY))));
+ 
+       if (claim.kind === 'row' && claim.row.owner === recovery.owner) {
+         if (recovery.action === 'replace') {
+           this.deleteSchedules(STARTUP_CALLBACK);
+-          await this.#replaceContainer(recovery.reason);
++          await devboxLifecycleTrace('await', "devbox.ts:1428", async () => (this.#replaceContainer(recovery.reason)));
+         } else {
+           this.#invalidateGeneration(this.#startup);
+-          await this.stop('SIGTERM');
+-          await this.#awaitContainerStopped();
++          await devboxLifecycleTrace('await', "devbox.ts:1431", async () => (this.stop('SIGTERM')));
++          await devboxLifecycleTrace('await', "devbox.ts:1432", async () => (this.#awaitContainerStopped()));
+         }
+ 
+-        await this.ctx.storage.delete(RECOVERY_ACTION_KEY);
++        await devboxLifecycleTrace('await', "devbox.ts:1435", async () => (this.ctx.storage.delete(RECOVERY_ACTION_KEY)));
+ 
+         if (recovery.action === 'replace') return;
+       } else {
+         // A successful successor retired the old recovery claim.
+-        await this.ctx.storage.delete(RECOVERY_ACTION_KEY);
++        await devboxLifecycleTrace('await', "devbox.ts:1440", async () => (this.ctx.storage.delete(RECOVERY_ACTION_KEY)));
+       }
+     }
+ 
+-    await this.#admitControlListener();
++    await devboxLifecycleTrace('await', "devbox.ts:1444", async () => (this.#admitControlListener()));
+   }
+ 
+   /** Instance allocation and control-listener proof are outside the hook budget. */
+   async #admitControlListener(): Promise<void> {
+     const generation = this.#generation;
++    const admittedAt = Date.now();
++    console.log(JSON.stringify({ event: 'devbox.lifecycle.admission.enter', generation, running: this.ctx.container?.running, port: this.defaultPort, budgetMs: this.policy.portWaitMs, at: admittedAt }));
+ 
+     try {
+-      await this.startAndWaitForPorts({
++      await devboxLifecycleTrace('await', "devbox.ts:1454", async () => (this.startAndWaitForPorts({
+         ports: this.defaultPort,
+         cancellationOptions: {
+           instanceGetTimeoutMS: this.policy.portWaitMs,
+@@ -1457,8 +1459,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+           waitInterval: ADMISSION_POLL_INTERVAL_MS,
+           abort: AbortSignal.timeout(this.policy.portWaitMs),
+         },
+-      });
++      })));
++      console.log(JSON.stringify({ event: 'devbox.lifecycle.admission.exit', generation, ms: Date.now() - admittedAt, restoration: this.#restoration.phase }));
+     } catch (cause) {
++      console.log(JSON.stringify({ event: 'devbox.lifecycle.admission.failed', generation, ms: Date.now() - admittedAt, reason: describe({ cause }), owned: this.#owns(generation) }));
+       if (!this.#owns(generation)) {
+         console.error(`[devbox] superseded admission refused: ${describe({ cause })}`);
+ 
+@@ -1466,9 +1470,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+       }
+ 
+       const failure = classifyRecovery({ cause });
+-      await this.#record('attach', `[${failure} → retry] ${describe({ cause })}`);
++      await devboxLifecycleTrace('await', "devbox.ts:1473", async () => (this.#record('attach', `[${failure} → retry] ${describe({ cause })}`)));
+ 
+-      if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, 1);
++      if (this.#owns(generation)) await devboxLifecycleTrace('await', "devbox.ts:1475", async () => (this.#arm(STARTUP_CALLBACK, 1)));
+     }
+   }
+ 
+@@ -1624,15 +1628,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+   async #claimRecovery(): Promise<RecoveryClaim> {
+     const token = crypto.randomUUID();
+ 
+-    return await this.ctx.blockConcurrencyWhile(async () => {
++    return await this.ctx.blockConcurrencyWhile(() => devboxLifecycleTrace('block', "devbox.ts:1631", async () => {
+       const admission = admissionStep(
+-        parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY)),
++        parseRecoveryRow(await devboxLifecycleTrace('await', "devbox.ts:1633", async () => (this.ctx.storage.get(ATTACH_RECOVERY_KEY)))),
+       );
+ 
+-      await this.ctx.storage.put(ATTACH_RECOVERY_KEY, recoveryRow(token, admission.stage));
++      await devboxLifecycleTrace('await', "devbox.ts:1636", async () => (this.ctx.storage.put(ATTACH_RECOVERY_KEY, recoveryRow(token, admission.stage))));
+ 
+       return { token, admit: admission.admit, stage: admission.stage };
+-    });
++    }));
+   }
+ 
+   /**
+@@ -1705,16 +1709,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+     generation: number,
+     apply: () => Promise<void>,
+   ): Promise<boolean> {
+-    return await this.ctx.blockConcurrencyWhile(async () => {
+-      const held = parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY));
++    return await this.ctx.blockConcurrencyWhile(() => devboxLifecycleTrace('block', "devbox.ts:1712", async () => {
++      const held = parseRecoveryRow(await devboxLifecycleTrace('await', "devbox.ts:1713", async () => (this.ctx.storage.get(ATTACH_RECOVERY_KEY))));
+ 
+       if (!this.#owns(generation)) return false;
+ 
+       if (held.kind !== 'row' || held.row.owner !== claim.token) return false;
+-      await apply();
++      await devboxLifecycleTrace('await', "devbox.ts:1718", async () => (apply()));
+ 
+       return true;
+-    });
++    }));
+   }
+ 
+   /**
+@@ -2065,15 +2069,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+ 
+   /** Requests may start a stopped box, then adopt the hook's settled generation. */
+   async resolveReadiness(): Promise<RestoreReadiness> {
+-    if (this.ctx.container?.running !== true) await this.#startContainer();
++    if (this.ctx.container?.running !== true) await devboxLifecycleTrace('await', "devbox.ts:2072", async () => (this.#startContainer()));
+     // Join application readiness without withholding the hook's RPC replies.
+-    await this.#gateRestore?.run;
+-    await this.#resolveAdoption();
++    await devboxLifecycleTrace('await', "devbox.ts:2074", async () => (this.#gateRestore?.run));
++    await devboxLifecycleTrace('await', "devbox.ts:2075", async () => (this.#resolveAdoption()));
+     const admission = this.#admission();
+ 
+     if (admission !== undefined) return admission;
+ 
+-    await this.kickStartup();
++    await devboxLifecycleTrace('await', "devbox.ts:2080", async () => (this.kickStartup()));
+ 
+     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
+       throw new Error(
+@@ -2096,7 +2100,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+    * One readiness state machine — this adds no policy of its own.
+    */
+   async ensureReady(): Promise<RestoreAdmission> {
+-    const readiness = await this.resolveReadiness();
++    const readiness = await devboxLifecycleTrace('await', "devbox.ts:2103", async () => (this.resolveReadiness()));
+ 
+     if (readiness.kind === 'pending') throw new Error(readiness.reason);
+ 
+@@ -2135,11 +2139,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+    * saved. A caller that passes its own `cwd` gets it.
+    */
+   override async exec(command: string, options?: ExecOptions): Promise<ExecResult> {
+-    return await this.#withActiveCaller(async () => {
+-      await this.ensureReady();
++    return await devboxLifecycleTrace('await', "devbox.ts:2142", async () => (this.#withActiveCaller(async () => {
++      await devboxLifecycleTrace('await', "devbox.ts:2143", async () => (this.ensureReady()));
+ 
+-      return await super.exec(command, { cwd: DEVBOX_WORKDIR, ...options });
+-    });
++      return await devboxLifecycleTrace('await', "devbox.ts:2145", async () => (super.exec(command, { cwd: DEVBOX_WORKDIR, ...options })));
++    })));
+   }
+ 
+   /**
+@@ -2710,6 +2714,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+   async devboxState(): Promise<DevboxReport> {
+     await this.kickStartup();
+     await this.#resolveAdoption();
++    console.log(JSON.stringify({ event: 'devbox.lifecycle.state', generation: this.#generation, running: this.ctx.container?.running,
++      restoration: this.#restoration.phase, startupHeld: this.#startup !== undefined, hookHeld: this.#gateRestore !== undefined }));
+ 
+     const [supervised, ports, incidents] = await Promise.all([
+       this.#procSpecs(),
+@@ -3486,7 +3492,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+     // One command per container per runtime-directory cwd, and idempotent:
+     // `mkdir -p` from the work directory, which always exists.
+     if (cwd === DEVBOX_RUNTIME_DIR && !this.#runtimeDirReady) {
+-      const made = await super.exec(`mkdir -p '${DEVBOX_RUNTIME_DIR}'`, { cwd: DEVBOX_WORKDIR });
++      const made = await devboxLifecycleTrace('await', "devbox.ts:3495", async () => (super.exec(`mkdir -p '${DEVBOX_RUNTIME_DIR}'`, { cwd: DEVBOX_WORKDIR })));
+       this.#stampPhase('containerStart');
+ 
+       if (made.exitCode !== 0) {
+@@ -3496,7 +3502,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+       this.#runtimeDirReady = true;
+     }
+ 
+-    const result = await super.exec(command, { cwd });
++    const result = await devboxLifecycleTrace('await', "devbox.ts:3505", async () => (super.exec(command, { cwd })));
+     this.#stampPhase('containerStart');
+ 
+     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+@@ -3541,7 +3547,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+    *  `#arm` asks before writing one, and the question `ensureReady` asks before
+    *  driving a retry the schedule already owes. */
+   async #pending(callback: string): Promise<boolean> {
+-    return !needsArming(await this.listSchedules(callback), Date.now() / 1000);
++    const schedules = await this.listSchedules(callback);
++    const now = Date.now() / 1000;
++    const pending = !needsArming(schedules, now);
++    console.log(JSON.stringify({ event: 'devbox.lifecycle.schedule', callback, now, pending, times: schedules.map(row => row.time) }));
++    return pending;
+   }
+ }
+ 
+@@ -3550,3 +3560,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
+ function mutableBackupOptions(options: BackupOptions): BackupOptions {
+   return { ...options, excludes: options.excludes === undefined ? undefined : [...options.excludes] };
+ }
++
++async function devboxLifecycleTrace<T>(event: string, step: string, run: () => Promise<T>): Promise<T> {
++  const id = crypto.randomUUID();
++  const at = Date.now();
++  console.log(JSON.stringify({event: 'devbox.lifecycle.' + event + '.enter', step, id, at}));
++  try { return await run(); }
++  finally { console.log(JSON.stringify({event: 'devbox.lifecycle.' + event + '.exit', step, id, at: Date.now(), ms: Date.now() - at})); }
++}

@@ -21,7 +21,8 @@
 
 import { createHash } from 'node:crypto';
 
-import { DELTA_MANIFEST_NAME } from '../../src/chunked-delta';
+import { DELTA_MANIFEST_NAME, DELTA_BLOCK_BYTES, DeltaManifestSchema, readDeltaIndex } from '../../src/chunked-delta';
+import * as v from 'valibot';
 import type { ContainerDisk } from './strategy-machine';
 import {
   contentSize,
@@ -46,7 +47,7 @@ const Q = String.raw`'((?:[^']|'\\'')*)'`;
 const unquote = (word: string): string => word.replaceAll(`'\\''`, `'`);
 
 const OP = {
-  probe: new RegExp(String.raw`^out=\$\(find ${Q} (.*?)-mindepth 1 -printf '[^']*' 2>/dev/null \| base64 \| tr -d '\\n'\); rc=\$\?; printf '%s %s' "\$rc" "\$out"$`),
+  probe: new RegExp(String.raw`^out=\$\(set -o pipefail; find ${Q} (.*?)-mindepth 1 -printf '[^']*' 2>/dev/null \| devbox-block-lower --probe-opaque ${Q} \| base64 \| tr -d '\\n'\); rc=\$\?; printf '%s %s' "\$rc" "\$out"$`),
   prune: new RegExp(String.raw`-path ${Q} -prune -o`, 'g'),
   whiteout: new RegExp(String.raw`^stat -c '%t,%T' ${Q} 2>/dev/null \|\| printf 'x\\n'$`),
   basestat: new RegExp(String.raw`^stat -c '%F %s' ${Q} 2>/dev/null \|\| printf 'ABSENT\\n'$`),
@@ -54,7 +55,7 @@ const OP = {
   mkdir: /^mkdir -p (.+)$/,
   split: new RegExp(String.raw`^split -b (\d+) -a 4 ${Q} ${Q} \|\| false$`),
   say: /^printf '([A-Z]+ \d+)\\n'$/,
-  sha256sum: new RegExp(String.raw`^sha256sum ${Q}\* 2>/dev/null \|\| false$`),
+  sha256sum: new RegExp(String.raw`^find ${Q} -type f -exec sha256sum \{\} \+ \|\| false$`),
   rmrf: new RegExp(String.raw`^rm -rf ${Q}$`),
   ifBase: new RegExp(String.raw`^if test -s ${Q}; then (.*); else printf 'BEMPTY (\d+)\\n'; fi$`),
   chown: new RegExp(String.raw`^chown (\d+):(\d+) ${Q}$`),
@@ -66,6 +67,8 @@ const OP = {
   truncate: new RegExp(String.raw`^truncate -s (\d+) ${Q}$`),
   manifest: new RegExp(String.raw`^printf %s ${Q} \| base64 -d > ${Q}$`),
   cat: new RegExp(String.raw`^cat ${Q} 2>/dev/null$`),
+  base64: new RegExp(String.raw`^base64 ${Q}$`),
+  mknod: new RegExp(String.raw`^: > ${Q}$`),
 };
 
 /**
@@ -75,9 +78,68 @@ const OP = {
  */
 export function deltaCommand(command: string, disk: ContainerDisk): ShellReply | undefined {
   if (!command.startsWith('# devbox-')) return undefined;
+
+  if (command.startsWith('# devbox-block-lower-v2')) return composeBlockMount(command, disk);
   const shell = new DeltaShell(disk);
 
   return shell.run(command.split('\n'));
+}
+
+/** This in-memory filesystem oracle composes eagerly, as its squashfs model
+ * unpacks eagerly. Real IO bounds are measured by block-lower.test.ts. */
+function composeBlockMount(command: string, disk: ContainerDisk): ShellReply {
+  const args = new Map([...command.matchAll(new RegExp(String.raw`--([a-z-]+) ${Q}`, 'g'))].map(match => [match[1], match[2]]));
+
+  const get = (key: string): string => {
+    const value = args.get(key);
+
+    if (value === undefined) throw new Error(`block lower lacks ${key}`);
+
+    return unquote(value);
+  };
+
+  const delta = get('delta');
+  const base = get('base');
+  const mount = get('mount');
+  const bytes = disk.readFile(`${delta}/${DELTA_MANIFEST_NAME}`);
+
+  if (bytes === undefined) throw new Error('missing block manifest');
+  const manifest = v.parse(DeltaManifestSchema, JSON.parse(new TextDecoder().decode(bytes)));
+  const tree = disk.tree(mount);
+  tree.plant(manifest.dirs.map((dir, ino) => ({ path: dir.p, ino: ino + 1, kind: 'dir', mode: dir.mode, metadata: { ...ROOT_METADATA, uid: dir.uid, gid: dir.gid } })));
+
+  for (const file of manifest.files) {
+    if (file.kind !== 'chunked') continue;
+    const output = new Uint8Array(file.s);
+    const fromBase = disk.readFile(`${base}/${file.p}`);
+
+    if (fromBase !== undefined) output.set(fromBase.subarray(0, file.s));
+    const index = disk.readFile(`${delta}/.devbox-delta/${file.over.index}`);
+
+    if (index === undefined) throw new Error('missing block index');
+
+    for (const override of readDeltaIndex(file.over, file.s, index)) {
+      if (override.src === 'hole') output.fill(0, override.o, Math.min(file.s, override.o + DELTA_BLOCK_BYTES));
+      else {
+        const chunk = disk.readFile(`${delta}/.devbox-delta/chunks/${override.d}`);
+
+        if (chunk === undefined || createHash('sha256').update(chunk).digest('hex') !== override.d) throw new Error('corrupt block chunk');
+        output.set(chunk, override.o);
+      }
+    }
+
+    tree.writeFile(file.p, output, { ...ROOT_METADATA, uid: file.uid, gid: file.gid });
+    const node = tree.node(file.p);
+
+    if (node === undefined) throw new Error('composed inode missing');
+    node.mode = file.mode;
+  }
+
+  // Cloud b20260913141100 and the same image in Docker report plain fuse;
+  // the generation-bearing source, not a synthetic subtype, identifies it.
+  disk.mount(mount, { source: `devbox-block:${get('generation')}`, fstype: 'fuse', options: 'ro' });
+
+  return { stdout: '', stderr: '', exitCode: 0 };
 }
 
 /** `%T@`: seconds and a ten-digit fraction, as GNU find prints a time. */
@@ -212,6 +274,37 @@ class DeltaShell {
     if ((m = OP.manifest.exec(line)) !== null) return this.#manifest(unquote(m[1]!), unquote(m[2]!));
 
     if ((m = OP.cat.exec(line)) !== null) return this.#cat(unquote(m[1]!));
+
+    if ((m = OP.mknod.exec(line)) !== null) {
+      const path = m[1];
+
+      if (path === undefined) throw new Error('whiteout lacks a path');
+      const owned = this.#dest(unquote(path));
+
+      if (owned.relative.split('/').at(-1) === '.wh..wh..opq') {
+        owned.tree.writeFile(owned.relative, new Uint8Array(0), ROOT_METADATA);
+
+        return 0;
+      }
+
+      const prefix = unquote(path).slice(0, -owned.relative.length - 1);
+      const whiteouts = this.disk.whiteouts.get(prefix) ?? new Set<string>();
+      const slash = owned.relative.lastIndexOf('/');
+      whiteouts.add(owned.relative.slice(0, slash + 1) + owned.relative.slice(slash + 5));
+      this.disk.whiteouts.set(prefix, whiteouts);
+
+      return 0;
+    }
+
+    if ((m = OP.base64.exec(line)) !== null) {
+      const path = m[1];
+
+      if (path === undefined) throw new Error('base64 needs a path');
+      const node = this.disk.node(unquote(path));
+
+      return node?.kind === 'file' ? this.#say(Buffer.from(bytesOf(node)).toString('base64')) : 1;
+    }
+
     throw new Error(`the delta shell emulates no such operation: ${line.slice(0, 120)}`);
   }
 
@@ -241,10 +334,16 @@ class DeltaShell {
 
     if (tree === undefined) return this.#say('1 ');
     const rows = tree.snapshot();
+
+    const opaque = new Set(rows.filter(row => row.path.split('/').at(-1) === '.wh..wh..opq')
+      .map(row => row.path.slice(0, Math.max(0, row.path.lastIndexOf('/')))));
+
     const names = new Map<number, number>();
 
     for (const row of rows) names.set(row.ino, (names.get(row.ino) ?? 0) + 1);
     const fields: string[] = [];
+
+    if (opaque.has('')) fields.push('o', '0', '2', '755', '0', '0', '4096', '0', '0', '', '');
 
     const excluded = (path: string): boolean => pruned.some((pattern) => {
       const parts = path.split('/');
@@ -259,7 +358,8 @@ class DeltaShell {
     for (const row of rows) {
       if (excluded(row.path)) continue;
       const meta = row.metadata!;
-      const type = row.kind === 'file' ? 'f' : row.kind === 'dir' ? 'd' : 'l';
+      const isOpaque = opaque.has(row.path) || ['trusted.overlay.opaque', 'user.overlay.opaque', 'user.fuseoverlayfs.opaque'].some(key => meta.xattrs[key] === 'y');
+      const type = row.kind === 'file' ? 'f' : row.kind === 'dir' ? isOpaque ? 'o' : 'd' : 'l';
 
       const nlink = row.kind === 'dir'
         ? 2 + rows.filter((child) => child.kind === 'dir' && child.path.startsWith(`${row.path}/`) && !child.path.slice(row.path.length + 1).includes('/')).length

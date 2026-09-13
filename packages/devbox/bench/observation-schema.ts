@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import type { FileEvidence } from './witness-files';
+import { DeltaFallbackSchema, type DeltaFallback } from '../src/durability/contracts';
 
 export interface ExecReply {
   ok?: boolean;
@@ -65,6 +66,8 @@ export interface StartupState {
     delta?: LayerObservation | null;
     mode?: string;
     rev?: number;
+    deltaFormat?: 'chunked';
+    deltaFallback?: DeltaFallback;
   } | null;
   incidents?: { total?: number; undelivered?: number };
 }
@@ -90,6 +93,7 @@ export const StateReplySchema = v.looseObject({
     chain: v.optional(v.nullable(v.looseObject({
       base: v.optional(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) })),
       delta: v.optional(v.nullable(LayerObservationSchema)), mode: v.optional(v.string()), rev: v.optional(v.number()),
+      deltaFormat: v.optional(v.literal('chunked')), deltaFallback: v.optional(DeltaFallbackSchema),
     }))),
     incidents: v.optional(v.looseObject({ total: v.optional(v.number()), undelivered: v.optional(v.number()) })),
   })),

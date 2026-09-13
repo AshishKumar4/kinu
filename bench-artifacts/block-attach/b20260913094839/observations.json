@@ -1,0 +1,3879 @@
+{
+  "runId": "b20260913094839",
+  "date": "2026-09-13T10:04:22.046Z",
+  "source": {
+    "commit": "ad8a2346bf2646bea539bc795d4eb93effd05786",
+    "dirtyDigest": "clean"
+  },
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
+  "worker": "kinu-devbox-bench-b20260913094839-snapshot-chain",
+  "bucket": "kinu-devbox-bench-b20260913094839-snapshot-chain",
+  "workerVersion": "76a27b9b-ddab-4941-bdfb-68eb7f4fa211",
+  "scope": "two storage cells; not full strategy admission",
+  "c3": {
+    "event": "matched.chain.C3.observations",
+    "case": "snapshot-chain/C3",
+    "runId": "b20260913094839",
+    "box": "ab-snapshot-chain-b20260913094839",
+    "identity": {
+      "commit": "ad8a2346bf2646bea539bc795d4eb93effd05786",
+      "dirtyDigest": "clean",
+      "workerVersion": "76a27b9b-ddab-4941-bdfb-68eb7f4fa211",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0"
+    },
+    "workload": {
+      "path": "vol/dense.bin",
+      "baselineBytes": 67108864,
+      "overwriteBytes": 65536,
+      "offset": 8388608,
+      "baselineSeed": 61,
+      "overwriteSeed": 62
+    },
+    "prefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+    "preparation": {
+      "cleanup": null,
+      "destroy": {
+        "ok": true,
+        "ms": 424,
+        "destroyed": true,
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-b20260913094839"
+      }
+    },
+    "initial": {
+      "attach": {
+        "kind": "empty",
+        "detail": "no chain recorded; an empty overlay is attached"
+      },
+      "state": {
+        "extractionAllowed": false,
+        "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+        "state": {
+          "restoration": "attached",
+          "running": true,
+          "lastAttach": {
+            "kind": "empty",
+            "detail": "no chain recorded; an empty overlay is attached"
+          },
+          "bootId": "d5907fd8-67f2-419b-ab35-4c4ba74ec29c",
+          "chain": null,
+          "incidents": {
+            "total": 5,
+            "undelivered": 5
+          },
+          "strategy": "snapshot-chain",
+          "durable": true,
+          "ready": true,
+          "lastInteractionAt": 1789292961972,
+          "replacedCount": 0,
+          "supervised": [],
+          "ports": []
+        },
+        "ok": true,
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-b20260913094839",
+        "ms": 545
+      },
+      "redrives": 6,
+      "ms": 32919,
+      "startedAt": 1789292930706
+    },
+    "initialObservations": [
+      {
+        "event": "kick",
+        "startedAt": 1789292930706,
+        "finishedAt": 1789292930822,
+        "reply": {
+          "ok": true,
+          "ms": 46,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839"
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292930822,
+        "finishedAt": 1789292930854,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 13
+        },
+        "error": null
+      },
+      {
+        "event": "drive",
+        "startedAt": 1789292930854,
+        "finishedAt": 1789292936982,
+        "reply": {
+          "ok": false,
+          "ms": 6109,
+          "error": "this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.",
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839"
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292931105,
+        "finishedAt": 1789292931162,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 8
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292931412,
+        "finishedAt": 1789292931442,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292931692,
+        "finishedAt": 1789292931720,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292931970,
+        "finishedAt": 1789292932000,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 12
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292932250,
+        "finishedAt": 1789292932279,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292932529,
+        "finishedAt": 1789292932558,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292932809,
+        "finishedAt": 1789292932841,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 12
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292933091,
+        "finishedAt": 1789292933129,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292933379,
+        "finishedAt": 1789292933421,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292933671,
+        "finishedAt": 1789292933700,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292933950,
+        "finishedAt": 1789292933977,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 7
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292934227,
+        "finishedAt": 1789292934256,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292934506,
+        "finishedAt": 1789292934535,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292934785,
+        "finishedAt": 1789292934817,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 12
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292935067,
+        "finishedAt": 1789292935094,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292935344,
+        "finishedAt": 1789292935372,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292935622,
+        "finishedAt": 1789292935652,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292935902,
+        "finishedAt": 1789292935932,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292936182,
+        "finishedAt": 1789292936211,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292936461,
+        "finishedAt": 1789292936490,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292936740,
+        "finishedAt": 1789292936767,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 0,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292930865,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292937018,
+        "finishedAt": 1789292937078,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292936965,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 43
+        },
+        "error": null
+      },
+      {
+        "event": "drive",
+        "startedAt": 1789292937078,
+        "finishedAt": 1789292943204,
+        "reply": {
+          "ok": false,
+          "ms": 6108,
+          "error": "this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.",
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839"
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292937328,
+        "finishedAt": 1789292937358,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292937609,
+        "finishedAt": 1789292937637,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292937888,
+        "finishedAt": 1789292937916,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292938167,
+        "finishedAt": 1789292938195,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292938445,
+        "finishedAt": 1789292938473,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292938723,
+        "finishedAt": 1789292938754,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 13
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292939005,
+        "finishedAt": 1789292939043,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292939293,
+        "finishedAt": 1789292939351,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 40
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292939601,
+        "finishedAt": 1789292939638,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292939888,
+        "finishedAt": 1789292939945,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 29
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292940196,
+        "finishedAt": 1789292940225,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292940475,
+        "finishedAt": 1789292940524,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 30
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292940775,
+        "finishedAt": 1789292940806,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292941056,
+        "finishedAt": 1789292941087,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292941337,
+        "finishedAt": 1789292941365,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292941615,
+        "finishedAt": 1789292941643,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292941893,
+        "finishedAt": 1789292941921,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292942172,
+        "finishedAt": 1789292942203,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 13
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292942453,
+        "finishedAt": 1789292942482,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292942732,
+        "finishedAt": 1789292942760,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292943010,
+        "finishedAt": 1789292943038,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 1,
+              "undelivered": 1
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292937088,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292943289,
+        "finishedAt": 1789292943352,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943189,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 44
+        },
+        "error": null
+      },
+      {
+        "event": "drive",
+        "startedAt": 1789292943352,
+        "finishedAt": 1789292949479,
+        "reply": {
+          "ok": false,
+          "ms": 6110,
+          "error": "this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.",
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839"
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292943602,
+        "finishedAt": 1789292943629,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292943879,
+        "finishedAt": 1789292943907,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292944157,
+        "finishedAt": 1789292944184,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292944435,
+        "finishedAt": 1789292944471,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292944721,
+        "finishedAt": 1789292944749,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292944999,
+        "finishedAt": 1789292945026,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292945276,
+        "finishedAt": 1789292945305,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292945555,
+        "finishedAt": 1789292945582,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 8
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292945832,
+        "finishedAt": 1789292945883,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 33
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292946134,
+        "finishedAt": 1789292946161,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292946411,
+        "finishedAt": 1789292946439,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292946689,
+        "finishedAt": 1789292946717,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292946967,
+        "finishedAt": 1789292946996,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 8
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292947247,
+        "finishedAt": 1789292947274,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292947525,
+        "finishedAt": 1789292947552,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292947803,
+        "finishedAt": 1789292947829,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292948079,
+        "finishedAt": 1789292948106,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292948357,
+        "finishedAt": 1789292948383,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292948634,
+        "finishedAt": 1789292948661,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292948911,
+        "finishedAt": 1789292948938,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292949189,
+        "finishedAt": 1789292949220,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292943365,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 12
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292949470,
+        "finishedAt": 1789292949533,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949465,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 45
+        },
+        "error": null
+      },
+      {
+        "event": "drive",
+        "startedAt": 1789292949533,
+        "finishedAt": 1789292955659,
+        "reply": {
+          "ok": false,
+          "ms": 6108,
+          "error": "this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.",
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839"
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292949783,
+        "finishedAt": 1789292949810,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292950060,
+        "finishedAt": 1789292950090,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292950340,
+        "finishedAt": 1789292950370,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292950620,
+        "finishedAt": 1789292950660,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292950910,
+        "finishedAt": 1789292950937,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292951188,
+        "finishedAt": 1789292951214,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292951465,
+        "finishedAt": 1789292951493,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292951744,
+        "finishedAt": 1789292951773,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292952023,
+        "finishedAt": 1789292952051,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292952301,
+        "finishedAt": 1789292952328,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292952579,
+        "finishedAt": 1789292952608,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292952858,
+        "finishedAt": 1789292952885,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292953136,
+        "finishedAt": 1789292953162,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292953412,
+        "finishedAt": 1789292953441,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292953691,
+        "finishedAt": 1789292953719,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292953969,
+        "finishedAt": 1789292953996,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292954247,
+        "finishedAt": 1789292954276,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292954526,
+        "finishedAt": 1789292954553,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292954804,
+        "finishedAt": 1789292954830,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 8
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292955080,
+        "finishedAt": 1789292955107,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292955357,
+        "finishedAt": 1789292955384,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 3,
+              "undelivered": 3
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292949545,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292955634,
+        "finishedAt": 1789292955695,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955645,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 43
+        },
+        "error": null
+      },
+      {
+        "event": "drive",
+        "startedAt": 1789292955695,
+        "finishedAt": 1789292961823,
+        "reply": {
+          "ok": false,
+          "ms": 6109,
+          "error": "this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.",
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839"
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292955945,
+        "finishedAt": 1789292955975,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292956225,
+        "finishedAt": 1789292956252,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292956502,
+        "finishedAt": 1789292956554,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 35
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292956804,
+        "finishedAt": 1789292956833,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292957084,
+        "finishedAt": 1789292957112,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292957362,
+        "finishedAt": 1789292957390,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292957640,
+        "finishedAt": 1789292957700,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 33
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292957951,
+        "finishedAt": 1789292957986,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 8
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292958237,
+        "finishedAt": 1789292958265,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292958515,
+        "finishedAt": 1789292958541,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292958792,
+        "finishedAt": 1789292958818,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292959069,
+        "finishedAt": 1789292959106,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292959356,
+        "finishedAt": 1789292959385,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292959635,
+        "finishedAt": 1789292959671,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 8
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292959921,
+        "finishedAt": 1789292959958,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292960209,
+        "finishedAt": 1789292960237,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292960487,
+        "finishedAt": 1789292960515,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292960765,
+        "finishedAt": 1789292960795,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 13
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292961046,
+        "finishedAt": 1789292961074,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 11
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292961324,
+        "finishedAt": 1789292961372,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 30
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292961622,
+        "finishedAt": 1789292961650,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292955708,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292961901,
+        "finishedAt": 1789292961960,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 5,
+              "undelivered": 5
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292961808,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 42
+        },
+        "error": null
+      },
+      {
+        "event": "drive",
+        "startedAt": 1789292961960,
+        "finishedAt": 1789292963649,
+        "reply": {
+          "ok": true,
+          "exitCode": 0,
+          "stdout": "",
+          "stderr": "",
+          "ms": 1671
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292962212,
+        "finishedAt": 1789292962250,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 5,
+              "undelivered": 5
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292961972,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292962500,
+        "finishedAt": 1789292962529,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": false,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 5,
+              "undelivered": 5
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292961972,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 10
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292962779,
+        "finishedAt": 1789292962809,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "unstarted",
+            "running": true,
+            "unready": "no restoration has run for this container yet",
+            "chain": null,
+            "incidents": {
+              "total": 5,
+              "undelivered": 5
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789292961972,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 9
+        },
+        "error": null
+      },
+      {
+        "event": "state",
+        "startedAt": 1789292963059,
+        "finishedAt": 1789292963625,
+        "reply": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+          "state": {
+            "restoration": "attached",
+            "running": true,
+            "lastAttach": {
+              "kind": "empty",
+              "detail": "no chain recorded; an empty overlay is attached"
+            },
+            "bootId": "d5907fd8-67f2-419b-ab35-4c4ba74ec29c",
+            "chain": null,
+            "incidents": {
+              "total": 5,
+              "undelivered": 5
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": true,
+            "lastInteractionAt": 1789292961972,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913094839",
+          "ms": 545
+        },
+        "error": null
+      }
+    ],
+    "baselineCommand": {
+      "ok": true,
+      "exitCode": 0,
+      "stdout": "{\"prepared\":\"baseline\",\"path\":\"/workspace/vol/dense.bin\"}",
+      "stderr": "",
+      "ms": 769
+    },
+    "baselineCheckpoint": {
+      "ok": true,
+      "outcome": {
+        "kind": "failed",
+        "reason": "publishing /var/tmp/devbox/stage/layer.sqsh through /backups/a5cdd274-8745-4480-ac38-027d5cae4b21/data.sqsh failed (1): dd: fsync failed for '/backups/a5cdd274-8745-4480-ac38-027d5cae4b21/data.sqsh': Input/output error\ndd: closing output file '/backups/a5cdd274-8745-4480-ac38-027d5cae4b21/data.sqsh': Input/output error"
+      },
+      "ms": 656741,
+      "state": "done",
+      "token": "checkpoint-b96e6c9a-1263-451e-b6cb-d136561d495e",
+      "kind": "quiesce"
+    },
+    "overwriteCommand": null,
+    "rounds": [
+      {
+        "round": 1,
+        "checkpoint": null,
+        "published": {
+          "transport": {
+            "puts": null,
+            "putUploadBytes": null
+          }
+        },
+        "accounting": {
+          "beforeOps": null,
+          "afterOps": null,
+          "window": null
+        }
+      }
+    ],
+    "beforeDestroy": null,
+    "destroyReceipt": null,
+    "restoration": null,
+    "restorationObservations": [],
+    "restoreProbe": null,
+    "file": null,
+    "correctness": "unmeasured",
+    "errors": [
+      "the C3 baseline checkpoint did not commit"
+    ],
+    "cleanup": null
+  },
+  "sparse": {
+    "bytes": 2147483648,
+    "representation": "whole sparse record (>50% zero blocks), served by delta/tree",
+    "initial": {
+      "attach": {
+        "kind": "empty",
+        "detail": "no chain recorded; an empty overlay is attached"
+      },
+      "state": {
+        "extractionAllowed": false,
+        "storePrefix": "boxes/ebedbfc80efad55536037634a55bf498f608934b7b4c1458689027ff8cd0919c/",
+        "state": {
+          "restoration": "attached",
+          "running": true,
+          "lastAttach": {
+            "kind": "empty",
+            "detail": "no chain recorded; an empty overlay is attached"
+          },
+          "bootId": "103b9f91-8807-4355-ab37-5819db98ac01",
+          "chain": null,
+          "incidents": {
+            "total": 5,
+            "undelivered": 0
+          },
+          "strategy": "snapshot-chain",
+          "durable": true,
+          "ready": true,
+          "lastInteractionAt": 1789293626859,
+          "lastTick": {
+            "running": true,
+            "ping": "ok",
+            "armedNext": true,
+            "decision": "hold",
+            "at": 1789293621968
+          },
+          "replacedCount": 1,
+          "supervised": [],
+          "ports": []
+        },
+        "ok": true,
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-b20260913094839",
+        "ms": 235
+      },
+      "redrives": 1,
+      "ms": 6251,
+      "startedAt": 1789293626720
+    },
+    "restoration": null,
+    "restoreProbe": null,
+    "blockReads": null,
+    "baseline": {
+      "ok": true,
+      "outcome": {
+        "kind": "failed",
+        "reason": "publishing /var/tmp/devbox/stage/layer.sqsh through /backups/76fa0bdb-dda9-4222-a3da-44ae540b0c47/data.sqsh failed (1): dd: fsync failed for '/backups/76fa0bdb-dda9-4222-a3da-44ae540b0c47/data.sqsh': Input/output error\ndd: closing output file '/backups/76fa0bdb-dda9-4222-a3da-44ae540b0c47/data.sqsh': Input/output error"
+      },
+      "ms": 217663,
+      "state": "done",
+      "token": "checkpoint-661209a8-186d-427f-b8b3-a6031f017060",
+      "kind": "quiesce"
+    },
+    "checkpoint": null,
+    "fileProbe": null,
+    "errors": [
+      "sparse baseline was not committed"
+    ]
+  },
+  "cleanup": [
+    "worker: deleted or absent",
+    "kinu-devbox-bench-b20260913094839-snapshot-chain-snapshotchainbox: absent",
+    "absent",
+    "drained 0 objects and 0 multipart uploads"
+  ],
+  "errors": [
+    "the C3 baseline checkpoint did not commit",
+    "the baseline checkpoint was not committed",
+    "the overwrite writer was unobserved",
+    "C3 requires its one committed overwrite checkpoint",
+    "the publication window is absent, invalid or still open",
+    "the PUT window does not belong to this run and box",
+    "the independent operation bracket was unobserved",
+    "C3 must publish exactly 1 object attempt",
+    "C3 publication bytes must be observed and strictly below 196608",
+    "the post-overwrite restore was not proven genuinely cold",
+    "C3 cold file correctness is unmeasured",
+    "storage attach phases were not observed",
+    "block payload counters were not observed",
+    "sparse baseline was not committed"
+  ]
+}
