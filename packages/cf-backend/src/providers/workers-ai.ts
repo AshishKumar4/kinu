@@ -6,7 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from '@kinu.run/core';
 import { DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels } from '@kinu.run/core';
-import { CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
 import {

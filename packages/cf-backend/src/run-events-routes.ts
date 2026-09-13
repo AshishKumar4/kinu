@@ -21,7 +21,7 @@ import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
 import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
-} from './lib/orchestrator-wire';
+} from '@kinu.run/core';
 import { err, json } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 

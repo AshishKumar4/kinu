@@ -6,7 +6,7 @@ import {
   type WebSearchProvider,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
-import { buildCfWebSearchProvider } from './lib/web-provider';
+import { buildCfWebSearchProvider } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,

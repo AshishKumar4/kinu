@@ -1,4 +1,4 @@
-import { JsonValueSchema, parseJsonValue, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
 import * as v from 'valibot';
 
 const RpcEventSchema = v.objectWithRest({

@@ -62,7 +62,7 @@ import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
-import { nextAlarmTime } from "./lib/cron";
+import { nextAlarmTime } from '@kinu.run/core';
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,

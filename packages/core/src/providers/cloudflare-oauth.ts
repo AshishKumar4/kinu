@@ -1,5 +1,6 @@
-import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import type { OAuthCredential } from '../credentials/store';
+import { diagnostics, toKinuError } from '../obs/index';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
@@ -406,7 +407,11 @@ function firstCloudflareError(obj: JsonObject): string | null {
   return null;
 }
 
-async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
+/** A JSON OBJECT answer, or a named failure carrying the upstream's status and
+ *  the parse cause — an OAuth endpoint the caller cannot proceed without gets
+ *  a real error, not a silent null to re-diagnose downstream. Shared with the
+ *  auth routes, which answer the same endpoints during login. */
+export async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
   try {
     return v.parse(JsonObjectSchema, await response.json());
   } catch (error) {

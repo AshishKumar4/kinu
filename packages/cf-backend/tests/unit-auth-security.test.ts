@@ -12,7 +12,7 @@ import {
   cloudflareWorkersAIBaseURL,
   isCloudflareCredentialUsable,
   withCloudflareAccount,
-} from '../src/lib/cloudflare-oauth';
+} from '@kinu.run/core';
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
 import { escapeHtml } from '@kinu.run/core';

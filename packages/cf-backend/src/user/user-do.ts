@@ -129,7 +129,7 @@ import {
   type PutEgressSecretInput,
 } from './egress-vault';
 import { randomToken, sha256Hex } from '@kinu.run/core';
-import { resolveWorkspaceTitle } from '../lib/agent-naming';
+import { resolveWorkspaceTitle } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '../analytics/install';
 import { recordReleaseTransition } from '../analytics/record';
 import { openAnalyticsWindow } from '../analytics/writer';
@@ -166,7 +166,7 @@ import {
   withCloudflareAccount,
   type CloudflareAccount,
   type CloudflareAIGatewaySummary,
-} from '../lib/cloudflare-oauth';
+} from '@kinu.run/core';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 

@@ -2173,6 +2173,11 @@ export {
   type TabPresence, type ToolInfo,
 } from './protocol';
 
+export {
+  decodeJsonWire, decodeRunEventWire, decodeScaffoldRunWire, resumeIndexFromLastEventId,
+  type RunEventWire, type ScaffoldRunWire,
+} from './protocol/orchestrator-wire';
+
 export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
 
 export {
