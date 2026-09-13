@@ -164,7 +164,8 @@ The eager counterexamples `c3_attach_copies_the_whole_64mib_base` and
 implementation. They do not describe v2 storage attach. No product deployment,
 full-hook latency guarantee or callback-only publication bound is claimed.
 
-D8. SDK input blocks contain storage work only. This supersedes D1/D3's
+D8. SDK input blocks contain storage work only (`4bca22e3c`, 2026-09-13).
+This supersedes D1/D3's
 in-block restore placement and the input-block part of R1, as authorized by
 the lifecycle-defect assignment on 2026-09-13. Restore still runs once per
 fresh container in the awaited `onStart` hook, after port-proven admission.
@@ -219,7 +220,29 @@ Raw observations and the completed teardown manifest are committed under
 `bench-artifacts/teardown/b20260913094839.json`. Worker, container application,
 bucket and generated configuration were removed; the final residue scan
 found zero objects and zero multipart uploads. No workload was changed to
-make this refusal green. R2 publication must be diagnosed before O1 can close.
+make this refusal green. The stream-composition publication defect was later
+fixed in `08d58075b`; its controls are in
+`bench-artifacts/block-attach/20260913-publication/`.
+
+The bounded rerun `b20260913114625` on clean `116c7e632` attempted C3 and a
+2 GiB dense changed file after D8 and the named-fallback/hash-batching fix
+`197daa94f`. Their base checkpoints committed in 13,259 ms (67,112,960 bytes)
+and 181,611 ms (2,147,487,744 bytes). Both edited checkpoints then refused
+`opaque-directory publication requires an explicit namespace record`, after
+1,882 and 61,558 ms. Neither changed-file attach ran. Both attach times,
+payload-byte counters and index-page counters are unmeasured, not zero.
+The dense writer's size and three range hashes were recorded before its
+edited checkpoint. This refusal did not publish a legacy delta.
+
+`a551b73f3` fixed the empty delta-key delete that interrupted intermediate
+cleanup. Each cell now has its own container identity; startup observation
+ends at 55 seconds without changing a runtime budget. Worker, container
+application, both boxes, bucket and generated configuration were removed;
+the final residue scan counted zero objects and zero multipart uploads.
+Raw observations, verdict and receipts are under
+`bench-artifacts/block-attach/b20260913114625/` and
+`bench-artifacts/teardown/b20260913114625.json`. O1 remains open on opaque
+directory support and the unmeasured changed-file restores.
 O2. Storage implementation closed by D7. Deployed latency evidence remains
 part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is
