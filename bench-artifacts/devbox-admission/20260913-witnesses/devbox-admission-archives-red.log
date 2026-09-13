@@ -1,0 +1,30 @@
+bun test v1.4.0 (34cbb9a40)
+
+scripts/bench-devbox-decision.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+1200 | 
+1201 | describe('the chain arm asks the store for what its record names', () => {
+1202 |   const CHAIN = 'c0ffee00-0000-4000-8000-00000000beef';
+1203 | 
+1204 |   test('a record naming a delta wants both archives present', () => {
+1205 |     expect(chainArchiveExpectations(CHAIN, 'delta-uuid', 'boxes/witness/')).toEqual([
+                                                                                   ^
+error: expect(received).toEqual(expected)
+
+@@ -7,3 +7,3 @@
+    {
+-     "key": "boxes/witness/backups/delta-uuid/delta.sqsh",
++     "key": "boxes/witness/backups/c0ffee00-0000-4000-8000-00000000beef/delta.sqsh",
+      "name": "the delta object the record names exists in the store with non-zero size",
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-devbox-admission/scripts/bench-devbox-decision.test.ts:1205:77)
+(fail) the chain arm asks the store for what its record names > a record naming a delta wants both archives present [0.28ms]
+
+ 4 pass
+ 60 filtered out
+ 1 fail
+ 10 expect() calls
+Ran 5 tests across 1 file. [157.00ms]

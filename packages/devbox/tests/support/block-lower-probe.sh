@@ -36,6 +36,9 @@ test "$block_mount" = "devbox-block:$generation:probe fuse"
 fuse-overlayfs -o "lowerdir=$block:$delta/.devbox-delta/tree:$base,upperdir=$upper,workdir=$probe_dir/work" "$merged"
 node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1])); if(s.payloadBytes!==0||s.indexPages!==0)throw Error(JSON.stringify(s)); console.log("attach-payload-bytes="+s.payloadBytes)' "$probe_dir/stats.json"
 cmp /fixture/expected "$merged/dir/file"
+test ! -e "$upper/dir/file"
+test ! -e "$upper/whole"
+printf 'matrix-composed-witness=marker-readable,upper-absent,sidecar-mounted,block-mounted\n'
 test "$(cat "$merged/dir/whole")" = both
 test ! -e "$merged/dir/stale"
 cmp /fixture/whole "$merged/whole"

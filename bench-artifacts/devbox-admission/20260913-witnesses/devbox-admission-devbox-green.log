@@ -1,0 +1,232 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/candidate-closure-facts.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+packages/devbox/tests/lifecycle-generation.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] superseded admission refused: the container reported CONTAINER_UNAVAILABLE
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported MISSING_CREDENTIALS
+[devbox] start refused: the container reported MISSING_CREDENTIALS
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported NO_SPACE
+[devbox] start refused: the container reported INVALID_MOUNT_CONFIG
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] start refused: the attach-recovery record did not parse [unreadable → refuse]
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] start refused: the container reported NO_SPACE
+[devbox] start refused: the container reported OPERATION_INTERRUPTED
+[devbox] start refused: the container reported MISSING_CREDENTIALS
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported UNKNOWN_ERROR
+[devbox] start refused: the stamp refused
+[devbox] start refused: the stamp refused
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: the container reported RPC_TRANSPORT_ERROR
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/strategy-conformance.test.ts:
+
+smart-container bar — per-arm matrix (design § 6)
+
+cell    snapshot-chain  
+6.1     existing          attach empty, write, commit, replace, attach
+6.2     existing          quiesce publishes exactly once
+6.3     existing          three generations, each wake carries every commit
+6.4     existing          death at every commit seam serves old or new
+6.6     existing          control metadata outside every payload prefix
+6.7     existing          corrupted payload refused by name
+6.8     existing          commit interrupted by replacement converges
+6.16    existing          teardown after stop is classified
+6.9     pass              DO reset mid-restore: one daemon, one restore, tree exact
+6.10    pass              container replaced mid-commit, old boot finishes late
+6.11    pass              byte-for-byte: mode, owner, times, xattrs, symlink, hardlink, sparse
+6.12    pass              counted bounds, and the same k against n and 10n
+6.13    pass              1e5 files: exact tree, same RestoreWork as 1e3 files
+6.14    refused           1 GiB sparse plus 64 MiB dense: commit O(data), wake O(1), in-place seal O(k)
+6.15    pass              sqlite rewrite: random 4 KiB pwrites, bytesPut bounded by dirty pages
+6.17    pass              two containers racing: one head, loser refused and reported, never merged
+6.18    pass              disk full mid-journal: ENOSPC, no effect without a record, eviction, tree exact
+6.20    pass              GC never deletes a reachable object
+6.21    pass              restore and backup time versus tree size at three sizes
+6.22    pass              C3 overwrite: a 64 KiB edit publishes below 196,608 bytes in exactly one object
+6.23    pass              many small changed files: one object per checkpoint, bytes near the change
+6.24    pass              per-file maps: a one-file change costs the same at 1,000 and 5,000 files
+6.19    harness           stop then wake on the same instance: the devbox-harness suites
+
+6.14 snapshot-chain: refused — a snapshot-chain wake makes 4 remote ops against the O(1) bound of 3: the base integrity head, the head that adopts an unreferenced delta, the store mount's list and the base layer's get (a base+delta wake makes 5; measured 2026-09-10 in the conformance harness)
+
+snapshot-chain 6.22: bytesPut=90298 objectsPut=1
+snapshot-chain 6.23: bytesPut=184091 objectsPut=1
+snapshot-chain 6.24: files=1000 bytesPut=877 objectsPut=1 attachBytes=877 attachObjects=1
+snapshot-chain 6.24: files=5000 bytesPut=877 objectsPut=1 attachBytes=877 attachObjects=1
+6.21 restore and backup time versus tree size — 100, 1,000 and 10,000 files of 4 KiB
+
+arm snapshot-chain: files | tree bytes | full backup ms | 64 KiB backup ms | 64 KiB backup bytesPut | restore ms | restore ops | restore payload bytes
+arm snapshot-chain: 100 | 409600 | 10.1 | 2.9 | 23916 | 4.3 | 5 | 564214
+arm snapshot-chain: 1000 | 4096000 | 64.8 | 2.1 | 23916 | 16.2 | 5 | 5641208
+arm snapshot-chain: 10000 | 40960000 | 722.0 | 8.6 | 23916 | 131.5 | 5 | 56420664
+
+
+packages/devbox/tests/store-mount-bounds.test.ts:
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"1e3bd08f-afcd-479d-82d0-47571a6b8c43"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"1e3bd08f-afcd-479d-82d0-47571a6b8c43","cwd":"","at":1789313644501}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"1e3bd08f-afcd-479d-82d0-47571a6b8c43","ms":1}
+[devbox] /workspace base 1e3bd08f-afcd-479d-82d0-47571a6b8c43 (26 bytes)
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"6a1f4417-7fab-46a2-8b80-ef525b40f14c"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"6a1f4417-7fab-46a2-8b80-ef525b40f14c","cwd":"","at":1789313644504}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"6a1f4417-7fab-46a2-8b80-ef525b40f14c","ms":1}
+[devbox] /workspace base 6a1f4417-7fab-46a2-8b80-ef525b40f14c (30 bytes)
+
+packages/devbox/tests/supervised-lifecycle.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/container-gone.test.ts:
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"0fe25420-5666-4739-9df8-4c3f94f60b3c"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"0fe25420-5666-4739-9df8-4c3f94f60b3c","cwd":"","at":1789313644536}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"0fe25420-5666-4739-9df8-4c3f94f60b3c","ms":0}
+[devbox] /workspace base 0fe25420-5666-4739-9df8-4c3f94f60b3c (59 bytes)
+[devbox] /workspace already attached — attach skipped
+[devbox] attach already-attached: chain 0fe25420-5666-4739-9df8-4c3f94f60b3c
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"6770e61b-f88b-4f5f-8bd3-6ce0c333bfc6"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"6770e61b-f88b-4f5f-8bd3-6ce0c333bfc6","cwd":"","at":1789313644538}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"6770e61b-f88b-4f5f-8bd3-6ce0c333bfc6","ms":1}
+[devbox] /workspace base 6770e61b-f88b-4f5f-8bd3-6ce0c333bfc6 (59 bytes)
+
+packages/devbox/tests/stale-stamp-exec-fence.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/restoration-visibility.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/terminal-activity.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] background-work check failed, holding: the owning workspace cannot be reached
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/decisions.test.ts:
+[devbox] incident a2eded3e-765b-4eb7-9db3-187ee908f435 was not delivered, retrying: the host was unreachable
+[devbox] tick checkpoint rejected: store unreachable
+
+packages/devbox/tests/restore-after-start.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: settled row could not be persisted
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] dropping the schedule row for `snapshotWorkspaceIfDue`: this class carries no such member, so the alarm loop can only log it and keep the row for ever
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/stale-stamp-fence.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+packages/devbox/tests/file-relocation.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+publication.cut_cost original=5 unarmed=5 unarmed_control_rpcs=0 armed_control_rpcs=3
+
+ 471 pass
+ 0 fail
+ 1971 expect() calls
+Ran 471 tests across 29 files. [29.82s]
+DEVBOX_SUITE_EXIT=0

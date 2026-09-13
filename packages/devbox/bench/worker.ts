@@ -1251,11 +1251,8 @@ export default {
             key,
             exists: object !== null,
             size: object?.size ?? 0,
-            // THE STORE'S OWN NAME FOR THESE BYTES. A witness cell asks whether
-            // one KEY holds different bytes than it did before, and a size
-            // cannot answer that: two archives of the same length are the same
-            // size and different objects. The etag changes when the object is
-            // replaced, which is exactly the fact `mutable-delta` turns on.
+            // The immutable-publication witness compares this etag before and
+            // after a new delta is published. Size alone cannot detect rewrite.
             etag: object?.etag ?? '',
             ms: Date.now() - started,
           }, object === null ? 404 : 200);
