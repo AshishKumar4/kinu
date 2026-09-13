@@ -2599,4 +2599,179 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   }, 240_000);
+
+  test('a reset to the already-committed width leaves no mark: the next drag persists', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '340');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
+      }, { timeout: 10_000 });
+
+      // resetToDefault at the committed 340 issues a no-op write: the
+      // library emits nothing, and nothing marks the next emission as
+      // ours to swallow.
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>('[data-separator]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      });
+      await Bun.sleep(400);
+
+      // A real drag follows: pointerdown marks the input, the release
+      // commit persists the width the user's hand chose. The inspector is
+      // the trailing panel — dragging the separator right narrows it.
+      const separator = await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      const box = await separator!.boundingBox();
+      const x = box!.x + box!.width / 2;
+      const y = box!.y + box!.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 60, y, { steps: 4 });
+      await page.mouse.up();
+      await Bun.sleep(300);
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBe(280);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a viewport narrowing that squeezes the inspector persists nothing and latches no choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // The stored 2000px cannot fit beside the chat floor: every committed
+      // layout here is the ResizeObserver's constraint, never a gesture.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '2000');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+
+      const before = await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ));
+
+      // Narrowing re-commits a smaller constrained layout: no input mark,
+      // so the preferred 2000 stays stored and no new choice is written.
+      await page.setViewport({ width: 1100, height: 900 });
+      await Bun.sleep(600);
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBeLessThan(before);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
+      expect(Object.keys(state.stored).filter((key) => key.startsWith('kinu.inspector.open.')).sort()).toEqual([
+        'kinu.inspector.open.ashish@example.com.checkout-fixes',
+      ]);
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('two desktop↔mobile remounts leave the document and separator listener counts at baseline', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        // Every listener the page registers is counted by target+type; the
+        // same accounting on remove keeps a live tally.
+        interface LiveWindow extends Window { __liveListeners?: Map<string, number> }
+
+        const w: LiveWindow = window;
+        w.__liveListeners = new Map();
+
+        const tally = (target: EventTarget, type: string, delta: number) => {
+          // SAFETY: the separator div carries `data-separator` (the library
+          // sets it); `dataset` presence on a DOM element is the check, and
+          // `instanceof Document` covers the ownerDocument listeners. Any
+          // other target matches neither and is skipped.
+          if ('dataset' in target) {
+            const key = `sep:${type}`;
+            w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
+
+            return;
+          }
+
+          if (target instanceof Document) {
+            const key = `doc:${type}`;
+            w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
+          }
+        };
+
+        const add = EventTarget.prototype.addEventListener;
+        const remove = EventTarget.prototype.removeEventListener;
+
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+          tally(this, type, 1);
+
+          if (listener !== null) add.call(this, type, listener, options);
+        };
+
+        EventTarget.prototype.removeEventListener = function (type, listener, options) {
+          tally(this, type, -1);
+
+          if (listener !== null) remove.call(this, type, listener, options);
+        };
+
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '400');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-separator]', { timeout: 20_000 });
+      await Bun.sleep(500);
+
+      const readTally = () => {
+        const w: Window & { __liveListeners?: Map<string, number> } = window;
+
+        return Object.fromEntries(w.__liveListeners!);
+      };
+
+      const baseline = await page.evaluate(readTally);
+
+      // Two full remounts: each swap unmounts the separator element, which
+      // must detach every listener the hook attached — element and document.
+      for (let i = 0; i < 2; i++) {
+        await page.setViewport({ width: 800, height: 900 });
+        await Bun.sleep(600);
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+        await Bun.sleep(600);
+      }
+
+      const after = await page.evaluate(readTally);
+
+      expect(after).toEqual(baseline);
+
+      await page.close();
+    });
+  }, 240_000);
 });
