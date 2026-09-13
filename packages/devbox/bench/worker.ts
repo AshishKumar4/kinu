@@ -887,14 +887,11 @@ class BenchBox extends Devbox<BenchEnv> {
   }
 
   /**
-   * Destroy this box's container identity without touching its rows or its
-   * store: the disk — and the boot id on it — is gone, so the next drive
-   * provisions a fresh instance and restores the committed generation onto
-   * it. The witness instrument for a true cold restore. A stop preserves the
-   * disk, so a wake after one adopts instead of restoring; only a destroy (or
-   * a platform replacement, which this is shaped like) proves the attach a
-   * fresh instance performs. The drive sorts out the generation: it observes
-   * the container down and turns over before admitting.
+   * Force a container reset for the benchmark. Actual container stop, sleep,
+   * or restart loses container-local disk. A stable sandbox or Durable Object
+   * identity is not a filesystem generation. Destroy is a forced-reset
+   * instrument, not the only cold-restore path; the subsequent drive must
+   * establish its filesystem generation before admitting work.
    */
   async destroyContainerForBench(): Promise<boolean> {
     await stopContainer({
