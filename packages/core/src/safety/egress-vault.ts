@@ -38,17 +38,19 @@
  */
 
 import * as v from 'valibot';
-import type { SqlExec } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import type { CredentialCipher } from '../credentials/envelope';
+import { toKinuError } from '../obs/error';
+import { diagnostics } from '../obs/log';
+import type { SqlExec } from '../types/primitives';
+import { nanoid } from '../utils/nanoid';
 import {
-  EGRESS_PLACEHOLDER_BYTES,
+  EGRESS_PLACEHOLDER_PREFIX,
+  PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
   planEgress,
   type EgressRequestFacts,
   type EgressSecretBinding,
-} from '@kinu.run/core';
-import { randomToken } from '@kinu.run/core';
-import type { CredentialCipher } from './credential-envelope';
+} from './egress-gate';
 
 /** A binding id is owner-authored and lands in a rule name and a SQL key, so
  *  it is held to the same shape as a credential key. */
@@ -116,7 +118,7 @@ export function initEgressVaultTables(sql: SqlExec): void {
 /** A fresh placeholder. Independent of the secret by construction — this
  *  function never sees one. */
 function mintEgressPlaceholder(): string {
-  return `pxs1_${randomToken(EGRESS_PLACEHOLDER_BYTES)}`;
+  return `${EGRESS_PLACEHOLDER_PREFIX}${nanoid(PLACEHOLDER_BODY_LENGTH)}`;
 }
 
 /** What the owner and the UI may see: every binding, no secret material. */

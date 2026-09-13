@@ -34,7 +34,7 @@
  * proves at module load that neither set contains a reserved one. A name that
  * cannot be declared is a value that cannot arrive.
  */
-import { RESERVED_LOG_FIELDS } from '@kinu.run/core/obs';
+import { RESERVED_LOG_FIELDS } from '../log';
 
 /**
  * Refuse a set of publishable names that includes a reserved one, or the same

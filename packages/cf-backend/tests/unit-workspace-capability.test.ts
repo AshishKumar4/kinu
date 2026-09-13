@@ -14,7 +14,7 @@ import {
   requireTier,
   revokeWorkspaceCapability,
   type WorkspaceCapability,
-} from '../src/user/workspace-capability';
+} from '@kinu.run/core';
 import { isModelInferenceCredentialKey } from '../src/user/credential-headers';
 import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do';
 

@@ -44,7 +44,7 @@
  * Every call site is fire-and-forget from inside a turn, a route handler or a
  * `.catch()`. A telemetry write that can fail a turn is worse than no telemetry.
  */
-import { diagnostics } from '@kinu.run/core/obs';
+import { diagnostics } from '../log';
 import * as v from 'valibot';
 import { MAX_WRITES_PER_INVOCATION } from './limits';
 import {
@@ -62,6 +62,23 @@ import {
 export const FiniteNumber = v.pipe(v.number(), v.finite());
 
 /**
+ * One Analytics Engine data point, mirrored field-for-field from the platform's
+ * `AnalyticsEngineDataPoint` so this module never names a runtime type a shared
+ * package cannot see. The platform's binding is assignable to {@link
+ * AnalyticsDatasetSink} because the shapes are identical.
+ */
+export interface AnalyticsDataPoint {
+  indexes?: ((ArrayBuffer | string) | null)[];
+  doubles?: number[];
+  blobs?: ((ArrayBuffer | string) | null)[];
+}
+
+/** The whole surface a dataset binding offers: one fire-and-forget write. */
+export interface AnalyticsDatasetSink {
+  writeDataPoint(event?: AnalyticsDataPoint): void;
+}
+
+/**
  * The Analytics Engine members of the Worker's environment. A structural type
  * rather than the global `Env` so a test can hand this module a fake binding
  * without standing up fifty unrelated ones, and so nothing here depends on the
@@ -73,9 +90,9 @@ export const FiniteNumber = v.pipe(v.number(), v.finite());
  * exists.
  */
 export interface AnalyticsEnv {
-  readonly AGENT_METRICS?: AnalyticsEngineDataset;
-  readonly FEEDBACK_MARKERS?: AnalyticsEngineDataset;
-  readonly CONTROL_PLANE_OPS?: AnalyticsEngineDataset;
+  readonly AGENT_METRICS?: AnalyticsDatasetSink;
+  readonly FEEDBACK_MARKERS?: AnalyticsDatasetSink;
+  readonly CONTROL_PLANE_OPS?: AnalyticsDatasetSink;
 }
 
 /** What happened to the rows this writer was given. Every counter is a distinct
@@ -216,7 +233,7 @@ function slotOf(row: SlotLookup, name: string): string | number | undefined {
  * writing because nothing called us".
  */
 function createAnalyticsWriter<S extends AnalyticsSchema>(
-  dataset: AnalyticsEngineDataset | undefined,
+  dataset: AnalyticsDatasetSink | undefined,
   schema: S,
   window: AnalyticsWindow,
 ): AnalyticsWriter<S> {

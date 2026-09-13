@@ -97,8 +97,8 @@ import {
   toKinuError,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import {
+  initUserTables, PROFILE_CATALOG_CONFIG_KEY,
   CapabilityDeniedError,
   armCapabilityReconcile,
   clearCapabilityReconcile,
@@ -112,27 +112,25 @@ import {
   type UserCaller,
   type WorkspaceCapability,
   type ResolvedCaller,
-} from './workspace-capability';
-import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
-import { DeviceTerminalHub, terminalFromSocket } from './device-terminal';
-import {
+  DeviceSocketHub, deviceIdFromSocket,
+  DeviceTerminalHub, terminalFromSocket,
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
-} from './device-inflight';
-import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers';
-import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate';
-import { createCredentialCipher, type CredentialCipher } from './credential-envelope';
-import {
+  credentialToHeaders, codexAccessTokenExpiring,
+  validateCredential, validateCredentialKey, validateWorkspaceName,
+  createCredentialCipher, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
-} from './egress-vault';
+} from '@kinu.run/core';
+import { initAccessTokenTable } from '../cli/access-token-store';
+import { isModelInferenceCredentialKey } from './credential-headers';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { resolveWorkspaceTitle } from '@kinu.run/core';
-import { installAnalyticsDiagnostics } from '../analytics/install';
-import { recordReleaseTransition } from '../analytics/record';
-import { openAnalyticsWindow } from '../analytics/writer';
+import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { recordReleaseTransition } from '@kinu.run/core/analytics';
+import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
@@ -745,6 +743,7 @@ export class UserDO extends Agent<Env> {
   private ensureInit(): void {
     if (this._initialized) return;
     initUserTables(this.ctx.storage.sql);
+    initAccessTokenTable(this.ctx.storage.sql);
     this._inflight.releaseAbandonedClaims();
     this._initialized = true;
   }
@@ -4182,7 +4181,7 @@ export class UserDO extends Agent<Env> {
       const refreshToken = cred.refreshToken;
 
       if (!refreshToken) return null;
-      const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
+      const needRefresh = opts?.forceRefresh || codexAccessTokenExpiring(cred.accessToken);
 
       if (needRefresh) {
         const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });

@@ -26,8 +26,8 @@ import {
 import {
   CAPABLE_HELLO, OTHER_WORKSPACE, WORKSPACE, daemon, deviceHarness,
 } from './helpers/device-harness';
-import type { UserCaller } from '../src/user/workspace-capability';
-import { DeviceSocketHub } from '../src/user/device-hub';
+import type { UserCaller } from '@kinu.run/core';
+import { DeviceSocketHub } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
   DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROVISION_METHOD,

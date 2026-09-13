@@ -18,7 +18,7 @@ import {
   deviceIdFromSocket,
   type DeviceSocket,
   type DeviceSocketCtx,
-} from '../src/user/device-hub';
+} from '@kinu.run/core';
 
 interface FakeSocket extends DeviceSocket {
   sent: string[];

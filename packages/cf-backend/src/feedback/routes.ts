@@ -12,12 +12,12 @@
 
 import type { AuthIdentity } from '../auth/session';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { writeFeedbackMarker } from '../analytics/feedback-marker';
+import { writeFeedbackMarker } from '@kinu.run/core/analytics';
 import { recordFeedback, type ControlPlaneEnv } from '../control-plane/feedback-ingest';
 import { retryTransientDO } from '@kinu.run/core';
 import type { UserDO } from '../user/user-do';
-import { isWorkspaceName } from '../user/validate';
-import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
+import { isWorkspaceName } from '@kinu.run/core';
+import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { FEEDBACK_SCREENSHOT_TYPE } from './contract';
 import { routeFeedback, type WorkspaceAttribution } from './submit';
 

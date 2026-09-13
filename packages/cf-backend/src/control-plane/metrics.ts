@@ -14,8 +14,8 @@
  * deployment's own datasets, resolve a workspace filter to the digest the
  * dataset is indexed by, and hand the batch to the transport.
  */
-import { analyticsDigest } from '../analytics/privacy';
-import { controlPlaneMetricsQueries } from '../analytics/query';
+import { analyticsDigest } from '@kinu.run/core/analytics';
+import { controlPlaneMetricsQueries } from '@kinu.run/core/analytics';
 import {
   analyticsMissingSettings, clearAnalyticsCache, runAnalyticsBatch,
   type AnalyticsPanels, type AnalyticsSqlEnv,

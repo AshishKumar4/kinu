@@ -13,7 +13,7 @@ import {
   createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type TestUserDO,
 } from './user-do';
-import type { UserCaller } from '../../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 export const WORKSPACE = 'workspace-a';
 

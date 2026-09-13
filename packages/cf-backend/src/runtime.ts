@@ -83,7 +83,7 @@ import {
   type UserCredentialClient,
   type UserCredentialSource,
 } from "./providers/agent-registry";
-import { ownerCaller, type UserCaller } from "./user/workspace-capability";
+import { ownerCaller, type UserCaller } from "@kinu.run/core";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
 import {
   agentAffinityKey, normalizeUsage,

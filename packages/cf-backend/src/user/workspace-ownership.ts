@@ -19,7 +19,7 @@
  */
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { ownerCaller, type OwnerCapabilityEnv } from './workspace-capability';
+import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 

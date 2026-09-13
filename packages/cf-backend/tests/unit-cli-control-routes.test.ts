@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';

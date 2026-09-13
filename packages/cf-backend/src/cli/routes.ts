@@ -25,7 +25,7 @@ import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from
 import { handleUserAIProxyRequest } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy';
-import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability';
+import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 

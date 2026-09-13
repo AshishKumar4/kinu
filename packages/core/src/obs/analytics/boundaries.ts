@@ -37,7 +37,7 @@
  * of them. Recording which mechanism a boundary uses is what lets one gate check
  * both kinds without knowing them individually.
  */
-import type { LogEventName } from '@kinu.run/core/obs';
+import type { LogEventName } from '../log';
 
 /**
  * The five boundary families, pinned. A family is the QUESTION a query asks —
@@ -98,7 +98,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'capability.denied',
     family: 'error',
     event: 'capability.denied',
-    site: 'packages/cf-backend/src/user/workspace-capability.ts',
+    site: 'packages/core/src/safety/workspace-capability.ts',
     mechanism: 'diagnostics',
     emitter: 'denyCapability',
     means: 'A privileged user-level call was refused: no caller identity, an '

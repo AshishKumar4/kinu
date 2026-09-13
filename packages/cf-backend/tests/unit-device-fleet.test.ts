@@ -18,7 +18,7 @@ import {
   createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import { createHubDeviceTransport } from '../src/device-transport';
 
 const WORKSPACE = 'workspace-a';

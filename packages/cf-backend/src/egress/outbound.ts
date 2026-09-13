@@ -63,8 +63,8 @@ import {
   type ScrubReplacement,
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { ownerCaller, type UserCaller } from '../user/workspace-capability';
-import type { EgressInjection, EgressInjectionResult } from '../user/egress-vault';
+import { ownerCaller, type UserCaller } from '@kinu.run/core';
+import type { EgressInjection, EgressInjectionResult } from '@kinu.run/core';
 import { kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 import {
   classifyErrorCode, diagnostics, renderThrownChain, toKinuError, KinuError,

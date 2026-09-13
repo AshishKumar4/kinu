@@ -16,7 +16,7 @@ import {
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import type { UserCredentialClient } from '../providers/agent-registry';
-import type { UserCaller } from './workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import { listAvailableModels } from './available-models';
 import type { WorkspaceEntry, WorkspaceRegistration } from './user-do';
 import { indexNewWorkspace, unindexWorkspace } from '../control-plane/index-feed';

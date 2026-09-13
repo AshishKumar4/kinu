@@ -20,7 +20,7 @@ import type { KinuSandbox } from '../src/kinu-sandbox';
 // of it living outside `runtime.ts`.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
-import type { EgressInjectionResult } from '../src/user/egress-vault';
+import type { EgressInjectionResult } from '@kinu.run/core';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';

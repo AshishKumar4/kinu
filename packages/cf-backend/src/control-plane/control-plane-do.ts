@@ -25,8 +25,8 @@ import { DurableObject } from 'cloudflare:workers';
 import { diagnostics } from '@kinu.run/core/obs';
 import type { Page, PageRequest } from '@kinu.run/core';
 import type { FeedbackRecord } from '../feedback/contract';
-import { installAnalyticsDiagnostics } from '../analytics/install';
-import { openAnalyticsWindow } from '../analytics/writer';
+import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 // `./capability`, never `./admin-caller`. The two modules answer different
 // questions, and the split exists so this one does not need the other's answer:
 // `admin-caller` re-exports this gate, but reaching it through that file puts

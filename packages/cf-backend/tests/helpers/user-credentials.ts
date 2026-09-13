@@ -8,7 +8,7 @@
 // specifically about attenuation.
 import type { UserCredentialSource } from '../../src/providers/agent-registry';
 import type { CredentialSummary } from '../../src/user/user-do';
-import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
+import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import { TEST_USER_ENV } from './user-do';
 
 export type CredentialSummaryDouble = CredentialSummary;

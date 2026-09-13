@@ -1,7 +1,7 @@
 import { forkTransferFrames, nanoid, FORK_FRAME_BYTES } from '@kinu.run/core';
 import type { ForkFrame } from '@kinu.run/core';
 import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
-import type { UserCaller } from './workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
 
 export interface CloudForkRegistry {

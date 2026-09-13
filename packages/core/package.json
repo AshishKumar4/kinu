@@ -6,6 +6,7 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./analytics": "./src/obs/analytics/index.ts",
     "./identity": "./src/identity/index.ts",
     "./obs": "./src/obs/index.ts",
     "./protocol": "./src/protocol.ts",

@@ -9,7 +9,7 @@
  * owns.
  */
 
-import { isWorkspaceName } from '../user/validate';
+import { isWorkspaceName } from '@kinu.run/core';
 
 /** Every container this deployment addresses is `kinu-<workspace>`. One
  *  spelling, in one place, because the edge refuses every id that is not it. */

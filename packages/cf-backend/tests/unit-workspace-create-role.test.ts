@@ -14,7 +14,7 @@ import {
 } from '@kinu.run/core';
 import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 

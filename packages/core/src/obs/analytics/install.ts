@@ -44,10 +44,11 @@
  * gate, a pure frame check in the RPC gate, a provider's fetch wrapper — and it
  * must therefore be installed in every isolate those run in.
  */
+import { ERROR_CODES, type ErrorCode, type KinuError } from '../error';
 import {
-  ERROR_CODES, createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink,
-  type ErrorCode, type KinuError, type LogEventName, type LogFields, type Logger,
-} from '@kinu.run/core/obs';
+  createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink,
+  type LogEventName, type LogFields, type Logger,
+} from '../log';
 import * as v from 'valibot';
 import { boundaryOf, eventFamily } from './boundaries';
 import { analyticsDigest, assertPublishableNames } from './privacy';

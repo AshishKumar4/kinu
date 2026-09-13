@@ -17,16 +17,18 @@
  * laptop reconnecting under the same device row would inherit its predecessor's
  * capabilities, and a stale answer would read as a fresh one.
  */
-import {
-  DeviceTunnel, EXECUTOR_CAPABILITIES, TOOLCHAIN_PROBE_BINARIES, isDeviceUnknownMethodError,
-  deviceToolchainAnswer, freshDeviceToolchain,
-  type DeviceToolchain, type JsonValue, type TunnelSocket,
-} from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { KinuError, toKinuError } from '../obs/error';
+import { diagnostics } from '../obs/log';
+import type { JsonValue } from '../utils/json';
+import { DeviceTunnel, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
+import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
+import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
+import { EXECUTOR_CAPABILITIES } from './types';
 import * as v from 'valibot';
 
-/** WebSocket.OPEN is 1 across every implementation. */
-const WS_OPEN = 1;
+/** WebSocket.OPEN is 1 across every implementation. Shared with the terminal
+ *  hub, which reads the same sockets. */
+export const WS_OPEN = 1;
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
