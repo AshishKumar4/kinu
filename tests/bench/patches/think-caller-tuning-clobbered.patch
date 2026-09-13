@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
-index 076a20fb9..f1a87e0ca 100644
+index fc1f7d36a..0c74ba509 100644
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -291,7 +291,7 @@ export class EvolutionEngine {
+@@ -304,7 +304,7 @@ export class EvolutionEngine {
  
    constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
      this.rt = rt;
 -    this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
 +    this.config = { ...config, ...DEFAULT_EVOLUTION_CONFIG };
-     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
+     rt.actor.assertCurrent();
  
-     // The engine owns the outcome + lessons + replay + completed-turn +
+     const actor = rt.storage.sql<Pick<WorkspaceActor, 'kind'>>`
