@@ -349,6 +349,8 @@ describe('the home page is the new-workspace form', () => {
             enabledEmpty: submit !== undefined && !submit.disabled,
             alignContent: grid === null ? '' : getComputedStyle(grid).alignContent,
             sidebarButton: [...document.querySelectorAll('aside button')].some((b) => b.textContent === 'New workspace'),
+            eyebrow: grid?.querySelector('.p-eyebrow')?.textContent ?? null,
+            heading: grid?.querySelector('h1')?.textContent ?? null,
           };
         });
 
@@ -359,8 +361,12 @@ describe('the home page is the new-workspace form', () => {
         expect(fact.enabledEmpty).toBe(true);
         // md+ content-centres the tracks; the rail is up at 1280px.
         expect(fact.alignContent).toBe('center');
-        // The sidebar does not offer the form the page already is.
+        // The sidebar does not offer the form the page already is — and the
+        // page itself stopped restating it as an eyebrow. The H1 and the
+        // primary action are the label now.
         expect(fact.sidebarButton).toBe(false);
+        expect(fact.eyebrow).not.toBe('New workspace');
+        expect(fact.heading).toBe('What do you wanna work on?');
       } finally {
         await page.close();
       }
