@@ -197,7 +197,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'provider.error',
     family: 'provider',
     event: 'provider.error',
-    site: 'packages/cf-backend/src/providers/cloudflare-ai-fetch.ts',
+    site: 'packages/core/src/providers/cloudflare-ai-fetch.ts',
     mechanism: 'diagnostics',
     emitter: 'failure',
     means: 'The upstream AI endpoint answered non-ok after the forced-refresh '

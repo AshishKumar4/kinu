@@ -22,10 +22,10 @@
  */
 import type { UserDO } from './user-do';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../lib/cloudflare-oauth';
-import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '../providers/cloudflare-ai-fetch';
+import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { createUserDOAuthResolver } from '../providers/agent-registry';
 import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
-import { createDirectWorkersAIFetch } from '../providers/direct-workers-ai-fetch';
+import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { listAvailableModels } from './available-models';
 import { json } from '../lib/http';
 import { ownerCaller } from './workspace-capability';
