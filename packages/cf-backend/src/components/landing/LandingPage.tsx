@@ -82,7 +82,7 @@ function PlanSection(): ReactElement {
       <SectionHead label="03 · Plan mode" lead="In Plan mode the agent can read files and research, but not edit anything. It submits a Markdown plan. You mark the lines that need work, or approve it, and only then does a Build turn start.">
         See the plan before <Accent>anything is written.</Accent>
       </SectionHead>
-      <LandingFrame kind="plan" caption="Example UI and sample data, not a live workspace." />
+      <LandingFrame kind="plan" caption="Sample workspace" />
       <p className={NOTE}>A recorded walkthrough plays over the workspace: a request, tool calls, a submitted plan, an approval, and the slate it builds.</p>
       <a className={TRAILING_LINK} href={REPOSITORY + '/blob/main/docs/TOOLS.md#plan-authority'} target="_blank" rel="noreferrer">What Plan mode can and cannot do →</a>
     </section>
@@ -95,7 +95,7 @@ function SlatesSection(): ReactElement {
       <SectionHead label="04 · Slates" lead="Ask for a dashboard and the agent writes a small Worker. It opens in its own tab on a preview URL, reading whatever you connected — your files, or a database over MCP.">
         Build live apps <Accent>with slates.</Accent>
       </SectionHead>
-      <LandingFrame kind="slate" caption="Example UI and sample data, not a running app." />
+      <LandingFrame kind="slate" caption="Sample app" />
       <p className={NOTE}>The charts draw once on open.</p>
       <div className="mt-8 grid gap-4 text-[13px] leading-[1.7] p-text-3 md:grid-cols-2 md:gap-12">
         <p>A binding passes one of the caller's own capabilities: files, an MCP connection narrowed to named tools, or a read model. A declaration is not a permission grant. The owner's existing gates still apply on every call.</p>

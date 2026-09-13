@@ -1,0 +1,9 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/unit-step-stats.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+ 21 pass
+ 0 fail
+ 66 expect() calls
+Ran 21 tests across 2 files. [356.00ms]
