@@ -45,7 +45,7 @@ import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js'
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import { agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, type HomeRootVfs, type TmpConfiner } from './agent-home';
-import { provisionWorkspaceRuntimes } from './workspace-runtimes';
+import { provisionWorkspaceRuntimes, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
@@ -184,12 +184,21 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
     async exec(command, stdinOrOptions) {
       const options = shellExecOptions({ value: stdinOrOptions });
 
-      const result = await (await open()).exec(command, {
+      const workspace = await open();
+
+      const result = await workspace.exec(command, {
         stdin: options?.stdin,
         signal: options?.signal,
       });
 
-      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+      return workspaceCommandNotFound(
+        { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+        // The live registry IS the catalog: it holds the coreutils, the bins
+        // provisionWorkspaceRuntimes declared (npm, npx, the loopback re-wires
+        // and each supplied runtime's entrypoints) and whatever the host added
+        // (git) — read per call because installs re-register mid-session.
+        (bin) => workspace.registry.has(bin),
+      );
     },
   };
 }
