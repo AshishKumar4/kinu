@@ -27,11 +27,12 @@
  * Specified by docs/EXPLORATION.md — "The six axes", "Presets", "Settle is
  * derived" and "Refusals".
  */
+import { settleOf, SWARM_PRESET_POINTS, type SwarmPresetRow } from '../strategy/swarm';
 import {
-  NAMED_SWARM_PRESETS, settleOf, SWARM_PRESET_POINTS,
-  type HeadRunView, type NamedSwarmPreset, type SwarmConfig, type SwarmPresetRow,
-  type SwarmSettle,
-} from "@kinu.run/core";
+  NAMED_SWARM_PRESETS,
+  type NamedSwarmPreset, type SwarmConfig, type SwarmSettle,
+} from '../types/swarm';
+import type { HeadRunView } from '../heads/types';
 
 /**
  * The six axes by NAME.

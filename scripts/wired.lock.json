@@ -10,7 +10,7 @@
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#hasActiveForkWork (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#hasLiveForkRun (unreached-export)",
   "packages/cf-backend/src/components/surfaces/fork-runs.ts#unexplainedForkRoots (unreached-export)",
-  "packages/cf-backend/src/components/surfaces/swarm-resolution.ts#fanInArity (unreached-export)",
+  "packages/core/src/read-models/swarm-resolution.ts#fanInArity (unreached-export)",
   "packages/cf-backend/src/gallery-agent-stub.ts#useAgent (unreached-export)",
   "packages/cf-backend/src/gallery-agent-stub.ts#useAgentChat (unreached-export)",
   "packages/cf-backend/src/hooks/use-async-resource.ts#beginLoad (unreached-export)",

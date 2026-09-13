@@ -28,7 +28,7 @@ import {
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useKinu } from "@/hooks/use-kinu";
 import { useElementSize } from "@/hooks/use-element-size";
-import { runLiveness } from "@/components/surfaces/swarm-resolution";
+import { runLiveness } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary } from "@kinu.run/core";
 
 export default function MCTSExplorer() {

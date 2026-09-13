@@ -3,7 +3,7 @@ import {
   createSessionRecovery,
   fetchDeployedBuildSha,
   isNewerDeployedBuild,
-} from "../src/hooks/session-recovery";
+} from "@kinu.run/core";
 
 function timeoutError(method = "getWorkspaceSnapshot", ms = 30_000): Error {
   return new Error(`RPC call to ${method} timed out after ${ms}ms`);

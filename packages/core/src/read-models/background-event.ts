@@ -22,14 +22,18 @@
 
 import {
   ADVISOR_SIGNAL_KIND, DEFAULT_ADVISOR_MIN_SEVERITY, isAdvisorSeverity,
-  JsonObjectSchema, SIGNAL_ID_METADATA_KEY, turnAuthor,
-  type AdvisorSeverity, type JsonObject, type SignalCardEvent, type SignalCardState,
-} from "@kinu.run/core";
+  type AdvisorSeverity,
+} from '../advisor/review';
+import type { BroadcastEvent } from '../types/backend-host';
+import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
+import type { SignalCardEvent, SignalCardState } from '../types/signals';
+import { turnAuthor } from '../utils/ui-message';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
 
 /** A turn the backend enqueued, never typed by the operator. `system_event` is
  *  the rest: harness-authored, with no card of its own. */
-export type ProgrammaticTurn =
+export type ClassifiedProgrammaticTurn =
   | { kind: "event_drain" }
   | { kind: "workspace_created" }
   | { kind: "background_job"; jobKind: string; status: string }
@@ -85,7 +89,7 @@ const SignalCardEventSchema = v.variant('state', [
  */
 export function classifyProgrammaticTurn<Metadata>(
   metadata: Metadata, id?: string,
-): ProgrammaticTurn | null {
+): ClassifiedProgrammaticTurn | null {
   if (turnAuthor({ id, metadata }) === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
   const turn = parsed.success ? parsed.output : {};
@@ -266,4 +270,36 @@ export function eventVariantLabel(variant: string): string {
 /** Internal event sources keep their stable vocabulary; owner copy does not. */
 export function eventSourceLabel(source: string): string {
   return source.replace(/^subordinate(?=$|[\s(])/i, "Agent");
+}
+
+/**
+ * The one construction site for a metadata-bearing broadcast event.
+ *
+ * Both backends' metadata-carrying emissions go through here — the CLI's
+ * subordinate reporter and the shared signal seam — so neither adapter
+ * constructs the shape itself. `type` and `metadata` are required
+ * positionally, so the capability (the event carries its content as metadata)
+ * cannot be left off while still typechecking as this shape; the remaining
+ * members ride one optional fields bag.
+ */
+export function metadataBroadcastEvent(
+  type: string,
+  metadata: JsonObject,
+  fields?: {
+    readonly id?: string;
+    readonly state?: string;
+    readonly status?: string;
+    readonly text?: string;
+    readonly branchId?: string;
+    readonly task?: string;
+    readonly takeSetId?: string;
+    readonly turnId?: string;
+    readonly message?: string;
+    readonly displayName?: string;
+    readonly steerId?: string;
+    readonly atStep?: number;
+    readonly jobId?: string;
+  },
+): BroadcastEvent {
+  return { type, metadata, ...fields };
 }

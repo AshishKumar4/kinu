@@ -31,7 +31,7 @@ import { isRateLimitedTurnError } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
-import type { HeadDeltas } from "@/components/head-chat";
+import type { HeadDeltas } from "@kinu.run/core";
 import { cleanNodeLabel, type ExplorerSelection } from "@/components/swarm-tree-model";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
 import type { ForkNode, Rpc } from "@kinu.run/core";
@@ -50,7 +50,7 @@ import {
 import {
   fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf,
   type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution,
-} from "./swarm-resolution";
+} from "@kinu.run/core";
 
 export interface ExplorationSurfaceProps {
   /** Trees of the searches in flight, keyed by search, fed by `mcts-progress`

@@ -40,7 +40,7 @@ import { useToggledSet } from "@/hooks/use-toggled-set";
 import { FileViewer } from "./FileViewer";
 import {
   PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir,
-} from "./files-plane";
+} from "@kinu.run/core";
 
 interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
 

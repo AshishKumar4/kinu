@@ -20,7 +20,7 @@ import {
   type ClientErrorReport,
 } from './contract';
 import { routeTemplateOf, type ReportedRoute } from '../app-routes';
-import { pageDeployedBuildSha } from '../hooks/session-recovery';
+import { pageDeployedBuildSha } from '@kinu.run/core';
 
 /**
  * What the PAGE contributes to a report, as opposed to what the error does.

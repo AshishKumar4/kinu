@@ -7,7 +7,7 @@ import type { AlternateTakeSet } from '@kinu.run/core';
 import { takeEvidence } from '@kinu.run/core';
 import {
   currentTakeIndex, cycleTakeIndex, hasComparableTakes, takeChipLabel,
-} from '../src/components/alternate-takes-logic';
+} from '@kinu.run/core';
 
 function makeSet(overrides: Partial<AlternateTakeSet> = {}): AlternateTakeSet {
   return {

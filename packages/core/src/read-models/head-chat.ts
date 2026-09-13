@@ -15,7 +15,7 @@
  * so applying one is a concatenation and nothing else.
  */
 import type { UIMessage } from "ai";
-import type { HeadStep, HeadStepToolCall } from "@kinu.run/core";
+import type { HeadStep, HeadStepToolCall } from '../heads/types';
 
 /** What a running head has produced but not yet journalled, in the two streams
  *  the provider separates. Both halves, because the chat draws both. */

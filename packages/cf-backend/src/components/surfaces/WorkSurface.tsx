@@ -7,7 +7,7 @@ import {
 import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import type { HeadDeltas } from "@/components/head-chat";
+import type { HeadDeltas } from "@kinu.run/core";
 import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";

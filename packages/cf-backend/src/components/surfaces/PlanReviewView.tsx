@@ -17,7 +17,7 @@ import {
   exportAnnotations, extractFrontmatter, parseMarkdownToBlocks,
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@kinu.run/core";
-import { createPlanAnnotationSaveQueue } from "./plan-annotation-save";
+import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
