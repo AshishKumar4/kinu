@@ -1,0 +1,21 @@
+[devbox-bench] deployed https://kinu-devbox-bench-p20260913102157-snapshot-chain.ashishkmr472.workers.dev at version 2a775502-8bb0-4c3b-9b7d-a9d70b25c000
+[devbox-bench] publication probe: no restoration has run for this container yet; driving readiness through one no-op exec (drive 1)
+[devbox-bench] publication probe: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] publication probe: no restoration has run for this container yet; driving readiness through one no-op exec (drive 2)
+[devbox-bench] publication probe: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] publication probe: no restoration has run for this container yet; driving readiness through one no-op exec (drive 3)
+[publication-probe] startup
+[publication-probe] mount-and-processes
+[publication-probe] writer
+[publication-probe] window-open
+[publication-probe] ops-before
+[publication-probe] baseline
+[publication-probe] window-close
+[publication-probe] ops-after
+[publication-probe] after
+[publication-probe] box-teardown
+[publication-probe] worker-delete
+[publication-probe] container-delete
+[publication-probe] residue
+[publication-probe] teardown
+{"artifact":"/home/mrwhite0racle/Kinu-wt-block-layer-impl/bench-artifacts/block-attach/20260913-publication/p20260913102157"}
