@@ -1,0 +1,110 @@
+{
+  "table": [
+    {
+      "runId": "run-7fb7x66q5rrlbog4y8zff",
+      "step": 3,
+      "input": 20415,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-7fb7x66q5rrlbog4y8zff",
+      "step": 4,
+      "input": 20499,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-etssn9djc6y0fahmj326s",
+      "step": 4,
+      "input": 20523,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-etssn9djc6y0fahmj326s",
+      "step": 6,
+      "input": 20830,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-38ehj64o4jpdlm2ri77bi",
+      "step": 4,
+      "input": 20939,
+      "cacheRead": 1792,
+      "share": 0.08558192845885668
+    },
+    {
+      "runId": "run-38ehj64o4jpdlm2ri77bi",
+      "step": 5,
+      "input": 20985,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-vxqs00cjms2ffa2kglpd7",
+      "step": 5,
+      "input": 21029,
+      "cacheRead": 1792,
+      "share": 0.08521565457225735
+    },
+    {
+      "runId": "run-vxqs00cjms2ffa2kglpd7",
+      "step": 6,
+      "input": 21344,
+      "cacheRead": 20928,
+      "share": 0.9805097451274363
+    },
+    {
+      "runId": "run-1agkeztccne9brlcngh4t",
+      "step": 4,
+      "input": 21470,
+      "cacheRead": 1792,
+      "share": 0.08346530041918956
+    },
+    {
+      "runId": "run-1agkeztccne9brlcngh4t",
+      "step": 6,
+      "input": 21527,
+      "cacheRead": 1792,
+      "share": 0.08324429785850328
+    },
+    {
+      "runId": "run-jhkxay5i74w1k9kgfev6o",
+      "step": 6,
+      "input": 21604,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-jhkxay5i74w1k9kgfev6o",
+      "step": 7,
+      "input": 21937,
+      "cacheRead": 21440,
+      "share": 0.977344212973515
+    }
+  ],
+  "stats": {
+    "steps": 12,
+    "windowLimit": 200,
+    "tokens": {
+      "input": 253102,
+      "output": 509,
+      "cacheRead": 49536,
+      "neurons": 27282.85067549348
+    },
+    "cacheHit": {
+      "samples": 12,
+      "last": 0.977344212973515,
+      "mean": 0.1912800949508132,
+      "p95": 0.9805097451274363,
+      "ema": 0.3041685771910305,
+      "emaAlpha": 0.2
+    },
+    "usd": 0.30011136,
+    "pricedSteps": 12,
+    "unpricedSteps": 0,
+    "stepsWithoutUsage": 0
+  }
+}

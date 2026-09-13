@@ -1,0 +1,24 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/unit-volatile-context.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+811 |     const current = { ...initial, executors: [workspace, activeSandbox] };
+812 |     const second = ledger.weave(history, current);
+813 |     const delta = String(second.at(-1)?.content);
+814 | 
+815 |     expect(second[1]).toBe(first[1]);
+816 |     expect(delta).toContain('sandbox status went from `ready on demand` to `active`');
+                        ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "sandbox status went from `ready on demand` to `active`"
+Received: "<dynamic_context fingerprint=\"744b3e49f92bb1eb\">\nLive system state from the Kinu runtime. It is not conversation, and the user did not write it. A later dynamic_context block supersedes every earlier one.\n\n## World model (facts you remembered)\n- unchanged = yes\n\n## Execution status\nLive availability for the runtimes described in the system prompt, and what each one declares it can run:\n- workspace: active\n- sandbox: active, files at /sandbox\n</dynamic_context>"
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/core/tests/unit-volatile-context.test.ts:816:19)
+(fail) DynamicContextLedger (the cache-stability contract) > later blocks update only changed facts and compaction restores a full snapshot [0.88ms]
+
+ 0 pass
+ 70 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [169.00ms]

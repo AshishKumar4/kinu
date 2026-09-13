@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "text": "Use execute_tools and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it."
+  },
+  {
+    "role": "assistant",
+    "text": "SAVED\n\nCrafted tool `cache_echo` was created via `workspace.createTool(name, description, code)` — it takes a text argument (string or `{text}`) and returns that same text. The tool reported `{\"ok\":true,\"name\":\"cache_echo\",\"action\":\"created\"}`. It has not been invoked, per your instruction."
+  },
+  {
+    "role": "user",
+    "text": "Use your saved cache_echo crafted tool through execute_tools with the text CACHE_ECHO_OK. Reply with the returned text."
+  },
+  {
+    "role": "assistant",
+    "text": "CACHE_ECHO_OK"
+  }
+]

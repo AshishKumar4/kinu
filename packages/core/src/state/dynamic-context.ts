@@ -26,10 +26,18 @@ import {
 } from '../prompting/volatile-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
+import { craftedToolDeclarations } from '../tools/sandbox-contract';
+import type { ResolvedTurnProfile } from '../profiles/resolve';
+import { SUBMIT_PLAN_TOOL } from '../tools/registry';
+import type { ToolSet } from 'ai';
 
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
   readonly stores: AgentStores;
+  /** The profile already bound to the inference, never an ambient fallback. */
+  readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
+  /** The actual callable surface bound to the same inference. */
+  readonly tools: ToolSet;
   /** The turn's MEMORY.md tail — read once per turn behind the only await in
    *  this plane, so the caller passes it rather than re-reading per step. */
   readonly memoryTail: string | undefined;
@@ -75,8 +83,14 @@ export function subordinateDelegatesOf(
  */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
+  const { profile } = input;
 
   return agentDynamicContext({
+    mode: {
+      workMode: profile.workMode,
+      planSubmission: profile.allowedTools.includes(SUBMIT_PLAN_TOOL) && input.tools[SUBMIT_PLAN_TOOL] !== undefined,
+    },
+    craftedTools: craftedToolDeclarations(input.tools, profile),
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),

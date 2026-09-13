@@ -1,0 +1,33 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/unit-dynamic-context-binding.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+67 | 
+68 | test('a workspace craft is not advertised when no callable resolver was supplied', () => {
+69 |   const o = setup();
+70 |   o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input' });
+71 | 
+72 |   expect(collect(o).craftedTools ?? []).toEqual([]);
+                                             ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "code": "(input) => input",
++     "description": "Echo from the workspace",
++     "name": "secret_echo",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 7
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/core/tests/unit-dynamic-context-binding.test.ts:72:41)
+(fail) a workspace craft is not advertised when no callable resolver was supplied [8.18ms]
+
+ 0 pass
+ 13 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [147.00ms]

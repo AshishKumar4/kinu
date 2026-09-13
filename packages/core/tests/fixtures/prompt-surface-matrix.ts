@@ -24,6 +24,7 @@
  */
 
 import type { SystemPromptOptions } from '../../src/prompt';
+import type { DynamicContext } from '../../src/prompting/volatile-context';
 import { BUILTIN_TOOLS } from '../../src/tools/registry';
 import { BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel } from '../../src/profiles';
 import type { PromptExecutorInfo } from '../../src/prompting/surface';
@@ -85,6 +86,7 @@ const ALL_TOOLS = [...BUILTIN_TOOLS];
 export interface PromptCase {
   readonly name: string;
   readonly opts: SystemPromptOptions;
+  readonly mode?: DynamicContext['mode'];
 }
 
 function rolePromptCase(
@@ -110,7 +112,6 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
       availableTools: ALL_TOOLS,
       executors: [WORKSPACE, SANDBOX, LAPTOP],
       backend: 'cf',
-      workMode: 'build',
       temporaryAsk: true,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
       currentDate: '2026-01-01',
@@ -171,22 +172,20 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   },
   {
     name: 'plan-mode-with-submission',
+    mode: { workMode: 'plan', planSubmission: true },
     opts: {
       availableTools: ALL_TOOLS,
       executors: [WORKSPACE],
       backend: 'cf',
-      workMode: 'plan',
-      planSubmissionAvailable: true,
     },
   },
   {
     name: 'plan-mode-without-submission',
+    mode: { workMode: 'plan', planSubmission: false },
     opts: {
       availableTools: ALL_TOOLS,
       executors: [WORKSPACE],
       backend: 'cf',
-      workMode: 'plan',
-      planSubmissionAvailable: false,
     },
   },
   ...Object.entries(BUILTIN_ROLE_DEFINITIONS).map(([id, role]) => rolePromptCase(id, role)),

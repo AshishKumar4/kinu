@@ -30,6 +30,7 @@
 import { Agent, getAgentByName } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { JsonValue, CraftedTool } from '@kinu.run/core';
+import { craftedToolDeclarations, DynamicContextLedger } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createExecuteToolsFactory } from '../../src/execute-tools';
@@ -99,12 +100,22 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     });
 
     const call = (mode: WorkMode) => host.bindingCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'CALCULATE', { member: 'call', args: [{ n: 21 }], invocation: null });
+    const tool = factory.toolFor({});
+    const declarations = () => craftedToolDeclarations({ execute_tools: tool }, { workMode: 'build', allowedTools: ['execute_tools'] });
+    const before = declarations();
     const first = await call('build');
     crafted.code = 'async ({n}) => n*3';
+    crafted.description = 'Triple';
     const second = await call('build');
     const planned = await call('plan');
+    const ledger = new DynamicContextLedger();
+    ledger.weave([{ role: 'user', content: 'inspect' }], { executors: [{ name: 'sandbox', available: true, configured: true, status: 'idle' }] });
 
-    return JSON.stringify({ first, second, planned });
+    const updated = ledger.weave([{ role: 'user', content: 'inspect' }, { role: 'assistant', content: 'connected' }], {
+      executors: [{ name: 'sandbox', available: true, configured: true, active: true, status: 'active' }],
+    });
+
+    return JSON.stringify({ first, second, planned, declarations: { before, after: declarations() }, delta: updated.at(-1)?.content });
   }
 
   async exercise(family: SlateActorFamily): Promise<{ answer: JsonValue; browserCallable: boolean }> {

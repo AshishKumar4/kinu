@@ -1,0 +1,453 @@
+{
+  "latest": {
+    "at": 1789318282918,
+    "runId": "run-c0zy6qhvesi6v69pfyvck",
+    "stepIndex": 2,
+    "usage": {
+      "input": 20787,
+      "output": 23,
+      "cacheRead": 20096,
+      "neurons": 572.1418337225914
+    },
+    "context": {
+      "segments": [
+        {
+          "plane": "system",
+          "label": "Soul",
+          "chars": 19,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Mission",
+          "chars": 130,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Role: General (general)",
+          "chars": 1401,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Operating guidance",
+          "chars": 313,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Execution environments",
+          "chars": 3666,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Tools available this turn",
+          "chars": 934,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Persistence",
+          "chars": 581,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Code execution and learned capabilities",
+          "chars": 767,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Delegation",
+          "chars": 513,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Background work",
+          "chars": 639,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Verification",
+          "chars": 389,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Output format",
+          "chars": 175,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Skills",
+          "chars": 589,
+          "items": 1
+        },
+        {
+          "plane": "system",
+          "label": "Runtime context",
+          "chars": 99,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "read",
+          "chars": 1192,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "write",
+          "chars": 385,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "edit",
+          "chars": 626,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "list",
+          "chars": 1140,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "find",
+          "chars": 357,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "grep",
+          "chars": 1154,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "delete",
+          "chars": 350,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "bash",
+          "chars": 664,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "execute_tools",
+          "chars": 37475,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "run",
+          "chars": 2433,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "file",
+          "chars": 2927,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "memory",
+          "chars": 2180,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "tasks",
+          "chars": 2673,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "web",
+          "chars": 1385,
+          "items": 1
+        },
+        {
+          "plane": "tools",
+          "label": "agents",
+          "chars": 21182,
+          "items": 1
+        },
+        {
+          "plane": "messages",
+          "label": "user",
+          "chars": 331,
+          "items": 3
+        },
+        {
+          "plane": "messages",
+          "label": "assistant",
+          "chars": 1478,
+          "items": 5
+        },
+        {
+          "plane": "messages",
+          "label": "tool",
+          "chars": 400,
+          "items": 3
+        },
+        {
+          "plane": "ephemeral",
+          "label": "dynamic_context",
+          "chars": 1003,
+          "items": 1
+        }
+      ],
+      "measuredChars": 89550,
+      "charsPerToken": 4,
+      "estimatedTokens": 22388
+    }
+  },
+  "contextWindow": 1310720,
+  "telemetry": {
+    "steps": 6,
+    "windowLimit": 400,
+    "tokens": {
+      "input": 124025,
+      "output": 317,
+      "cacheRead": 82432,
+      "neurons": 7368.847152620554
+    },
+    "cacheHit": {
+      "samples": 6,
+      "last": 0.9667580699475634,
+      "mean": 0.6653493214160433,
+      "p95": 0.9969140337986775,
+      "ema": 0.7507909297017512,
+      "emaAlpha": 0.2
+    },
+    "usd": 0.08105731999999999,
+    "pricedSteps": 6,
+    "unpricedSteps": 0,
+    "stepsWithoutUsage": 0
+  },
+  "spend": {
+    "producers": [
+      {
+        "source": "agent",
+        "calls": 6,
+        "callsWithoutUsage": 0,
+        "usage": {
+          "input": 124025,
+          "output": 317,
+          "cacheRead": 82432,
+          "neurons": 7368.847152620554
+        },
+        "unpricedCalls": 0,
+        "floorPricedCalls": 0,
+        "usd": 0.08105731999999999
+      },
+      {
+        "source": "fast",
+        "calls": 4,
+        "callsWithoutUsage": 0,
+        "usage": {
+          "input": 1339,
+          "output": 5353,
+          "cacheRead": 0,
+          "neurons": 2311.6182250976562
+        },
+        "unpricedCalls": 0,
+        "floorPricedCalls": 0,
+        "usd": 0.0254278
+      }
+    ],
+    "total": {
+      "calls": 10,
+      "callsWithoutUsage": 0,
+      "usage": {
+        "input": 125364,
+        "output": 5670,
+        "cacheRead": 82432,
+        "neurons": 9680.46537771821
+      },
+      "unpricedCalls": 0,
+      "floorPricedCalls": 0,
+      "usd": 0.10648511999999999
+    },
+    "coverage": {
+      "calls": 10,
+      "measured": 10,
+      "reported": 1,
+      "silent": [],
+      "partial": []
+    },
+    "offTurnShare": 0.05107071447105332,
+    "missions": []
+  },
+  "log": [
+    {
+      "event": "gettools_end",
+      "detail": "rebuilt — 7 tools",
+      "elapsedMs": 0,
+      "createdAt": 1789317954231
+    },
+    {
+      "event": "gettools_rebuilding",
+      "detail": " → build:execute_tools,run,file,agents,memory,tasks,web::0:0:0",
+      "elapsedMs": 0,
+      "createdAt": 1789317954231
+    },
+    {
+      "event": "mcp_tools_served",
+      "detail": "0 tools",
+      "elapsedMs": 118,
+      "createdAt": 1789317954349
+    },
+    {
+      "event": "beforeturn",
+      "detail": "streamText() called next",
+      "elapsedMs": 296,
+      "createdAt": 1789317954527
+    },
+    {
+      "event": "system_prompt_hash",
+      "detail": "1e788b74c3eec63e",
+      "elapsedMs": 296,
+      "createdAt": 1789317954527
+    },
+    {
+      "event": "first_chunk",
+      "detail": null,
+      "elapsedMs": 2384,
+      "createdAt": 1789317956615
+    },
+    {
+      "event": "step_finish",
+      "detail": "step 1 kind=tool-call reason=tool-calls textLen=0 tools=1[file] results=1 input=20415 output=223 cacheRead=20352 neurons=578.2654624283314 model=@cf/zai-org/glm-5.3",
+      "elapsedMs": 7890,
+      "createdAt": 1789317962121
+    },
+    {
+      "event": "tool_call_end",
+      "detail": "file (0ms)",
+      "elapsedMs": 7890,
+      "createdAt": 1789317962121
+    },
+    {
+      "event": "step_finish",
+      "detail": "step 2 kind=text reason=stop textLen=4 tools=0[] results=0 input=20661 output=3 cacheRead=1792 neurons=2445.0654785335064 model=@cf/zai-org/glm-5.3",
+      "elapsedMs": 76485,
+      "createdAt": 1789318030716
+    },
+    {
+      "event": "response_complete",
+      "detail": "completed",
+      "elapsedMs": 76485,
+      "createdAt": 1789318030716
+    },
+    {
+      "event": "system_prompt_hash",
+      "detail": "1e788b74c3eec63e (stable)",
+      "elapsedMs": 62,
+      "createdAt": 1789318031425
+    },
+    {
+      "event": "beforeturn",
+      "detail": "streamText() called next",
+      "elapsedMs": 62,
+      "createdAt": 1789318031425
+    },
+    {
+      "event": "mcp_tools_served",
+      "detail": "0 tools",
+      "elapsedMs": 62,
+      "createdAt": 1789318031425
+    },
+    {
+      "event": "first_chunk",
+      "detail": null,
+      "elapsedMs": 9859,
+      "createdAt": 1789318041222
+    },
+    {
+      "event": "tool_call_end",
+      "detail": "file (0ms)",
+      "elapsedMs": 9936,
+      "createdAt": 1789318041299
+    },
+    {
+      "event": "step_finish",
+      "detail": "step 1 kind=tool-call reason=tool-calls textLen=0 tools=1[file] results=1 input=20685 output=19 cacheRead=20096 neurons=557.5600220561028 model=@cf/zai-org/glm-5.3",
+      "elapsedMs": 9939,
+      "createdAt": 1789318041302
+    },
+    {
+      "event": "step_finish",
+      "detail": "step 2 kind=text reason=stop textLen=52 tools=0[] results=0 input=20714 output=32 cacheRead=20096 neurons=566.4508791863918 model=@cf/zai-org/glm-5.3",
+      "elapsedMs": 61690,
+      "createdAt": 1789318093053
+    },
+    {
+      "event": "response_complete",
+      "detail": "completed",
+      "elapsedMs": 61690,
+      "createdAt": 1789318093053
+    },
+    {
+      "event": "system_prompt_hash",
+      "detail": "1e788b74c3eec63e (stable)",
+      "elapsedMs": 63,
+      "createdAt": 1789318093821
+    },
+    {
+      "event": "mcp_tools_served",
+      "detail": "0 tools",
+      "elapsedMs": 63,
+      "createdAt": 1789318093821
+    },
+    {
+      "event": "beforeturn",
+      "detail": "streamText() called next",
+      "elapsedMs": 63,
+      "createdAt": 1789318093821
+    },
+    {
+      "event": "first_chunk",
+      "detail": null,
+      "elapsedMs": 187285,
+      "createdAt": 1789318281043
+    },
+    {
+      "event": "tool_call_end",
+      "detail": "run (0ms)",
+      "elapsedMs": 187347,
+      "createdAt": 1789318281105
+    },
+    {
+      "event": "step_finish",
+      "detail": "step 1 kind=tool-call reason=tool-calls textLen=0 tools=1[run] results=1 input=20763 output=17 cacheRead=0 neurons=2649.36347669363 model=@cf/zai-org/glm-5.3",
+      "elapsedMs": 187366,
+      "createdAt": 1789318281124
+    },
+    {
+      "event": "step_finish",
+      "detail": "step 2 kind=text reason=stop textLen=58 tools=0[] results=0 input=20787 output=23 cacheRead=20096 neurons=572.1418337225914 model=@cf/zai-org/glm-5.3",
+      "elapsedMs": 189160,
+      "createdAt": 1789318282918
+    },
+    {
+      "event": "response_complete",
+      "detail": "completed",
+      "elapsedMs": 189160,
+      "createdAt": 1789318282918
+    }
+  ]
+}

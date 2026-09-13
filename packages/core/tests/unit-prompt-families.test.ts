@@ -19,7 +19,7 @@ const full = PROMPT_MATRIX.find(({ name }) => name === 'cf-full-surface');
 
 if (!full) throw new Error('Full prompt proof surface is missing');
 
-// Upper-bound fixture: the longest role, Plan and submission, external tools,
+// Upper-bound system fixture: the longest role, static mode policy, external tools,
 // all executor/preview branches, both instruction trust tiers, active skills,
 // every delegation action and root doctrine. Mutually exclusive arms retain
 // their independent coverage in PROMPT_MATRIX.
@@ -27,8 +27,7 @@ const ALL_SECTIONS: SystemPromptOptions = {
   ...full.opts,
   identity: { workspace: 'Budget workspace', agent: 'Budget actor' },
   roleSection: { id: 'task', label: 'Task', instructions: BUILTIN_ROLE_DEFINITIONS.task.instructions },
-  workMode: 'plan',
-  planSubmissionAvailable: true,
+
   externalTools: [{ name: 'docs.search', source: 'mcp', description: 'Search connected documentation.' }],
   executors: full.opts.executors?.map((executor) => ({ ...executor, capabilities: ['net_inbound'] })),
 };

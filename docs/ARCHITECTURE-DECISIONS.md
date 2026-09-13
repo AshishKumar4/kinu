@@ -10,12 +10,30 @@ entry names it and re-runs its measurement. Subsystems with their own log:
 
 C1. Runtime and environment facts ride a tail block after the immutable
 conversation. The system prompt is byte-stable across steps; the conversation
-is durable; per-step facts (executor state, pending work, the date at day
-granularity) are rendered into a dynamic-context ledger whose blocks are
-frozen at birth and appended, later blocks superseding earlier ones. Decided
+is durable; per-step facts (executor state and pending work) are rendered into
+a dynamic-context ledger whose blocks are frozen at birth and appended, later
+updates superseding the named facts. Decided
 2026-09-03 (staged-context cutover); reviewed 2026-09-13 against
 `prompting/volatile-context.ts` and `orchestrator/turn-context.ts`; pinned by
-`unit-volatile-context.test.ts`.
+`unit-volatile-context.test.ts`. On 2026-09-13, current mode and submission
+availability moved here; their conditional policy stays in the original
+Markdown/GEPA `guidance/operating` section. The reader receives the profile
+already bound to inference, not an ambient fallback. Build→Plan keeps the
+same system bytes; actual file-write pins retain Plan refusal and Build use.
+Same-guard lead duplication funds the static policy: the 26-case matrix is
+229,207 bytes under its unchanged 229,498-byte ceiling. The representative
+Operating guidance ceiling was deliberately re-pinned from 460 to its exact
+878 characters; an 880-character mutant fails it. The 4,800-byte GEPA cap and
+all 18 section IDs stay unchanged.
+The first nonempty activation/reset snapshot is full; later changes, including
+across turns and to empty state, append deltas. Executor differences use
+structured snapshots keyed by name. A missing crafted-callable reader declares
+none; supplied readers describe the actual installed sandbox resolver, not the
+workspace store. Compaction renders the one stored state and cannot revive
+cleared facts. The original fixed two-change
+file-read control saved 340 and 177 bytes per append (706→366, 570→393),
+including the full/delta tag and explanatory header; this is a byte
+measurement, not a provider-token estimate.
 
 C2. The provider cache is addressed per provider, markers placed last. Anthropic
 gets four breakpoints (one after tools, one at the end of the system prompt,

@@ -169,8 +169,8 @@ describe('a candidate that cannot ship is never scored', () => {
       actor: rt.actor,
       sectionId: 'guidance/operating',
       evalSet: EVAL_SET,
-      // Drops every slot and flag the builder supplies values for. Rendering
-      // this would silently lose the stance guidance and the plan-mode bar.
+      // Drops the family slot. Mode guidance is now runtime-owned ledger
+      // content, so GEPA cannot change its permissions by editing this section.
       reflectionLm: async () => contractBreaker,
       metric: async (source) => {
         scored.add(source);

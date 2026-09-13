@@ -2,6 +2,7 @@
 // Catches drift: stale tool references, missing capability sections, execution
 // guidance, and that registered-executors render correctly.
 import { describe, test, expect } from 'bun:test';
+import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
 import {
   assertToolsSupportedByModel,
   buildSystemPromptSync,
@@ -18,6 +19,9 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   turnLocalContextMessage,
+  renderDynamicContextBlock,
+  DynamicContextLedger, collectDynamicContext, createAgentStores, initWorkspaceSchema,
+  buildBuiltinTools, runChat, permitInPlan, toolsInWorkMode, resolveTurnProfile, profileCatalogDigest,
   splitPromptSections,
   AGENTS_TOOL_ACTIONS,
   BUILTIN_SKILLS,
@@ -27,12 +31,14 @@ import {
   type PromptExecutorInfo,
 } from '../src/index';
 import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
-import { DELEGATION_SECTION } from '../src/prompting/section-templates';
+import { DELEGATION_SECTION, OPERATING_GUIDANCE } from '../src/prompting/section-templates';
+import type { SystemPromptOptions } from '../src/prompt';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,
   type SwarmInput,
 } from '../src/strategy/swarm';
-import { createTestRuntime } from '@kinu.run/test-utils';
+import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
+import { makeSqlExec } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
 /**
@@ -1130,17 +1136,13 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('success criteria');
   });
 
-  test('adds mode overlays only when requested', () => {
-    const { rt } = createTestRuntime();
-    const plan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
-    expect(plan).toContain('submit_plan');
-    expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
-    expect(plan).toContain('Do not expose ports or produce preview or output links');
-    expect(plan).toContain('Until the plan is approved, do not begin implementation');
+  test('the live ledger carries both plan-submission variants', () => {
+    const plan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: true } });
+    expect(plan).toContain('Mode: plan; submit_plan: available.');
 
-    const delegatedPlan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: false });
-    expect(delegatedPlan).toContain('report concrete findings to the parent Plan turn');
-    expect(delegatedPlan).not.toContain('End by calling `submit_plan`');
+    const delegatedPlan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: false } });
+    expect(delegatedPlan).toContain('Mode: plan; submit_plan: unavailable.');
+    expect(delegatedPlan).not.toContain('investigate and report');
   });
 
   test('a background-job wake reaches the resume guidance even though it also carries a work mode', () => {
@@ -1151,9 +1153,9 @@ describe('buildSystemPromptSync', () => {
     // written to stop the agent re-doing or polling settled work, never
     // reached a model on the real wake path. The two axes are read from
     // different keys now, so the wake carries the overlay AND its permission
-    // — but through different TIERS: the permission is a bar and rides the
-    // cacheable prefix, the overlay is per-turn and rides the turn's own
-    // message, so a wake landing mid-session no longer rewrites the prefix.
+    // — through distinct planes: static policy in the system, current mode in
+    // the ledger, and provenance in the turn-local tail. A wake does not
+    // rewrite the policy prefix.
     const wake = { kinuEvent: 'background_job', kinuMode: 'build' };
     expect(turnProvenanceForMetadata(wake)).toBe('background_resume');
     expect(workModeForTurnMetadata(wake)).toBe('build');
@@ -1162,18 +1164,17 @@ describe('buildSystemPromptSync', () => {
 
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
-      workMode: workModeForTurnMetadata(wake),
     });
 
     expect(prompt).not.toContain('the referenced job result first');
     expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(wake) })!.content))
       .toContain('the referenced job result first');
 
-    // A Plan job's wake keeps BOTH: the read-only bar in the prefix, the
-    // resume overlay in the turn.
+    // A Plan wake keeps both its mode fact and its resume overlay.
     const planWake = { kinuEvent: 'background_job', kinuMode: 'plan' };
-    const planPrompt = buildSystemPromptSync(rt, { workMode: workModeForTurnMetadata(planWake) });
-    expect(planPrompt).toContain('Do not change project files, system resources, releases, or deployments');
+    const planPrompt = renderDynamicContextBlock({ mode: { workMode: workModeForTurnMetadata(planWake), planSubmission: false } });
+    expect(planPrompt).toContain('Mode: plan;');
+    expect(prompt).toContain('In Plan, inspect and research only.');
     expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(planWake) })!.content))
       .toContain('the referenced job result first');
   });
@@ -1195,15 +1196,13 @@ describe('buildSystemPromptSync', () => {
     expect(workModeForTurnMetadata(null)).toBe('build');
   });
 
-  test('Auto (the build work mode) adds nothing at all, byte for byte', () => {
-    // Auto IS the absence of constraint, so it renders nothing. A
-    // `- Turn mode: build` line ~350 bytes into the CACHEABLE prefix announces
-    // a mode with no guidance branch and stops an Auto turn and an otherwise
-    // identical chat turn from sharing a provider prefix cache.
+  test('the Build value belongs to the ledger, not the static prefix', () => {
+    // Static conditional policy remains in the system. The Build value must
+    // clear an earlier Plan fact without rewriting that policy prefix.
     const { rt } = createTestRuntime();
     const base = { backend: 'cf' as const, model: { id: 'x' }, currentDate: '2026-01-01' };
-    expect(buildSystemPromptSync(rt, { ...base, workMode: 'build' }))
-      .toBe(buildSystemPromptSync(rt, base));
+    expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: false } }))
+      .toContain('Mode: build; submit_plan: unavailable.');
     expect(buildSystemPromptSync(rt, base)).not.toContain('Turn mode');
   });
 
@@ -1263,40 +1262,87 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('a role never widens Plan mode', () => {
-    const { rt } = createTestRuntime();
+  test('root and child provider requests carry static Plan policy and live reach without widening execution', async () => {
+    const { rt, testSql } = createTestRuntime();
+    initWorkspaceSchema({ sql: testSql.sql, execRaw: testSql.execRaw, exec: makeSqlExec(testSql.db) });
+    const actors = createTestActors(testSql.sql, testSql.execRaw);
+    const catalog = { roles: {}, tiers: { default: { model: 'test' } } };
 
-    const planOnly = buildSystemPromptSync(rt, {
-      workMode: 'plan',
-      planSubmissionAvailable: true,
-    });
+    try {
+      for (const actor of [actors.main, actors.sibling('child')]) {
+        const subject = { ...rt, actor };
+        const stores = createAgentStores(() => testSql.sql, () => actor, rt.storage.transactionSync);
 
-    for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
-      const prompt = buildSystemPromptSync(rt, {
-        workMode: 'plan',
-        planSubmissionAvailable: true,
-        roleSection: {
-          id,
-          label: deriveRoleLabel(id),
-          instructions: role.instructions,
-        },
-      });
+        for (const id of Object.keys(BUILTIN_ROLE_DEFINITIONS)) {
+          const ledger = new DynamicContextLedger();
+          const history: ModelMessage[] = [];
+          let previousSystem: string | undefined;
 
-      expect(prompt).toContain('Do not change project files, system resources, releases, or deployments');
-      expect(prompt).toContain('Until the plan is approved, do not begin implementation');
-      expect(prompt).toContain('Do not expose ports or produce preview or output links');
+          for (const phase of id === 'task' ? [0, 1, 2] : [0, 1]) {
+            const mode = phase === 2 ? 'build' : 'plan';
+            const path = `/mode-${actor.name}-${id}-${phase}.txt`;
+            await subject.storage.vfs.writeFile(path, 'original');
+            const file = buildBuiltinTools({ rt: subject }).file;
 
-      for (const line of planOnly.split('\n')) expect(prompt).toContain(line);
+            if (!file) throw new Error('missing file tool');
+            const tools: ToolSet = { file };
+
+            if (phase === 0) tools.submit_plan = permitInPlan(tool({
+              description: 'Submit the plan for review', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'submitted',
+            }));
+
+            const profile = resolveTurnProfile({
+              envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+              provider: { revision: '1', availableModels: ['test'] }, roleId: id, workMode: mode,
+              availableTools: Object.keys(tools), activeSkills: [],
+            });
+
+            const system = buildSystemPromptSync(subject, { availableTools: ['file'], roleSection: profile.role });
+
+            if (previousSystem !== undefined) expect(system).toBe(previousSystem);
+            previousSystem = system;
+            let calls = 0;
+
+            const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+              const step = calls++;
+
+              return {
+                content: step < 2
+                  ? [{ type: 'tool-call', toolName: 'file', toolCallId: `file-${phase}-${step}`,
+                    input: JSON.stringify(step === 0 ? { action: 'read', path } : { action: 'write', path, content: 'changed' }) }]
+                  : [{ type: 'text', text: 'done' }],
+                finishReason: { unified: step < 2 ? 'tool-calls' : 'stop', raw: undefined },
+                usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+              };
+            } });
+
+            history.push({ role: 'user', content: 'Try the requested file operation.' });
+            const callableTools = toolsInWorkMode(profile.workMode, tools);
+
+            for await (const event of runChat({ model, system, history, tools: callableTools,
+              dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, memoryTail: undefined, missingCapabilities: [] }) },
+            })) {
+              if (event.type === 'done') history.push(...event.responseMessages);
+            }
+
+            expect(model.doStreamCalls).toHaveLength(3);
+            const request = model.doStreamCalls[0];
+            const instructions = request?.prompt.find((message) => message.role === 'system');
+
+            expect(instructions?.content).toContain('In Plan, inspect and research only.');
+            expect(instructions?.content).toContain('Implementation waits for an approved Build turn.');
+            const facts = request?.prompt.filter((message) => message.role === 'user').at(-1);
+            expect(JSON.stringify(facts)).toContain(`Mode: ${mode}; submit_plan: ${phase === 0 ? 'available' : 'unavailable'}.`);
+            expect(JSON.stringify(facts)).not.toContain('Do not change project files');
+            expect(await subject.storage.vfs.readFile(path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))
+              .toBe(mode === 'build' ? 'changed' : 'original');
+          }
+        }
+      }
+    } finally {
+      testSql.close();
     }
-
-    expect(compilePromptSurface({
-      workMode: 'plan',
-      roleSection: {
-        id: 'task',
-        label: 'Task',
-        instructions: BUILTIN_ROLE_DEFINITIONS.task.instructions,
-      },
-    }).workMode).toBe('plan');
   });
 
   test('renders the date-only current date in runtime context', () => {
@@ -1329,7 +1375,10 @@ describe('buildSystemPromptSync', () => {
       // section's own opening forty lines above it, and both of its triggers
       // are mechanised — turn-steering states them at the step where the
       // decision is still open, which is the version that measurably converts.
-      'Operating guidance': 460,
+      // 2026-09-13: current mode stays dynamic; reviewed conditional Plan
+      // policy is restored here. Exact measured 878, with no local headroom.
+      // The 26-case matrix and 4,800-byte GEPA ceilings are unchanged.
+      'Operating guidance': 878,
       // +2 summary lines for the team/peers split + the subordinate report
       // tool (2026-07, Subordinates A2). Real actors advertise a
       // deps-filtered subset; this representative surface carries all three.
@@ -1499,24 +1548,32 @@ describe('buildSystemPromptSync', () => {
 
     const { rt } = createTestRuntime();
 
-    const prompt = buildSystemPromptSync(rt, {
+    const options = {
       backend: 'cf',
       registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'laptop'],
       currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
+    } satisfies SystemPromptOptions;
+
+    const problems = (prompt: string): string[] => {
+      const sections = new Map(splitPromptSections(prompt).map((section) => [section.title, section.chars]));
+
+      return Object.entries(BUDGETS).flatMap(([title, budget]) => {
+        const size = sections.get(title);
+
+        if (size === undefined) return [`section "${title}" missing from the prompt`];
+
+        return size > budget ? [`section "${title}" is ${size} chars — over its ${budget}-char budget`] : [];
+      });
+    };
+
+    expect(problems(buildSystemPromptSync(rt, options))).toEqual([]);
+
+    const grown = buildSystemPromptSync(rt, { ...options,
+      sectionOverrides: { 'guidance/operating': OPERATING_GUIDANCE.source + '\nX' },
     });
 
-    const sections = new Map(splitPromptSections(prompt).map((s) => [s.title, s.chars]));
-    const problems: string[] = [];
-
-    for (const [title, budget] of Object.entries(BUDGETS)) {
-      const size = sections.get(title);
-
-      if (size === undefined) problems.push(`section "${title}" missing from the prompt`);
-      else if (size > budget) problems.push(`section "${title}" is ${size} chars — over its ${budget}-char budget`);
-    }
-
-    expect(problems).toEqual([]);
+    expect(problems(grown)).toEqual(['section "Operating guidance" is 880 chars — over its 878-char budget']);
   });
 
   test('does NOT promise unimplemented or redundant strategies', () => {

@@ -127,17 +127,10 @@ export interface PromptSurfaceOptions {
   temporaryAsk?: boolean;
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
-  /** What the turn may do. Defaults to `build` — Auto, the absence of
-   *  constraint — which renders no guidance at all. */
-  workMode?: WorkMode;
   /** The one Role section this turn renders, from the resolved turn profile.
    *  Absent renders nothing — an actor resolved without a profile authority
    *  keeps its plain surface. */
   roleSection?: { id: string; label: string; instructions: string };
-  /** Whether this Plan actor owns the submit_plan completion boundary. A
-   * delegated turn reports to its parent; an owner chat can own an independent
-   * review even when the actor is an additional agent. */
-  planSubmissionAvailable?: boolean;
   /** The names this agent and its workspace answer to. Absent, and blank
    *  either way, render nothing. */
   identity?: PromptIdentity;
@@ -153,8 +146,6 @@ export interface PromptSurface {
   selectableExecutors: PromptExecutorInfo[];
   model: PromptModelProfile;
   backend?: PromptBackend;
-  workMode: WorkMode;
-  planSubmissionAvailable: boolean;
   roleSection: { id: string; label: string; instructions: string } | null;
   identity: ResolvedPromptIdentity;
 }
@@ -294,8 +285,6 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     model: resolvePromptModelProfile(opts.model),
     roleSection: opts.roleSection ?? null,
     backend: opts.backend,
-    workMode: opts.workMode ?? 'build',
-    planSubmissionAvailable: opts.planSubmissionAvailable ?? false,
     // `|| null`, not `??`: the empty string is what a fresh workspace's title
     // is until its first prompt names it, and whitespace is not a name either.
     identity: {
