@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-13",
-  "files": 2207,
-  "functions": 55094,
+  "files": 2217,
+  "functions": 55264,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -23,7 +23,7 @@
     },
     {
       "key": "scripts/bench-devbox-strategies.ts#measureArm",
-      "complexity": 77
+      "complexity": 76
     },
     {
       "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
@@ -163,10 +163,6 @@
     },
     {
       "key": "scripts/axis-ergonomics/report.ts#score",
-      "complexity": 39
-    },
-    {
-      "key": "scripts/bench-devbox-strategies.ts#readChainCutCell",
       "complexity": 39
     },
     {

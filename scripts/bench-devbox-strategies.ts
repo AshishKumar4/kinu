@@ -3218,11 +3218,27 @@ export interface ControlWitnessFacts {
   };
 }
 
-/** A committed marker reads through the composed lower on a new boot, stays
- * out of the fresh upper, and attaches without payload or index-page reads. */
-function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | undefined): WitnessCheck {
-  if (cell === undefined) return absentCell(name);
+/** The marker half's three observations, named so the detail line can say
+ *  which one failed rather than which expression did. */
+interface ChunkedMarkerObservation {
+  readonly manifest: boolean;
+  readonly merged: boolean;
+  readonly upperAbsent: boolean;
+}
 
+/** The composed-restore half's three observations: the boot is new, the
+ *  attach read no payload bytes, and the layers and record are what a
+ *  composed restore leaves behind. */
+interface ChunkedRestoreObservation {
+  readonly cold: boolean;
+  readonly zeroPayload: boolean;
+  readonly mountedAndAdvanced: boolean;
+}
+
+/** The marker half of the chunked-absorption witness: the delta's manifest
+ * names the committed file, the merged view serves it, and the fresh upper
+ * proves it was NOT copied. */
+function chunkedMarkerObserved(cell: ChunkedAbsorptionFacts): ChunkedMarkerObservation {
   const manifest = cell.manifestRead?.ok === true && cell.manifestRead.exitCode === 0
     && cell.manifest !== null && v.safeParse(DeltaManifestSchema, cell.manifest).success
     && cell.manifest.files.some((file) => file.p === cell.markerPath);
@@ -3234,6 +3250,13 @@ function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | u
     && cell.markerInUpper.error === null && cell.markerInUpper.reply?.ok === true
     && cell.markerInUpper.reply.exitCode === 0 && cell.markerInUpper.evidence?.kind === 'missing';
 
+  return { manifest, merged, upperAbsent };
+}
+
+/** The composed-restore half: a NEW boot served the marker through a mounted
+ * chunked lower with zero payload reads, and the next publication kept the
+ * record on the same base with a delta still named. */
+function chunkedRestoreObserved(cell: ChunkedAbsorptionFacts): ChunkedRestoreObservation {
   const boot = cell.wake?.state.state?.bootId;
 
   const cold = boot !== undefined && cell.beforeState?.state?.bootId !== undefined
@@ -3243,16 +3266,31 @@ function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | u
   const zeroPayload = cell.blockReads !== null && cell.blockReads.payloadBytes === 0
     && cell.blockReads.indexPages === 0 && cell.blockReads.readRequests === 0;
 
-  const observed = manifest && merged && upperAbsent && cold && zeroPayload
-    && cell.sidecarMounted === true && cell.blockMounted === true
+  const mountedAndAdvanced = cell.sidecarMounted === true && cell.blockMounted === true
     && cell.mounts?.ok === true && cell.mounts.exitCode === 0
     && cell.before !== null && cell.after === cell.before && cell.afterNamesDelta === true
     && cell.nextCheckpoint?.ok === true && cell.nextCheckpoint.outcome?.kind === 'committed';
 
+  return { cold, zeroPayload, mountedAndAdvanced };
+}
+
+/** A committed marker reads through the composed lower on a new boot, stays
+ * out of the fresh upper, and attaches without payload or index-page reads. */
+function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | undefined): WitnessCheck {
+  if (cell === undefined) return absentCell(name);
+
+  const marker = chunkedMarkerObserved(cell);
+  const restore = chunkedRestoreObserved(cell);
+
+  const observed = marker.manifest && marker.merged && marker.upperAbsent
+    && restore.cold && restore.zeroPayload && restore.mountedAndAdvanced;
+
   return {
     name, observed,
-    detail: `chunked manifest ${manifest ? 'confirmed' : 'unobserved'}; marker merged=${merged} upper absent=${upperAbsent}; `
-      + `cold=${cold} sidecar mounted=${String(cell.sidecarMounted)} block mounted=${String(cell.blockMounted)} zero attach payload=${zeroPayload}; `
+    detail: `chunked manifest ${marker.manifest ? 'confirmed' : 'unobserved'}; `
+      + `marker merged=${marker.merged} upper absent=${marker.upperAbsent}; `
+      + `cold=${restore.cold} sidecar mounted=${String(cell.sidecarMounted)} block mounted=${String(cell.blockMounted)} `
+      + `zero attach payload=${restore.zeroPayload}; `
       + `next checkpoint=${cell.nextCheckpoint?.outcome?.kind ?? 'unobserved'}; `
       + `generation ${cell.before ?? 'unobserved'} to ${cell.after ?? 'unobserved'}`,
   };
@@ -3299,22 +3337,14 @@ function deltaLayerCollapseWitness(
   };
 }
 
-/** The historical witness name now requires two immutable objects and a
- * CAS-published record advance. A retained mounted key must not change. */
-function mutableDeltaWitness(
-  name: string,
-  cell: NonNullable<ControlWitnessFacts['mutableDelta']> | undefined,
-): WitnessCheck {
-  if (cell === undefined) return absentCell(name);
-
+/** The record-advance half of the mutable-delta witness: rev steps by one on
+ * the same base, a NEW immutable delta id is named under a key nobody had
+ * written before, and the publication committed. */
+function mutableDeltaAdvanced(cell: NonNullable<ControlWitnessFacts['mutableDelta']>): boolean {
   const before = cell.beforeState.state?.chain;
   const after = cell.afterState.state?.chain;
 
-  const preserved = cell.etagBefore.length > 0 && cell.retainedHead.ok === true
-    && cell.retainedHead.exists === true && cell.retainedHead.etag === cell.etagBefore
-    && cell.retainedHead.size === cell.bytesBefore && cell.bytesBefore > 0;
-
-  const advanced = before?.rev !== undefined && after?.rev === before.rev + 1
+  return before?.rev !== undefined && after?.rev === before.rev + 1
     && before.base?.id !== undefined && after.base?.id === before.base.id
     && before.delta?.id !== undefined && after.delta?.id !== undefined
     && before.delta.id !== after.delta.id
@@ -3322,6 +3352,24 @@ function mutableDeltaWitness(
     && cell.key === `${cell.afterState.storePrefix ?? ''}backups/${after.delta.id}/delta.sqsh`
     && cell.key !== cell.previousKey && cell.etagAfter.length > 0 && cell.bytesAfter > 0
     && cell.checkpoint.ok === true && cell.checkpoint.outcome?.kind === 'committed';
+}
+
+/** The historical witness name now requires two immutable objects and a
+ * CAS-published record advance. A retained mounted key must not change. */
+function mutableDeltaWitness(
+  name: string,
+  cell: NonNullable<ControlWitnessFacts['mutableDelta']> | undefined,
+): WitnessCheck {
+  if (cell === undefined) return absentCell(name);
+  const before = cell.beforeState.state?.chain;
+  const after = cell.afterState.state?.chain;
+
+  const preserved = cell.etagBefore.length > 0 && cell.retainedHead.ok === true
+    && cell.retainedHead.exists === true && cell.retainedHead.etag === cell.etagBefore
+    && cell.retainedHead.size === cell.bytesBefore && cell.bytesBefore > 0;
+
+
+  const advanced = mutableDeltaAdvanced(cell);
 
   return {
     name,
@@ -3463,6 +3511,119 @@ const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
 const CHAIN_STORE_MOUNT_DIR = '/backups';
 
 
+/** A chain or delta id is either present and well-formed or the cell cannot
+ *  name what it observed — the witness distinguishes "no id" from "wrong id"
+ *  nowhere, so both refusals read identically. */
+function requiredChainId(id: string | undefined, what: string): string {
+  if (id === undefined || !/^[a-zA-Z0-9-]+$/.test(id)) {
+    throw new Error(`the committed ${what} id is missing or invalid`);
+  }
+
+  return id;
+}
+
+/** HEAD one archived key through the fixture's /head endpoint — the cell and
+ * its witness both read presence and etag through this one reader. */
+async function headKey(fixture: Fixture, box: string, key: string): Promise<HeadReply> {
+  return await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
+}
+
+/**
+ * The chunked-absorption cell, extracted: publish a small marker delta, destroy
+ * the container without another quiesce, then observe the wake that restores
+ * it. One sample record accumulates every observation, so the witness judges
+ * facts rather than re-running the arm.
+ */
+async function observeChunkedAbsorption(
+  fixture: Fixture,
+  box: string,
+  facts: { -readonly [Key in keyof ControlWitnessFacts]: ControlWitnessFacts[Key] },
+): Promise<void> {
+  const marker = `chunked-absorption-${crypto.randomUUID()}`;
+  const markerFile = 'witness-chunked-absorption.txt';
+  const errors: string[] = [];
+
+  const sample: ChunkedAbsorptionSample = {
+    markerPath: markerFile, markerDigest: createHash('sha256').update(marker).digest('hex'),
+    manifest: null, manifestRead: null, markerInMerged: null, markerInUpper: null,
+    sidecarMounted: null, blockMounted: null, blockReads: null, mounts: null, before: null, after: null, afterNamesDelta: null,
+    nextCheckpoint: null, wake: null, errors,
+  };
+
+  facts.chunkedAbsorption = sample;
+  const harness = basename(HARNESS);
+  await execInBox(
+    fixture,
+    box,
+    `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
+    + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
+  );
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+
+  // A tick preserves the base; this cell needs a delta sidecar to restore.
+  const seeded = await checkpointOperation(
+    fixture, box, 'tick', 'chunked-absorption marker commit',
+  );
+
+  sample.seedCheckpoint = seeded;
+
+  if (seeded.outcome?.kind !== 'committed') {
+    throw new Error(
+      `the marker commit did not publish a delta to serve: `
+      + `${seeded.outcome?.kind ?? 'unknown'}${seeded.outcome?.reason === undefined ? '' : ` (${seeded.outcome.reason})`}`,
+    );
+  }
+
+  sample.beforeState = await boxState(fixture, box);
+  const chainId = requiredChainId(sample.beforeState.state?.chain?.base?.id, 'chain');
+  sample.before = chainId;
+  const deltaId = requiredChainId(sample.beforeState.state?.chain?.delta?.id, 'delta');
+  sample.deltaHead = await headKey(fixture, box, `${sample.beforeState.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`);
+  const manifestPoint = `${dirname(CHAIN_UPPER_DIR)}/witness-manifest`;
+  sample.manifestRead = await execInBox(fixture, box,
+    `mkdir -p '${manifestPoint}' && devbox-squashfuse '${CHAIN_STORE_MOUNT_DIR}/${deltaId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
+
+  if (sample.manifestRead.ok === true && sample.manifestRead.exitCode === 0 && sample.manifestRead.stdout !== undefined) {
+    try {
+      const manifest = v.safeParse(DeltaManifestSchema, JSON.parse(sample.manifestRead.stdout));
+
+      if (manifest.success) sample.manifest = manifest.output;
+      else errors.push(`chunked manifest: ${issueText(manifest.issues)}`);
+    } catch (error) {
+      errors.push(`chunked manifest: ${describeThrown({ cause: error })}`);
+    }
+  } else {
+    errors.push(sample.manifestRead.error ?? sample.manifestRead.stderr ?? 'the manifest observer did not complete');
+  }
+
+  sample.destroyReceipt = await destroyBox(fixture, box);
+  const startupObservations: StartupObservation[] = [];
+  sample.startupObservations = startupObservations;
+  sample.wake = await startupOperation(fixture, box, '/wake', 'chunked-absorption wake', ['attached'], { observations: startupObservations });
+  sample.blockReads = await readBlockAttachMetrics(fixture, box);
+  sample.mounts = await execInBox(fixture, box, 'cat /proc/mounts');
+
+  if (sample.mounts.ok === true && sample.mounts.exitCode === 0 && sample.mounts.stdout !== undefined) {
+    sample.sidecarMounted = mountAt(sample.mounts.stdout, `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null;
+    const block = mountAt(sample.mounts.stdout, `${dirname(CHAIN_UPPER_DIR)}/block-lower`);
+    sample.blockMounted = block?.fstype === 'fuse';
+  }
+
+  sample.markerInMerged = await readBoxFile(fixture, box, `${DEVBOX_WORK_DIR}/${markerFile}`);
+  sample.markerInUpper = await readBoxFile(fixture, box, `${CHAIN_UPPER_DIR}/${markerFile}`);
+
+  // A new write makes the next publication observable rather than a no-op.
+  await execInBox(
+    fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
+  );
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+  sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
+  sample.afterState = await boxState(fixture, box);
+  const next = sample.afterState.state?.chain;
+  sample.after = next?.base?.id ?? null;
+  sample.afterNamesDelta = next === undefined || next === null ? null : next.delta !== undefined && next.delta !== null;
+}
+
 /**
  * Run this arm's preregistered witness cells and answer what they observed.
  *
@@ -3493,9 +3654,6 @@ async function runControlWitnessCells(
     }
   };
 
-  const headKey = async (key: string): Promise<HeadReply> =>
-    await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
-
   // Pin the first archive in a live mount, so the next publication's sweep
   // must retain it and its exact pre-publication etag remains observable.
   await cell('mutable-delta', async () => {
@@ -3518,7 +3676,7 @@ async function runControlWitnessCells(
       etagAfter: after.etag,
       bytesBefore: before.bytes,
       bytesAfter: after.bytes,
-      retainedHead: await headKey(before.key),
+      retainedHead: await headKey(fixture, box, before.key),
       beforeState: before.state,
       afterState: after.state,
       checkpoint: after.checkpoint,
@@ -3527,93 +3685,7 @@ async function runControlWitnessCells(
   // Priced workloads are finished. Publish a small marker delta, then destroy
   // the container without another quiesce before observing chunked absorption.
   await cell('chunked-absorption', async () => {
-    const marker = `chunked-absorption-${crypto.randomUUID()}`;
-    const markerFile = 'witness-chunked-absorption.txt';
-    const errors: string[] = [];
-
-    const sample: ChunkedAbsorptionSample = {
-      markerPath: markerFile, markerDigest: createHash('sha256').update(marker).digest('hex'),
-      manifest: null, manifestRead: null, markerInMerged: null, markerInUpper: null,
-      sidecarMounted: null, blockMounted: null, blockReads: null, mounts: null, before: null, after: null, afterNamesDelta: null,
-      nextCheckpoint: null, wake: null, errors,
-    };
-
-    facts.chunkedAbsorption = sample;
-    const harness = basename(HARNESS);
-    await execInBox(
-      fixture,
-      box,
-      `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
-      + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
-    );
-    await delay(MIN_CHECKPOINT_INTERVAL_MS);
-
-    // A tick preserves the base; this cell needs a delta sidecar to restore.
-    const seeded = await checkpointOperation(
-      fixture, box, 'tick', 'chunked-absorption marker commit',
-    );
-
-    sample.seedCheckpoint = seeded;
-
-    if (seeded.outcome?.kind !== 'committed') {
-      throw new Error(
-        `the marker commit did not publish a delta to serve: `
-        + `${seeded.outcome?.kind ?? 'unknown'}${seeded.outcome?.reason === undefined ? '' : ` (${seeded.outcome.reason})`}`,
-      );
-    }
-
-    sample.beforeState = await boxState(fixture, box);
-    const chainId = sample.beforeState.state?.chain?.base?.id;
-
-    if (chainId === undefined || !/^[a-zA-Z0-9-]+$/.test(chainId)) throw new Error('the committed chain id is missing or invalid');
-    sample.before = chainId;
-    const deltaId = sample.beforeState.state?.chain?.delta?.id;
-
-    if (deltaId === undefined || !/^[a-zA-Z0-9-]+$/.test(deltaId)) throw new Error('the committed delta id is missing or invalid');
-    sample.deltaHead = await headKey(`${sample.beforeState.storePrefix ?? ''}backups/${deltaId}/delta.sqsh`);
-    const manifestPoint = `${dirname(CHAIN_UPPER_DIR)}/witness-manifest`;
-    sample.manifestRead = await execInBox(fixture, box,
-      `mkdir -p '${manifestPoint}' && devbox-squashfuse '${CHAIN_STORE_MOUNT_DIR}/${deltaId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
-
-    if (sample.manifestRead.ok === true && sample.manifestRead.exitCode === 0 && sample.manifestRead.stdout !== undefined) {
-      try {
-        const manifest = v.safeParse(DeltaManifestSchema, JSON.parse(sample.manifestRead.stdout));
-
-        if (manifest.success) sample.manifest = manifest.output;
-        else errors.push(`chunked manifest: ${issueText(manifest.issues)}`);
-      } catch (error) {
-        errors.push(`chunked manifest: ${describeThrown({ cause: error })}`);
-      }
-    } else {
-      errors.push(sample.manifestRead.error ?? sample.manifestRead.stderr ?? 'the manifest observer did not complete');
-    }
-
-    sample.destroyReceipt = await destroyBox(fixture, box);
-    const startupObservations: StartupObservation[] = [];
-    sample.startupObservations = startupObservations;
-    sample.wake = await startupOperation(fixture, box, '/wake', 'chunked-absorption wake', ['attached'], { observations: startupObservations });
-    sample.blockReads = await readBlockAttachMetrics(fixture, box);
-    sample.mounts = await execInBox(fixture, box, 'cat /proc/mounts');
-
-    if (sample.mounts.ok === true && sample.mounts.exitCode === 0 && sample.mounts.stdout !== undefined) {
-      sample.sidecarMounted = mountAt(sample.mounts.stdout, `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null;
-      const block = mountAt(sample.mounts.stdout, `${dirname(CHAIN_UPPER_DIR)}/block-lower`);
-      sample.blockMounted = block?.fstype === 'fuse';
-    }
-
-    sample.markerInMerged = await readBoxFile(fixture, box, `${DEVBOX_WORK_DIR}/${markerFile}`);
-    sample.markerInUpper = await readBoxFile(fixture, box, `${CHAIN_UPPER_DIR}/${markerFile}`);
-
-    // A new write makes the next publication observable rather than a no-op.
-    await execInBox(
-      fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
-    );
-    await delay(MIN_CHECKPOINT_INTERVAL_MS);
-    sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
-    sample.afterState = await boxState(fixture, box);
-    const next = sample.afterState.state?.chain;
-    sample.after = next?.base?.id ?? null;
-    sample.afterNamesDelta = next === undefined || next === null ? null : next.delta !== undefined && next.delta !== null;
+    await observeChunkedAbsorption(fixture, box, facts);
   });
 
   return { facts, notes };
@@ -3790,6 +3862,45 @@ async function probeReadOnlyLayer(
   };
 }
 
+/** Head every archive row the record names and report presence — plus the
+ *  post-cut delta's etag and the unreferenced-delta flag, which need the same
+ *  reads. A row the record does not name is not asked for. */
+async function readCutArchiveRows(
+  fixture: Fixture,
+  box: string,
+  rows: readonly ChainArchiveExpectation[],
+  evidence: CutEvidence,
+): Promise<{
+  readonly deltaRow: ChainArchiveExpectation | undefined;
+  readonly baseExists: boolean | null;
+  readonly deltaExists: boolean | null;
+  readonly unexpectedDelta: boolean | null;
+  readonly postDeltaEtag: string | null;
+}> {
+  const deltaRow = rows[1];
+  const baseRow = rows[0];
+  let baseExists: boolean | null = null;
+  let deltaExists: boolean | null = null;
+  let unexpectedDelta: boolean | null = false;
+  let postDeltaEtag: string | null = null;
+
+  if (baseRow !== undefined) {
+    const head = await readCutHead(fixture, box, baseRow.key, evidence);
+    baseExists = headPresence(head);
+  }
+
+  if (deltaRow !== undefined) {
+    const head = await readCutHead(fixture, box, deltaRow.key, evidence);
+    const exists = headPresence(head);
+    deltaExists = deltaRow.present ? exists : null;
+    unexpectedDelta = deltaRow.present ? false : exists;
+
+    if (deltaRow.present && head?.error === undefined) postDeltaEtag = head?.etag || null;
+  }
+
+  return { deltaRow, baseExists, deltaExists, unexpectedDelta, postDeltaEtag };
+}
+
 /**
  * The snapshot-chain reader checks: the record the cut left, the archives it
  * names in both directions, the served word, the cut marker, and the
@@ -3826,26 +3937,8 @@ async function readChainCutCell(
     ? chainArchiveExpectations(gen.baseId, gen.deltaId ?? undefined, prefix)
     : [];
 
-  const baseRow = rows[0];
-  const deltaRow = rows[1];
-  let baseExists: boolean | null = null;
-  let deltaExists: boolean | null = null;
-  let unexpectedDelta: boolean | null = false;
-  let postDeltaEtag: string | null = null;
-
-  if (baseRow !== undefined) {
-    const head = await readCutHead(fixture, box, baseRow.key, evidence);
-    baseExists = headPresence(head);
-  }
-
-  if (deltaRow !== undefined) {
-    const head = await readCutHead(fixture, box, deltaRow.key, evidence);
-    const exists = headPresence(head);
-    deltaExists = deltaRow.present ? exists : null;
-    unexpectedDelta = deltaRow.present ? false : exists;
-
-    if (deltaRow.present && head?.error === undefined) postDeltaEtag = head?.etag || null;
-  }
+  const { deltaRow, baseExists, deltaExists, unexpectedDelta, postDeltaEtag } =
+    await readCutArchiveRows(fixture, box, rows, evidence);
 
   evidence.markerAfter = await readBoxMarker(fixture, box, cutMarker);
   const markerPresent = witnessMatches(evidence.markerAfter, createHash('sha256').update(cutContent).digest('hex'));

@@ -1176,6 +1176,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return indexes;
   };
 
+  /** Two generation readings name the same container when the earlier one was
+   *  never observed (no baseline to differ from) or they agree — the ONLY two
+   *  shapes a mid-attach container replacement is distinguishable from. */
+  const containerReplaced = (pinned: string | undefined, observed: string | undefined): boolean =>
+    pinned !== undefined && observed !== pinned;
+
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
     // A chain whose layers EXIST cannot be served by extraction, so a mount
@@ -1194,7 +1200,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     const mountedGeneration = await ports.containerGeneration?.();
 
-    if (containerGeneration !== undefined && mountedGeneration !== containerGeneration) {
+    if (containerReplaced(containerGeneration, mountedGeneration)) {
       throw new ContainerChangedDuringAttach();
     }
 
@@ -1207,7 +1213,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     ): Promise<never> => {
       const failedGeneration = await ports.containerGeneration?.();
 
-      if (mountedGeneration !== undefined && failedGeneration !== mountedGeneration) {
+      if (containerReplaced(mountedGeneration, failedGeneration)) {
         throw new ContainerChangedDuringAttach();
       }
 
@@ -1220,7 +1226,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const visible = await shell.awaitLayer(mountedBase);
 
     if (!visible.ready) {
-      if ((await ports.containerGeneration?.()) !== mountedGeneration) {
+      if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) {
         throw new ContainerChangedDuringAttach();
       }
 
@@ -1328,7 +1334,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       assertComposedMounts(completedMounts, blockToken, mountedBase, deltaSource, deltaLayer);
     }
 
-    if (mountedGeneration !== await ports.containerGeneration?.()) throw new ContainerChangedDuringAttach();
+    if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) throw new ContainerChangedDuringAttach();
     // THE STORE MOUNT STAYS: squashfuse reads each layer through it for as
     // long as the overlay serves the work directory, so a release here is
     // refused EBUSY. The publication writes through this same mount.
