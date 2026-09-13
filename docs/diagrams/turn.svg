@@ -120,7 +120,7 @@
   <rect x="58" y="884" width="412" height="77" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
   <text class="b mono" x="70" y="905" text-anchor="start" fill="var(--purple)">terminal-effects.ts</text>
   <text class="s" x="70" y="922" text-anchor="start">recordTurn → eligible turns enter the evolution window</text>
-  <text class="s" x="70" y="939" text-anchor="start">review and improvement lanes run outside the turn queue</text>
+  <text class="s" x="70" y="939" text-anchor="start">actor-scoped review; root evolution runs in the background</text>
   <text class="s" x="70" y="956" text-anchor="start">drainPendingEvents → deliver queued work</text>
   <path d="M58 944 L14 944 L14 119 L56 119" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#a-purple)"/>
   <text class="xs" x="9" y="488" text-anchor="middle" transform="rotate(-90 9 488)" fill="var(--purple)">the reactor — a turn can wake the next one</text>
