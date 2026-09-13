@@ -11,7 +11,7 @@
   "asymmetry ChatHistoryEntry.metadata#absent-in-cli",
   "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli",
 
-  "asymmetry TurnSinks.logActivity#absent-in-cli",
+
   "movable packages/cf-backend/src/agent-routing.ts",
   "movable packages/cf-backend/src/analytics/boundaries.ts",
   "movable packages/cf-backend/src/analytics/feedback-marker.ts",

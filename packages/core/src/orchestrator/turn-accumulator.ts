@@ -62,7 +62,7 @@ export type ToolResultLike = ToolOutcome & {
 /** Platform side-effects the accounting fires — both optional so a pure consumer
  *  (tests, a minimal CLI) can omit them. */
 export interface TurnSinks {
-  /** Human-readable activity line (cf: activity_log row; cli: debug log). */
+  /** Human-readable activity line, durably recorded by both backends. */
   logActivity?(event: string, detail?: string): void;
   /** A completed tool call, for a durable run-event log (cf RunEventRecorder). */
   onToolCallEvent?(e: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'>): void;

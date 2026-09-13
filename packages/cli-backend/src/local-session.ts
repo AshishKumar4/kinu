@@ -53,6 +53,7 @@ import { TierIdSchema,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
   EventLog,
+  writeActivityLog,
   type RunEventRecorder,
   TriggerRegistry,
   // Ingress — core owns the gates; this session owns the local clock and the
@@ -298,6 +299,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       oneShot: input.oneShot,
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
+        logActivity: (event, detail) => { input.session().logActivity(event, detail); },
         onToolCallEvent: (ev) => { input.session().reportToolCallEnd(ev); },
         onStepEvent: (ev) => { input.session().reportStepFinish(ev); },
       },
@@ -1471,6 +1473,16 @@ export class LocalAgentSession implements BackendHost {
 
   broadcast(event: BroadcastEvent): void {
     this.emit({ type: 'broadcast', event });
+  }
+
+  logActivity(event: string, detail?: string): void {
+    const now = Date.now();
+    const startedAt = this.actorSession.orchestrator.acc.startedAt;
+
+    writeActivityLog(() => ({ sql: this.rt.storage.sql, actor: this.rt.actor }), {
+      event, detail: detail ?? null, createdAt: now,
+      elapsedMs: this.currentRunId !== null && startedAt > 0 ? now - startedAt : 0,
+    });
   }
 
   get headRuntime(): HeadRuntime {

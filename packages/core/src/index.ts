@@ -41,7 +41,7 @@ export {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from './identity/effect-tombstones';
 
-export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
+export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
 
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
