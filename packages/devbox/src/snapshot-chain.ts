@@ -1,57 +1,26 @@
 /**
- * Strategy one: an immutable base plus one cumulative delta, both squashfs
- * archives in an object store, attached as lazy FUSE layers.
+ * Immutable base plus one cumulative delta, published at a fresh UUID key.
  *
- * THE SHAPE. The first checkpoint archives the whole work directory as the
- * BASE, written once. Every later checkpoint archives the overlay's upper
- * directory (the changed set, whiteouts included) into one DELTA object that
- * each checkpoint replaces atomically. The chain is at most two layers deep.
+ * V2 attach mounts the store and both squashfs archives lazily, then serves
+ * chunked inodes through a read-only block lower above the delta's whole-file
+ * tree and the base. Namespace preparation creates only directories and
+ * whiteouts. No payload or override-index page is read on the attach path.
+ * See docs/DEVBOX-DECISIONS.md D2/D7 for the bound and its workload limitation.
  *
- * AN ATTACH MOVES NO BYTES. The box's store subtree is mounted, `squashfuse`
- * mounts the base and the delta out of it, and `fuse-overlayfs` lays a fresh
- * upper over both: `lowerdir=<delta>:<base>`, newest first. Bytes arrive when
- * something reads them, so an attach of any size fits the container-start
- * budget. Copying the delta into the upper instead did not finish inside a
- * 300 s budget on the deployed benchmark at the size a ladder leaves behind.
- * A layer is equivalent: a delta's deletions travel as `0/0` character
- * devices and its emptied directories as an opaque xattr, and fuse-overlayfs
- * honours both in any layer.
+ * The upper is cumulative relative to the mounted lower, not necessarily the
+ * base. Publication merges retained delta metadata with that upper. It never
+ * overwrites an archive a live mount may still read. CAS publishes the new
+ * pointer before cleanup; retirement preserves current/fallback references
+ * and mounted sources. A legacy-only delta keeps delta:base and collapses at
+ * its next changed checkpoint. The formats never share an overlay stack.
  *
- * WHAT THE COMPOSITION COSTS. While a delta is served as a layer, the upper
- * holds only what was written since the attach, NOT the cumulative changed
- * set, so a delta commit may not archive it. The first commit with something
- * to say therefore COLLAPSES the chain onto a fresh base, an archive of the
- * merged view; the record then names no delta and delta commits resume.
- * Whether a delta is served as a layer is asked of `/proc/mounts`: the layer
- * is mounted at a path named after its generation.
+ * A seed stamp permits reusing a complete cumulative upper on the same live
+ * container. Replacement loses the upper and stamp. A successful restore
+ * proves every composed mount and its container generation before returning.
  *
- * THE SAME-INSTANCE PATH is the cheapest one. A stop does not always take the
- * container with it. When the same instance comes back, its upper already
- * holds what the last publication archived, the seed stamp proves it, and the
- * attach mounts the base alone over the upper it kept.
- *
- * ORDERING UNDER CRASH. The delta is replaced by an atomic PUT, so a reader
- * sees the old delta or the new one. The state record is written BEFORE any
- * cleanup: a crash between the PUT and the state write leaves a complete
- * delta the record does not name yet, and an attach adopts it, because
- * squashfs verifies its own superblock and the mount is the validator.
- * Cleanup first could delete the only copy.
- *
- * TWO GENERATIONS, TWO ROLES. A box that holds one copy of itself refuses
- * every attach forever once that copy is missing or the wrong size. So the
- * record also names `fallback`: the newest generation an attach has PROVEN
- * it can serve, retained until a newer one passes the same proof. A restore
- * reads them newest first, verifies the one it offers before serving it,
- * stamps a refusal on the record's failure field, and publishes which
- * generation recovered.
- *
- * EXTRACTION IS LOCAL DEVELOPMENT ONLY. A store mount needs container
- * outbound interception, which a plain local `wrangler dev` does not have, so
- * the local path archives and extracts whole trees: a full pass over every
- * byte on every attach. A chain that already HAS a base never degrades to
- * extraction, which would hand the caller an empty directory and call it a
- * success. Only a workspace with no base yet may fall back, once, with the
- * reason recorded.
+ * A fallback retains the newest generation already proven readable.
+ * Extraction remains an explicitly permitted local-development path only;
+ * an existing lazy chain never silently degrades to extraction.
  */
 
 import type { BackupOptions, DirectoryBackup } from '@cloudflare/sandbox';
@@ -61,13 +30,13 @@ import {
   DELTA_BLOCK_BYTES,
   DELTA_MANIFEST_NAME,
   DELTA_OPS_PER_COMMAND,
+  DELTA_TREE_DIR,
   type DeltaBaseFact,
   type DeltaFileHashes,
   type DeltaManifest,
   DeltaManifestSchema,
-  type DeltaMaterializeOps,
   type DeltaProbeEntry,
-  buildDeltaMaterializeOps,
+  buildDeltaAttachOps,
   buildDeltaStageOps,
   deltaBaseStatCommand,
   deltaBlockHashCommand,
@@ -239,7 +208,7 @@ export function supersedeGeneration(
 ): Pick<ChainState, 'fallback' | 'orphans'> {
   if (previous.fallback === undefined) {
     return {
-      fallback: { base: previous.base, delta: previous.delta },
+      fallback: { base: previous.base, delta: previous.delta, deltaFormat: previous.deltaFormat },
       orphans: previous.orphans,
     };
   }
@@ -417,6 +386,11 @@ export interface ChainBaseLayer extends ChainLayer {
   readonly id: string;
 }
 
+interface ChainDeltaLayer extends ChainLayer {
+  /** Immutable publication identity. Absent only on a legacy-only archive. */
+  readonly id?: string | undefined;
+}
+
 /** ONE GENERATION: the immutable base, and the cumulative changed set once one
  *  has landed. Both live under one `<box>/backups/<uuid>/` prefix, so a
  *  generation is either wholly referenced or wholly garbage. `ChainState` IS
@@ -426,7 +400,7 @@ export interface ChainGeneration {
   /** The full base. Immutable once written. */
   readonly base: ChainBaseLayer;
   /** The cumulative changed set, or undefined until the first delta lands. */
-  readonly delta: ChainLayer | undefined;
+  readonly delta: ChainDeltaLayer | undefined;
   /** How the delta's bytes are laid out. `chunked` is a sidecar of changed
   *  extents plus a per-file map, materialized into the upper at attach.
   *  Absent means the legacy layout: a full squashfs of the upper, composed
@@ -439,6 +413,8 @@ export interface ChainGeneration {
 /** Everything a box knows about its own chain. One record, one writer,
  *  replaced whole. */
 export interface ChainState extends ChainGeneration {
+  /** Superseded immutable deltas, retained while a fallback or live mount uses them. */
+  readonly retiredDeltas?: readonly string[];
   readonly mode: ChainMode;
   /** Monotonic revision. Every publication bumps it, and so does a restore
    *  that promotes the fallback. */
@@ -490,6 +466,7 @@ const ChainGenerationSchema = v.object({
     objectVersion: ObjectVersionSchema,
   }),
   delta: v.optional(v.object({
+    id: v.optional(v.pipe(v.string(), v.regex(CHAIN_ID_RE))),
     bytes: v.number(),
     digest: DigestSchema,
     objectVersion: ObjectVersionSchema,
@@ -506,6 +483,7 @@ const ChainStateSchema = v.object({
   upperMark: v.optional(v.string()),
   fallback: v.optional(ChainGenerationSchema),
   orphans: v.optional(v.array(v.pipe(v.string(), v.regex(CHAIN_ID_RE)))),
+  retiredDeltas: v.optional(v.array(v.pipe(v.string(), v.regex(CHAIN_ID_RE)))),
   lastFailure: v.optional(v.object({ at: v.number(), reason: v.string() })),
 });
 
@@ -520,6 +498,7 @@ function generationOf(row: v.InferOutput<typeof ChainGenerationSchema>): ChainGe
       objectVersion: row.base.objectVersion,
     },
     delta: row.delta === undefined ? undefined : {
+      id: row.delta.id,
       bytes: row.delta.bytes,
       digest: row.delta.digest,
       objectVersion: row.delta.objectVersion,
@@ -543,6 +522,7 @@ export function normalizeChainState(raw: StoredValue): ChainState | null {
     upperMark: row.upperMark,
     fallback: row.fallback === undefined ? undefined : generationOf(row.fallback),
     orphans: row.orphans,
+    retiredDeltas: row.retiredDeltas,
     lastFailure: row.lastFailure,
   };
 }
@@ -699,6 +679,10 @@ const tmpStageDir = `/dev/shm/devbox-stage`;
  *  as long as the overlay is. */
 const lowerBase = `${DEVBOX_RUNTIME_DIR}/lower-base`;
 
+const blockLower = `${DEVBOX_RUNTIME_DIR}/block-lower`;
+
+const blockStats = `${DEVBOX_RUNTIME_DIR}/block-lower-stats.json`;
+
 /** Where delta layers are mounted, one directory per generation. */
 const lowerDeltaRoot = `${DEVBOX_RUNTIME_DIR}/lower-delta`;
 
@@ -732,6 +716,15 @@ function mountedLayerPath(mountPoint: string, root: string, objectKey: string): 
  *  outlive the container that made it true. */
 function deltaLayerServed(procMounts: string, chainId: string): boolean {
   return findMount(procMounts, deltaLayerMountPoint(chainId)) !== undefined;
+}
+
+function retirementAfter(previous: ChainState | null): string[] {
+  const ids = new Set(previous?.retiredDeltas ?? []);
+  const id = previous?.delta?.id;
+
+  if (id !== undefined) ids.add(id);
+
+  return [...ids];
 }
 
 /** How many times an attach asks the store mount for a layer it cannot see
@@ -840,9 +833,21 @@ function chainShell(exec: ContainerExec, root: string) {
      *  exec prepared with `bad mount point`. `nonempty` is safe because this
      *  private runtime directory is reset before every mount. */
     mountLayer: async (objectKey: string, mountPoint: string): Promise<void> => {
-      await must('squashfuse mount', `mkdir -p ${shellPath(mountPoint)} && /usr/bin/squashfuse `
+      const source = mountedLayerPath(CHAIN_STORE_MOUNT, root, objectKey);
+      await must('squashfuse mount', `mkdir -p ${shellPath(mountPoint)} && /usr/local/bin/devbox-squashfuse `
         + `${shellPath(mountedLayerPath(CHAIN_STORE_MOUNT, root, objectKey))} ${shellPath(mountPoint)} `
-        + '-o allow_other,ro,nonempty');
+        + `-o ${shellPath(`allow_other,ro,nonempty,subtype=squashfuse,fsname=${source}`)}`);
+    },
+    mountBlockLower: async (generation: string, delta: string, baseSource: string, deltaSource: string): Promise<void> => {
+      await must('read-only block lower mount', '# devbox-block-lower-v2\n'
+        + `mkdir -p ${shellPath(blockLower)}\n`
+        + `/usr/local/bin/devbox-block-lower --base ${shellPath(lowerBase)} --delta ${shellPath(delta)} `
+        + `--mount ${shellPath(blockLower)} --generation ${shellPath(generation)} `
+        + `--base-source ${shellPath(baseSource)} --delta-source ${shellPath(deltaSource)} `
+        + `--stats ${shellPath(blockStats)} >${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} 2>&1 &\n`
+        + `block_pid=$!; for _ in $(seq 1 100); do mountpoint -q ${shellPath(blockLower)} && break; `
+        + `kill -0 "$block_pid" 2>/dev/null || break; sleep 0.05; done\n`
+        + `mountpoint -q ${shellPath(blockLower)} || { cat ${shellPath(`${DEVBOX_RUNTIME_DIR}/block-lower.log`)} >&2; false; }`);
     },
     /** Attach `lowers` (first entry is newest) with a fresh writable upper,
      *  created in the same command for the reason {@link mountLayer} states. */
@@ -995,7 +1000,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     mode: ChainMode,
     generation: ChainGeneration,
   ): Promise<
-    { refusal: string } | { refusal: null; delta: ChainLayer | undefined }
+    { refusal: string } | { refusal: null; delta: ChainDeltaLayer | undefined }
   > => {
     if (mode === 'extract') return { refusal: null, delta: undefined };
 
@@ -1008,7 +1013,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (unsound !== null) return { refusal: unsound };
 
     if (generation.delta === undefined) return { refusal: null, delta: undefined };
-    const stored = await ports.objectFacts(deltaObjectKey(root, generation.base.id));
+    const stored = await ports.objectFacts(deltaObjectKey(root, generation.delta.id ?? generation.base.id));
 
     if (stored === undefined) {
       return {
@@ -1028,7 +1033,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (corrupt !== null) return { refusal: corrupt };
     }
 
-    return { refusal: null, delta: stored };
+    return { refusal: null, delta: { ...generation.delta, ...stored } };
   };
 
   const attachExtract = async (generation: ChainGeneration): Promise<AttachOutcome> => {
@@ -1227,7 +1232,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // `serve` a moment ago, so it is not asked for twice; an unreferenced but
     // complete delta is adopted here (header, "Ordering under crash"). A
     // mounted negative may be cached or a stat error, never proof of absence.
-    const storedDelta = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
+    const storedDelta: ChainDeltaLayer | undefined = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
+    const deltaId = storedDelta?.id ?? generation.base.id;
+    const deltaSource = mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaObjectKey(root, deltaId));
+    const blockToken = `${generation.base.id}:${mountedGeneration ?? 'unobserved'}`;
     const haveDelta = storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA? The stamp is written only by the
@@ -1248,6 +1256,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const baseHeld = standing !== undefined && findMount(standing, lowerBase)?.source === mountedBase;
 
     await shell.unmountPath(DEVBOX_WORKDIR);
+    await shell.unmountPath(blockLower);
 
     if (!baseHeld) await shell.unmountPath(lowerBase);
     await shell.releaseDeltaLayers();
@@ -1258,7 +1267,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // it, with ONE exception: an upper that holds this delta, which emptying
     // would throw away along with every change since the stamp.
     await shell.resetDirs([
-      ...(baseHeld ? [] : [lowerBase]), lowerDeltaRoot, ...(held ? [] : [upperDir]), workDir,
+      ...(baseHeld ? [] : [lowerBase]), lowerDeltaRoot, blockLower, ...(held ? [] : [upperDir]), workDir,
     ]);
 
     if (!baseHeld) {
@@ -1275,11 +1284,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // whole composition landed, which the `already-attached` return relies on.
     const deltaLayer = deltaLayerMountPoint(generation.base.id);
     const lowerLayers = [lowerBase];
-    let sidecar: DeltaMaterializeOps | null = null;
+    let chunked = false;
 
     if (composing) {
       try {
-        await shell.mountLayer(deltaObjectKey(root, generation.base.id), deltaLayer);
+        await shell.mountLayer(deltaObjectKey(root, deltaId), deltaLayer);
       } catch (error) {
         await layerFailed('delta', { cause: error });
       }
@@ -1292,11 +1301,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (manifest === null) {
         lowerLayers.unshift(deltaLayer);
       } else {
-        sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR,
-          indexes: await readSidecarIndexes(manifest, deltaLayer) });
-
         try {
-          await runOpsBatched('materializing the delta into the upper', sidecar.pre);
+          await runOpsBatched('preparing delta namespace', buildDeltaAttachOps(manifest, upperDir));
+          await shell.mountBlockLower(blockToken, deltaLayer, mountedBase,
+            deltaSource);
+          lowerLayers.unshift(blockLower, `${deltaLayer}/${DELTA_TREE_DIR}`);
+          chunked = true;
         } catch (error) {
           await layerFailed('delta', { cause: error });
         }
@@ -1309,23 +1319,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     await shell.overlayAttach(DEVBOX_WORKDIR, lowerLayers);
     await assertOverlayLanded(`chain ${generation.base.id}`);
 
-    if (sidecar !== null) {
-      try {
-        await runOpsBatched('applying the delta deletions', sidecar.post);
-      } catch (error) {
-        await layerFailed('delta', { cause: error });
-      }
+    const completedMounts = await shell.readMounts();
 
-      // Absorbed: release the sidecar, best effort. A stuck mount must not
-      // fail a start whose workspace is served; the next commit sees the
-      // standing mount as a layered delta and collapses, which is correct
-      // and merely costly, and the next attach releases every delta layer.
-      try {
-        await shell.unmountPath(deltaLayer);
-      } catch (error) {
-        ports.log(`${DEVBOX_WORKDIR} chain ${generation.base.id} absorbed its delta and the sidecar could not be released: ${describe({ cause: error })}`);
-      }
+    if (chunked) {
+      assertComposedMounts(completedMounts, blockToken, mountedBase, deltaSource, deltaLayer);
     }
+
+    if (mountedGeneration !== await ports.containerGeneration?.()) throw new ContainerChangedDuringAttach();
     // THE STORE MOUNT STAYS: squashfuse reads each layer through it for as
     // long as the overlay serves the work directory, so a release here is
     // refused EBUSY. The publication writes through this same mount.
@@ -1338,7 +1338,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // publishes a delta of it.
     const restored = !haveDelta
       ? 'base'
-      : held ? 'base+delta already in this upper' : sidecar !== null ? 'base+delta absorbed into the upper' : 'base+delta layered';
+      : held ? 'base+delta already in this upper' : chunked ? 'base+delta block-composed' : 'base+delta layered';
 
     ports.log(
       `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
@@ -1349,6 +1349,18 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       kind: 'attached',
       detail: `chain ${generation.base.id} ${bytes}B ${restored}`,
     };
+  };
+
+  const assertComposedMounts = (mounts: string, token: string, baseSource: string, deltaSource: string, deltaLayer: string): void => {
+    const block = findMount(mounts, blockLower);
+    const base = findMount(mounts, lowerBase);
+    const delta = findMount(mounts, deltaLayer);
+
+    if (block?.source !== `devbox-block:${token}` || block.fstype !== 'fuse.devbox-block'
+      || base?.source !== baseSource || !base.fstype.includes('squashfuse')
+      || delta?.source !== deltaSource || !delta.fstype.includes('squashfuse')) {
+      throw new Error('composed lower mounts or generation do not match; readiness refused');
+    }
   };
 
   const attachChain = async (generation: ChainGeneration): Promise<AttachOutcome> => {
@@ -1538,7 +1550,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // The mark described another generation's changed set. An undefined
       // mark never matches, so the next tick archives rather than skips.
       upperMark: undefined,
-      fallback: { base: state.base, delta: state.delta },
+      fallback: { base: state.base, delta: state.delta, deltaFormat: state.deltaFormat },
       lastFailure: { at: ports.now(), reason },
     };
 
@@ -1575,7 +1587,17 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // a proof of the current generation: the overlay may serve the generation
     // a later rebase superseded, so the fallback stays until an attach mounts
     // what the record now names.
-    if (isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
+    const mounts = await shell.readMounts();
+
+    if (isOverlayMounted(mounts, DEVBOX_WORKDIR)) {
+      if (state?.deltaFormat === 'chunked' && deltaLayerServed(mounts, state.base.id)) {
+        const block = findMount(mounts, blockLower);
+        const runtime = await ports.containerGeneration?.();
+
+        if (block?.source !== `devbox-block:${state.base.id}:${runtime ?? 'unobserved'}`
+          || findMount(mounts, lowerBase) === undefined) throw new Error('incomplete composed mounts; readiness refused');
+      }
+
       ports.log(`${DEVBOX_WORKDIR} already attached — attach skipped`);
 
       return {
@@ -1707,7 +1729,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * ONLY WHOLE OBJECT: the package is one squashfs, so the object count per
    * checkpoint stays at one whatever the changed set holds.
    */
-  const stageChunkedDelta = async (chainId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<ChainLayer | null> => {
+  const stageChunkedDelta = async (chainId: string, deltaId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<ChainLayer | null> => {
     const fallback = (why: string): null => {
       if (retained !== undefined) throw new Error(`refusing to lose the retained delta: ${why}`);
       ports.log(`${DEVBOX_WORKDIR} chain ${chainId}: archiving the whole upper because ${why}`);
@@ -1815,7 +1837,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     try {
-      return await stageAndPut(deltaObjectKey(root, chainId), pkgDir, [], storeHeld);
+      return await stageAndPut(deltaObjectKey(root, deltaId), pkgDir, [], storeHeld);
     } finally {
       // The package lives in memory when the disk was short; it is released
       // whether or not the publication landed.
@@ -1872,8 +1894,19 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    *  the live generations too. */
   const sweepOrphans = async (state: ChainState): Promise<void> => {
     const orphans = state.orphans ?? [];
+    const retained = new Set([state.delta?.id, state.fallback?.delta?.id]);
+    const mounts = await shell.readMounts();
+    const heldDeltas: string[] = [];
 
-    if (orphans.length === 0) return;
+    for (const id of state.retiredDeltas ?? []) {
+      const key = deltaObjectKey(root, id);
+      const source = mountedLayerPath(CHAIN_STORE_MOUNT, root, key);
+
+      if (retained.has(id) || mounts.split('\n').some(line => line.split(' ')[0] === source)) heldDeltas.push(id);
+      else await ports.deleteObjects([key]);
+    }
+
+    if (orphans.length === 0 && heldDeltas.length === (state.retiredDeltas?.length ?? 0)) return;
 
     for (const generation of orphans) {
       await ports.deleteObjects([
@@ -1883,7 +1916,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       ]);
     }
 
-    await ports.writeState({ ...state, orphans: undefined }, state.rev);
+    await ports.writeState({ ...state, orphans: undefined, retiredDeltas: heldDeltas }, state.rev);
     ports.log(`${orphans.length} superseded generation(s) deleted`);
   };
 
@@ -1930,6 +1963,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const reseatAfterFirstBase = async (chainId: string): Promise<void> => {
     try {
       await shell.unmountPath(DEVBOX_WORKDIR);
+      await shell.unmountPath(blockLower);
       await shell.releaseDeltaLayers();
       await shell.resetDirs([lowerBase, lowerDeltaRoot, upperDir, workDir]);
       await shell.mountLayer(baseObjectKey(root, chainId), lowerBase);
@@ -1994,6 +2028,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     await shell.resetDirs([stageDir]);
     let layer: ChainLayer;
+    const deltaId = fresh ? undefined : crypto.randomUUID();
     let deltaFormat: 'chunked' | undefined;
 
     if (fresh) {
@@ -2027,10 +2062,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
           throw new Error('retained delta is unreadable', thrown);
         }) : null;
 
-      const chunked = await stageChunkedDelta(chainId, storeHeld, retained ?? undefined);
+      if (deltaId === undefined) throw new Error('delta publication has no identity');
+      const chunked = await stageChunkedDelta(chainId, deltaId, storeHeld, retained ?? undefined);
       deltaFormat = chunked === null ? undefined : 'chunked';
       layer = chunked ?? await stageAndPut(
-        deltaObjectKey(root, chainId), upperDir, ports.archiveExcludes(), storeHeld,
+        deltaObjectKey(root, deltaId), upperDir, ports.archiveExcludes(), storeHeld,
       );
     }
 
@@ -2040,7 +2076,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       mode: 'chain',
       rev: (previous?.rev ?? 0) + 1,
       base: fresh ? { id: chainId, ...layer } : previous.base,
-      delta: fresh ? undefined : layer,
+      delta: fresh ? undefined : { ...layer, id: deltaId },
+      retiredDeltas: retirementAfter(previous),
       deltaFormat: fresh ? undefined : deltaFormat,
       at: ports.now(),
       changeVersion: version,
@@ -2247,6 +2284,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         metadataObjectKey(root, generation),
       ],
     ));
+    await ports.deleteObjects([...new Set([state.delta?.id, state.fallback?.delta?.id, ...(state.retiredDeltas ?? [])])]
+      .filter((id): id is string => id !== undefined).map(id => deltaObjectKey(root, id)));
     await ports.clearState();
   };
 

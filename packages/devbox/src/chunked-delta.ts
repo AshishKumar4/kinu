@@ -1,65 +1,21 @@
 /**
- * Chunked deltas: a small edit published as a small publication.
+ * One cumulative delta object: whole records under tree/, nonzero changed
+ * 16 KiB blobs under chunks/, and authenticated per-file index files beside
+ * them. Manifest v2 names each index by file digest, root digest and count.
  *
- * The legacy snapshot-chain delta is a squashfs of the whole upper directory.
- * overlayfs copies the WHOLE changed inode into the upper on the first write,
- * so a 64 KiB overwrite in a 64 MiB file archives and uploads ~89 MB (measured
- * 89,478,664 B in one PUT through the local harness, conformance cell 6.22).
- * A chunked delta instead publishes, in ONE squashfs object under the same
- * delta key:
+ * Attach parses bounded changed-namespace records only. Demand reads resolve
+ * each block through logarithmically many authenticated pages; a missing
+ * override reads the base range, while an explicit hole reads zeros.
  *
- *   .devbox-delta/manifest.json  changed paths, per-file block overrides, deletions
- *   .devbox-delta/tree/<path>    small, new and metadata-only files, whole
- *   .devbox-delta/chunks/<sha>   changed 16 KiB blocks by content digest
+ * Publication compares upper files with the base and merges untouched
+ * records from a mounted delta. Files below 64 KiB, linked/nonregular files
+ * and files with more than half zero blocks travel whole. This is cumulative
+ * changed-set publication, not a pending-write bitmap or a mmap barrier.
  *
- * A big changed file travels as its UNCHANGED blocks by reference (copied from
- * the base layer at materialize time) plus an override list for the blocks
- * that differ: changed blocks as chunk blobs, zero blocks as explicit
- * zero-writes. Nothing is content-addressed ACROSS generations — the delta is
- * self-contained — so there is no parent to lose and no pack a generation
- * must not retire.
- *
- * THE HARD INVARIANT. No read path fetches an index whose size grows with the
- * number of files in the tree. The manifest lists only CHANGED paths, each
- * chunked file carries only its OWN overrides, and a wake reads the manifest
- * plus exactly the chunks of the files it materializes. There is no tree-wide
- * index to read on open, which is the property whose absence retired
- * merkle-pack (a whole-tree index, read entirely on open, cost 563 B/file
- * flat: 3,349,804 B fetched to serve a 4 KiB read at 5,000 files). Cell 6.24
- * refuses that shape mechanically: the same one-file change must publish and
- * serve the same bytes at 1,000 and 5,000 files.
- *
- * WHAT TRANSFERS FROM archive/merkle-pack-cold (d9ea44c82), AND WHAT DOES NOT.
- * The repaired v2 did the C3 case in 160,253 B in three objects.
- *
- *   - The per-file extent map transfers as the override list: where v2's file
- *     node carries chunk extents plus hole extents, a manifest entry carries
- *     only the blocks that differ from the base. Same information, narrower.
- *   - Sparse-hole preservation transfers as elision: v2 stores zero chunks
- *     once by digest; here an all-zero block is never stored and materializes
- *     as zeros. Geometry is block-granular, which is what mksquashfs itself
- *     serves today (it sparse-detects zero blocks).
- *   - The whole-file fallback transfers as `whole`: small, new and link-shared
- *     files travel whole. There are no parent chunks to reuse — the delta
- *     names nothing outside itself — so the lost-boundary-map regression has
- *     no surface to recur on.
- *   - The attach fix transfers as construction: v2 prohibited a generation
- *     from retiring a pack it adds; a chunked delta references no pack but its
- *     own, staged and published by the same checkpoint.
- *   - Content-defined chunking does NOT transfer. CDC needs a byte-loop engine
- *     the container does not offer in the proven tool vocabulary (sh, find,
- *     stat, dd, split, sha256sum, cp). Fixed 16 KiB blocks reach the C3 bound
- *     through this vocabulary: a 64 KiB overwrite touches at most five blocks.
- *     Insertions that shift every later block fall back to the whole file.
- *
- * OBJECT COUNT. One delta object per publication is the floor snapshot-chain
- * already holds, and this design keeps it. Regime 1 (docs/BENCH.md:418-420)
- * killed overlay-cas on exactly this axis — two mount publications per changed
- * file at ~1 s serialized each — so bytes are never bought with objects here.
- *
- * Every decision about what travels lives in {@link planDeltaPublication}, in
- * TypeScript, where a unit test pins it; the container only moves the bytes
- * the plan names, one straight-line operation per line.
+ * C3's 64 KiB overwrite touches at most five 16 KiB blocks, independent of
+ * the base's size. Index bytes belong to the conditional encoding/framing
+ * allowance, not the attach manifest. SnapshotChain's publication accounting
+ * remains the model; the real-tools and live benches supply its wire premise.
  */
 
 import { createHash } from 'node:crypto';
@@ -88,7 +44,7 @@ export const DELTA_OPS_PER_COMMAND = 250;
  *  naming that directory AND validating as a manifest. */
 export const DELTA_MANIFEST_NAME = '.devbox-delta/manifest.json';
 
-const DELTA_TREE_DIR = '.devbox-delta/tree';
+export const DELTA_TREE_DIR = '.devbox-delta/tree';
 
 const DELTA_CHUNK_DIR = '.devbox-delta/chunks';
 
@@ -141,7 +97,6 @@ export const DeltaManifestSchema = v.object({
 
 export type DeltaManifest = v.InferOutput<typeof DeltaManifestSchema>;
 
-export type DeltaManifestFile = DeltaManifest['files'][number];
 
 /** One upper entry as the probe reports it: eleven null-separated fields. */
 export interface DeltaProbeEntry {
@@ -472,6 +427,15 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   const hashIndex = new Map(input.hashFiles.map((path, index) => [path, index]));
 
   for (const entry of input.probe) {
+    const basename = entry.path.slice(entry.path.lastIndexOf('/') + 1);
+
+    if (basename.startsWith('.wh.')) {
+      if (basename === '.wh..wh..opq') throw new Error('opaque-directory publication requires an explicit namespace record');
+      const path = entry.path.slice(0, entry.path.lastIndexOf('/') + 1) + basename.slice(4);
+      deleted.push(v.parse(RelPath, path));
+      continue;
+    }
+
     if (entry.type === 'd') {
       dirs.push({ p: entry.path, mode: entry.mode, uid: entry.uid, gid: entry.gid });
       continue;
@@ -699,22 +663,6 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
   return ops;
 }
 
-/** Where a materialize runs. */
-export interface DeltaMaterializeLayout {
-  readonly sideDir: string;
-  readonly upperDir: string;
-  readonly lowerBase: string;
-  readonly mergedDir: string;
-  readonly indexes: ReadonlyMap<string, Uint8Array>;
-}
-
-/** The two materialize phases: `pre` fills the upper before the overlay
- *  lands; `post` deletes through the merged view after it does. */
-export interface DeltaMaterializeOps {
-  readonly pre: readonly string[];
-  readonly post: readonly string[];
-}
-
 /** The directories a manifest carries, created under `root` with their
  *  attributes, plus every ancestor a carried file needs. */
 function directoryOps(manifest: DeltaManifest, root: string): string[] {
@@ -722,10 +670,12 @@ function directoryOps(manifest: DeltaManifest, root: string): string[] {
 
   for (const file of manifest.files) for (const dir of ancestorDirs(file.p)) wanted.add(dir);
 
+  for (const path of manifest.deleted) for (const dir of ancestorDirs(path)) wanted.add(dir);
+
   for (const dir of manifest.dirs) wanted.add(dir.p);
   const ops: string[] = [];
 
-  if (wanted.size > 0) ops.push(`mkdir -p ${[...wanted].sort().map((dir) => shellPath(`${root}/${dir}`)).join(' ')}`);
+  if (wanted.size > 0) ops.push(`mkdir -p ${[...wanted].map((dir) => shellPath(`${root}/${dir}`)).join(' ')}`);
 
   for (const dir of manifest.dirs) {
     ops.push(`chown ${dir.uid}:${dir.gid} ${shellPath(`${root}/${dir.p}`)}`, `chmod ${dir.mode.toString(8)} ${shellPath(`${root}/${dir.p}`)}`);
@@ -734,63 +684,13 @@ function directoryOps(manifest: DeltaManifest, root: string): string[] {
   return ops;
 }
 
-/**
- * Serve a manifest back as container operations. A chunked file is the base
- * copied whole plus its overrides written over it — never a block for an
- * unchanged one — so a wake reads exactly the manifest, the carried files and
- * the kept chunks: O(changed), never O(tree). Deletions and dir/non-dir
- * replacements go through the merged view because only the overlay can mint
- * a whiteout.
- */
-export function buildDeltaMaterializeOps(manifest: DeltaManifest, layout: DeltaMaterializeLayout): DeltaMaterializeOps {
-  const pre = ['# devbox-materialize-v1', ...directoryOps(manifest, layout.upperDir)];
-  const post = ['# devbox-materialize-v1-post'];
-  const sideTree = `${layout.sideDir}/${DELTA_TREE_DIR}`;
-  const sideChunks = `${layout.sideDir}/${DELTA_CHUNK_DIR}`;
-  const replaced = new Set(manifest.treplace);
-  const linkFirst = new Map<string, string>();
+/** Namespace-only preparation before any overlay is mounted. Replacement
+ * inodes come from the newer lower; deletions are whiteouts in the plain upper. */
+export function buildDeltaAttachOps(manifest: DeltaManifest, upper: string): string[] {
+  return ['# devbox-namespace-v2', ...directoryOps(manifest, upper),
+    ...manifest.deleted.map(path => {
+      const slash = path.lastIndexOf('/');
 
-  for (const group of manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]!);
-
-  const plant = (file: DeltaManifestFile, root: string): string[] => {
-    const dest = `${root}/${file.p}`;
-    const first = linkFirst.get(file.p);
-
-    if (first !== undefined) return [`ln ${shellPath(`${root}/${first}`)} ${shellPath(dest)}`];
-
-    if (file.kind === 'whole') return [`cp -a ${shellPath(`${sideTree}/${file.p}`)} ${shellPath(dest)}`];
-    const ops = [`cp ${shellPath(`${layout.lowerBase}/${file.p}`)} ${shellPath(dest)} 2>/dev/null || : > ${shellPath(dest)}`];
-
-    const index = layout.indexes.get(file.over.index);
-
-    if (index === undefined) throw new Error(`missing index of ${file.p}`);
-
-    for (const override of readDeltaIndex(file.over, file.s, index)) {
-      const source = override.src === 'chunk' ? shellPath(`${sideChunks}/${override.d}`) : '/dev/zero';
-      ops.push(`dd if=${source} of=${shellPath(dest)} bs=${DELTA_BLOCK_BYTES} seek=${override.o / DELTA_BLOCK_BYTES} count=1 conv=notrunc 2>/dev/null`);
-    }
-
-    ops.push(
-      `truncate -s ${file.s} ${shellPath(dest)}`,
-      `chown ${file.uid}:${file.gid} ${shellPath(dest)}`,
-      `chmod ${file.mode.toString(8)} ${shellPath(dest)}`,
-    );
-
-    return ops;
-  };
-
-  for (const file of manifest.files) {
-    if (!replaced.has(file.p)) pre.push(...plant(file, layout.upperDir));
-  }
-
-  for (const path of manifest.treplace) {
-    post.push(`rm -rf ${shellPath(`${layout.mergedDir}/${path}`)}`);
-    const file = manifest.files.find((row) => row.p === path);
-
-    if (file !== undefined) post.push(...plant(file, layout.mergedDir));
-  }
-
-  for (const path of manifest.deleted) post.push(`rm -rf ${shellPath(`${layout.mergedDir}/${path}`)}`);
-
-  return { pre, post };
+      return `: > ${shellPath(`${upper}/${path.slice(0, slash + 1)}.wh.${path.slice(slash + 1)}`)}`;
+    })];
 }
