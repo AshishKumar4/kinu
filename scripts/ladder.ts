@@ -1240,7 +1240,7 @@ export const LADDER: readonly Gate[] = [
       + 'export — is exercised only as far as one stored anchor painting.',
   },
   {
-    run: 'bun test scripts/public-pages.test.ts',
+    run: 'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
     seconds: 55,

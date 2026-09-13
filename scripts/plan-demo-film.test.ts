@@ -49,15 +49,13 @@ describe('plan-demo-film', () => {
         // Two distinct held frames — the asking state and the review —
         // mux into a two-frame GIF of exactly the stage's geometry.
         const asking = await captureCueFrame(page, origin, { at: 0 });
-        const first = join(dir, 'a.png');
-        const second = join(dir, 'b.png');
-        writeFileSync(first, asking.png);
-        writeFileSync(second, png);
+        writeFileSync(join(dir, 'a.png'), asking.png);
+        writeFileSync(join(dir, 'b.png'), png);
 
         const manifest = join(dir, 'frames.txt');
         writeFileSync(manifest, concatManifest([
-          { file: first, holdMs: 400 },
-          { file: second, holdMs: 600 },
+          { file: 'a.png', holdMs: 400 },
+          { file: 'b.png', holdMs: 600 },
         ]));
 
         const gif = join(dir, 'two-frames.gif');
