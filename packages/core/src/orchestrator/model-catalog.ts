@@ -29,6 +29,7 @@ import { contextWindowForModel } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
+import type { ModelWindow } from '../prompting/step-prune';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
@@ -95,7 +96,7 @@ export class ModelCatalogSession {
   }
 
   /** Await the selected operation's catalog, independent of the live chat cache. */
-  async contextFor(spec: string): Promise<PromptModelContext> {
+  async contextFor(spec: string): Promise<PromptModelContext & ModelWindow> {
     const info = await this.lookup(spec);
     const contextWindow = info?.contextWindow ?? contextWindowForModel(spec);
 

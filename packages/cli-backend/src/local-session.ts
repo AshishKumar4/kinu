@@ -3984,6 +3984,10 @@ export class LocalAgentSession implements BackendHost {
     await reviewRecordedTurn({
       snapshot: recorded,
       llm: this.rt.advisorLlm,
+      workspace: {
+        vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
+        limits: async () => this.modelCatalog.contextFor(resolveModelRoute('advisor', await this.routingProfile()).model),
+      },
       govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: recorded.gateOpen,
       deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),
