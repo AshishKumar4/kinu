@@ -52,6 +52,7 @@ const TUI_ACTIONS = {
   'editor.history-next': { scope: 'editor', label: 'Next prompt' },
   'editor.history-search': { scope: 'editor', label: 'Search prompts' },
   'editor.clear': { scope: 'editor', label: 'Save and clear draft' },
+  'editor.undo': { scope: 'editor', label: 'Undo draft edit' },
   'effort.cycle': { scope: 'editor', label: 'Cycle reasoning effort' },
   'tier.cycle': { scope: 'editor', label: 'Cycle tier' },
   'tier.cycle-reverse': { scope: 'editor', label: 'Cycle tier backwards' },
@@ -150,6 +151,7 @@ const COMMON_BINDINGS = {
   'editor.history-next': ['down'],
   'editor.history-search': ['ctrl+r'],
   'editor.clear': ['ctrl+c'],
+  'editor.undo': ['ctrl+-', 'ctrl+_'],
 } as const satisfies KeymapOverrides;
 
 const PRESET_BINDINGS = {

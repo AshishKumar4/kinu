@@ -81,6 +81,7 @@ import {
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
 import { useComposerPaste } from './use-composer-paste';
+import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
@@ -286,7 +287,10 @@ function ChatScene({
   const msgIdRef = useRef(0);
   const historyRef = useRef<ScrollBoxRenderable | null>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
+  const draftEditing = useDraftEditing(inputRef, rendererInstance);
   const scrollAnchor = usePreservedScrollAnchor(historyRef);
+
+  useEffect(draftEditing.reset, [client, draftEditing.reset]);
 
   const handleNavigationFocusChange = useCallback((focused: boolean) => {
     if (focused) inputRef.current?.blur();
@@ -469,10 +473,10 @@ function ChatScene({
   const setInputText = useCallback((text: string) => {
     promptCursorRef.current = null;
     draftValueRef.current = text;
-    inputRef.current?.setText(text);
+    draftEditing.replace(text);
     setDraft(text);
     syncComposerRows();
-  }, [syncComposerRows]);
+  }, [draftEditing.replace, syncComposerRows]);
 
   /** Send (or steer) one user prompt. @path mentions (plus quoted/~ path
    *  tokens) become attachments: images and PDFs inline as file parts, other
@@ -1518,7 +1522,9 @@ function ChatScene({
     return () => { rendererInstance.root.onMouseUp = undefined; };
   }, [rendererInstance]);
 
-  useKeyboard((key) => {
+  useKeyboard(async (key) => {
+    draftEditing.changed();
+
     if (shellApproval.pending) {
       key.preventDefault();
       const actionId = keyDispatcher.feed(key, ['consent']).actionId;
@@ -1684,6 +1690,31 @@ function ChatScene({
       return;
     }
 
+    if (actionId === 'editor.undo') {
+      key.preventDefault();
+      draftEditing.undo();
+
+      return;
+    }
+
+    if (actionId === 'editor.external') {
+      key.preventDefault();
+      selectionPendingRef.current = true;
+
+      try {
+        const edited = await draftEditing.external(expandPastes(inputRef.current?.plainText ?? ''));
+        setInputText(edited);
+        inputRef.current?.gotoBufferEnd();
+      } catch (cause) {
+        addError({ cause });
+      } finally {
+        selectionPendingRef.current = false;
+        inputRef.current?.focus();
+      }
+
+      return;
+    }
+
     if (actionId === 'editor.history-previous' || actionId === 'editor.history-next') {
       const input = inputRef.current;
 
@@ -1763,9 +1794,10 @@ function ChatScene({
 
     if (!value.trim()) return;
     setInputText('');
+    draftEditing.reset();
 
     return handleSubmit(expandPastes(value));
-  }, [expandPastes, handleSubmit, overlayOpen, setInputText]);
+  }, [draftEditing.reset, expandPastes, handleSubmit, overlayOpen, setInputText]);
 
   const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
     && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
@@ -1902,6 +1934,7 @@ function ChatScene({
             ...openTuiKeyBindings(keybindings, 'editor.newline'),
           ]}
           onContentChange={() => {
+            draftEditing.changed();
             const text = inputRef.current?.plainText ?? '';
 
             if (text !== draftValueRef.current) promptCursorRef.current = null;
@@ -1909,6 +1942,7 @@ function ChatScene({
             setDraft(text);
             syncComposerRows();
           }}
+          onCursorChange={draftEditing.cursorMoved}
           onSubmit={onInputSubmit}
           style={{
             backgroundColor: colors.background.user,

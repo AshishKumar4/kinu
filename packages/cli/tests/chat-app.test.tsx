@@ -13,6 +13,40 @@ import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
 
+test('draft undo restores the previous deletion burst and is isolated after send', async () => {
+  const screen = await mountChat(fakeClient({ name: 'undo-draft' }).client, { kittyKeyboard: true });
+  await screen.mockInput.typeText('draft to keep');
+  screen.mockInput.pressBackspace();
+  screen.mockInput.pressBackspace();
+  const input = screen.renderer.currentFocusedRenderable;
+
+  if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
+  expect(input.plainText).toBe('draft to ke');
+  screen.mockInput.pressKey('-', { ctrl: true });
+  await screen.renderOnce();
+  expect(input.plainText).toBe('draft to keep');
+  flushSync(() => screen.mockInput.pressEnter());
+  screen.mockInput.pressKey('-', { ctrl: true });
+  await screen.renderOnce();
+  expect(input.plainText).toBe('');
+});
+
+test('draft undo retains only the newest 64 snapshots', async () => {
+  const screen = await mountChat(fakeClient({ name: 'undo-ring' }).client, { kittyKeyboard: true });
+  const input = screen.renderer.currentFocusedRenderable;
+
+  if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
+
+  for (let index = 0; index < 70; index += 1) {
+    input.setText(`draft ${String(index).padStart(2, '0')}`);
+    screen.mockInput.pressArrow('right');
+  }
+
+  for (let index = 0; index < 70; index += 1) screen.mockInput.pressKey('-', { ctrl: true });
+  await screen.renderOnce();
+  expect(input.plainText).toBe('draft 05');
+});
+
 test('prompt history recalls sent and cleared drafts, searches, and persists per workspace', async () => {
   const sent: unknown[] = [];
   const store = createMemoryTuiPreferenceStore();
