@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
 import { chainBox } from './support/chain-box';
+import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 
 /** The numeric value of one `key=value` s3fs option, or undefined when the
  *  mount did not state it — which leaves s3fs's own default in charge. */
@@ -18,6 +19,17 @@ function bound(options: readonly string[], key: string): number | undefined {
 }
 
 describe('the store mount states its own s3fs bounds', () => {
+  test('a first checkpoint seats its base with the command session outside the workspace', async () => {
+    const arm = chainBox();
+    await arm.box.attachNow();
+    await arm.box.writeFile('/workspace/file', 'baseline');
+    await arm.box.exec('pwd');
+    expect(arm.container.sessionCwd).toBe('/workspace');
+    expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
+    expect(arm.container.layerMounts.size).toBe(1);
+    expect(arm.container.sessionCwd).toBe(DEVBOX_RUNTIME_DIR);
+  });
+
   test('a publish mounts the store under connect, silence and retry bounds', async () => {
     const arm = chainBox();
     expect((await arm.box.attachNow()).kind).toBe('empty');

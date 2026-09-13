@@ -1,8 +1,8 @@
 /-
-  Kinu.Storage.SnapshotChain — chunked publication and eager restore.
+  Kinu.Storage.SnapshotChain — chunked publication and lazy attachment.
 
   Source: packages/devbox/src/chunked-delta.ts#planDeltaPublication,
-  #buildDeltaStageOps, #buildDeltaMaterializeOps; and
+  #buildDeltaStageOps, #buildDeltaAttachOps; and
   packages/devbox/src/snapshot-chain.ts#snapshotChainStorage,
   #shouldRebase, #supersedeGeneration.
 
@@ -15,13 +15,12 @@
   unconditional wire bound. C3 proves the five-block geometry and the numeric
   bound with explicit metadata/encoding premises; the bench measures those.
 
-  Attach mounts at most two images, then reads M manifest records and
-  materializes the whole base of each changed chunked file plus carried
-  payload and zero overrides. In the design note's notation that is O(M)
-  metadata and O(L + D) payload, with L the full changed-file bases. Below,
-  baseBytes and deltaBytes name those two terms to avoid confusing L with
-  layersMounted. A tiny overwrite can therefore require a whole-tree copy.
-  No theorem here claims O(1) attach or O(pending-since-last-tick) publication.
+  V2 attach mounts at most two images plus a read-only block server, reads
+  changed namespace records, and reads no payload. BlockLayer models the
+  O(M+H+L) metadata bound, authenticated median search shape, composed reads,
+  mount readiness and file-local copy-up. Whole-file writable opens and
+  arbitrary service startup remain outside the attachment bound.
+  No theorem claims O(pending-since-last-tick) publication or wall-clock time.
 
   The generation model retains the current generation, one proven fallback,
   and named orphans. A successful attach releases the fallback to the orphan
@@ -192,24 +191,15 @@ theorem c3_is_strictly_cheaper_than_whole_file (offset recordBytes : Nat)
   have h := c3_publication_bound offset recordBytes hrecord
   omega
 
-/-! ## Attach: manifests plus eager whole-base materialization -/
+/-! ## Attach: v2 namespace records and lazy mounts -/
 
-def fileBaseCopy (f : FileDelta) : Nat :=
-  if travelsWhole f then 0 else f.baseBytes
-
-def fileDeltaCopy (f : FileDelta) : Nat :=
-  filePayload f + if travelsWhole f then 0 else f.zeroOverrides * blockBytes
-
-def baseCopies (files : List FileDelta) : Nat := (files.map fileBaseCopy).sum
-def deltaCopies (files : List FileDelta) : Nat := (files.map fileDeltaCopy).sum
-
-/-- M counts manifest records including overrides and metadata-only entries,
-    not merely paths. These are local records, not M separate R2 GETs.
-    classB counts layer probes only; lazy FUSE GETs are not predicted. -/
-def attachCost (hasDelta : Bool) (records : Nat) (files : List FileDelta) : Cost :=
+/-- Records count files and other namespace entries, not override pages.
+    The v2 block server is an additional composed mount when a delta exists.
+    `BlockLayer` models the namespace bound, demand reads and readiness. -/
+def attachCost (hasDelta : Bool) (records : Nat) (_files : List FileDelta) : Cost :=
   { classA := 0, classB := layers hasDelta,
-    bytes := if hasDelta then baseCopies files + deltaCopies files else 0,
-    layersMounted := layers hasDelta,
+    bytes := 0,
+    layersMounted := layers hasDelta + if hasDelta then 1 else 0,
     manifestRecords := if hasDelta then records else 0 }
 
 def attachCostAt (_treeBytes _pending : Nat) (hasDelta : Bool)
@@ -218,15 +208,15 @@ def attachCostAt (_treeBytes _pending : Nat) (hasDelta : Bool)
 
 theorem chain_attach_layer_setup (hasDelta : Bool)
     (records : Nat) (files : List FileDelta) :
-    (attachCost hasDelta records files).layersMounted = layers hasDelta
+    (attachCost hasDelta records files).layersMounted = layers hasDelta + (if hasDelta then 1 else 0)
       ∧ (attachCost hasDelta records files).classB = layers hasDelta := by
   simp [attachCost]
 
 theorem chain_attach_reads_manifest (records : Nat) (files : List FileDelta) :
     (attachCost true records files).manifestRecords = records := rfl
 
-theorem chain_attach_materializes_base_plus_delta (records : Nat) (files : List FileDelta) :
-    (attachCost true records files).bytes = baseCopies files + deltaCopies files := rfl
+theorem chain_attach_reads_no_payload (hasDelta : Bool) (records : Nat) (files : List FileDelta) :
+    (attachCost hasDelta records files).bytes = 0 := rfl
 
 theorem chain_attach_independent_of_n (n n' p : Nat) (hasDelta : Bool)
     (records : Nat) (files : List FileDelta) :
@@ -239,30 +229,6 @@ theorem chain_attach_independent_of_pending (n p p' : Nat) (hasDelta : Bool)
 theorem attach_without_delta_materializes_nothing (records : Nat) (files : List FileDelta) :
     (attachCost false records files).bytes = 0
       ∧ (attachCost false records files).manifestRecords = 0 := by simp [attachCost]
-
-theorem chunked_restore_copies_full_base (f : FileDelta) (h : travelsWhole f = false) :
-    fileBaseCopy f = f.baseBytes := by simp [fileBaseCopy, h]
-
-theorem c3_attach_copies_the_whole_64mib_base (offset recordBytes : Nat) :
-    baseCopies [c3File offset recordBytes] = 67108864 := by
-  simp only [baseCopies, List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, Nat.add_zero]
-  rw [chunked_restore_copies_full_base _ (c3_uses_chunked_publication offset recordBytes)]
-  rfl
-
-/-- A family of dense one-block edits with arbitrarily large bases defeats
-    every proposed constant byte bound. Larger untouched-file populations
-    are not needed for the counterexample. -/
-theorem attach_materialization_has_no_constant_bound (bound : Nat) :
-    ∃ f : FileDelta, bound < (attachCost true 1 [f]).bytes := by
-  let f : FileDelta :=
-    { size := bound + 65536, baseBytes := bound + 65536, holes := 0,
-      changedChunks := 1, zeroOverrides := 0, recordBytes := 100 }
-  refine ⟨f, ?_⟩
-  have hw : travelsWhole f = false := by
-    simp [travelsWhole, f, wholeThreshold]
-  simp [attachCost, baseCopies, deltaCopies, fileBaseCopy, fileDeltaCopy,
-    filePayload, hw, f, blockBytes]
-  omega
 
 def extractAttachCost (n : Nat) : Cost :=
   { classA := 0, classB := 1, bytes := n, layersMounted := 0 }

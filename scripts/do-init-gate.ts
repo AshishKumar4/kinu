@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { readSources } from './sources';
+import { readContainerInputBlockSources, readSources } from './sources';
 import { sandboxLineage } from './egress-interception';
 import {
   blockBodyOf, classMembers, declaredName, functionOf, identifierCalleeName, identifierText,
@@ -692,9 +692,113 @@ export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
   return { inspected, violations, classifier, arms };
 }
 
+/** 2026-09-13 cloud trace b20260913105359: container.js:641 held onStart
+ * at :644 while Devbox's boot-id RPC (:3495) never received its reply.
+ * Follow named local methods, including the virtual SDK onStart edge. */
+export function auditBlockBodies(sources: ReadonlyMap<string, string>): Violation[] {
+  const methods = new Map<string, SyntaxNode[]>();
+  const parameters = new Map<string, readonly (string | undefined)[]>();
+  const parsed = [...sources].map(([file, text]) => ({ file, text, tree: parse(file, text) }));
+
+  for (const { tree } of parsed) walk(tree.root, node => {
+    if (node.type !== 'MethodDefinition' && node.type !== 'FunctionDeclaration') return;
+    const name = (declaredName(node) ?? '').replace(/^#/, '');
+    const body = blockBodyOf(functionOf(node) ?? node);
+
+    if (name && body) methods.set(name, [...methods.get(name) ?? [], body]);
+    const fn = functionOf(node)?.raw;
+
+    if (name && fn && (fn.type === 'FunctionExpression' || fn.type === 'FunctionDeclaration')) {
+      parameters.set(name, fn.params.map(param => param.type === 'Identifier' ? param.name : undefined));
+    }
+  });
+
+  // A recovery write passes its storage transaction as `apply`. That callback
+  // is part of the block body too; follow every direct argument at its calls.
+  for (const { tree } of parsed) walk(tree.root, node => {
+    if (node.raw.type !== 'CallExpression') return;
+    const called = (memberCalleeName(node) ?? identifierCalleeName(node) ?? '').replace(/^#/, '');
+    const args = node.raw.arguments;
+    (parameters.get(called) ?? []).forEach((parameter, index) => {
+      if (!parameter) return;
+      const argument = node.children.find(child => child.start === args[index]?.start);
+      const body = argument && isFunctionLike(argument) ? blockBodyOf(argument) ?? argument : undefined;
+
+      if (body) methods.set(parameter, [...methods.get(parameter) ?? [], body]);
+    });
+  });
+  const violations: Violation[] = [];
+
+  for (const { file, tree } of parsed) walk(tree.root, node => {
+    if (node.raw.type !== 'CallExpression' || memberCalleeName(node) !== 'blockConcurrencyWhile') return;
+    const rawArgument = node.raw.arguments[0];
+    const argument = node.children.find(child => child.start === rawArgument?.start);
+
+    if (!argument) return;
+    const visited = new Set<SyntaxNode>();
+    const reached = new Set<string>();
+
+    const inspect = (body: SyntaxNode): void => {
+      if (visited.has(body)) return;
+      visited.add(body);
+
+      const visit = (call: SyntaxNode): void => {
+        if (call !== body && isFunctionLike(call)) return;
+        const called = (memberCalleeName(call) ?? identifierCalleeName(call) ?? '').replace(/^#/, '');
+        const raw = call.raw;
+
+        if (raw.type === 'CallExpression' && raw.callee.type === 'MemberExpression') {
+          const receiver = raw.callee.object;
+
+          // SQLite's exec is not a container command.
+          if (receiver.type === 'MemberExpression' && !receiver.computed
+            && receiver.property.type === 'Identifier' && receiver.property.name === 'sql') return;
+
+          if (CONTAINER_REACHES.includes(called) && called !== 'adoptOrTurnOver' && called !== 'restoreNow' && called !== 'stampBootId') reached.add(called);
+
+          if (receiver.type === 'ThisExpression' || receiver.type === 'Super') {
+            for (const target of methods.get(called) ?? []) inspect(target);
+          }
+
+          if (called === 'transaction' || called === 'then' || called === 'blockConcurrencyWhile') {
+            for (const child of call.children) if (isFunctionLike(child)) inspect(child);
+          }
+        } else if (called) {
+          for (const target of methods.get(called) ?? []) inspect(target);
+        }
+
+        if (called === START_DEADLINE) {
+          for (const child of call.children) if (isFunctionLike(child)) inspect(child);
+        }
+
+        for (const child of call.children) visit(child);
+      };
+
+      visit(body);
+    };
+
+    inspect(argument);
+
+    for (const sink of reached) violations.push({ file, line: tree.lineAt(node.start), owner: 'blockConcurrencyWhile', member: sink, reason: `input block reaches container RPC \`${sink}\`; release the storage block before container work` });
+  });
+
+  return violations;
+}
+
+/** Product corpus comes from sources.ts; SDK files come from the installed
+ * packages that supply the input blocks, not a copied vendor fixture. */
+export function containerBlockSources(sources: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  const selected = new Map([...sources].filter(([, text]) => text.includes('blockConcurrencyWhile') || text.includes('class Devbox')));
+
+  for (const [file, text] of readContainerInputBlockSources()) selected.set(file, text);
+
+  return selected;
+}
+
 if (import.meta.main) {
   const sources = readSources();
   const { inspected, violations, classifier, arms } = audit(sources);
+  const blockViolations = auditBlockBodies(containerBlockSources(sources));
 
   // Denominator. A gate that finds nothing because it looked nowhere is the
   // failure this whole exercise is about.
@@ -710,6 +814,8 @@ if (import.meta.main) {
   const vendor = declared.filter((cls) => !ours.includes(cls));
 
   const problems: string[] = [];
+
+  for (const found of blockViolations) problems.push(`${found.file}:${found.line}: ${found.reason}`);
 
   if (inspected.length === 0) {
     problems.push('found 0 governed hooks — the matcher is not matching');
@@ -777,6 +883,8 @@ if (import.meta.main) {
       + `container-start onStart, ${counted('recovery')} SDK-awaited recovery); `
       + `${ours.length}/${declared.length} wrangler-declared DO classes defined here and parsed`
       + (vendor.length > 0 ? `; not ours: ${vendor.join(', ')}` : '')
+      + '; input blocks reach no named container RPC through local/virtual methods'
+      + '\n  block-call graph is blind to computed names, imported helpers and indirectly passed callbacks'
       // The blind spots, on the SUCCESS path, because a limitation visible only
       // in red output is invisible exactly when the tree is green.
       + `\ndo-init-gate: blind to — what \`${RECOVERY_CLASSIFIER}\``

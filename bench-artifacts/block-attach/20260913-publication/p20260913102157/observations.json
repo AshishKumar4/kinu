@@ -1,0 +1,1334 @@
+{
+  "runId": "p20260913102157",
+  "source": {
+    "commit": "13433573602f8043ef1806299fdd638f43efd9e7",
+    "dirtyDigest": "clean"
+  },
+  "image": "docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f",
+  "hypotheses": [
+    {
+      "rank": 1,
+      "candidate": "intercepted PUT stream or bench meter stalls",
+      "prediction": "small direct PUT and multipart windows expose which boundary stops; same bytes old image separate image from Worker"
+    },
+    {
+      "rank": 2,
+      "candidate": "s3fs multipart timeout",
+      "prediction": "failed part errors recur near configured 30s silence, not total object duration"
+    },
+    {
+      "rank": 3,
+      "candidate": "bucket/credential config drift",
+      "prediction": "normalized old/current configs differ at bucket binding or mount options; all PUT sizes fail with authorization error"
+    },
+    {
+      "rank": 4,
+      "candidate": "multipart size handling",
+      "prediction": "4MiB succeeds and multipart-sized archives fail before completion; sparse tiny archive counters contradict it"
+    },
+    {
+      "rank": 5,
+      "candidate": "new image FUSE or archive-path contention",
+      "prediction": "same 64MiB fails only on new image; local s3fs/MinIO reproduction fails with new tools"
+    }
+  ],
+  "steps": [
+    {
+      "step": "startup",
+      "at": "2026-09-13T10:22:35.593Z",
+      "value": {
+        "attach": {
+          "kind": "empty",
+          "detail": "no chain recorded; an empty overlay is attached"
+        },
+        "state": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/",
+          "state": {
+            "restoration": "attached",
+            "running": true,
+            "lastAttach": {
+              "kind": "empty",
+              "detail": "no chain recorded; an empty overlay is attached"
+            },
+            "bootId": "d47df43e-aa16-46ed-8db9-62f04a463436",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": true,
+            "lastInteractionAt": 1789294950194,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-p20260913102157",
+          "ms": 308
+        },
+        "redrives": 3,
+        "ms": 18293,
+        "startedAt": 1789294937300
+      }
+    },
+    {
+      "step": "mount-and-processes",
+      "at": "2026-09-13T10:23:05.603Z",
+      "value": {
+        "ok": false,
+        "ms": 29989,
+        "error": "A call to blockConcurrencyWhile() in a Durable Object waited for too long. The call was canceled and the Durable Object was reset.",
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-p20260913102157"
+      }
+    },
+    {
+      "step": "writer",
+      "at": "2026-09-13T10:23:06.985Z",
+      "value": {
+        "ok": true,
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": "",
+        "ms": 1362
+      }
+    },
+    {
+      "step": "window-open",
+      "at": "2026-09-13T10:23:07.388Z",
+      "value": {
+        "ok": true,
+        "window": {
+          "schema": "devbox-publication-window/1",
+          "token": "p20260913102157-publication",
+          "prefix": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/",
+          "openedAt": 1789294987246,
+          "closedAt": null,
+          "attempts": []
+        }
+      }
+    },
+    {
+      "step": "ops-before",
+      "at": "2026-09-13T10:23:08.177Z",
+      "value": {
+        "ok": true,
+        "calls": {},
+        "classA": 0,
+        "classB": 0,
+        "classFree": 0,
+        "total": 0,
+        "bytes": {}
+      }
+    },
+    {
+      "step": "baseline",
+      "at": "2026-09-13T10:34:05.090Z",
+      "value": {
+        "ok": true,
+        "outcome": {
+          "kind": "failed",
+          "reason": "publishing /var/tmp/devbox/stage/layer.sqsh through /backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh failed (1): dd: fsync failed for '/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh': Input/output error\ndd: closing output file '/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh': Input/output error"
+        },
+        "ms": 654224,
+        "state": "done",
+        "token": "checkpoint-32158867-913c-4003-b43e-b913fa243a3f",
+        "kind": "quiesce"
+      }
+    },
+    {
+      "step": "window-close",
+      "at": "2026-09-13T10:34:05.158Z",
+      "value": {
+        "ok": true,
+        "window": {
+          "schema": "devbox-publication-window/1",
+          "token": "p20260913102157-publication",
+          "prefix": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/",
+          "openedAt": 1789294987246,
+          "closedAt": 1789295645111,
+          "attempts": [
+            {
+              "id": "7ea844b4-aa80-4051-a3e4-3fc34bfb044f",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/",
+              "operation": "put",
+              "uploadId": null,
+              "startedAt": 1789294992137,
+              "finishedAt": 1789294992293,
+              "bytes": 0,
+              "observedBytes": 0,
+              "outcome": "returned",
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "03b64894-252b-4ec6-abd1-7e9d24d61f75",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "put",
+              "uploadId": null,
+              "startedAt": 1789294992797,
+              "finishedAt": 1789294992979,
+              "bytes": 0,
+              "observedBytes": 0,
+              "outcome": "returned",
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "fcbb4687-847d-4529-80e1-ce909eaee840",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789294993402,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "38919c7b-2f5d-4a6c-85b3-f391bd6fc3d4",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789294993402,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "49c6e082-c830-4d91-b61e-03436c0d66df",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789294993428,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "9e969154-0bf7-4ee4-a08b-b0755010223f",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789294993428,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "571b20a2-0528-41c1-930f-4bb0af4d3f06",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789294993428,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "f499dd3c-e64e-4bb1-8e81-4722d512d3c7",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295029452,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "3b4c1b12-2259-4979-a85c-64d172f22513",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295029452,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "af528d3b-f9ae-46ca-9ff0-df479f23f472",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295029455,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "9299f5a1-6f87-41c1-8924-85861091e267",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295029461,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "9db742ca-388e-4dd5-97f2-91b3a7e0690d",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295029462,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "13e0524c-bac4-44bd-8782-e75b25d57d12",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295065499,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "e34233ee-74bc-431b-a401-4f8cf1a726ac",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295065500,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "f5d14e4e-f6e9-4845-8f7f-94aa51f48716",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295065500,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "e82387d9-3f77-4c6f-97ca-ca5e2ceacb9b",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295065502,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "c9c4e2c4-a2e5-4af0-9619-40e78cb5de68",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295065504,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "040fe046-8a35-4782-adf1-2830495239d4",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295101527,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "10b0901a-7063-4713-8003-d3f2bd9860cd",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295101527,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "7f818aa1-5671-461e-83e2-4a16e8bf5849",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295101538,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "b23b37dc-b1e9-4058-8fbc-0986f285a272",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295101545,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "cee57266-708c-46fd-a986-c2c0907ddee4",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295101547,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "b5dad989-a0c1-406e-a1e6-f401997999ba",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295137564,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "d6652231-bb35-40bf-aad5-4d5a2d2fa57d",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295137564,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "fbc2e556-7f45-4c22-a68e-669788b17e52",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295137575,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "c2a57211-b1c6-4c37-9331-691cd83c2aba",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295137581,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "59528cba-7398-4a99-94f4-dd9ff2b02b10",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295137625,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "ffc426f4-9c95-4bfb-bc32-8d6f93edec85",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295173597,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "7765175a-e992-4069-8961-27326614c6b5",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295173597,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "802a2586-bddb-4e7d-b681-908d4ba56fe5",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295173611,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "9e24b7cd-176b-4385-b812-df28a46073a0",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295173614,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "7f96edfb-20bb-4852-8a62-f5845bef2bba",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295173622,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "a76a749d-89cb-4db0-bd50-ca3a94948458",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295209639,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "4e25adec-5a56-45e5-b7a9-7e4149926c64",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295209639,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "85836101-78a0-4bcb-8b60-5a27dfb82098",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295209649,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "ad49c50d-02fc-4e57-adde-57b050e604bd",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295245671,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "a8559b55-a8fc-459a-806e-cfd3312e3154",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295245671,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "652073fe-06ce-453a-82d9-a475e816640e",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295245685,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "ab85fa60-a858-46aa-a2a8-b0e58952a210",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295281713,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "6f659b47-2f72-4376-a5f1-70c12a8f3b8b",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295281713,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "2f2665ff-eb61-4f3f-b28f-671db14f066c",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "APTjTIfpgqO6EqC2PqRDDU2TpiAbBdIdYFOJdJrXvSikP8pis0pu3Dgp1fm0j-n_ugm5Adz8h_IO_5JRsGNIHJu9VHpQzpKLAQkB6ARJihpO0EpIHa2AdvMroH2LZhm344URGbI6439eo-O5HBRV-gDsTpOdPNq1D3xLd2tIOCm03yvAuellX8H799TKZFcvJgItc2C68-0bNez3fMk1_ZsYnSyBK1VgfxBwr_g5NS6kF7x8ISQq8xAxUguUIzanWbKmqV2iIjC2JRlUr8Ufdjv-52GRjrNcTWcGiiN5wkAonIAXoq_LXO23nUmLbV59JMEpkKkeIUBNwGw80JIIWaA",
+              "startedAt": 1789295281722,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "76e1f3cf-be95-4e2e-add5-1d43f6b2cc7e",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295318472,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "a0adb743-1420-4b61-8d84-ebd89c18caf0",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295318472,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "6dfc678d-c89b-4d9f-9acc-743b8f9c4165",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295318474,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "c34027e8-8c3f-4034-bb60-7729d3601779",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295318474,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "caf42b35-5b6b-4b80-99ed-8ba6dce18210",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295318475,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "60adc848-a34d-4b0c-8bb9-759d2247f5b7",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295354522,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "d9e2083a-9bad-46f9-afd5-f6c063333c01",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295354522,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "181bb8f9-6b9a-48cc-a9bc-b81c0e25aea2",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295354524,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "542795fa-edf4-402a-8534-7dd3508b438b",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295354527,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "23630612-5d43-49d0-8127-274da92cf9ba",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295354527,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "d11cceb0-4547-448c-b0f7-19b10b65b917",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295390552,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "393d2283-cedc-4e23-8881-53eaec273af3",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295390564,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "7444afd2-2558-4585-9c91-04d454f3deb8",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295390571,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "b10dbfe5-8bad-4b59-9cd3-fdf50d0b9fb1",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295390572,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "81179426-50ad-4916-a541-02d430ce08d8",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295390610,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "ec99830a-19e5-4b5b-bff1-e6f8eae3013f",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295426594,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "5768b566-1909-413e-8bea-f551140d8cfc",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295426608,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "58d7d829-4519-460c-a96e-c6c357c32769",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295426617,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "c5ad81cd-85fc-46ea-956c-a8b23225a694",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295426622,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "05cda778-9794-42ec-890e-ecbaa16e585e",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295426633,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "0b56af3e-052e-47fd-956e-badba442e1da",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295462631,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "2e3536ca-1db0-4aec-8b35-7efd54504c41",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295462651,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "22bea08b-5291-427e-b483-0639c15a96e3",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295462654,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "275c6acc-7a52-44b6-85f8-1db1a471aef0",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295462666,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "483cfb7a-021c-4eb7-9f36-627ab6aecce8",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295462667,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "4ac39e2e-3707-4c16-9f87-29a20495799b",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295498665,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "c10825e3-8a34-4090-9ba4-3da06ac61865",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295498688,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "cc3e0e61-0fb3-4ea2-92a6-bbbb924ba5c5",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295498690,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "c68cf0a6-d282-4e6c-9134-b7a8cf0bde22",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295498701,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "0e86f343-7f8d-4a75-951d-de8abd7ec507",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295498705,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "eec0cbe0-3918-44f0-aa4a-ed8419d094f3",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295534700,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "ac698744-3b1b-41f0-a407-40137c005028",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295534721,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "2e076ef4-5676-4866-b4c7-7b0d9609c755",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295534731,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "4c1c7141-39c7-4d0f-9cab-eea99a813081",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295570737,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "6a744c77-11bc-4ab6-979b-7748b1ab4ec6",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295570760,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "44bfa2b5-aed3-4621-84ee-17ec539f3c7d",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295570760,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "b8ed4331-68a2-44fd-bd5e-c0c3494028ca",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295606772,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "deb28b24-8a7c-498c-a321-f43aef3be653",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295606796,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "2aa73b1c-825e-4e6e-ac06-1eea947f518b",
+              "key": "boxes/da1432169c934e937a8820b8e54846883911a1bb91be450d3d410cb6575534ba/backups/7fafa7cf-d3d6-4986-841f-decb4f97d770/data.sqsh",
+              "operation": "uploadPart",
+              "uploadId": "AINtLsyKIdFjDHlkPeEcRPLFdJa8k-1jMysw5p8rsopOWug_gkgphSZscJpa8wUQ7WATFXjjEHVBSM5BypH5sFhVPWNofaclDBvF1pA3a09lZzpWKlSwlng3bra1a8nHxgf54SbKqvFK2JIhkSk9Gg7QqktKZKV2p8wlPY4BinsVb4KmyaLzG8q-bSHO37gIb3pDbdSq_W3za9D23NuZXDO3LG5Qo_LVL3L9E-zlHCoLBOqSuEunzV3K56qb0W2kIf7WVAa6IVoxId95YOo6ZSGiSKKxlv5LGksoOsbLukIwgK2IpU1QvLh2XGPTbtVVsxq3YuRzjGuECIXsqem5m1A",
+              "startedAt": 1789295606796,
+              "finishedAt": null,
+              "bytes": null,
+              "observedBytes": null,
+              "outcome": null,
+              "error": null,
+              "bodyError": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "ops-after",
+      "at": "2026-09-13T10:34:05.946Z",
+      "value": {
+        "ok": true,
+        "calls": {
+          "head": 11,
+          "put": 2,
+          "list": 4,
+          "createMultipartUpload": 2,
+          "resumeMultipartUpload": 55,
+          "uploadPart": 54,
+          "abort": 1
+        },
+        "classA": 117,
+        "classB": 11,
+        "classFree": 1,
+        "total": 129,
+        "bytes": {}
+      }
+    },
+    {
+      "step": "after",
+      "at": "2026-09-13T10:34:06.043Z",
+      "value": {
+        "ok": true,
+        "exitCode": 0,
+        "stdout": "67112960 /var/tmp/devbox/stage/layer.sqsh\n  297 s3fs BACKUP_BUCKET /backups -o passwd_file=/tmp/.passwd-s3fs-c4a8e6f0-0975-4fe0-b3c7-088268ee4cdf,stat_cache_expire=60,enable_noobj_cache,multipart_size=5,nomixupload,connect_timeout=10,readwrite_timeout=30,retries=3,use_path_request_style,url=http://r2.internal,ahbe_conf=/tmp/.s3fs-ahbe-ec7781a9-a848-466b-9744-c16e410d231c.conf\n  424 sed -n /s3fs/p",
+        "stderr": "",
+        "ms": 78
+      }
+    },
+    {
+      "step": "box-teardown",
+      "at": "2026-09-13T10:34:06.715Z",
+      "value": []
+    },
+    {
+      "step": "worker-delete",
+      "at": "2026-09-13T10:34:10.383Z",
+      "value": [
+        "worker: deleted or absent",
+        "kinu-devbox-bench-p20260913102157-snapshot-chain-snapshotchainbox: absent"
+      ]
+    },
+    {
+      "step": "container-delete",
+      "at": "2026-09-13T10:34:11.912Z",
+      "value": [
+        "absent"
+      ]
+    },
+    {
+      "step": "residue",
+      "at": "2026-09-13T10:34:13.003Z",
+      "value": {
+        "objects": 0,
+        "uploads": 0
+      }
+    },
+    {
+      "step": "teardown",
+      "at": "2026-09-13T10:34:16.948Z",
+      "value": {
+        "manifest": {
+          "schema": "storage-matrix/teardown@1",
+          "runId": "p20260913102157",
+          "createdAt": "2026-09-13T10:21:57.276Z",
+          "updatedAt": "2026-09-13T10:34:16.948Z",
+          "entries": [
+            {
+              "kind": "worker",
+              "name": "kinu-devbox-bench-p20260913102157-snapshot-chain",
+              "detail": "snapshot-chain fixture Worker",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "container-app",
+              "name": "kinu-devbox-bench-p20260913102157-snapshot-chain-snapshotchainbox",
+              "detail": "snapshot-chain container application",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "r2-bucket",
+              "name": "kinu-devbox-bench-p20260913102157-snapshot-chain",
+              "detail": "dedicated snapshot-chain bucket",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "do-state",
+              "name": "ab-snapshot-chain-p20260913102157",
+              "detail": "per-arm durable box state",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "alarm",
+              "name": "ab-snapshot-chain-p20260913102157",
+              "detail": "per-arm durable alarm",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "mount",
+              "name": "ab-snapshot-chain-p20260913102157",
+              "detail": "per-arm mounted workspace",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "local-path",
+              "name": "/tmp/kinu-devbox-bench-p20260913102157",
+              "detail": "generated Wrangler config directory",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            }
+          ],
+          "counters": {},
+          "kept": false
+        },
+        "failures": []
+      }
+    }
+  ],
+  "workerVersion": "2a775502-8bb0-4c3b-9b7d-a9d70b25c000"
+}

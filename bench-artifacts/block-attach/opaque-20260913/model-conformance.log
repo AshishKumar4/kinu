@@ -1,0 +1,43 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/strategy-conformance.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+smart-container bar — per-arm matrix (design § 6)
+
+cell    snapshot-chain  
+6.1     existing          attach empty, write, commit, replace, attach
+6.2     existing          quiesce publishes exactly once
+6.3     existing          three generations, each wake carries every commit
+6.4     existing          death at every commit seam serves old or new
+6.6     existing          control metadata outside every payload prefix
+6.7     existing          corrupted payload refused by name
+6.8     existing          commit interrupted by replacement converges
+6.16    existing          teardown after stop is classified
+6.9     not run           DO reset mid-restore: one daemon, one restore, tree exact
+6.10    not run           container replaced mid-commit, old boot finishes late
+6.11    not run           byte-for-byte: mode, owner, times, xattrs, symlink, hardlink, sparse
+6.12    not run           counted bounds, and the same k against n and 10n
+6.13    not run           1e5 files: exact tree, same RestoreWork as 1e3 files
+6.14    not run           1 GiB sparse plus 64 MiB dense: commit O(data), wake O(1), in-place seal O(k)
+6.15    not run           sqlite rewrite: random 4 KiB pwrites, bytesPut bounded by dirty pages
+6.17    not run           two containers racing: one head, loser refused and reported, never merged
+6.18    not run           disk full mid-journal: ENOSPC, no effect without a record, eviction, tree exact
+6.20    not run           GC never deletes a reachable object
+6.21    not run           restore and backup time versus tree size at three sizes
+6.22    not run           C3 overwrite: a 64 KiB edit publishes below 196,608 bytes in exactly one object
+6.23    not run           many small changed files: one object per checkpoint, bytes near the change
+6.24    not run           per-file maps: a one-file change costs the same at 1,000 and 5,000 files
+6.19    harness           stop then wake on the same instance: the devbox-harness suites
+
+
+6.21 restore and backup time versus tree size — 100, 1,000 and 10,000 files of 4 KiB
+
+arm snapshot-chain: files | tree bytes | full backup ms | 64 KiB backup ms | 64 KiB backup bytesPut | restore ms | restore ops | restore payload bytes
+
+
+ 5 pass
+ 44 filtered out
+ 0 fail
+ 30 expect() calls
+Ran 5 tests across 1 file. [130.00ms]

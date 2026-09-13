@@ -1,0 +1,10 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/snapshot-chain.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+ 3 pass
+ 131 filtered out
+ 0 fail
+ 17 expect() calls
+Ran 3 tests across 1 file. [44.00ms]

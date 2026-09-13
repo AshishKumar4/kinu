@@ -1,0 +1,29 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/bench/publication-meter.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+200 |   `);
+201 |   const runtime = await meterRuntime(entry);
+202 | 
+203 |   try {
+204 |     expect((await runtime.dispatchFetch('https://meter.invalid/', { method: 'PUT', body: 'hello', signal: AbortSignal.timeout(2000) })).status).toBe(200);
+205 |     expect(await (await runtime.dispatchFetch('https://meter.invalid/')).json()).toMatchObject({ put: 1 });
+                                                                                       ^
+error: expect(received).toMatchObject(expected)
+
+- {
+-   "put": 1,
+- }
++ {}
+
+- Expected  - 3
++ Received  + 1
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-block-layer-impl/packages/devbox/bench/publication-meter.test.ts:205:82)
+(fail) the bench proxy flushes an under-threshold operation on success and failure [154.50ms]
+
+ 0 pass
+ 2 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [337.00ms]

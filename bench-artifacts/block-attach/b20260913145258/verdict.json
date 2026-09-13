@@ -1,0 +1,68 @@
+{
+  "date": "2026-09-13",
+  "status": "both-storage-attach-figures-observed-publication-count-still-red",
+  "scope": "Bounded storage evidence; not G1-G10 strategy admission",
+  "imageDigest": "sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e",
+  "cells": [
+    {
+      "name": "C3: 64KiB overwrite in 64MiB dense file",
+      "runId": "b20260913143908",
+      "source": "4ded56c3b6417b8cc52866de48e9360ecda6f9e1",
+      "dirtyDigest": "clean",
+      "workerVersion": "ddc1dcbd-f5d2-47bd-9b87-ba18e1536dad",
+      "attachMs": 5218,
+      "phaseArithmetic": "5555 - 337",
+      "attachPayloadBytes": 0,
+      "attachIndexPages": 0,
+      "attachReadRequests": 0,
+      "deltaFormat": "chunked",
+      "deltaArchiveBytes": 69632,
+      "editedCheckpointMs": 6412,
+      "fileCorrectness": "full 64MiB file verification passed",
+      "publicationObjectAttempts": 3,
+      "publicationAccepted": false,
+      "remainingRefusal": "C3 must publish exactly 1 object attempt",
+      "observations": "../b20260913143908/observations.json",
+      "teardown": "../../teardown/b20260913143908.json"
+    },
+    {
+      "name": "2GiB dense changed file",
+      "runId": "b20260913145258",
+      "source": "4ded56c3b6417b8cc52866de48e9360ecda6f9e1",
+      "dirtyDigest": "sha256:6e604bfe90d27e458e5f0270cc4aa693d87200c6dbf853d0ceb96f59658ea111",
+      "workerVersion": "ac445d8e-5e09-463b-a6a0-0b60b0ea83c9",
+      "instrumented": true,
+      "instrumentation": ["devbox-instrumentation.patch", "container-instrumentation.patch", "sandbox-instrumentation.patch", "driver-selection.patch"],
+      "attachMs": 3735,
+      "phaseArithmetic": "4032 - 297",
+      "attachPayloadBytes": 0,
+      "attachIndexPages": 0,
+      "attachReadRequests": 0,
+      "deltaFormat": "chunked",
+      "baselineCheckpointMs": 190766,
+      "baselineArchiveBytes": 2147487744,
+      "editedCheckpointMs": 230756,
+      "deltaArchiveBytes": 69632,
+      "fileCorrectness": "size=2147483648 and all three recorded range hashes matched after cold restore",
+      "errors": [],
+      "observations": "observations.json",
+      "teardown": "../../teardown/b20260913145258.json"
+    }
+  ],
+  "provenance": "C3 was measured on a clean committed tree. Dense timing includes Worker/SDK await instrumentation and is not described as a clean-tree timing. The product base is the same 4ded56c3b; the exact trace patches and independent-cell selection are retained. Neither sample measures the later stale-startup guard.",
+  "attributedFixes": [
+    { "commit": "4bca22e3c", "fix": "SDK input blocks release before the awaited restore hook; the original reset was attributed to container.js:641 awaiting onStart and the boot-id RPC." },
+    { "commit": "197daa94f", "fix": "Every chunked-format fallback persists and logs a named reason. The original 2GiB sparse failure was missing hashes from an oversized sha256sum argv; bounded find batches fix it." },
+    { "commit": "40f16afc6", "fix": "Opaque directory records mask the base at delta/tree while preserving whole and higher chunked records; native probe, reader validation, Docker and Lean coverage are present." },
+    { "commit": "291359865", "fix": "Live reseat ran from /workspace and failed EBUSY, leaving zero base hashes. Storage commands now use /var/tmp/devbox; failed reseats refuse. The traced control then found 4092 matching blocks of 4096 and published 69632 bytes." },
+    { "commit": "4ded56c3b", "fix": "Cloud and Docker report plain fuse for the block mount. The readiness predicate now uses that measured type plus the unchanged exact source/generation checks; wrong type, wrong generation and missing mount remain red." },
+    { "commit": "9f877511e", "fix": "Stale buffered startup rows no longer reopen the hook around a ready running container. The dense trace showed one unnecessary adoption waiting 14814ms behind the active writer; the guard is red/green pinned locally." }
+  ],
+  "cleanup": {
+    "bothRuns": "Worker, container application, boxes, bucket and generated configuration removed; driver and tail processes stopped",
+    "finalResidueObjects": 0,
+    "finalResidueMultipartUploads": 0
+  },
+  "runtimeTimeoutsRaised": false,
+  "remaining": "The C3 payload bound now passes, but s3fs still performs two zero-byte directory/placeholder PUTs plus the final payload write. The one-attempt gate remains red and O1 is not full strategy admission."
+}

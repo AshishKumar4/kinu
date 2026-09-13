@@ -1,8 +1,8 @@
 /**
  * One ephemeral container presented as a durable workspace.
  *
- * Admission proves the Sandbox control listener before the SDK opens its
- * onStart block. The hook adopts the same boot or restores one fresh boot
+ * Admission proves the Sandbox control listener before the SDK calls
+ * onStart, outside its storage-only input block. The hook adopts or restores
  * under one raced budget. Requests and maintenance adopt or refuse; they
  * never run a second filesystem restore.
  */
@@ -683,6 +683,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * `unstarted`, which only the next start hook may restore.
    */
   async #resolveAdoption(): Promise<void> {
+    if (this.#gateRestore !== undefined) return;
+
     if (this.#adoptionPending) await this.#adoptOrTurnOver();
   }
 
@@ -910,7 +912,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
   }
 
-  /** The SDK opens this block only after the control listener has answered. */
+  /** The SDK releases its storage block after proving the control listener. */
   override onStart(): Promise<void> {
     return this.#restoreInStartGate();
   }
@@ -1385,6 +1387,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   async devboxStartup(): Promise<void> {
+    // The SDK may already have buffered a row that the completed hook deleted.
+    // That stale callback cannot reopen the hook around an active caller.
+    if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
     await this.#startContainer();
 
     if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
@@ -2065,6 +2070,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Requests may start a stopped box, then adopt the hook's settled generation. */
   async resolveReadiness(): Promise<RestoreReadiness> {
     if (this.ctx.container?.running !== true) await this.#startContainer();
+    // Join application readiness without withholding the hook's RPC replies.
+    await this.#gateRestore?.run;
     await this.#resolveAdoption();
     const admission = this.#admission();
 
@@ -2696,7 +2703,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         + `${String(Math.max(0, Date.now() - held.since))} ms`;
     }
 
-    return undefined;
+    return this.#gateRestore === undefined ? undefined : 'the container start hook has not settled';
   }
 
   /**
@@ -2719,7 +2726,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       durable: this.store !== undefined,
       running: this.ctx.container?.running === true,
       restoration: this.#restoration.phase,
-      ready: this.#restoration.phase === 'attached',
+      ready: this.#restoration.phase === 'attached' && this.#gateRestore === undefined,
       unready: this.#unready(),
       lastInteractionAt: this.#lastInteraction
         ?? await this.ctx.storage.get<number>(LAST_INTERACTION_KEY),
@@ -3373,7 +3380,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // free of an SDK type it would otherwise need in its port signature.
         return { status: checked.status as ChangeStatus, version: checked.version };
       },
-      exec: async (command) => await this.#rawExec(command),
+      exec: async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR),
       stamp: (phase) => this.#stampPhase(phase),
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),

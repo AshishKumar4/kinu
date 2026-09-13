@@ -1,0 +1,46 @@
+bun test v1.4.0 (34cbb9a40)
+
+scripts/do-init-block-bodies.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/counter-pin-red.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/diagnosis.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/final-pins.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/interrupted-teardown.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/local-s3fs.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/local-s3fs.sh is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913101729/observations.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913101729/wrangler.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913101758/driver.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913101758/observations.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913101758/wrangler.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913102157/driver.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913102157/observations.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913102157/wrangler.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913102749/driver.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913102749/observations.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/p20260913102749/wrangler.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/pin-green.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/pin-red.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/sdk-pin-green.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/sdk-pin-red.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/transport-probe-control.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/transport-probe-fixed.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/transport-probe-modes.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/transport-probe.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/20260913-publication/tsc.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/b20260913094839/observations.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/b20260913094839/verdict.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/b20260913103506/driver.log is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/b20260913103506/observations.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/block-attach/b20260913103506/verdict.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/teardown/b20260913094839.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/teardown/b20260913103506.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/teardown/p20260913101729.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/teardown/p20260913101758.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/teardown/p20260913102157.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+sources: WARNING: bench-artifacts/teardown/p20260913102749.json is tracked AND gitignored — ignore rules never hide a tracked file from a gate; either `git rm --cached` it or drop the ignore rule
+
+ 4 pass
+ 0 fail
+ 8 expect() calls
+Ran 4 tests across 1 file. [169.00ms]

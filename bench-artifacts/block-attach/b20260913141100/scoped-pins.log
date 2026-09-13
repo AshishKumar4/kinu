@@ -1,0 +1,58 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/block-lower.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+packages/devbox/tests/store-mount-bounds.test.ts:
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"a8d9a61e-df36-4efd-8bae-2c8dc1b827f6"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"a8d9a61e-df36-4efd-8bae-2c8dc1b827f6","cwd":"","at":1789309670989}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"a8d9a61e-df36-4efd-8bae-2c8dc1b827f6","ms":4}
+[devbox] /workspace base a8d9a61e-df36-4efd-8bae-2c8dc1b827f6 (26 bytes)
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"7a0dd0ff-cac6-4818-be9c-3170d75ca7c7"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"7a0dd0ff-cac6-4818-be9c-3170d75ca7c7","cwd":"","at":1789309670995}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"7a0dd0ff-cac6-4818-be9c-3170d75ca7c7","ms":0}
+[devbox] /workspace base 7a0dd0ff-cac6-4818-be9c-3170d75ca7c7 (30 bytes)
+
+packages/devbox/tests/restore-after-start.test.ts:
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] start refused: settled row could not be persisted
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container identity was destroyed after a failed attach; a fresh one attaches on the next operation
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the box claims a restoration the container does not carry; restoring it rather than serving callers a world that is gone
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] the container instance was replaced (1 so far)
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+[devbox] dropping the schedule row for `snapshotWorkspaceIfDue`: this class carries no such member, so the alarm loop can only log it and keep the row for ever
+[devbox] attach empty: this devbox has no store configured, so nothing is durable
+
+ 166 pass
+ 0 fail
+ 790 expect() calls
+Ran 166 tests across 4 files. [4.01s]

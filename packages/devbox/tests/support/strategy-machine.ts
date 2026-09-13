@@ -495,7 +495,7 @@ export class ContainerDisk {
     // no writer needs to know which paths are disk and which are not.
     if (path.startsWith('/dev/shm/') || path === '/dev/shm') return;
 
-    if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`) || path.startsWith('/var/tmp/devbox/lower-empty')) return;
+    if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`) || path.startsWith('/var/tmp/devbox/lower-empty') || path === '/var/tmp/devbox/block-lower') return;
 
     if (delta > 0 && this.quotaBytes !== null && this.usedBytes + delta > this.quotaBytes) {
       throw new DiskFull(path, delta, Math.max(0, this.quotaBytes - this.usedBytes));
@@ -848,18 +848,32 @@ export class ContainerDisk {
       options: 'rw,nosuid',
     });
     this.overlays.set(point, overlay);
+    const whiteouts = this.whiteouts.get(overlay.upper);
+
+    if (whiteouts !== undefined) this.whiteouts.set(point, new Set(whiteouts));
     this.tree(overlay.upper);
   }
 
   /** Plant one layer's rows over `merged`; answers the next layer's inode offset. */
   #mergeLayer(merged: Map<string, NodeEntry>, layer: string, inoBase: number): number {
-    const tree = this.trees.get(layer);
-
-    if (tree === undefined) return inoBase;
     let highest = 0;
+    const rows = this.snapshot(layer);
 
-    for (const entry of tree.snapshot()) {
+    for (const entry of rows) {
+      if (entry.path.split('/').at(-1) !== '.wh..wh..opq') continue;
+      const parent = entry.path.slice(0, Math.max(0, entry.path.lastIndexOf('/')));
+
+      for (const path of merged.keys()) if (parent === '' || path.startsWith(`${parent}/`)) merged.delete(path);
+    }
+
+    for (const entry of rows) {
+      if (entry.path.split('/').at(-1) === '.wh..wh..opq') continue;
       highest = Math.max(highest, entry.ino);
+
+      if (entry.kind !== 'dir' && merged.get(entry.path)?.kind === 'dir') {
+        for (const path of merged.keys()) if (path.startsWith(`${entry.path}/`)) merged.delete(path);
+      }
+
       merged.set(entry.path, { ...entry, ino: entry.ino + inoBase });
     }
 
@@ -903,6 +917,7 @@ export class ContainerDisk {
     const owner = this.#overlayOwner(path);
 
     if (owner !== undefined) {
+      if (owner.relative.split('/').at(-1) === '.wh..wh..opq') return undefined;
       const upper = this.trees.get(owner.overlay.upper)?.node(owner.relative);
 
       if (upper !== undefined) return { node: upper };
@@ -911,9 +926,12 @@ export class ContainerDisk {
       if (masked !== undefined && isMasked(masked, owner.relative)) return undefined;
 
       for (const layer of owner.overlay.lowers) {
-        const node = this.trees.get(layer)?.node(owner.relative);
+        const node = this.node(`${layer}/${owner.relative}`);
 
         if (node !== undefined) return { node };
+        const parents = ['', ...ancestors(owner.relative).slice(0, -1).map(parent => parent.slice(1))];
+
+        if (parents.some(parent => this.node(`${layer}/${parent === '' ? '' : `${parent}/`}.wh..wh..opq`) !== undefined)) return undefined;
       }
 
       return undefined;
@@ -1823,7 +1841,7 @@ function snapshotChainArm(): ConformanceArm {
 
       if (held === 0) return 0;
       const chainId = row.base.id;
-      const deltaKey = deltaObjectKey(STORE_ROOT, chainId);
+      const deltaKey = deltaObjectKey(STORE_ROOT, row.delta.id ?? chainId);
       const bytes = durable.get(deltaKey);
 
       if (bytes === null) return 0;
@@ -2061,9 +2079,9 @@ function snapshotChainArm(): ConformanceArm {
 
       if (row.delta !== undefined) {
         declared.push({
-          key: deltaObjectKey(STORE_ROOT, row.base.id),
+          key: deltaObjectKey(STORE_ROOT, row.delta.id ?? row.base.id),
           byteLength: row.delta.bytes,
-          names: [deltaObjectKey(STORE_ROOT, row.base.id), 'delta'],
+          names: [deltaObjectKey(STORE_ROOT, row.delta.id ?? row.base.id), 'delta'],
         });
       }
 

@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-13",
+  "runId": "b20260913094839",
+  "source": "ad8a2346b",
+  "workerVersion": "76a27b9b-ddab-4941-bdfb-68eb7f4fa211",
+  "imageDigest": "sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
+  "status": "refused-before-changed-file-restore",
+  "scope": "Two bounded storage cells, not G1-G10 strategy admission",
+  "cells": [
+    {
+      "name": "C3: 64 KiB edit in 64 MiB dense file",
+      "baselineCheckpointMs": 656741,
+      "failure": "s3fs dd fsync and close returned EIO publishing the baseline",
+      "changedFileAttachMs": null,
+      "attachPayloadBytes": null
+    },
+    {
+      "name": "2 GiB sparse changed file, generated inside the container",
+      "baselineCheckpointMs": 217663,
+      "failure": "s3fs dd fsync and close returned EIO publishing the baseline",
+      "changedFileAttachMs": null,
+      "attachPayloadBytes": null
+    }
+  ],
+  "diagnosis": "The publication boundary failed. The underlying EIO mechanism is not established by these observations.",
+  "cleanup": {
+    "workerAbsent": true,
+    "containerApplicationAbsent": true,
+    "bucketAbsent": true,
+    "configurationRemoved": true,
+    "finalResidueObjects": 0,
+    "finalResidueMultipartUploads": 0,
+    "manifest": "../../teardown/b20260913094839.json"
+  },
+  "localEvidence": {
+    "realContainerAttachPayloadBytes": 0,
+    "realContainerAttachIndexPages": 0,
+    "conformanceC3Bytes": 90298,
+    "conformanceC3Objects": 1,
+    "note": "Local evidence is not a cloud latency or a substitute for the missing live figures."
+  }
+}

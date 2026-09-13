@@ -28,6 +28,24 @@ Metadata path lengths are platform-bounded. Payload reads/copies are zero. This 
 only if H≤cM. It is not a wall-clock guarantee. Resuming services and proving listeners follows
 attachment inside the hook.
 
+Opaque directories are directory records with `opaque:true`; an opaque root
+uses `p:""`. The native publication probe observes `trusted.overlay.opaque`,
+the user-namespace variants and fuse-overlayfs's `.wh..wh..opq` marker.
+Unreadable opacity refuses publication. The package places the marker in
+`delta/tree`, and the block server verifies it before mounting. A mask on
+the higher block directory would also hide this checkpoint's whole files;
+the tree-level mask hides only the older base. Cumulative publication drops
+retained descendants of a replaced opaque directory and preserves its mask
+on later ordinary edits. No lower directory is enumerated.
+
+H still counts directory records, including an opaque root, rather than the
+entries those records hide. On 2026-09-13 the Docker conformance row renamed
+a directory over a removed lower directory, checkpointed, restored, and
+listed exactly the new names. Mixed whole and chunked records remained
+readable with zero payload bytes and index pages at attach; a missing opaque
+marker refused readiness. `BlockLayer.lean` models these precedence rules
+and proves that opacity does not add a second directory record.
+
 ## One necessary format change
 
 V1 embeds over[]. Using the real planner with synthetic hashes, M=1 and one deduplicated chunk, logical
@@ -43,7 +61,15 @@ index names a file beside chunks within the same delta squashfs, not another rem
 bounded authenticated search pages ordered by block offset. Fetch/search O(log(k+1)) pages per block,
 never fetch the entire index on open. Entries retain o/src/d; src=hole means zero bytes, not lower
 fallthrough. Missing override means the same base range, zero-extended beyond base EOF; s clips the last
-block. Whole-file thresholds stay 64KiB and >50% zero blocks. V1 is refused by version; reset deployment,
+block. Whole-file thresholds stay 64KiB and >50% zero blocks. A mostly-zero file is
+a whole record inside the chunked delta's tree, not a legacy whole-upper
+publication. The bounded block-lower cell therefore uses a dense changed
+file. On 2026-09-13, `b20260913105359` attributed the sparse cell's legacy
+fallback to `block-hash-failed` (0 of 131072 hashes), not the zero-block rule.
+The shell expanded every split path into one `sha256sum` argument list;
+`delta-hash-argv.test.ts` reproduced `Argument list too long`. Hashing now
+uses `find -exec ... +` batches. Every format fallback is a named value on
+the published chain and its log event. V1 is refused by version; reset deployment,
 no dual reader. Publication must merge retained delta metadata with the upper; today's mounted-delta
 collapse cannot remain.
 

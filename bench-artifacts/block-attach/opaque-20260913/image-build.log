@@ -1,0 +1,67 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 1.20kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#3 DONE 0.0s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 2B done
+#4 DONE 0.0s
+
+#5 [squash 3/5] ADD --checksum=sha256:42d4dfd17ed186745117cfd427023eb81effff3832bab09067823492b6b982e7 https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz /build/source.tar.gz
+#5 DONE 0.0s
+
+#6 [build 1/6] FROM docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d
+#6 DONE 0.0s
+
+#7 [squash 1/5] FROM docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 282B done
+#8 DONE 0.0s
+
+#9 [build 6/6] RUN cargo test --locked && cargo build --release --locked
+#9 CACHED
+
+#10 [squash 4/5] WORKDIR /build
+#10 CACHED
+
+#11 [squash 2/5] RUN apt-get update -qq && apt-get install -y --no-install-recommends build-essential libfuse-dev libzstd-dev zlib1g-dev pkg-config
+#11 CACHED
+
+#12 [squash 3/5] ADD --checksum=sha256:42d4dfd17ed186745117cfd427023eb81effff3832bab09067823492b6b982e7 https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz /build/source.tar.gz
+#12 CACHED
+
+#13 [build 5/6] COPY src ./src
+#13 CACHED
+
+#14 [squash 5/5] RUN tar -xzf source.tar.gz && cd squashfuse-0.1.103 && ./configure --disable-shared --disable-demo --disable-high-level --enable-low-level && make -j2
+#14 CACHED
+
+#15 [build 3/6] WORKDIR /build
+#15 CACHED
+
+#16 [stage-2 2/3] COPY --from=build /build/target/release/devbox-block-lower /usr/local/bin/devbox-block-lower
+#16 CACHED
+
+#17 [build 2/6] RUN apk add --no-cache build-base
+#17 CACHED
+
+#18 [build 4/6] COPY Cargo.toml Cargo.lock ./
+#18 CACHED
+
+#19 [stage-2 3/3] COPY --from=squash /build/squashfuse-0.1.103/squashfuse_ll /usr/local/bin/devbox-squashfuse
+#19 CACHED
+
+#20 exporting to image
+#20 exporting layers done
+#20 writing image sha256:33060d68bbf1fea69a37307c1523d267b2301e387c3efe65f4eddff20dc67018 done
+#20 naming to docker.io/library/kinu-devbox-block-layer:20260913-opaque done
+#20 DONE 0.0s

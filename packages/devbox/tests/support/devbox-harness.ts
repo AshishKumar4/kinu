@@ -591,13 +591,8 @@ export class FakeSandbox {
     );
   }
   /**
-   * Set while the container-start hook holds the platform's init gate.
-   *
-   * The one platform fact this fake models that is NOT a container behaviour:
-   * while `onStart` is awaited inside `blockConcurrencyWhile` the runtime
-   * delivers no event to the Durable Object. A test that called `box.exec()`
-   * directly during that window would be asserting against an interleaving the
-   * platform cannot produce, so {@link deliver} awaits this first.
+   * An explicit platform input block. The patched SDK's container hook does
+   * not hold one; delivered operations join Devbox readiness themselves.
    */
   initGate: Promise<void> | undefined;
 
@@ -750,6 +745,19 @@ export class FakeSandbox {
    * other command.
    */
   #execChainCommand(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+    const unmount = /\/usr\/bin\/fusermount3 -u '([^']+)'/.exec(command)?.[1];
+
+    if (unmount !== undefined) {
+      const mounted = this.overlayMounts.has(unmount) || this.layerMounts.has(unmount) || this.s3fsMounts.has(unmount);
+
+      if (mounted && this.#mountIsBusy(unmount)) return { stdout: '', stderr: `fusermount3: failed to unmount ${unmount}: Device or resource busy`, exitCode: 1 };
+      this.overlayMounts.delete(unmount);
+      this.layerMounts.delete(unmount);
+      this.s3fsMounts.delete(unmount);
+
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
     if (command.includes('/usr/bin/fuse-overlayfs')) {
       const quoted = quotedSegments(command);
       const target = quoted.at(-1);
@@ -759,9 +767,9 @@ export class FakeSandbox {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
 
-    if (command.includes('/usr/bin/squashfuse')) {
-      const quoted = quotedSegments(command);
-      const mountPoint = quoted.at(-1);
+    if (command.includes('/usr/local/bin/devbox-squashfuse')) {
+      const quoted = quotedSegments(command.slice(command.indexOf('/usr/local/bin/devbox-squashfuse')));
+      const mountPoint = quoted[1];
 
       if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
 
@@ -1038,21 +1046,19 @@ export class FakeSandbox {
     // holders were killed first — which is the deterministic reason every
     // deployed stop refused, measured in probe `hp0901170218`, where the
     // identical `fusermount -u` returned 0 the moment the session was parked.
-    if (mountPath === '/workspace'
-      && (this.sessionCwd === mountPath || this.sessionCwd.startsWith(`${mountPath}/`))) {
+    if (this.#mountIsBusy(mountPath)) {
       throw new Error(
         `fusermount -u failed (exit 1): fusermount: failed to unmount ${mountPath}: `
         + 'Device or resource busy',
       );
     }
 
-    if (this.workdirHolder !== undefined && mountPath === '/workspace') {
-      // The holder is still alive, so the mount is still busy: the refusal a
-      // real fusermount gives, before any state changes hands.
-      throw new Error(`fusermount: failed to unmount ${mountPath}: Device or resource busy`);
-    }
-
     this.s3fsMounts.delete(mountPath);
+  }
+
+  #mountIsBusy(path: string): boolean {
+    return this.sessionCwd === path || this.sessionCwd.startsWith(`${path}/`)
+      || (path === '/workspace' && this.workdirHolder !== undefined);
   }
 
   async renameFile(oldPath: string, newPath: string, sessionId?: string): Promise<FileOperation> {
@@ -1391,17 +1397,10 @@ export class FakeSandbox {
     this.startFaultAfterRunning = undefined;
 
     if (fault !== undefined) throw fault;
-    // The SDK awaits onStart inside its block on every start request.
-    // Incoming requests wait on initGate; timers and awaited I/O can complete.
-    const opened = Promise.withResolvers<void>();
-    this.initGate = opened.promise;
-
-    try {
-      await this.onStart();
-    } finally {
-      this.initGate = undefined;
-      opened.resolve();
-    }
+    // 2026-09-13 cloud block trace b20260913105359: an adoption RPC inside
+    // the SDK hook block never receives its reply. The patched SDK releases
+    // its storage block first; Devbox's readiness singleflight gates callers.
+    await this.onStart();
 
   }
 
