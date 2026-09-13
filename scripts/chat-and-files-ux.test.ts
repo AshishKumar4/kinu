@@ -2452,12 +2452,11 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
 });
 
 describe('the workbench type scale, as the browser computes it', () => {
-  test('assistant prose reads at 16px and tool-row labels at 13px', async () => {
+  test('the workbench reads at the owner-approved compact scale', async () => {
     const sizes = await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1280, height: 1600 });
-      await page.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
-      await page.reload({ waitUntil: 'networkidle0' });
+      await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('.prose-chat');
       await page.waitForSelector('[data-tool-state] strong');
 
@@ -2471,10 +2470,11 @@ describe('the workbench type scale, as the browser computes it', () => {
       return measured;
     });
 
-    // The scale's two load-bearing rungs: chat prose at the root size, dense
-    // tool rows one step down. Both moved here from miniaturised literals
-    // (0.906rem prose, 11px tool titles), so either regression reads here.
-    expect(sizes.prose).toBe('16px');
+    // The scale's two load-bearing rungs on the workbench: chat prose just
+    // under 15px, dense tool rows at 13. Both pinned to the sizes the owner
+    // approved — the shell frame renders inside `.p-workbench`, so either
+    // regression reads here.
+    expect(sizes.prose).toBe('14.496px');
     expect(sizes.toolLabel).toBe('13px');
   }, 120_000);
 });

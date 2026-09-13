@@ -682,6 +682,16 @@ export default function WorkspacePage() {
     return () => window.removeEventListener("kinu:new-agent", open);
   }, [createAndOpenAgent]);
 
+  /* The workbench reads at the compact scale index.css gates on
+     `html[data-workbench]`: the rail and drawer live outside this route's
+     subtree, so the flag sits on the root. A layout effect sets it before the
+     first paint, so the page never flashes at the default scale. */
+  useLayoutEffect(() => {
+    document.documentElement.dataset.workbench = "";
+
+    return () => { delete document.documentElement.dataset.workbench; };
+  }, []);
+
   // The picker awaits its own write. `setModel` records the failure on
   // `state.error` and rolls the picker back to the stored spec before it
   // resolves the reason, so this handler owns the settlement and has nothing
