@@ -25,7 +25,16 @@ import { describe, expect, it } from 'vitest';
 import type { SocketDO } from './worker';
 
 /** The upgrade `DeviceSocketHub.accept` answers (`device-hub.ts:106-113`). One
- *  per device, on whichever object the test is addressing. */
+ *  per device, on whichever object the test is addressing.
+ *
+ *  The client half is kept on a module-level set: a WebSocketPair's client end
+ *  is a GC-managed I/O object, and workerd closes the connection — server side
+ *  included, attachment with it — when the unreferenced client is collected.
+ *  Nothing here holds a reference after `connect` returns, so under load the
+ *  desktop socket could vanish between `recordProbe` and `probeRecord`, which
+ *  is exactly the null this file shipped as a deploy flake. */
+const clients = new Set<WebSocket>();
+
 const connect = async (object: DurableObjectStub<SocketDO>, device: string) => {
   const response = await object.fetch(`https://user-do/?device=${device}`, {
     headers: { Upgrade: 'websocket' },
@@ -33,6 +42,8 @@ const connect = async (object: DurableObjectStub<SocketDO>, device: string) => {
 
   // Without this the tests below would pass on a hub that accepted nothing.
   expect(response.status).toBe(101);
+
+  if (response.webSocket !== null) clients.add(response.webSocket);
 };
 
 describe('hibernatable socket attachments', () => {
