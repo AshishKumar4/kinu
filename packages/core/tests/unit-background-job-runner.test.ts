@@ -71,8 +71,8 @@ function fakeHost() {
  *  place orphan recovery can happen. */
 function setup(opts: {
   resume?: JobResumer; policy?: BackgroundPolicy; db?: Database; harvest?: JobHarvester;
-  onDetached?: (jobId: string, requestIds: readonly string[]) => Promise<void> | void;
-  onCancelled?: (jobId: string) => Promise<void> | void;
+  onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
+  onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   scheduleResume?: (atMs: number) => Promise<void> | void;
 } = {}) {
   const db = opts.db ?? new Database(':memory:');
@@ -324,8 +324,8 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
 });
 
 describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
-  test('cancel aborts the work, marks cancelled, and WAKES the agent; the fiber does not relabel or wake again', async () => {
-    const { runner, store, enqueued, settled } = setup();
+  test.each([undefined, null])('without an external owner (%p), cancel aborts, marks cancelled, and wakes once', async (external) => {
+    const { runner, store, enqueued, settled } = setup({ onDetached: external, onCancelled: external });
     const controller = new AbortController();
     const id = runner.create('run', {}, 'build', controller);
     const work = Promise.withResolvers<never>();

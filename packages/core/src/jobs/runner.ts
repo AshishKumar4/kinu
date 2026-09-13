@@ -177,11 +177,14 @@ export interface BackgroundJobRunnerDeps {
    *  follow a partial per-request move, so the runner preserves the minted job's
    *  live completion rather than pretending the foreground still owns it.
    *  Requests issued AFTER the handoff are not transferred at all — the owning
-   *  job's identity travels with the call instead (see ./device-ownership). */
-  onDetached?(jobId: string, requestIds: readonly string[]): Promise<void> | void;
+   *  job's identity travels with the call instead (see ./device-ownership).
+   *  null declares a host with no separately owned remote requests: its work
+   *  remains under the runner's AbortController. */
+  onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
   /** Cancel external work transferred to this exact durable job. Throws to
-   *  REFUSE the cancel, which leaves the job running and retryable. */
-  onCancelled?(jobId: string): Promise<void> | void;
+   *  REFUSE the cancel, which leaves the job running and retryable. null is the
+   *  local-controller-only case, matching onDetached. */
+  onCancelled?: ((jobId: string) => Promise<void> | void) | null;
   /** Re-drive an evicted job from its durable checkpoint. When absent, an evicted
    *  running job is failed; when present, the runner reclaims the job under a fresh
    *  lease epoch and re-drives it in a new durable fiber. */
