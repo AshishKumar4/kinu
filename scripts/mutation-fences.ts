@@ -24,7 +24,7 @@
  * sit in that file EXACTLY ONCE (a stale fixture direction is a gate failure,
  * not a pass), the mutation to apply, and the owning test that must go red. A
  * fence whose snippet has moved fails the gate naming the fence — that is the
- * `test:mutation` harness's own rule, re-stated: a mutation whose edit
+ * `packages/core/tests/mutation-*.test.ts` harness's own rule, re-stated: a mutation whose edit
  * silently missed proves nothing.
  *
  * HOW THE COPY IS MADE. `git worktree add --detach` at the current HEAD under
@@ -34,8 +34,8 @@
  * is symlinked to this checkout's, which is the setup-worktree invariant
  * (third-party modules are shared and identical; `@kinu.run/*` resolves
  * through the WORKTREE's own packages). The copy is removed in a `finally`,
- * and the gate NEVER mutates the working tree — the rule `test:mutation`
- * states, kept here for the same reason.
+ * and the gate NEVER mutates the working tree — the rule the mutation suites
+ * state, kept here for the same reason.
  *
  * THE MEASURED SET versus THE GOVERNED SET, stated rather than implied:
  * MEASURED — every declared fence's file, read once for the exactly-once
