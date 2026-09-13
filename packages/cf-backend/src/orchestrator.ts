@@ -5237,7 +5237,7 @@ export class OrchestratorAgent extends ActorAgent {
    *
    * The whole point is that the owner supplies NOTHING: no name, no mission,
    * no role. It inherits this workspace's mission, runs as the catalog's
-   * `general`, and comes back with a blank `displayName` — which is not a gap
+   * `task`, and comes back with a blank `displayName` — which is not a gap
    * to fill in with a placeholder string but the state the first-interaction
    * title policy reads (`SubordinateAgent.onChatResponse`). Its `name` is a
    * stable slug and is the thing to route to.

@@ -18,7 +18,7 @@ import * as v from 'valibot';
 function catalogA(): ProfileCatalog {
   return {
     roles: {
-      general: { description: 'everyday work', instructions: 'Do the task directly.', tier: 'default', preset: 'ideate' },
+      task: { description: 'everyday work', instructions: 'Do the task directly.', tier: 'default', preset: 'ideate' },
       researcher: { description: 'finds things out', instructions: 'Research before answering.', tier: 'fast', preset: 'research' },
     },
     tiers: {
@@ -309,7 +309,7 @@ describe('account cache isolation', () => {
     const a = v.parse(ParsedEnvelope, expectOk(steps.readA));
     expect(a.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
     expect(a.version).toBe(3);
-    expect(Object.keys(a.catalog.roles)).toContain('general');
+    expect(Object.keys(a.catalog.roles)).toContain('task');
     const b = v.parse(ParsedEnvelope, expectOk(steps.readB));
     expect(b.authority).toEqual({ kind: 'account', accountId: 'acc-b' });
     expect(Object.keys(b.catalog.roles)).toEqual(['auditor']);
@@ -485,7 +485,7 @@ describe('the turn profile authority reader', () => {
     // The turn completed, under this account's own catalog.
     expect(served.envelope.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
     expect(served.envelope.version).toBe(9);
-    expect(Object.keys(served.envelope.catalog.roles).sort()).toEqual(['general', 'researcher']);
+    expect(Object.keys(served.envelope.catalog.roles).sort()).toEqual(['researcher', 'task']);
     // It reported the substitution, naming the version it ran under, and the
     // resolution itself carries what answered and what it cost.
     const [fallback, resolved] = served.diagnostics;

@@ -63,7 +63,7 @@ function sessions() {
 
 function bind(actor: ActorSession, turnId: string, mode: WorkMode, message: ModelMessage, tools: ToolSet = {}) {
   const lease = actor.beginTurn({ runId: `run-${turnId}`, turnId }, mode, Date.now());
-  actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'general', workMode: mode,
+  actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'task', workMode: mode,
     availableTools: Object.keys(tools), activeSkills: [] }), profiles);
   actor.appendInput(lease, message);
 
@@ -161,7 +161,7 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
   const old = actor.beginTurn({ runId: 'run-old', turnId: 'old-turn' }, 'plan', Date.now());
   actor.finishTurn(old);
   const current = actor.beginTurn({ runId: 'run-new', turnId: 'new-turn' }, 'build', Date.now());
-  const profile = resolveTurnProfile({ ...profiles, roleId: 'general', workMode: 'build', availableTools: [], activeSkills: [] });
+  const profile = resolveTurnProfile({ ...profiles, roleId: 'task', workMode: 'build', availableTools: [], activeSkills: [] });
 
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => ({
     content: [{ type: 'text', text: 'new answer' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],

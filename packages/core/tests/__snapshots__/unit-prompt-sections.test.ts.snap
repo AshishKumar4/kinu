@@ -23,10 +23,9 @@ exports[`every registered section reaches a rendered prompt the Markdown extract
   "plan-mode-with-submission": "99ee9be9ca76aeefea09eee3f079109f179922689db74ab74c413a6f8c5318bd",
   "plan-mode-without-submission": "fcc7d67faec674443cabb63201aeedc5aea7d424faf0a86479c92c2635e0a1b1",
   "role-auditor": "2b2b3a3299acae7d66cbd62bcdcc1c9af025a4c5ed0e3aa7766939330aecef14",
-  "role-designer": "b051a3a518751dbc3bf0753f1da2fa2ab23104ed3434ad0d7cc692634fef8e0f",
-  "role-general": "b677aeeff6244d3e9ebe766d5234e416fd8f9ce3f6f8437971ff5ff4f171b663",
-  "role-implementer": "771f5e0f95bb70083d31733c3ab5a87aa2b25c74854c3adbcbe4f7af1f221629",
+  "role-designer": "b0264b4e4f9c1163d2eb2e1979212bf262c09fe6c002408536585fd8344fc11f",
   "role-planner": "812f243b8816a914e82896a959896d13ebe61aba2e8e54ea1dc14fd818f0b0ee",
   "role-researcher": "1dd231623acc00679be6a17a203dac54e51ae824f26d61fd293d8b4426f9be60",
+  "role-task": "ee1c15cefb5ed2f2e4acca6058e1aa8cdcfc8ea7be874fdbe5709e375eb4d33f",
 }
 `;

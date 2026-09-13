@@ -41,7 +41,7 @@ export function soloHub(client: AgentClient): TuiHubData {
   return {
     agents: [{
       id: client.agentName, label: client.agentName, kind: 'main', status: 'idle',
-      roleId: 'general', tierId: 'default', workspace: client.agentName,
+      roleId: 'task', tierId: 'default', workspace: client.agentName,
     }],
     profile: {
       envelope: {
@@ -49,12 +49,12 @@ export function soloHub(client: AgentClient): TuiHubData {
         version: 1,
         digest: 'fixture',
         catalog: {
-          roles: { general: { description: 'General work', instructions: 'Work directly.', tier: 'default', preset: 'ideate' } },
+          roles: { task: { description: 'General work', instructions: 'Work directly.', tier: 'default', preset: 'ideate' } },
           tiers: { default: { model: 'openai/gpt-5.5', reasoningEffort: 'medium' } },
         },
       },
-      activeRoleId: 'general',
-      allowedRoleIds: ['general'],
+      activeRoleId: 'task',
+      allowedRoleIds: ['task'],
     },
   };
 }

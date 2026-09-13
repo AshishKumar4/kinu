@@ -9,10 +9,9 @@
 //
 // Resolution lives in ./resolve.ts; everything here is pure data, validation
 // and hashing.
-import general from "../prompts/role-general.md" with { type: 'text' };
+import task from "../prompts/role-task.md" with { type: 'text' };
 import researcher from "../prompts/role-researcher.md" with { type: 'text' };
 import planner from "../prompts/role-planner.md" with { type: 'text' };
-import implementer from "../prompts/role-implementer.md" with { type: 'text' };
 import auditor from "../prompts/role-auditor.md" with { type: 'text' };
 import designer from "../prompts/role-designer.md" with { type: 'text' };
 import * as v from 'valibot';
@@ -50,7 +49,7 @@ export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(
 /** The roles every authority implicitly ships. A catalog may override any of
  *  them by key; it cannot remove them. */
 const BUILTIN_ROLE_IDS = [
-  'general', 'researcher', 'planner', 'implementer', 'auditor', 'designer',
+  'task', 'researcher', 'planner', 'auditor', 'designer',
 ] as const;
 
 export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
@@ -64,7 +63,7 @@ export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
  * role it names. Config-store fallbacks read through this constant. The other
  * bare spellings sit in other lanes, inside core and out.
  */
-export const DEFAULT_ROLE_ID = 'general' as const satisfies BuiltinRoleId;
+export const DEFAULT_ROLE_ID = 'task' as const satisfies BuiltinRoleId;
 
 /** Kebab-case, lowercase-first: the same discipline skill names follow. */
 export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -251,7 +250,8 @@ export function profileCatalogDigest(catalog: ProfileCatalog): string {
  * second-strategy rule for an empty search (`agents/scout.md`), the security
  * reviewer's empty-result contract (`agents/security-reviewer.md`), the
  * planner's closing critical-files list (`system/plan-mode-subagent.md`), and
- * the sub-agent contract's blocked rule and its no-project-wide-validation
+ * the generic worker's task contract (`agents/task.md`), and the sub-agent
+ * contract's blocked rule and its no-project-wide-validation
  * rule beside concurrent siblings (`system/subagent-system-prompt.md`).
  *
  * What the text names is only what every actor has: the `file`, `run`, `web`,
@@ -260,9 +260,9 @@ export function profileCatalogDigest(catalog: ProfileCatalog): string {
  * gated on "when you were hired" because `report` is a subordinate's tool.
  */
 export const BUILTIN_ROLE_DEFINITIONS = {
-  general: {
-    description: 'The everyday agent for open-ended work in this workspace.',
-    instructions: definePromptSection('role/general', '', general.trimEnd()).render({}),
+  task: {
+    description: 'General work: implement, run, fix.',
+    instructions: definePromptSection('role/task', '', task.trimEnd()).render({}),
     tier: 'default',
     preset: 'ideate',
   },
@@ -278,12 +278,6 @@ export const BUILTIN_ROLE_DEFINITIONS = {
     tier: 'deep',
     preset: 'ideate',
     plan: true,
-  },
-  implementer: {
-    description: 'Turns an agreed plan or task into working code.',
-    instructions: definePromptSection('role/implementer', '', implementer.trimEnd()).render({}),
-    tier: 'default',
-    preset: 'optimise',
   },
   auditor: {
     description: 'Reviews changes for defects, regressions and security risks.',

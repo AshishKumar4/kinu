@@ -39,7 +39,7 @@ function baseInput(overrides: Partial<Parameters<typeof resolveTurnProfile>[0]> 
   return {
     envelope: envelope(),
     provider: PROVIDER,
-    roleId: 'general',
+    roleId: 'task',
     workMode: 'build' as const,
     availableTools: ['file', 'run', 'agents', 'mcp_github_search'],
     activeSkills: [],
@@ -165,7 +165,7 @@ describe('durable role change', () => {
   test('applied switch persists provenance and the next turn resolves the new role', () => {
     const config = memoryConfig();
     const out = changeActiveRole({ envelope: envelope(), config, to: 'auditor', actor: 'user' });
-    expect(out).toEqual({ kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 });
+    expect(out).toEqual({ kind: 'applied', from: 'task', to: 'auditor', catalogVersion: 3 });
     expect(config.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('auditor');
     expect(config.get('role_changed_by')).toBe('user');
     const nextTurn = resolveTurnProfile(baseInput({ roleId: 'auditor' }));
@@ -179,7 +179,7 @@ describe('durable role change', () => {
     expect(changeActiveRole({ envelope: envelope(), config, to: 'planner', actor: 'agent' }))
       .toEqual({ kind: 'refused', reason: 'locked' });
     expect(changeActiveRole({ envelope: envelope(), config, to: 'planner', actor: 'user' }))
-      .toEqual({ kind: 'applied', from: 'general', to: 'planner', catalogVersion: 3 });
+      .toEqual({ kind: 'applied', from: 'task', to: 'planner', catalogVersion: 3 });
   });
   test('approval refuses a widening self-switch and lands a narrowing one', () => {
     const config = memoryConfig();
@@ -225,7 +225,7 @@ describe('durable role change', () => {
  *  written twice, a new outcome member earns a wrong sentence in two places
  *  instead of a compile error in one. */
 describe('what a caller is told about a role change', () => {
-  const say = (outcome: RoleChangeOutcome, requested = 'auditor', current = 'general') =>
+  const say = (outcome: RoleChangeOutcome, requested = 'auditor', current = 'task') =>
     roleChangeOutcomeText(requested, outcome, current);
 
   test('an approval widening is refused with the approval named', () => {
@@ -236,7 +236,7 @@ describe('what a caller is told about a role change', () => {
     expect(text).toContain('approval');
     expect(text).not.toContain('awaiting owner approval');
     // And it names what runs meanwhile, which is the actionable half.
-    expect(text).toContain('"general"');
+    expect(text).toContain('"task"');
   });
 
   test('the two outcomes retrying cannot fix say so', () => {
@@ -247,7 +247,7 @@ describe('what a caller is told about a role change', () => {
 
   test('every outcome names the role that is live afterwards', () => {
     const outcomes: RoleChangeOutcome[] = [
-      { kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 },
+      { kind: 'applied', from: 'task', to: 'auditor', catalogVersion: 3 },
       { kind: 'refused', reason: 'locked' },
       { kind: 'refused', reason: 'unknown-role' },
       { kind: 'refused', reason: 'invalid-role-id' },
@@ -267,7 +267,7 @@ describe('what a caller is told about a role change', () => {
     // profiles/role-change.ts's contract: the running step keeps the profile it
     // already resolved. A message claiming the switch is live now would
     // contradict the turn the agent is in.
-    const text = say({ kind: 'applied', from: 'general', to: 'auditor', catalogVersion: 3 });
+    const text = say({ kind: 'applied', from: 'task', to: 'auditor', catalogVersion: 3 });
     expect(text).toContain('next turn');
   });
 
