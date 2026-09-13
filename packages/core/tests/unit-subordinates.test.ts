@@ -219,7 +219,7 @@ describe('the child descriptor authority', () => {
     expect(source.read()).toEqual({
       displayName: '',
       nameOrigin: 'auto',
-      role: 'general',
+      role: 'task',
       tier: null,
     });
   });
@@ -568,7 +568,7 @@ describe('team action routing', () => {
       displayName: '',
       nameOrigin: 'auto',
       mission: HARNESS_OWN_MISSION,
-      role: 'general',
+      role: 'task',
       lifetime: 'durable',
     }]);
     // Idle: a mission defines it, and does not become a task.

@@ -450,7 +450,7 @@ describe('ChatApp terminal interaction', () => {
   const HUB_FIXTURE: TuiHubData = {
     agents: [{
       id: 'agent-main', label: 'Checkout', kind: 'main', status: 'idle',
-      roleId: 'general', tierId: 'default', workspace: 'shop',
+      roleId: 'task', tierId: 'default', workspace: 'shop',
     }],
     profile: {
       envelope: {
@@ -458,12 +458,12 @@ describe('ChatApp terminal interaction', () => {
         version: 1,
         digest: 'digest',
         catalog: {
-          roles: { general: { description: 'General work', instructions: 'Work directly.', tier: 'default', preset: 'ideate' } },
+          roles: { task: { description: 'General work', instructions: 'Work directly.', tier: 'default', preset: 'ideate' } },
           tiers: { default: { model: 'workers-ai/deepseek', reasoningEffort: 'medium' } },
         },
       },
-      activeRoleId: 'general',
-      allowedRoleIds: ['general'],
+      activeRoleId: 'task',
+      allowedRoleIds: ['task'],
     },
   };
 

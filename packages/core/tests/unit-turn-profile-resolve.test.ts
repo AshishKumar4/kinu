@@ -68,7 +68,7 @@ function resolve(overrides: Partial<ResolveTurnProfileInput> = {}) {
   const input: ResolveTurnProfileInput = {
     envelope: envelope(catalogFixture),
     provider: provider(),
-    roleId: 'general',
+    roleId: 'task',
     workMode: 'build',
     availableTools: ['search', 'read', 'run'],
     activeSkills: [],
@@ -141,7 +141,7 @@ describe('tier resolution', () => {
       const profile = resolveTurnProfile({
         envelope: envelope(defaultOnly),
         provider: provider(),
-        roleId: 'general',
+        roleId: 'task',
         explicitTier: missing,
         workMode: 'build',
         availableTools: [],
@@ -247,7 +247,7 @@ describe('provider availability', () => {
     // before this rule an account pinning ANY tier to a degraded provider's
     // model refused every turn, whatever tier that turn itself ran at.
     const profile = resolve({
-      roleId: 'general', availableTools: [], provider: degraded(['m-default']),
+      roleId: 'task', availableTools: [], provider: degraded(['m-default']),
     });
 
     expect(profile.tier.model).toBe('m-default');
@@ -260,16 +260,16 @@ describe('role validation', () => {
     const profile = resolveTurnProfile({
       envelope: envelope(catalog()),
       provider: provider(),
-      roleId: 'general',
+      roleId: 'task',
       workMode: 'build',
       availableTools: [],
       activeSkills: [],
     });
 
     expect(profile.role).toEqual({
-      id: 'general', label: 'General',
-      description: BUILTIN_ROLE_DEFINITIONS.general.description,
-      instructions: BUILTIN_ROLE_DEFINITIONS.general.instructions,
+      id: 'task', label: 'Task',
+      description: BUILTIN_ROLE_DEFINITIONS.task.description,
+      instructions: BUILTIN_ROLE_DEFINITIONS.task.instructions,
     });
     // general declares the default tier, which is always configured.
     expect(profile.tier.source).toBe('role');
@@ -282,7 +282,7 @@ describe('role validation', () => {
     });
 
     expect(message).toContain('wizard');
-    expect(message).toContain('general');
+    expect(message).toContain('task');
   });
 
   test('malformed ids, tiers and work modes refuse before any lookup', () => {
@@ -303,7 +303,7 @@ describe('role validation', () => {
     });
 
     const run = (extra: Partial<ResolveTurnProfileInput>) => resolveTurnProfile({
-      envelope: envelope(withReview), provider: provider(['m-default', 'm-review']), roleId: 'general',
+      envelope: envelope(withReview), provider: provider(['m-default', 'm-review']), roleId: 'task',
       workMode: 'build', availableTools: [], activeSkills: [], ...extra,
     });
 
@@ -361,7 +361,7 @@ describe('permission mode', () => {
   });
 
   test('roles without plan inherit the mode untouched', () => {
-    expect(resolve({ roleId: 'implementer' }).workMode).toBe('build');
+    expect(resolve({ roleId: 'task' }).workMode).toBe('build');
   });
 });
 

@@ -1362,7 +1362,7 @@ export async function hostedSubordinateHarness(
     // the temporary rung has its own tests.
     lifetime: 'durable',
     mission: identity.mission,
-    role: identity.roleId ?? 'general',
+    role: identity.roleId ?? 'task',
     // Absent, not null: the parent pinned no tier, so the child's role derives
     // one. A literal null would be a pin on "no tier", which is a different
     // instruction and one the catalog cannot honour.

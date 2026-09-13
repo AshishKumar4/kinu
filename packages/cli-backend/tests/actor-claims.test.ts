@@ -122,7 +122,7 @@ async function runTurn(bound: Bound, opts: {
   );
 
   bound.actor.bindProfile(lease, resolveTurnProfile({
-    ...profiles, roleId: 'general', workMode: mode, availableTools: [], activeSkills: [],
+    ...profiles, roleId: 'task', workMode: mode, availableTools: [], activeSkills: [],
   }), profiles);
   bound.actor.appendInput(lease, opts.input);
 

@@ -64,7 +64,7 @@ export function mergePolicyProfile(): ResolvedTurnProfile {
       revision: 'rev-1',
       availableModels: [MERGE_POLICY_CHAT_MODEL, MERGE_POLICY_JUDGE_MODEL],
     },
-    roleId: 'general',
+    roleId: 'task',
     workMode: 'build',
     availableTools: [],
     activeSkills: [],

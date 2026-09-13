@@ -51,7 +51,7 @@ describe('guided onboarding renderer', () => {
       <TuiProductProvider runtime={{ preferenceStore: store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
         <GuidedOnboarding
           operations={operations}
-          roles={[{ id: 'general', label: 'General', description: 'General work' }]}
+          roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
           onReady={() => {}}
           onExit={() => {}}
         />
@@ -112,7 +112,7 @@ describe('guided onboarding renderer', () => {
         <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
-            roles={[{ id: 'general', label: 'General', description: 'General work' }]}
+            roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
             onReady={() => {}}
             onExit={() => {}}
           />
@@ -208,7 +208,7 @@ describe('guided onboarding renderer', () => {
         <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
           <GuidedOnboarding
             operations={operations}
-            roles={[{ id: 'general', label: 'General', description: 'General work' }]}
+            roles={[{ id: 'task', label: 'Task', description: 'General work' }]}
             onReady={() => {}}
             onExit={() => {}}
           />

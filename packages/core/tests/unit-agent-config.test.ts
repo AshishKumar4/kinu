@@ -443,7 +443,7 @@ describe('the canonical conversation id lives under its registered key', () => {
 
 /** A hired subordinate's assignment: the role its parent gave it, and the tier
  *  its parent pinned. Both are read at the child's next turn boundary, which is
- *  where a dropped assignment turns into an agent running as `general` at the
+ *  where a dropped assignment turns into an agent running as `task` at the
  *  default tier with nothing saying so. */
 describe('the hired assignment a child reads at its turn boundary', () => {
   test('role and tier round-trip through the typed accessors', () => {
@@ -497,7 +497,7 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     // An invalid id reads as the default, and the read does NOT overwrite it.
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.roleSelection, 'not json');
-    expect(c.getRoleSelection()).toBe('general');
+    expect(c.getRoleSelection()).toBe('task');
     expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('not json');
   });
 
@@ -510,14 +510,14 @@ describe('the hired assignment a child reads at its turn boundary', () => {
   test('an unknown role id still reads as general and the read leaves the row alone', () => {
     const c = setup();
     c.set(AGENT_CONFIG_KEYS.roleSelection, 'Not A Role!!');
-    expect(c.getRoleSelection()).toBe('general');
+    expect(c.getRoleSelection()).toBe('task');
     expect(c.get(AGENT_CONFIG_KEYS.roleSelection)).toBe('Not A Role!!');
   });
 
   test('a read never mints a role row; only an explicit selection persists one', () => {
     const c = setup();
     // Absent reads as the default and writes nothing.
-    expect(c.getRoleSelection()).toBe('general');
+    expect(c.getRoleSelection()).toBe('task');
     expect(c.all()).toEqual({});
 
     c.setRoleSelection('researcher');

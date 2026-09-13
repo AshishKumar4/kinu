@@ -150,7 +150,7 @@ export interface AgentConfigStore {
   setNameOrigin(origin: 'user' | 'auto'): void;
   /** Persist the visible title and its ownership in one SQLite statement. */
   setDisplayNameOrigin(name: string, origin: 'user' | 'auto'): void;
-  /** The agent's current role id. An absent or invalid row reads as `general`. The read writes nothing. */
+  /** The agent's current role id. An absent or invalid row reads as `task`. The read writes nothing. */
   getRoleSelection(): RoleId;
   /** Store the role id in the ONE role row. */
   setRoleSelection(roleId: RoleId): void;
@@ -308,8 +308,8 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
 
   /**
    * The role id lives in ONE `role_selection` row as the bare id.
-   * An absent or invalid row reads as `general`.
-   * The read writes nothing, so an unread row stays distinguishable from a stored `general`.
+   * An absent or invalid row reads as `task`.
+   * The read writes nothing, so an unread row stays distinguishable from a stored `task`.
    */
   const readRoleSelection = (): RoleId => {
     const stored = get(AGENT_CONFIG_KEYS.roleSelection);

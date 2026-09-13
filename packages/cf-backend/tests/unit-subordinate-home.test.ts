@@ -17,7 +17,7 @@ import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-h
 const hire = {
   displayName: 'Builder',
   nameOrigin: 'user' as const,
-  roleId: 'implementer' as const,
+  roleId: 'task' as const,
   mission: 'build the thing',
 };
 

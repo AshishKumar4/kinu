@@ -1,0 +1,32 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`every registered section reaches a rendered prompt the Markdown extraction preserves every rendered byte of the surface matrix 1`] = `
+{
+  "cf-full-surface": "f28d58dcb8ee21e78ce438177812dc3281d4300abb8f01249fb97671759e682e",
+  "cli-local-full-surface": "7e181651750544b6791eeddc1f3c8bef05acc2ef8704fdbdd2db3b212b387eef",
+  "code-execution": "53ab6280231934667d481a8b174a11698658ad6b39f93cf6da8d940907dbb6b8",
+  "defaults": "162cb68460ffa91282f1b63def3a6920f8c43e69cbcc945515d28eb9b1bc60be",
+  "delegation-hire-only": "ec4aa462b811f1e1e2c050d4668f6b75d437d89d3771f2b88ba00267f3488d8b",
+  "delegation-report-subordinate": "1e857164d9acd68d313415c795919f0a3989bc8eb4f683a78a7a25b7c33926d4",
+  "delegation-swarm-only": "9d426d6df83a0afd55d83f11f36a9f78ce82f0040bcfc80d1699b6297a741635",
+  "delegation-swarm-with-codemode": "d32ec1c243f73fe6b0db880627e32bf607bbb35f22c34551ff1109eb86172046",
+  "delegation-task-lifetime": "9fdaf37396fb64d5c8a31533ba43dfe385ba3977055be9121f76cab73ed98aa4",
+  "executors-cli-local-laptop": "6ad78732aae64a313b5ef15dbd465247e0f53c5242d543eec7e324c258dd0b82",
+  "executors-offline-laptop": "96e9256f4b8e60636768b21d9cf8e296669e666bf39dbaaea5c738a64cf20418",
+  "executors-preview-capable": "1a332a3c5d372fa005bd66891cc0dcba819cc584e6709e44e8e1ba07a96c6c8c",
+  "executors-unnamed-namespace": "39e12db09174bf302b2b763976375713942faf076757795fb744663651f1adad",
+  "executors-workspace-only": "3055d3f2acc1dfa60e9084a2ac237ccb2cf71c6ef69fe880ed993e5f7355d717",
+  "external-tools": "b4c089d04c6427411e91660220f7957c8ab0da140ed52d5464ac92689f774c5d",
+  "family-gemini": "7b8a2ca250da8ec048b9e40fcbafd04e7221a361c19699c0768527a6c4177cf0",
+  "family-gpt": "f23034bc78dc7b6d063087d5a1447d6b701b51dcf0c9f7e54ae06be02b89c820",
+  "family-kimi": "007885552e6dc407bbd6d55e2c897d1512ef86524d27f4d50f66db67d036bbe9",
+  "no-tools": "917c75c118f5f9948b96681945f46d941ea2509cfe9dac77260e72ff83d2b6c6",
+  "plan-mode-with-submission": "a8f9a5aafe24947e2af2c3c2a3f9281be7c4a766c91136bd314e6516c5b9bc0a",
+  "plan-mode-without-submission": "69726e7d4a61004d27d32c8285a099ca7c30b2d5c780d9c107ac691fef504446",
+  "role-auditor": "f699cf61bd3f9d7e5be173937065ab9fe92ceaed9e0eae4929e4f95aafc4638e",
+  "role-designer": "bb51a043fd1af70a60484e09c297cb731652f70987fd95c1f4847a0b4f4a1905",
+  "role-planner": "812f243b8816a914e82896a959896d13ebe61aba2e8e54ea1dc14fd818f0b0ee",
+  "role-researcher": "1dd231623acc00679be6a17a203dac54e51ae824f26d61fd293d8b4426f9be60",
+  "role-task": "82889f27eab60c8ed0bdb4397dfbb560f1dba30b63682cb5235109852f9cd239",
+}
+`;

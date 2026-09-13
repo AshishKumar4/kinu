@@ -628,7 +628,7 @@ export interface SubordinatesChangedEvent {
  *  the same default `AgentConfigStore.getRoleSelection` answers with, so an
  *  agent created with nothing said about it runs as the workspace's own kind
  *  of agent rather than a specialist nobody asked for. */
-const DEFAULT_SUBORDINATE_ROLE_ID = 'general';
+const DEFAULT_SUBORDINATE_ROLE_ID = 'task';
 
 function displayNameForRole(role: string): string {
   return role.trim().split(/\s+/).slice(0, 4)

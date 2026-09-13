@@ -1259,7 +1259,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult({
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",
-      role: "general",
+      role: "task",
       mission: "",
       model: null,
       activePlan: galleryAgentPlan,

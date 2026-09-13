@@ -34,7 +34,7 @@ function role(overrides: Partial<RoleDefinition> = {}): RoleDefinition {
 function catalog(): ProfileCatalog {
   return {
     roles: {
-      general: role(),
+      task: role(),
       researcher: role({ instructions: 'Go deep on sources.', tier: 'fast', preset: 'research' }),
     },
     tiers: {
@@ -186,9 +186,9 @@ describe('profile catalog compare-and-swap writes', () => {
     // wrapper, and the outermost message is the least informative one.
     const cases: Array<[string, JsonValue, string]> = [
       ['role missing its description', {
-        roles: { general: { instructions: 'Do the task directly.', tier: 'default', preset: 'ideate' } },
+        roles: { task: { instructions: 'Do the task directly.', tier: 'default', preset: 'ideate' } },
         tiers: { default: { model: MODEL } },
-      }, 'roles.general.description'],
+      }, 'roles.task.description'],
       [
         'malformed tier id',
         { roles: {}, tiers: { default: { model: MODEL }, 'Not Valid': { model: MODEL } } },
@@ -196,21 +196,21 @@ describe('profile catalog compare-and-swap writes', () => {
       ],
       [
         'role naming a tier the catalog does not hold',
-        { roles: { general: { description: 'Everyday work.', instructions: 'Do the task directly.', tier: 'giant', preset: 'ideate' } }, tiers: { default: { model: MODEL } } },
+        { roles: { task: { description: 'Everyday work.', instructions: 'Do the task directly.', tier: 'giant', preset: 'ideate' } }, tiers: { default: { model: MODEL } } },
         'every role tier must name a built-in tier or a tier in this catalog',
       ],
       ['definition repeating its record key', {
         roles: {
-          general: {
+          task: {
             description: 'Everyday work.',
             instructions: 'Do the task directly.',
             tier: 'default',
             preset: 'ideate',
-            id: 'general',
+            id: 'task',
           },
         },
         tiers: { default: { model: MODEL } },
-      }, 'roles.general.id'],
+      }, 'roles.task.id'],
       ['tier without a model', { roles: {}, tiers: { default: {} } }, 'tiers.default.model'],
     ];
 

@@ -161,7 +161,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: ['read_issue'] });
 
     const child = await hostedSubordinateHarness(actor, {
-      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'general', mission: 'Read issues',
+      name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'task', mission: 'Read issues',
     });
 
     const asChild = await childCaller(actor.db, subordinateAgentName(child.actor.handle.storageKey), 'issue-reader');
@@ -250,7 +250,7 @@ test('a hosted actor cannot restore source that its own filesystem authority can
 
   const child = await hostedSubordinateHarness(parent, {
     name: 'slate-author', displayName: 'Slate author', nameOrigin: 'user',
-    roleId: 'general', mission: 'Work inside the assigned private home',
+    roleId: 'task', mission: 'Work inside the assigned private home',
   });
 
   // The authority itself, on the child's own file plane: the same uid the
@@ -274,7 +274,7 @@ test('a binding held by a hosted actor reaches its own files and role, never the
 
   const child = await hostedSubordinateHarness(parent, {
     name: 'reader-1', displayName: 'Reader', nameOrigin: 'user',
-    roleId: 'general', mission: 'Read what you may',
+    roleId: 'task', mission: 'Read what you may',
   });
 
   const agentName = subordinateAgentName(child.actor.handle.storageKey);
@@ -313,7 +313,7 @@ test('a binding held by a hosted actor reaches its own files and role, never the
   // resolved profile cached across turns to test. The binding resolves the
   // actor's CURRENT role on every call — which is why the revocation above
   // bites immediately, and why restoring the role restores the reach.
-  changeRole('general');
+  changeRole('task');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
   changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
@@ -328,7 +328,7 @@ test('workspace read models are the root\'s own reads; a hosted actor holds none
   }));
 
   const child = await hostedSubordinateHarness(parent, {
-    name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', roleId: 'general', mission: 'Peek',
+    name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', roleId: 'task', mission: 'Peek',
   });
 
   const call = (caller: SlateCaller) => parent.agent.slateBindingCallAs(caller, 'status', 'DATA', { member: 'getExecutors', args: [], invocation: null });

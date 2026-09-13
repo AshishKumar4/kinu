@@ -57,7 +57,7 @@ export async function statusCommand(name: string): Promise<void> {
   }
 
   const roles = effectiveRoleCatalog(envelope.catalog);
-  const role = roles[coordinates.roleId] ?? roles.general;
+  const role = roles[coordinates.roleId] ?? roles.task;
   const tierId = coordinates.assignedTier ?? role?.tier ?? 'default';
   const tier = envelope.catalog.tiers[tierId] ?? envelope.catalog.tiers.default;
   const dbSize = statSync(local.dbPath).size;
