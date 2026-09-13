@@ -230,6 +230,28 @@ describe('hosted Nimbus workspace provider', () => {
     expect(real.exitCode).toBe(2);
   });
 
+  test('a runtime catalog read failure is carried into the refusal, not hidden as "no bins"', async () => {
+    const box = fakeBox();
+    box.exec = async (command) => ({
+      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127,
+    });
+    box.runtimes = { list: async () => { throw new Error('session box catalog socket closed'); } };
+
+    // The thrown list is a FACT about this refusal's confidence: the text
+    // still names the bin, the sandbox exit and the install path — and says
+    // the catalog itself could not be read, because "no bins known" and
+    // "could not ask" are different answers.
+    const missed = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
+
+    expect(missed.exitCode).toBe(127);
+    expect(missed.refusal?.reason).toBe('unavailable');
+    expect(missed.refusal?.error).toContain('bun');
+    expect(missed.refusal?.error).toContain('sandbox');
+    expect(missed.refusal?.error).toContain('nimbus install bun');
+    expect(missed.refusal?.error).toContain('runtime catalog could not be read');
+    expect(missed.refusal?.error).toContain('session box catalog socket closed');
+  });
+
   test('the embedded workspace shell answers its own absent command with the same refusal', async () => {
     const database = new Database(':memory:');
     const bundle = createWorkspaceBundle(database);
