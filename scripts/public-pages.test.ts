@@ -83,6 +83,10 @@ interface MovieFact {
   readonly decided: boolean;
   readonly slate: boolean;
   readonly settled: boolean;
+  /** Read while the story is mid-investigation: nothing to review yet. */
+  readonly noPlanYet: { status: string | null; decisions: boolean; plansList: boolean };
+  /** Read after seeking back to 0: the decided plan must leave the pane. */
+  readonly cleared: { status: string | null; plansList: boolean };
 }
 
 interface MovieReducedFact {
@@ -363,8 +367,21 @@ beforeAll(async () => {
       ));
 
       // The agent's tool calls stream into the transcript the way a real turn
-      // renders them.
+      // renders them — and before the plan exists the Work pane must not
+      // advertise one: the Plans read serves the timeline's plan, not a
+      // fixture's.
       await seek(cues.searchDone + 100);
+
+      const noPlanYet = await page.evaluate(() => {
+        const frame = document.querySelector('[data-landing-frame="plan"]');
+
+        return {
+          status: frame?.querySelector('[data-plan-status]')?.textContent ?? null,
+          decisions: frame?.querySelector('[data-plan-decisions]') !== null,
+          plansList: frame?.querySelector('[data-work-plans]') !== null,
+        };
+      });
+
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-tool-group]') !== null
         && document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true
@@ -391,6 +408,22 @@ beforeAll(async () => {
       // The build lands a slate, opened in its own tab: the settled state.
       await seek(cues.end);
       await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]', { timeout: 15_000 });
+
+      const settled = await page.$eval('[data-landing-frame="plan"]', (frame) => (
+        frame.getAttribute('data-movie-settled') === 'true'
+      ));
+
+      // Seeking back to the story's start clears the plan the pane served:
+      // the read model and the pane share one source. The Plans read refires
+      // on the cleared prop, so the empty answer is awaited, not sampled.
+      await seek(0);
+      await page.waitForFunction(() => (
+        document.querySelector('[data-landing-frame="plan"] [data-plan-status]') === null
+        && document.querySelector('[data-landing-frame="plan"] [data-work-plans]') === null
+      ), { timeout: 15_000 });
+
+      const cleared = { status: null, plansList: false };
+
       facts.movie = {
         typing: typing.length > 0,
         tools: true,
@@ -398,9 +431,9 @@ beforeAll(async () => {
         cursorShown,
         decided: true,
         slate: true,
-        settled: await page.$eval('[data-landing-frame="plan"]', (frame) => (
-          frame.getAttribute('data-movie-settled') === 'true'
-        )),
+        settled,
+        noPlanYet,
+        cleared,
       };
       expect(await page.evaluate(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
@@ -850,6 +883,15 @@ describe('the plan frame walks through the session', () => {
     expect(movie.decided).toBeTrue();
     expect(movie.slate).toBeTrue();
     expect(movie.settled).toBeTrue();
+  });
+
+  test('no plan is advertised before the story submits one, and seeking back clears it', () => {
+    const movie = required(facts.movie, 'walkthrough');
+
+    // Mid-investigation: no status, no decisions row, no Plans list.
+    expect(movie.noPlanYet).toEqual({ status: null, decisions: false, plansList: false });
+    // Back at t0 after approval: the approved plan is gone from the pane.
+    expect(movie.cleared).toEqual({ status: null, plansList: false });
   });
 
   test('reduced motion holds the settled state with no cursor and no playback', () => {
