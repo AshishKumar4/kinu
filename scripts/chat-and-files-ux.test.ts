@@ -2480,13 +2480,14 @@ describe('the workbench type scale, as the browser computes it', () => {
 });
 
 /**
- * K-05. The inspector opens at 340px with a 280px floor, collapses to
- * nothing behind a visible handle, and remembers both across reloads. A
- * preview arriving on its own raises a "Preview ready" chip where the reader
- * already is; only an explicit click navigates.
+ * K-05. A workspace the user has never touched opens its inspector COLLAPSED;
+ * the first thing worth seeing opens it on the workspace's behalf. From then
+ * on the user's own choice rules: a resize persists across reloads, a collapse
+ * persists, and a passive arrival raises a "Preview ready" chip where the
+ * reader already is — only an explicit click navigates.
  */
 describe('the workspace inspector at the actual WorkspacePage boundary', () => {
-  test('resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
+  test('collapsed until something arrives, then resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1440, height: 900 });
@@ -2496,9 +2497,26 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       const inspectorWidth = () => page.$$eval('[data-panel]', (panels) => Math.round(panels[1]?.getBoundingClientRect().width ?? -1));
 
-      // Opens at 340px inside the 320-360px band.
-      expect(await inspectorWidth()).toBeGreaterThanOrEqual(300);
-      expect(await inspectorWidth()).toBeLessThanOrEqual(380);
+      // A first visit with nothing to show collapses the column behind its
+      // expand handle. The signal has not arrived yet, so nothing reopens it.
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
+      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+
+      // The passive arrival is the something worth seeing: the column opens
+      // on the workspace's behalf AND raises the chip where the reader is —
+      // Work stays current, only the explicit click navigates.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
+
+      await page.click('[data-preview-ready]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]', { timeout: 10_000 });
+      expect(await page.$('[data-preview-ready]')).toBeNull();
 
       // A keyboard resize is an explicit size: it survives a reload. One
       // ArrowRight step is five percentage points, which lands the 340px
@@ -2535,15 +2553,484 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
       }, { timeout: 10_000 });
 
-      // A passive arrival chips instead of switching: Work stays current.
-      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
-      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
+      await page.close();
+    });
+  }, 240_000);
 
-      // The explicit click navigates onto the arrived preview.
-      await page.click('[data-preview-ready]');
-      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]', { timeout: 10_000 });
-      expect(await page.$('[data-preview-ready]')).toBeNull();
+  test('an oversize saved width constrains on screen but survives in storage with no explicit choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // The account holds a 2000px preference (kept from a wider display);
+      // this workspace carries no open/close choice of its own.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '2000');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+
+      // The signal opens the column on the workspace's behalf; the group
+      // cannot fit 2000px beside the chat minimum, so it commits what fits.
+      // The column's committed width is stable across frames once the
+      // write's commit — and any persist its report triggers — has landed.
+      await page.waitForFunction(() => {
+        const width = () => Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? 0);
+
+        return new Promise<boolean>((resolve) => {
+          const first = width();
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(first > 200 && width() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      // Constrained on screen, preferred in storage, and — nothing here was
+      // the user's explicit choice, so no choice is written for this
+      // workspace.
+      expect(state.width).toBeLessThan(1500);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
+      expect(Object.keys(state.stored).filter((key) => key.startsWith('kinu.inspector.open.'))).toEqual([]);
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a reset to the already-committed width leaves no mark: the next drag persists', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '340');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
+      }, { timeout: 10_000 });
+
+      // resetToDefault at the committed 340 issues a no-op write: the
+      // library emits nothing, and nothing marks the next emission as
+      // ours to swallow.
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>('[data-separator]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      });
+
+      // A real drag follows: pointerdown marks the input, the release
+      // commit persists the width the user's hand chose. The inspector is
+      // the trailing panel — dragging the separator right narrows it.
+      const separator = await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      const box = await separator!.boundingBox();
+      const x = box!.x + box!.width / 2;
+      const y = box!.y + box!.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 60, y, { steps: 4 });
+      await page.mouse.up();
+
+      // The release commit and its persist are synchronous in the same
+      // dispatch: the width lands at 280 and the store holds it.
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) === 280, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBe(280);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a viewport narrowing that squeezes the inspector persists nothing and latches no choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // The stored 2000px cannot fit beside the chat floor: every committed
+      // layout here is the ResizeObserver's constraint, never a gesture.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '2000');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+
+      const before = await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ));
+
+      // Narrowing re-commits a smaller constrained layout: no input mark,
+      // so the preferred 2000 stays stored and no new choice is written.
+      await page.setViewport({ width: 1100, height: 900 });
+      await page.waitForFunction((prev: number) => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) < prev, { timeout: 10_000 }, before);
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBeLessThan(before);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
+      expect(Object.keys(state.stored).filter((key) => key.startsWith('kinu.inspector.open.')).sort()).toEqual([
+        'kinu.inspector.open.ashish@example.com.checkout-fixes',
+      ]);
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('two desktop↔mobile remounts leave the document and separator listener counts at baseline', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        // Every listener the page registers is counted by target+type; the
+        // same accounting on remove keeps a live tally.
+        const w: Window & { __liveListeners?: Map<string, number> } = window;
+        w.__liveListeners = new Map();
+
+        const tally = (target: EventTarget, type: string, delta: number) => {
+          // The separator div carries `data-separator` (the library sets it);
+          // `instanceof HTMLElement` narrows it without a cast, and
+          // `instanceof Document` covers the ownerDocument listeners. Any
+          // other target matches neither and is skipped.
+          if (target instanceof HTMLElement && target.dataset['separator'] !== undefined) {
+            const key = `sep:${type}`;
+            w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
+
+            return;
+          }
+
+          if (target instanceof Document) {
+            const key = `doc:${type}`;
+            w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
+          }
+        };
+
+        const add = EventTarget.prototype.addEventListener;
+        const remove = EventTarget.prototype.removeEventListener;
+
+        EventTarget.prototype.addEventListener = function (type, listener, options) {
+          tally(this, type, 1);
+
+          if (listener !== null) add.call(this, type, listener, options);
+        };
+
+        EventTarget.prototype.removeEventListener = function (type, listener, options) {
+          tally(this, type, -1);
+
+          if (listener !== null) remove.call(this, type, listener, options);
+        };
+
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '400');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-separator]', { timeout: 20_000 });
+
+      const readTally = () => {
+        const w: Window & { __liveListeners?: Map<string, number> } = window;
+
+        return Object.fromEntries(w.__liveListeners!);
+      };
+
+      const baseline = await page.evaluate(readTally);
+
+      // Two full remounts: each swap unmounts the separator element, which
+      // must detach every listener the hook attached — element and document.
+      // The remount states themselves are the wait: the separator is absent
+      // on mobile, present on desktop.
+      for (let i = 0; i < 2; i++) {
+        await page.setViewport({ width: 600, height: 900 });
+        await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      }
+
+      const after = await page.evaluate(readTally);
+
+      expect(after).toEqual(baseline);
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a press retired by a remount cannot mark the next tree\'s commits', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // A stored width with no choice of its own: the signal opens the
+      // column on the workspace's behalf without writing a choice.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '300');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-separator]', { timeout: 20_000 });
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+
+      // Press without release: the input mark is set and no clear is
+      // scheduled — only the separator's own detach can retire it. The
+      // release-free move returns the library to inactive with zero
+      // commits, which the hook never listens to, so the mark survives.
+      await page.evaluate(() => {
+        const separator = document.querySelector('[data-separator]');
+        separator?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        separator?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+      });
+
+      // The swap unmounts the separator; the restore mounts a new tree whose
+      // first emission is its own announcement, not a gesture.
+      await page.setViewport({ width: 600, height: 900 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+
+      // The narrower group re-commits the held pixel width at a new share —
+      // twice. The restore's announcement already consumed this tree's first
+      // emission (the mode swap resets the measured flag after it), so the
+      // first tweak only re-arms; the second is the one that classifies.
+      // A retired press is input to no tree, so no choice key can appear:
+      // the storage wait resolves only on the defect — a stale mark
+      // claiming the second tweak — and its timeout is the pass. Geometry
+      // cannot synchronize this read (panels reflow through plain CSS ahead
+      // of the commit pipeline), so the test polls the handler's own effect
+      // instead; the bound (3s against a sub-frame pipeline) is validated
+      // by the red direction on the unfixed hook.
+      const chatBefore = await page.evaluate(() => Math.round(
+        document.querySelectorAll('[data-panel]')[0]?.getBoundingClientRect().width ?? -1,
+      ));
+
+      await page.setViewport({ width: 1400, height: 900 });
+      await page.waitForFunction((prev: number) => Math.round(
+        document.querySelectorAll('[data-panel]')[0]?.getBoundingClientRect().width ?? -1,
+      ) !== prev, { timeout: 10_000 }, chatBefore);
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+      await page.setViewport({ width: 1350, height: 900 });
+
+      const openKey = 'kinu.inspector.open.ashish@example.com.checkout-fixes';
+
+      try {
+        await page.waitForFunction((key: string) => localStorage.getItem(key) !== null, { timeout: 3000 }, openKey);
+        expect.unreachable('a retired press claimed the post-remount commit');
+      } catch (error) {
+        expect(error).toBeInstanceOf(TimeoutError);
+      }
+
+      const state = await page.evaluate(() => ({ ...localStorage }));
+
+      expect(state['kinu.inspector.ashish@example.com']).toBe('300');
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('the first divider drag after a remount persists its width and choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '340');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
+      }, { timeout: 10_000 });
+
+      // A full remount: the restored tree's announcement is its own, so the
+      // drag below is the first commit anyone could mistake — it must read
+      // as the user's and persist, with no warmup commit in between.
+      await page.setViewport({ width: 600, height: 900 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+
+      // Quiesce the fresh tree so the coordinates below are live. The
+      // inspector is the trailing panel — dragging the separator right
+      // narrows it from 340 to its 280 floor.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+      const separator = await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      const box = await separator!.boundingBox();
+      const x = box!.x + box!.width / 2;
+      const y = box!.y + box!.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 60, y, { steps: 4 });
+
+      // The held drag must move pixels: a drag the library never hears
+      // moves nothing, and must fail loudly here — never silently
+      // downstream as a classification result. Live recompute applies
+      // styles without committing, so this proves engagement while the
+      // release commit is still to come.
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) !== 340, { timeout: 5000 });
+      await page.mouse.up();
+
+      // Settle, then assert: whatever the drag commit classified, every
+      // commit it schedules (including a policy write-back) has landed —
+      // the settled width plus the stored values pin the classification.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBe(280);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
+      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('the first keyboard resize after a remount persists its width and choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '400');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 400;
+      }, { timeout: 10_000 });
+
+      await page.setViewport({ width: 600, height: 900 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+
+      // Quiesce the fresh tree, then focus the separator that is actually
+      // mounted and press: the library reads only key and currentTarget,
+      // but a press delivered while focus still sits on the detached old
+      // element reaches no handler — that is a fixture outcome, not a
+      // product one. One ArrowRight step is five percentage points,
+      // landing the 400px inspector near 328 — off the seed, inside
+      // bounds, exactly the user's.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>('[data-separator]')?.focus();
+      });
+      await page.keyboard.press('ArrowRight');
+
+      // The keypress must move pixels within a bound: a press the library
+      // never hears is a dead tree and fails loudly here.
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) < 340, { timeout: 5000 });
+
+      // Settle, then assert: whatever the keypress commit classified, every
+      // commit it schedules (including a policy write-back) has landed.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      // Fractional shares round differently across read paths, so the
+      // committed width can differ a pixel from the rect read; a stored
+      // width off the seed proves the commit was claimed as the user's.
+      expect(state.width).toBeGreaterThanOrEqual(320);
+      expect(state.width).toBeLessThanOrEqual(335);
+      expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeGreaterThanOrEqual(320);
+      expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeLessThanOrEqual(335);
+      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
+
       await page.close();
     });
   }, 240_000);

@@ -731,6 +731,21 @@ export default function WorkspacePage() {
   const inspector = useInspectorLayout({
     desktopPanels,
     mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
+    // The open/closed choice is this workspace's: opening the inspector in one
+    // workspace never opens it in the next.
+    workspace: agentId,
+    // The collapsed-by-default inspector opens itself once the workspace holds
+    // something it exists to show: a decision or consent waiting on the owner,
+    // a slate or preview, a produced output, an active plan.
+    worthShowing: [
+      state.pendingActions.length > 0,
+      state.pendingConsents.length > 0,
+      state.slates.length > 0,
+      state.previewFocus !== null,
+      state.pinnedPorts.length > 0,
+      state.executorOutputs.size > 0,
+      Boolean(state.activePlan),
+    ].some(Boolean),
   });
 
   // Plan decisions use the selected actor; previews remain workspace-scoped.
@@ -1185,9 +1200,10 @@ export default function WorkspacePage() {
         <button type="button" onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'}
           className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
       </div>
-      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }}>
+      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }} {...inspector.groupProps}>
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
         <Panel
+          id="chat"
           {...(desktopPanels
             ? { minSize: "24%" }
             : { minSize: "0%", defaultSize: mobilePane === 'chat' ? "100%" : "0%" })}
@@ -1384,6 +1400,7 @@ export default function WorkspacePage() {
           <PanelResizeHandle
             aria-label="Resize the inspector; press Enter to hide or show it"
             title="Drag to resize the inspector · Enter hides or shows it"
+            {...inspector.separatorProps}
             onKeyDown={(event) => {
               if (event.key !== "Enter" || event.defaultPrevented) return;
 
