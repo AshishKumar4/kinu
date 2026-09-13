@@ -12,7 +12,7 @@
  * nothing else, and an id nobody registered replaces nothing.
  *
  * That is asserted over `fixtures/prompt-surface-matrix.ts`, which takes every
- * conditional in the eleven sections in both directions, so a section that only
+ * conditional in the base sections in both directions, so a section that only
  * renders on one branch is still measured on a surface that enables it. Each
  * comparison is between two LIVE renderings taken in the same run: a recorded
  * rendering would only say which prompt shipped the day it was recorded, and
@@ -24,7 +24,7 @@
  *
  * End-to-end — a candidate proposed, promoted and read back out of the store
  * into the builder — is `unit-prompt-section-evolution.test.ts`; this file
- * covers the eleven addresses that path depends on.
+ * covers every address that path depends on, including root-only lead sections.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -34,6 +34,7 @@ import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import { definePromptSection, templateContract } from '../src/prompting/template';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
 import { createTestRuntime } from '@kinu.run/test-utils';
+import { PROMPT_SECTION_MAX_BYTES } from '../src/prompting/section-store';
 
 /** The character the mutation writes. Not a letter any section heading starts
  *  with, so every position where a mutated prompt differs from its baseline is
@@ -90,7 +91,7 @@ describe('every registered section reaches a rendered prompt', () => {
     expect(hashes).toMatchSnapshot();
   });
 
-  test('all eleven sections reach a surface that enables them', () => {
+  test('all sections reach a surface that enables them', () => {
     for (const section of PROMPT_SECTIONS) {
       const prompt = buildSystemPromptSync(rt, (section.id === 'role/profile' ? ROLE : FULL).opts);
       // Up to the newline OR the first tag: `## Delegation` is followed
@@ -175,7 +176,9 @@ describe('the prompt stays inside its byte budget', () => {
     // section lost its `agents.ask` bullet, the `agents` schema shed the
     // Breadth/Doubt triggers and the payoff framing, and the placeholder
     // mission lost its heads/subordinates clause.
-    const MATRIX_CEILING_BYTES = 111_800;
+    // 2026-09-13: seven root-only fusion rule families and the task worker
+    // contract. Exact measured bytes, no headroom; GEPA stays at 4,800/section.
+    const MATRIX_CEILING_BYTES = 225_915;
 
     const total = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
@@ -204,12 +207,20 @@ describe('PROMPT_SECTIONS — the addressing scheme', () => {
     }
   });
 
-  test('eleven sections, unique ids, every one a real template', () => {
-    expect(PROMPT_SECTIONS).toHaveLength(11);
-    expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(11);
+  test('eighteen sections, unique ids, every one a real evolvable template', () => {
+    expect(PROMPT_SECTIONS).toHaveLength(18);
+    expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(18);
+    expect(PROMPT_SECTIONS.map(({ id }) => id)).toEqual([
+      'guidance/operating', 'role/profile', 'tools/index', 'executors/section',
+      'state/persistence', 'state/code-execution', 'state/delegation',
+      'state/background-work', 'state/verification', 'state/output-format',
+      'state/workspace-instructions', 'lead/responsibility', 'lead/brief',
+      'lead/parallel', 'lead/review', 'lead/interruptions', 'lead/delivery', 'lead/direct-edit',
+    ]);
 
     for (const section of PROMPT_SECTIONS) {
       expect(section.source.startsWith('## ')).toBe(true);
+      expect(Buffer.byteLength(section.source, 'utf8')).toBeLessThanOrEqual(PROMPT_SECTION_MAX_BYTES);
       // Compiles, and its contract is readable — what the promotion gate compares
       // a candidate against.
       expect(templateContract(section.id, section.source)).toBeDefined();

@@ -51,6 +51,13 @@ import {
   VERIFICATION_SECTION,
   WORKSPACE_EXECUTOR_LINE,
   WORKSPACE_INSTRUCTIONS_SECTION,
+  LEAD_RESPONSIBILITY,
+  LEAD_BRIEF,
+  LEAD_PARALLEL,
+  LEAD_REVIEW,
+  LEAD_INTERRUPTION,
+  LEAD_DELIVERY,
+  LEAD_DIRECT_EDIT,
   sectionRenderer,
   type PromptSectionOverrides,
   type RenderSection,
@@ -409,11 +416,12 @@ export function unverifiedInstructionsMessage(ctx: UnverifiedInstructions): Mode
  * string synchronously and the runtime's sql executor is synchronous.
  */
 export function buildSystemPromptSync(
-  _rt: AgentRuntime,
+  rt: AgentRuntime,
   opts: SystemPromptOptions = {},
 ): string {
   const surface = compilePromptSurface(opts);
   const render = sectionRenderer(opts.sectionOverrides);
+  const lead = rt.actor.parentActorId === null && surface.agentsActions.includes('hire');
 
   return [
     // Identity, then the hard rules, then the doctrine that bounds every tool
@@ -436,6 +444,15 @@ export function buildSystemPromptSync(
     renderExecutorSection(surface, render),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
+    ...(lead ? [
+      render(LEAD_RESPONSIBILITY, {}),
+      render(LEAD_BRIEF, {}),
+      render(LEAD_PARALLEL, {}),
+      render(LEAD_REVIEW, {}),
+      render(LEAD_INTERRUPTION, {}),
+      render(LEAD_DELIVERY, {}),
+      render(LEAD_DIRECT_EDIT, {}),
+    ] : []),
     // System placement carries ONLY what the owner approved by digest, plus the
     // built-in skills. Everything else this workspace happens to contain rides
     // the unapproved-instructions block in the messages array
