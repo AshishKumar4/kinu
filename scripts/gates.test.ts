@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { findDuplicateGroups } from './ast-duplication';
 import { findMovable, withoutComments } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
-import { declaredSandboxClasses, WranglerContainers, wranglerContainerClasses } from './egress-interception';
+import { auditInterception, declaredSandboxClasses, WranglerContainers, wranglerContainerClasses } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
@@ -720,5 +720,42 @@ describe('egress interception denominator', () => {
       ['packages/cf-backend/src/c.ts',
         '// class Fake extends Sandbox\nexport const doc = "class AlsoFake extends Sandbox";'],
     ]))).toEqual([]);
+  });
+});
+
+describe('egress interception invariant — red in every direction it claims', () => {
+  const at = (body: string): ReadonlyMap<string, string> => new Map([
+    ['packages/cf-backend/src/kinu-sandbox.ts', `export class KinuSandbox extends Sandbox<Env> {\n${body}\n}`],
+  ]);
+
+  test('a class carrying both fields at their required values and nothing forbidden is clean', () => {
+    const audit = auditInterception(at('  enableInternet = false;\n  interceptHttps = true;'), ['KinuSandbox']);
+
+    expect(audit.inspected).toEqual([{ file: 'packages/cf-backend/src/kinu-sandbox.ts', owner: 'KinuSandbox' }]);
+    expect(audit.violations).toEqual([]);
+  });
+
+  test('a class that LOST `enableInternet = false` is the open path', () => {
+    const { violations } = auditInterception(at('  interceptHttps = true;'), ['KinuSandbox']);
+
+    expect(violations.map((v) => v.reason)).toEqual(['does not declare `enableInternet = false` — see this gate\'s header for the path that opens']);
+  });
+
+  test('a field present at the wrong value is reported with both values', () => {
+    const { violations } = auditInterception(at('  enableInternet = true;\n  interceptHttps = true;'), ['KinuSandbox']);
+
+    expect(violations.map((v) => v.reason)).toEqual(['declares `enableInternet = true`, must be `false`']);
+  });
+
+  test('a host allow or deny list is refused even beside a correct pair', () => {
+    const { violations } = auditInterception(
+      at('  enableInternet = false;\n  interceptHttps = true;\n  allowedHosts = ["api.example"];'), ['KinuSandbox'],
+    );
+
+    expect(violations.map((v) => v.reason)).toEqual(['declares `allowedHosts` — an allow/deny list must not be what totality rests on']);
+  });
+
+  test('a class wrangler does not bind is outside the denominator, whatever it declares', () => {
+    expect(auditInterception(at('  enableInternet = true;'), ['Other']).inspected).toEqual([]);
   });
 });

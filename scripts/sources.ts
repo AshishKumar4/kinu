@@ -97,6 +97,10 @@ const LOCKFILE = /(?:^|\/)(?:bun\.lock|bun\.lockb|package-lock\.json|pnpm-lock\.
  *  claim and no pasted credential — but it does name packages. */
 const STYLESHEET = /\.css$/;
 
+/** A browser document vite serves: the html pages beside `packages/cf-backend`'s
+ *  manifest, each naming its module entry in a `<script type="module">`. */
+const CLIENT_DOCUMENT = /^packages\/cf-backend\/[^/]+\.html$/;
+
 /**
  * What `bun test` ITSELF selects, measured rather than assumed: a directory
  * holding `a.test.ts`, `c.spec.ts`, `d_test.ts`, `e_spec.ts`, `g.test.tsx`,
@@ -392,6 +396,12 @@ export const isLockfile = (file: string): boolean => LOCKFILE.test(file);
  *  needs — and `.css` is outside {@link isTextSource}, so a dependency census
  *  that read only text sources would report a CSS-only package as unused. */
 export const isStylesheet = (file: string): boolean => STYLESHEET.test(file);
+
+/** A browser document. The client-graph gate's entry set is DERIVED from these,
+ *  because the entries vite serves are declared in html and nowhere else: a
+ *  fourth page arriving with its own `<script type="module">` joins the walk
+ *  without a list beside the gate being told. */
+export const isClientDocument = (file: string): boolean => CLIENT_DOCUMENT.test(file);
 
 /**
  * A seeded bench defect patch. The corpus `gate:bench-corpus` governs, narrowed
