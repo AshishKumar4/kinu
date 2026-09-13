@@ -24,9 +24,9 @@
  */
 import { describe, test, expect, afterAll, beforeAll, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+
 import * as v from 'valibot';
 import { generateText, stepCountIs, type LanguageModel } from 'ai';
 
@@ -42,7 +42,7 @@ import { createWorkspace } from '../../packages/core/src/identity/index';
 import { openWorkspaceMainActor } from '../../packages/core/src/identity/workspace-actors';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
-import {
+import { scratchDir,
   AdoptedSpendMeter, HARD_TASKS, INFRA_FAILURE_MARKER, caseKey, findResumableEvalDir,
   formatAdoptedSpend, infraBoundary,
   createTestActorsOver,
@@ -166,7 +166,7 @@ function scripted(steps: readonly ScriptedStep[]): LanguageModel {
   return model;
 }
 
-const dir = mkdtempSync(join(tmpdir(), 'harness-wiring-'));
+const dir = scratchDir('harness-wiring');
 
 const opened: Database[] = [];
 
@@ -185,7 +185,6 @@ afterAll(() => {
   resetLiveModelSpend();
 
   for (const db of opened) db.close();
-  rmSync(dir, { recursive: true, force: true });
 });
 
 function scoreOf(scores: readonly BehaviourScoreJson[], name: string): BehaviourScoreJson {
@@ -1096,7 +1095,7 @@ describe('adopted spend — a resumed run pays for the cases it adopted, exactly
    * fixture here would assert the suite's own schema rather than this seam.
    */
   function seedResumeDir(): string {
-    const root = mkdtempSync(join(dir, 'adopted-spend-'));
+    const root = scratchDir('adopted-spend', dir);
     const store = openEvalProgress(join(root, `${PREFIX}1700000000000`), SIGNATURE);
     store.markPlanned([FINISHED, CRASHED]
       .map(({ taskId, repetition }) => ({ taskId, repetition })));
@@ -1425,50 +1424,46 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
  */
 describe('the spawned-CLI driver roots its child outside the repository', () => {
   test('kinu create records a scratch project directory, never the repo root', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-driver-cwd-'));
+    const home = scratchDir('driver-cwd');
 
-    try {
-      await createCliWorkspace({
-        home,
-        workspace: 'cwd-probe',
-        purpose: 'a workspace whose recorded placement is the subject of the test',
-        // A fake credential: `create` persists the provider config it is given and
-        // calls no model, so this reaches the real birth path offline.
-        llm: {
-          name: 'fake', baseURL: 'http://127.0.0.1:9/v1', model: 'fake-model',
-          headers: { Authorization: 'Bearer fake' },
-        },
-      });
+    await createCliWorkspace({
+      home,
+      workspace: 'cwd-probe',
+      purpose: 'a workspace whose recorded placement is the subject of the test',
+      // A fake credential: `create` persists the provider config it is given and
+      // calls no model, so this reaches the real birth path offline.
+      llm: {
+        name: 'fake', baseURL: 'http://127.0.0.1:9/v1', model: 'fake-model',
+        headers: { Authorization: 'Bearer fake' },
+      },
+    });
 
-      const config = v.parse(
-        v.object({
-          agents: v.record(v.string(), v.object({ cwd: v.string(), mode: v.string() })),
-        }),
-        JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')),
-      );
+    const config = v.parse(
+      v.object({
+        agents: v.record(v.string(), v.object({ cwd: v.string(), mode: v.string() })),
+      }),
+      JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')),
+    );
 
-      const agent = config.agents['cwd-probe'];
+    const agent = config.agents['cwd-probe'];
 
-      if (agent === undefined) throw new Error('`kinu create` recorded no agent to read');
+    if (agent === undefined) throw new Error('`kinu create` recorded no agent to read');
 
-      // THE DEFECT FIRST, so a regression reads as itself rather than as a
-      // missing directory. `realpathSync` on both sides because the child
-      // canonicalises what it records, so comparing raw strings could pass for the
-      // wrong reason.
-      expect(agent.mode).toBe('local');
-      expect(
-        agent.cwd,
-        'the child agent was placed in THIS REPOSITORY, so a corpus task that writes files '
-        + 'writes them into the tree the harness was launched from — the debris defect',
-      ).not.toBe(realpathSync(join(import.meta.dirname, '../..')));
-      expect(
-        agent.cwd,
-        'the child agent must be placed inside the scratch home it was given, because that '
-        + 'directory becomes its host executor root',
-      ).toStartWith(realpathSync(home));
-    } finally {
-      rmSync(home, { recursive: true, force: true });
-    }
+    // THE DEFECT FIRST, so a regression reads as itself rather than as a
+    // missing directory. `realpathSync` on both sides because the child
+    // canonicalises what it records, so comparing raw strings could pass for the
+    // wrong reason.
+    expect(agent.mode).toBe('local');
+    expect(
+      agent.cwd,
+      'the child agent was placed in THIS REPOSITORY, so a corpus task that writes files '
+      + 'writes them into the tree the harness was launched from — the debris defect',
+    ).not.toBe(realpathSync(join(import.meta.dirname, '../..')));
+    expect(
+      agent.cwd,
+      'the child agent must be placed inside the scratch home it was given, because that '
+      + 'directory becomes its host executor root',
+    ).toStartWith(realpathSync(home));
   // Measured 4.1 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
   // on a finite run, stated with its measurement, not a detector.

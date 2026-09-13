@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { mkdirSync, writeFileSync } from "node:fs";
+
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   createCliSession,
   findTranscriptPath,
@@ -12,15 +13,8 @@ import {
 import { SessionRecorder } from "../src/session-recorder";
 import type { AgentClientEvent } from "../src/agent-client";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function tempTranscriptDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "kinu-transcripts-"));
-  tempDirs.push(dir);
+  const dir = scratchDir("transcripts");
 
   return dir;
 }

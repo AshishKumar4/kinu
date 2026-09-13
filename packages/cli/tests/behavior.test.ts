@@ -1,5 +1,6 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { readFileSync, writeFileSync } from "node:fs";
+
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -22,12 +23,11 @@ function toText(bytes: Buffer): string {
   return Bun.stripANSI(bytes.toString()).replaceAll('\r\n', '\n');
 }
 
-
 const tempDirs: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
+  const dir = scratchDir("test-project");
   tempDirs.push(dir);
 
   return dir;
@@ -82,7 +82,6 @@ const LedgerRowSchema = v.object({
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     stopLocalDaemon(dir);
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 
@@ -166,7 +165,7 @@ function shellQuote(value: string): string {
 
 describe("CLI behavior", () => {
   test("setup --account-only with an existing account does not enter the local model wizard", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-setup-account-"));
+    const home = scratchDir("cli-setup-account");
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
@@ -186,7 +185,7 @@ describe("CLI behavior", () => {
   });
 
   test("interactive setup can be rerun and reaches provider choices", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-setup-rerun-"));
+    const home = scratchDir("cli-setup-rerun");
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
@@ -207,7 +206,7 @@ describe("CLI behavior", () => {
   });
 
   test("setup --local-model keeps local provider setup explicit", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-setup-local-"));
+    const home = scratchDir("cli-setup-local");
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
@@ -224,7 +223,7 @@ describe("CLI behavior", () => {
   });
 
   test("provider list summarizes connected providers without leaking credentials", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-providers-"));
+    const home = scratchDir("cli-providers");
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
@@ -287,7 +286,7 @@ describe("CLI behavior", () => {
   });
 
   test("no-name chat can select a configured cloud agent", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-chat-"));
+    const home = scratchDir("cli-chat");
     tempDirs.push(home);
     writeConfig(home, {
       origin: "https://kinu.example.com",
@@ -316,7 +315,7 @@ describe("CLI behavior", () => {
 
 describe("kinu exec (headless)", () => {
   test("requires a task prompt and exits nonzero", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-usage-"));
+    const home = scratchDir("cli-exec-usage");
     tempDirs.push(home);
 
     const proc = runCli(["exec"], { home });
@@ -325,7 +324,7 @@ describe("kinu exec (headless)", () => {
   });
 
   test("demands --workspace when several workspaces are configured", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-agents-"));
+    const home = scratchDir("cli-exec-agents");
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
@@ -347,7 +346,7 @@ describe("kinu exec (headless)", () => {
   // spawned CLI binary against a mock OpenAI-compatible endpoint — proving
   // exit codes and the line-delimited JSON event shape end to end.
   test("runs a local workspace end-to-end with --json and honest exit codes", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-smoke-"));
+    const home = scratchDir("cli-exec-smoke");
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
 
@@ -418,7 +417,7 @@ describe("kinu exec (headless)", () => {
   }, 120_000);
 
   test("exits nonzero when the model endpoint fails", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-fail-"));
+    const home = scratchDir("cli-exec-fail");
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startFailingLlm();
@@ -449,7 +448,7 @@ describe("kinu exec (headless)", () => {
   // --no-auto-evolve is the switch a paired benchmark arm needs: the same
   // workspace and the same turn, with the evolution machinery off.
   test("--no-auto-evolve runs the turn normally on a local workspace", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-noevolve-"));
+    const home = scratchDir("cli-exec-noevolve");
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
 
@@ -476,7 +475,7 @@ describe("kinu exec (headless)", () => {
   // Reaching this rejection proves the flag is threaded all the way into the
   // AgentClient factory rather than parsed and dropped.
   test("--no-auto-evolve is rejected for cloud workspaces", () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-noevolve-cloud-"));
+    const home = scratchDir("cli-exec-noevolve-cloud");
     tempDirs.push(home);
     const stamp = new Date(0).toISOString();
     writeConfig(home, {
@@ -499,7 +498,7 @@ describe("kinu exec (headless)", () => {
 // between them and their agent either.
 describe("kinu run — a tool refusal is rendered for the person, not the model", () => {
   test("a refused escalation prints prose under ✗ and its diagnostic lands in cli.log", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-run-refusal-"));
+    const home = scratchDir("cli-run-refusal");
     tempDirs.push(home);
 
     // An unregistered runtime fails deterministically without touching a shell.
@@ -544,7 +543,7 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
 // ten-task run as a result.
 describe("kinu exec --json — a mechanical steer is observable from outside", () => {
   test("a turn reports the steering row it wrote, with trigger, tool and conversion", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-nudge-"));
+    const home = scratchDir("cli-exec-nudge");
     tempDirs.push(home);
 
     // Three failures from the same tool is the `repeated_failure` trigger; an
@@ -596,7 +595,7 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
 // nothing" and "the provider measured zero" must not arrive as the same bytes.
 describe("kinu exec --json — the turn-end usage payload", () => {
   test("carries no usage at all when the provider reported none", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-unmetered-"));
+    const home = scratchDir("cli-exec-unmetered");
     tempDirs.push(home);
     // The one difference from the metered smoke above: no `usage` block on the
     // completion — which @ai-sdk/openai-compatible turns into an all-undefined
@@ -814,7 +813,7 @@ function startEmptyModelMenuOrigin() {
 
 describe("kinu create — an unusable model is named at creation", () => {
   test("warns when the workspace's model has no connected provider", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-create-unusable-"));
+    const home = scratchDir("cli-create-unusable");
     tempDirs.push(home);
     const origin = startEmptyModelMenuOrigin();
 
@@ -847,7 +846,7 @@ describe("kinu create — an unusable model is named at creation", () => {
   }, 120_000);
 
   test("stays quiet when the model resolves through a working provider", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-create-usable-"));
+    const home = scratchDir("cli-create-usable");
     tempDirs.push(home);
     const server = startMockLlm("ok");
 
@@ -878,7 +877,7 @@ describe("kinu exec — provider failures are legible and actionable", () => {
   };
 
   test("renders the provider's own words once, with the command that resolves it", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-provider-err-"));
+    const home = scratchDir("cli-provider-err");
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
@@ -909,7 +908,7 @@ describe("kinu exec — provider failures are legible and actionable", () => {
   }, 120_000);
 
   test("--json carries the guidance as a field, not just as terminal decoration", async () => {
-    const home = mkdtempSync(join(tmpdir(), "kinu-cli-provider-err-json-"));
+    const home = scratchDir("cli-provider-err-json");
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
@@ -954,7 +953,7 @@ describe("kinu exec — provider failures are legible and actionable", () => {
 describe("kinu exec — stdin must not hang a scripted run", () => {
   test("returns promptly when argv carries the prompt and stdin stays open", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
-    const home = mkdtempSync(join(tmpdir(), "kinu-stdin-"));
+    const home = scratchDir("stdin");
     const started = Date.now();
 
     // stdin: 'pipe', never written to and never closed — exactly what a harness
@@ -967,7 +966,6 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     });
 
     await proc.exited;
-    rmSync(home, { recursive: true, force: true });
     // The assertion is that it terminates at all, rather than waiting on an
     // EOF that never arrives.
     expect(Date.now() - started).toBeLessThan(10_000);
@@ -975,7 +973,7 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
 
   test("a pipe that starts delivering within the grace is read to EOF — bytes are never dropped", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
-    const home = mkdtempSync(join(tmpdir(), "kinu-stdin-"));
+    const home = scratchDir("stdin");
 
     const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
       stdin: "pipe",
@@ -992,7 +990,6 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     await proc.stdin.end();
     await proc.exited;
     const stderr = await new Response(proc.stderr).text();
-    rmSync(home, { recursive: true, force: true });
     // A delivering pipe is a real pipe: it must never be reported as ignored.
     expect(stderr).not.toContain("stdin was open but idle");
   }, 20_000);

@@ -2,10 +2,10 @@
 // names it: the deterministic title lands first, the model call upgrades it,
 // and the agent database holds the result while the config ref stays
 // placement-only. The decision itself is proven in @kinu.run/core.
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+
 import { join } from 'node:path';
-import { afterAll, afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initAgentConfigTable, type LLMProviderConfig } from '@kinu.run/core';
 import { createCLIRuntime } from '@kinu.run/cli-backend';
@@ -19,7 +19,7 @@ import { createCLIRuntime } from '@kinu.run/cli-backend';
 // then deleted, for every later file that reads `KINU_HOME` or spawns a child
 // from `process.env`. Once the imports have bound it, the variable has done its
 // work and the process is put back the way it was found.
-const HOME = mkdtempSync(join(tmpdir(), 'kinu-title-home-'));
+const HOME = scratchDir('title-home');
 
 const inheritedHome = process.env.KINU_HOME;
 
@@ -32,21 +32,12 @@ const { loadConfigFile, upsertAgentConfig } = await import('../src/config');
 if (inheritedHome === undefined) delete process.env.KINU_HOME;
 else process.env.KINU_HOME = inheritedHome;
 
-afterAll(() => rmSync(HOME, { recursive: true, force: true }));
-
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
 };
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'user' | 'auto' } = {}) {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-title-agent-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('title-agent');
   const db = new Database(join(dir, 'agent.db'));
   const rt = createCLIRuntime(db, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
   initAgentConfigTable(rt.storage.execRaw);

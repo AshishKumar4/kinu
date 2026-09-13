@@ -14,8 +14,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { scratchPath } from '../packages/test-utils/src/scratch';
+
 
 import {
   BLIND_SPOTS, census, distribution, inventory, isGreen, judge, keyOf, measureFile, readBudget,
@@ -230,7 +230,7 @@ describe('a locked function', () => {
 /** oxlint's own reading of the same corpus: `kind` and complexity per byte
  *  offset, per file. */
 function oxlintComplexity(files: readonly string[]): Map<string, Map<number, { kind: string; complexity: number }>> {
-  const config = join(tmpdir(), `kinu-complexity-parity-${String(process.pid)}.json`);
+  const config = scratchPath('complexity-parity', 'config.json');
   writeFileSync(config, JSON.stringify({
     categories: {
       correctness: 'off', suspicious: 'off', pedantic: 'off', perf: 'off',

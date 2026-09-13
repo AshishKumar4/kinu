@@ -9,24 +9,18 @@
  * with nothing anywhere saying so.
  */
 
-import { describe, test, expect, afterEach } from 'bun:test';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, test, expect } from 'bun:test';
+import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { enforceOwnerOnly, ensureSecretDir, writeSecretFile } from '../src/secret-file';
 
-const roots: string[] = [];
-
 function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-secret-'));
-  roots.push(dir);
+  const dir = scratchDir('secret');
 
   return dir;
 }
-
-afterEach(() => {
-  while (roots.length > 0) rmSync(roots.pop()!, { recursive: true, force: true });
-});
 
 describe('writeSecretFile', () => {
   test('writes the content owner-only', () => {

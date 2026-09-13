@@ -14,9 +14,10 @@
  * exactly how the engine learns the boundary (os.tmpdir() reads it at call
  * time), and restored after.
  */
+import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import { createHostCheckpoints } from '../src/checkpoints';
 
@@ -24,12 +25,12 @@ describe('workdirForPath temp boundary', () => {
   /** A throwaway temp root with `label`-namespaced scratch, an engine reading
    *  it as the boundary, and both restored on cleanup. */
   function withTempBoundary(label: string) {
-    const outer = mkdtempSync(join(tmpdir(), `kinu-ckpt-bound-${label}-`));
+    const outer = scratchDir(`ckpt-bound-${label}`);
     const temp = join(outer, 'tmp');
     mkdirSync(temp, { recursive: true });
     const prior = process.env.TMPDIR;
     process.env.TMPDIR = temp;
-    const base = mkdtempSync(join(temp, 'store-'));
+    const base = scratchDir('store', temp);
     const engine = createHostCheckpoints({ agent: 'bound', base });
 
     return {
@@ -38,7 +39,6 @@ describe('workdirForPath temp boundary', () => {
       cleanup: () => {
         if (prior === undefined) delete process.env.TMPDIR;
         else process.env.TMPDIR = prior;
-        rmSync(outer, { recursive: true, force: true });
       },
     };
   }

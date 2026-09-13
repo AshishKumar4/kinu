@@ -138,7 +138,9 @@ const MKDTEMP_PREFIX = /mkdtempSync\(\s*join\(\s*tmpdir\(\)\s*,\s*['"`]([^'"`]+)
 /** Any mint of a directory under the temp dir. `mkdirSync` counts: an eager one
  *  in cli-backend's branch spawner wrote a directory per runtime construction —
  *  107 per suite run — which is how this whole class was found. */
-const MINTS = /mkdtempSync\(|mkdirSync\(\s*[^)]*(?:tmpdir\(\)|\/tmp\/)/;
+const MINTS = /mkdtemp(?:Sync)?\(|\bscratch(?:Dir|Path)\(|mkdirSync\(\s*[^)]*(?:tmpdir\(\)|\/tmp\/)/;
+
+const SHARED_MINT = /\bscratch(?:Dir|Path)\(/;
 
 /** A removal that still runs when the test body threw. */
 const RELEASES = /afterEach\(|afterAll\(|finally\s*\{/;
@@ -148,7 +150,7 @@ const REMOVES = /rmSync\(|\brm\(/;
 const USES_HELPER = /\bscratch(?:Dir|Path)\b/;
 
 /** A mint that is NOT the helper — the other half of a half-migrated file. */
-const RAW_MINT = /mkdtempSync\(/;
+const RAW_MINT = /mkdtemp(?:Sync)?\(/;
 
 /**
  * Source with comment lines blanked, positions preserved.
@@ -237,6 +239,8 @@ export function auditScratchOwnership(sources: ReadonlyMap<string, string>): Scr
     }
 
     const body = code(source);
+
+    if (SHARED_MINT.test(body)) prefixes.add(SCRATCH_ROOT_PREFIX);
 
     if (isSuiteFile(path) && WRITES_HOST_FILES.test(body) && UNOWNED_UNIQUE.test(body)) {
       problems.push({

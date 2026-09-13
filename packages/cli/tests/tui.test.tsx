@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+
 import { resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { createTestRenderer } from '@opentui/core/testing';
@@ -21,12 +22,15 @@ import {
   WalkbackOverlay,
   TakesOverlay,
 } from '../src/tui/overlays';
+
 import type { AgentModelEntry } from '../src/model-catalog';
 import type { KinuConfig } from '../src/config';
 import { MessageList } from '../src/tui/messages';
+
 import { BUILTIN_TUI_THEMES } from '../src/tui/theme';
 import { StatusBar } from '../src/tui/status-bar';
 import { ChatApp } from '../src/tui/chat-app';
+
 import { fakeClient } from './helpers/chat-app-fixture';
 import { VERSION } from '../src/display';
 
@@ -133,7 +137,6 @@ describe('CLI TUI layout', () => {
       renderer.destroy();
     }
   });
-
 
   test('status bar keeps the mode visible while a long workspace name clips', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 56, height: 6, useThread: false, maxFps: Number.POSITIVE_INFINITY });
@@ -760,7 +763,6 @@ describe('CLI TUI layout', () => {
     }
   });
 
-
   test('walk-back overlay lists recent user messages newest first', async () => {
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({ width: 96, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
@@ -897,33 +899,29 @@ describe('CLI TUI layout', () => {
       `,
     });
 
-    try {
-      // The actions stay unmodelled records: v.object would quietly drop a field
-      // the screen has no business sending, which is exactly the field that
-      // would carry a mission into chat.
-      const homeAction = v.nullable(v.record(v.string(), v.unknown()));
+    // The actions stay unmodelled records: v.object would quietly drop a field
+    // the screen has no business sending, which is exactly the field that
+    // would carry a mission into chat.
+    const homeAction = v.nullable(v.record(v.string(), v.unknown()));
 
-      const observed = v.parse(v.object({
-        listed: v.array(v.string()),
-        initial: v.nullable(v.string()),
-        afterDigits: v.nullable(v.string()),
-        openedByDigits: homeAction,
-        header: v.string(),
-        afterArrowDown: v.nullable(v.string()),
-        finalAction: homeAction,
-      }), JSON.parse(run.stdout));
+    const observed = v.parse(v.object({
+      listed: v.array(v.string()),
+      initial: v.nullable(v.string()),
+      afterDigits: v.nullable(v.string()),
+      openedByDigits: homeAction,
+      header: v.string(),
+      afterArrowDown: v.nullable(v.string()),
+      finalAction: homeAction,
+    }), JSON.parse(run.stdout));
 
-      expect(observed.initial).toBe(observed.listed[0]);
-      expect(observed.afterDigits).toBe(observed.listed[0]);
-      expect(observed.openedByDigits).toBeNull();
-      expect(observed.afterArrowDown).toBe(observed.listed[1]);
-      expect(observed.finalAction).toEqual({ type: 'exit' });
-      // The home header renders the one VERSION, which is why the version test
-      // asserts this header instead of grepping home-app.tsx for the literal.
-      expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
-    } finally {
-      rmSync(run.home, { recursive: true, force: true });
-    }
+    expect(observed.initial).toBe(observed.listed[0]);
+    expect(observed.afterDigits).toBe(observed.listed[0]);
+    expect(observed.openedByDigits).toBeNull();
+    expect(observed.afterArrowDown).toBe(observed.listed[1]);
+    expect(observed.finalAction).toEqual({ type: 'exit' });
+    // The home header renders the one VERSION, which is why the version test
+    // asserts this header instead of grepping home-app.tsx for the literal.
+    expect(observed.header).toContain(`Kinu workspaces · cli ${VERSION}`);
   });
 
   // The mission is what the workspace IS — it seeds SOUL.md and names the
@@ -949,31 +947,27 @@ describe('CLI TUI layout', () => {
       `,
     });
 
+    const observed = v.parse(
+      v.object({ opened: v.record(v.string(), v.unknown()) }),
+      JSON.parse(run.stdout),
+    );
+
+    const created = readdirSync(run.home, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(resolve(run.home, entry.name, 'agent.db')))
+      .map((entry) => entry.name);
+
+    expect(created).toHaveLength(1);
+    // Exactly this payload: an extra field is how a mission would reach chat
+    // as a first turn, and chat opens whatever `name` says.
+    expect(observed.opened).toEqual({ type: 'open-agent', name: created[0] });
+
+    const db = new Database(resolve(run.home, created[0]!, 'agent.db'), { readonly: true });
+
     try {
-      const observed = v.parse(
-        v.object({ opened: v.record(v.string(), v.unknown()) }),
-        JSON.parse(run.stdout),
-      );
-
-      const created = readdirSync(run.home, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && existsSync(resolve(run.home, entry.name, 'agent.db')))
-        .map((entry) => entry.name);
-
-      expect(created).toHaveLength(1);
-      // Exactly this payload: an extra field is how a mission would reach chat
-      // as a first turn, and chat opens whatever `name` says.
-      expect(observed.opened).toEqual({ type: 'open-agent', name: created[0] });
-
-      const db = new Database(resolve(run.home, created[0]!, 'agent.db'), { readonly: true });
-
-      try {
-        expect(db.query('SELECT COUNT(*) AS messages FROM actor_messages').get()).toEqual({ messages: 0 });
-        expect(db.query('SELECT mission FROM workspace_identity').all()).toEqual([{ mission }]);
-      } finally {
-        db.close();
-      }
+      expect(db.query('SELECT COUNT(*) AS messages FROM actor_messages').get()).toEqual({ messages: 0 });
+      expect(db.query('SELECT mission FROM workspace_identity').all()).toEqual([{ mission }]);
     } finally {
-      rmSync(run.home, { recursive: true, force: true });
+      db.close();
     }
   });
 
@@ -1019,138 +1013,130 @@ describe('CLI TUI layout', () => {
       `,
     });
 
-    try {
-      const observed = v.parse(v.object({
-        finalAction: v.nullable(v.record(v.string(), v.unknown())),
-        afterFree: v.array(v.string()),
-      }), JSON.parse(run.stdout));
+    const observed = v.parse(v.object({
+      finalAction: v.nullable(v.record(v.string(), v.unknown())),
+      afterFree: v.array(v.string()),
+    }), JSON.parse(run.stdout));
 
-      // The exit itself has to have happened, or an empty list is a screen
-      // that never finished rather than one that finished cleanly.
-      expect(observed.finalAction).toEqual({ type: 'exit' });
-      expect(observed.afterFree).toEqual([]);
-    } finally {
-      rmSync(run.home, { recursive: true, force: true });
-    }
+    // The exit itself has to have happened, or an empty list is a screen
+    // that never finished rather than one that finished cleanly.
+    expect(observed.finalAction).toEqual({ type: 'exit' });
+    expect(observed.afterFree).toEqual([]);
   });
 
   test('home model and effort selections persist as global defaults', () => {
-    const kinuHome = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
+    const kinuHome = scratchDir('home-tui');
 
-    try {
-      writeFileSync(resolve(kinuHome, 'config.json'), JSON.stringify({
-        model: 'openai/gpt-5.5',
-        reasoningEffort: 'medium',
-        providers: { openai: { apiKey: 'sk-test' } },
-      }));
+    writeFileSync(resolve(kinuHome, 'config.json'), JSON.stringify({
+      model: 'openai/gpt-5.5',
+      reasoningEffort: 'medium',
+      providers: { openai: { apiKey: 'sk-test' } },
+    }));
 
-      const script = `
-        import { readFileSync } from 'node:fs';
-        import { createElement } from 'react';
-        import { createTestRenderer } from '@opentui/core/testing.js';
-        import { createRoot, flushSync } from '@opentui/react';
-        import { CONFIG_PATH } from './packages/cli/src/config.ts';
-        import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
+    const script = `
+      import { readFileSync } from 'node:fs';
+      import { createElement } from 'react';
+      import { createTestRenderer } from '@opentui/core/testing.js';
+      import { createRoot, flushSync } from '@opentui/react';
+      import { CONFIG_PATH } from './packages/cli/src/config.ts';
+      import { HomeApp } from './packages/cli/src/tui/home-app.tsx';
 
-        globalThis.fetch = async () => new Response('{}', {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-        const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
-          width: 100,
-          height: 40,
-          useThread: false,
-          maxFps: Number.POSITIVE_INFINITY,
-        });
-        const root = createRoot(renderer);
-        const defaultTier = () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).localProfile?.catalog?.tiers?.default;
-        const settle = async (rounds = 10) => {
-          for (let i = 0; i < rounds; i++) {
-            await renderOnce();
-            await Bun.sleep(10);
-          }
-        };
-        // Counted render rounds are the wrong instrument for "has the UI caught
-        // up": on a loaded machine the overlay had not opened yet, every
-        // subsequent keystroke went nowhere, and the test then asserted against a
-        // config file it had seeded itself — so a no-op interaction read as a
-        // persistence bug. Wait for the observable state instead, and name what
-        // failed to arrive.
-        const waitFor = async (what, predicate, rounds = 600) => {
-          for (let i = 0; i < rounds; i++) {
-            await renderOnce();
-            if (predicate()) return;
-            await Bun.sleep(10);
-          }
-          throw new Error('timed out waiting for ' + what);
-        };
-        root.render(createElement(HomeApp, { opts: {} }));
-        await settle();
-        mockInput.pressTab();
-        await settle();
-        mockInput.pressTab();
-        await settle();
-        mockInput.pressEnter();
-        await waitFor('the model picker to open', () => captureCharFrame().includes('Select model'));
-        // Filter to ONE match and take it, rather than counting arrow presses
-        // from an assumed cursor position. The picker opens with the cursor on
-        // the model already in use — sensible behaviour, and it made the old
-        // 'openai' + one 'down' land back on gpt-5.5 (the seeded current model,
-        // and the LAST of the three openai matches), so the selection was a
-        // no-op that looked like a persistence failure.
-        await mockInput.typeText('gpt-5.4');
-        // And wait for the CURSOR to be on that row before taking it: Enter
-        // pressed a render too early takes whatever the cursor still sat on,
-        // which is the current model, which is a no-op. Anchored on the cursor
-        // marker rather than on the absence of gpt-5.5 anywhere in the frame —
-        // the home screen renders the model in use BEHIND the overlay, so that
-        // string is on screen no matter what the list is showing.
-        await waitFor('the cursor to reach the gpt-5.4 row', () => {
-          const cursorRow = captureCharFrame().split('\\n').find((row) => row.includes('▶'));
-          return cursorRow !== undefined && cursorRow.includes('gpt-5.4');
-        });
-        mockInput.pressEnter();
-        await waitFor('the chosen model to persist', () => defaultTier()?.model !== undefined && defaultTier().model !== 'openai/gpt-5.5');
-        // The write lands while the overlay is still on screen, so persistence is
-        // NOT the signal that the picker is done with the keyboard. Tab pressed
-        // here goes to the overlay and focus never reaches Effort.
-        await waitFor('the model picker to close', () => !captureCharFrame().includes('Select model'));
-        mockInput.pressTab();
-        // The row renders its key hint only while focused, so this is the
-        // observable "the effort control has the keyboard" — an arrow sent before
-        await waitFor('the effort control to take focus', () => {
-          const row = captureCharFrame().split('\\n').find((line) => line.includes('Effort:'));
-          return row?.includes('select') === true;
-        });
-        mockInput.pressArrow('right');
-        await waitFor('the chosen effort to persist', () => defaultTier()?.reasoningEffort !== undefined && defaultTier().reasoningEffort !== 'medium');
-        flushSync(() => { root.unmount(); });
-        renderer.destroy();
-        console.log(JSON.stringify(defaultTier()));
-      `;
-
-      const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
-
-      for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
-        delete env[name];
-      }
-
-      const proc = Bun.spawnSync({
-        cmd: [process.execPath, '-e', script],
-        cwd: repoRoot,
-        env,
-        stdout: 'pipe',
-        stderr: 'pipe',
+      globalThis.fetch = async () => new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
       });
+      const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+        width: 100,
+        height: 40,
+        useThread: false,
+        maxFps: Number.POSITIVE_INFINITY,
+      });
+      const root = createRoot(renderer);
+      const defaultTier = () => JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).localProfile?.catalog?.tiers?.default;
+      const settle = async (rounds = 10) => {
+        for (let i = 0; i < rounds; i++) {
+          await renderOnce();
+          await Bun.sleep(10);
+        }
+      };
+      // Counted render rounds are the wrong instrument for "has the UI caught
+      // up": on a loaded machine the overlay had not opened yet, every
+      // subsequent keystroke went nowhere, and the test then asserted against a
+      // config file it had seeded itself — so a no-op interaction read as a
+      // persistence bug. Wait for the observable state instead, and name what
+      // failed to arrive.
+      const waitFor = async (what, predicate, rounds = 600) => {
+        for (let i = 0; i < rounds; i++) {
+          await renderOnce();
+          if (predicate()) return;
+          await Bun.sleep(10);
+        }
+        throw new Error('timed out waiting for ' + what);
+      };
+      root.render(createElement(HomeApp, { opts: {} }));
+      await settle();
+      mockInput.pressTab();
+      await settle();
+      mockInput.pressTab();
+      await settle();
+      mockInput.pressEnter();
+      await waitFor('the model picker to open', () => captureCharFrame().includes('Select model'));
+      // Filter to ONE match and take it, rather than counting arrow presses
+      // from an assumed cursor position. The picker opens with the cursor on
+      // the model already in use — sensible behaviour, and it made the old
+      // 'openai' + one 'down' land back on gpt-5.5 (the seeded current model,
+      // and the LAST of the three openai matches), so the selection was a
+      // no-op that looked like a persistence failure.
+      await mockInput.typeText('gpt-5.4');
+      // And wait for the CURSOR to be on that row before taking it: Enter
+      // pressed a render too early takes whatever the cursor still sat on,
+      // which is the current model, which is a no-op. Anchored on the cursor
+      // marker rather than on the absence of gpt-5.5 anywhere in the frame —
+      // the home screen renders the model in use BEHIND the overlay, so that
+      // string is on screen no matter what the list is showing.
+      await waitFor('the cursor to reach the gpt-5.4 row', () => {
+        const cursorRow = captureCharFrame().split('\\n').find((row) => row.includes('▶'));
+        return cursorRow !== undefined && cursorRow.includes('gpt-5.4');
+      });
+      mockInput.pressEnter();
+      await waitFor('the chosen model to persist', () => defaultTier()?.model !== undefined && defaultTier().model !== 'openai/gpt-5.5');
+      // The write lands while the overlay is still on screen, so persistence is
+      // NOT the signal that the picker is done with the keyboard. Tab pressed
+      // here goes to the overlay and focus never reaches Effort.
+      await waitFor('the model picker to close', () => !captureCharFrame().includes('Select model'));
+      mockInput.pressTab();
+      // The row renders its key hint only while focused, so this is the
+      // observable "the effort control has the keyboard" — an arrow sent before
+      await waitFor('the effort control to take focus', () => {
+        const row = captureCharFrame().split('\\n').find((line) => line.includes('Effort:'));
+        return row?.includes('select') === true;
+      });
+      mockInput.pressArrow('right');
+      await waitFor('the chosen effort to persist', () => defaultTier()?.reasoningEffort !== undefined && defaultTier().reasoningEffort !== 'medium');
+      flushSync(() => { root.unmount(); });
+      renderer.destroy();
+      console.log(JSON.stringify(defaultTier()));
+    `;
 
-      expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
-      const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout.toString()));
-      expect(tier).toMatchObject({ reasoningEffort: 'high' });
-      expect(tier.model).toStartWith('openai/');
-      expect(tier.model).not.toBe('openai/gpt-5.5');
-    } finally {
-      rmSync(kinuHome, { recursive: true, force: true });
+    const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
+    for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
+      delete env[name];
     }
+
+    const proc = Bun.spawnSync({
+      cmd: [process.execPath, '-e', script],
+      cwd: repoRoot,
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
+    const tier = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout.toString()));
+    expect(tier).toMatchObject({ reasoningEffort: 'high' });
+    expect(tier.model).toStartWith('openai/');
+    expect(tier.model).not.toBe('openai/gpt-5.5');
   // Measured 3.4 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
   // on a finite run, stated with its measurement, not a detector.
@@ -1195,7 +1181,7 @@ async function renderOverlayFrame(showOverlay: boolean) {
 async function renderSettled(renderOnce: () => Promise<void>) {
   for (let i = 0; i < 10; i++) {
     await renderOnce();
-    await Bun.sleep(30);
+    await new Promise<void>((resolve) => setImmediate(resolve));
   }
 }
 
@@ -1309,17 +1295,13 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
       `,
     });
 
-    try {
-      const observed = v.parse(v.object({
-        readinessRow: v.boolean(),
-        briefOnOneLine: v.boolean(),
-      }), JSON.parse(full.stdout));
+    const observed = v.parse(v.object({
+      readinessRow: v.boolean(),
+      briefOnOneLine: v.boolean(),
+    }), JSON.parse(full.stdout));
 
-      expect(observed.readinessRow).toBe(false);
-      expect(observed.briefOnOneLine).toBe(true);
-    } finally {
-      rmSync(full.home, { recursive: true, force: true });
-    }
+    expect(observed.readinessRow).toBe(false);
+    expect(observed.briefOnOneLine).toBe(true);
 
     const compact = runHomeScreen({
       height: 30,
@@ -1329,18 +1311,14 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
       `,
     });
 
-    try {
-      expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
-    } finally {
-      rmSync(compact.home, { recursive: true, force: true });
-    }
+    expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
   // Measured 2.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
   test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', () => {
-    const project = realpathSync(mkdtempSync(resolve(tmpdir(), 'kinu-home-project-')));
+    const project = realpathSync(scratchDir('home-project'));
 
     const run = runHomeScreen({
       workspaces: ['shopbot'],
@@ -1378,17 +1356,12 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
       `,
     });
 
-    try {
-      const observed = v.parse(v.object({ notice: v.string() }), JSON.parse(run.stdout));
-      // The row is clipped to the panel, so the contested NAME has to survive
-      // the clip: without it the reader cannot tell which workspace is missing
-      // from the roster, and silence would read as "no such cloud workspace".
-      expect(observed.notice).toContain('shopbot');
-      expect(observed.notice).toContain('a local workspace holds this name');
-    } finally {
-      rmSync(run.home, { recursive: true, force: true });
-      rmSync(project, { recursive: true, force: true });
-    }
+    const observed = v.parse(v.object({ notice: v.string() }), JSON.parse(run.stdout));
+    // The row is clipped to the panel, so the contested NAME has to survive
+    // the clip: without it the reader cannot tell which workspace is missing
+    // from the roster, and silence would read as "no such cloud workspace".
+    expect(observed.notice).toContain('shopbot');
+    expect(observed.notice).toContain('a local workspace holds this name');
   });
 
 /** Drives the home screen the CLI actually runs, in a subprocess so that one
@@ -1409,7 +1382,7 @@ function runHomeScreen(options: {
    *  have to answer with something specific. */
   fetchStub?: string;
 }) {
-  const home = mkdtempSync(resolve(tmpdir(), 'kinu-home-tui-'));
+  const home = scratchDir('home-tui');
   writeFileSync(resolve(home, 'config.json'), JSON.stringify({
     model: 'openai/gpt-5.5',
     providers: { openai: { apiKey: 'sk-test' } },

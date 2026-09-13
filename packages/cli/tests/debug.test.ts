@@ -4,11 +4,11 @@
 // runs, the older one sorting first by created_at — reproducing what the
 // web UI's client-side buildTree() picks when it is not scoped by root_id),
 // and the hard requirement: a planted secret must never appear in the bundle.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import {
   BackgroundJobStore, MctsSearchStore, RunEventRecorder,
   JsonArraySchema, JsonObjectSchema, JsonValueSchema, UsageSchema, type JsonValue,
@@ -17,22 +17,15 @@ import {
   type ExplorationWrite, type ObjectiveIdentity,
 } from '@kinu.run/core';
 import { makeSql } from '@kinu.run/cli-backend';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import { scratchDir, createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-
-const tempDirs: string[] = [];
 
 const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function scratch(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  tempDirs.push(dir);
+  const dir = scratchDir(prefix);
 
   return dir;
 }

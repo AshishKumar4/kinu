@@ -15,19 +15,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import {
-  chmodSync,
-  linkSync,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 import {
@@ -212,6 +200,8 @@ const excludes = ['node_modules'];
 
 const root = mkdtempSync(`${tmpdir()}/devbox-delta-parity-`);
 
+afterAll(() => rmSync(root, { recursive: true, force: true }));
+
 const real = { upper: `${root}/upper`, base: `${root}/base`, stage: `${root}/stage`, pkg: `${root}/stage/pkg`, upper2: `${root}/upper2` };
 
 const disk = new ContainerDisk();
@@ -227,10 +217,6 @@ beforeAll(() => {
   disk.tree(real.upper).plant(trees.upper);
   disk.tree(real.base).plant(trees.base);
   disk.tree(real.upper2);
-});
-
-afterAll(() => {
-  rmSync(root, { recursive: true, force: true });
 });
 
 describe('the delta shell against bash', () => {

@@ -22,10 +22,10 @@
 //
 // No test here waits for anything. The lease carries no timestamp, so there is
 // nothing a clock could advance, and that is the property under test.
+import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import {
   DriverLeaseHold,
@@ -37,7 +37,7 @@ import { leaseHolder } from './driver-lease-probe';
 
 /** One workspace database, and a temp directory to delete afterwards. */
 function workspace() {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-lease-'));
+  const dir = scratchDir('lease');
   const db = new Database(join(dir, 'agent.db'));
   db.exec('PRAGMA journal_mode = WAL');
 
@@ -58,7 +58,7 @@ function driver(db: Database, pid: number, alive: Set<number>, kind: DriverKind)
 
 describe('the local driver lease', () => {
   test('an uncontended driver takes it, and the row names that process', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const daemon = driver(db, 101, new Set([101]), 'daemon');
@@ -67,12 +67,11 @@ describe('the local driver lease', () => {
       expect(daemon.held()).toBe(true);
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('a daemon does NOT interrupt a live interactive owner, and the refusal names it', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const alive = new Set([201, 202]);
@@ -92,12 +91,11 @@ describe('the local driver lease', () => {
       expect(owner.held()).toBe(true);
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('an interactive process DOES take it from a live daemon', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const alive = new Set([301, 302]);
@@ -113,12 +111,11 @@ describe('the local driver lease', () => {
       expect(daemon.held()).toBe(false);
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('a dead holder yields to anyone, with no clock involved', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const alive = new Set([401, 402]);
@@ -138,12 +135,11 @@ describe('the local driver lease', () => {
       expect(leaseHolder(db)).toEqual({ pid: 402, kind: 'daemon' });
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('release only matches its own token, so a preempted holder cannot evict its successor', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const alive = new Set([501, 502]);
@@ -167,12 +163,11 @@ describe('the local driver lease', () => {
       expect(driver(db, 501, alive, 'daemon').acquire()).toBeNull();
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('re-acquiring in the same process keeps one claim rather than racing itself', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const alive = new Set([601]);
@@ -192,12 +187,11 @@ describe('the local driver lease', () => {
       expect(leaseHolder(db)).toEqual({ pid: 601, kind: 'interactive' });
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('two concurrent claimants over one database leave exactly one holder', () => {
-    const { db, dir } = workspace();
+    const { db } = workspace();
 
     try {
       const alive = new Set([701, 702]);
@@ -216,7 +210,6 @@ describe('the local driver lease', () => {
       );
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

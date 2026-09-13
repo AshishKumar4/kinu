@@ -4,21 +4,16 @@
 //
 // Disk-bound scenarios run in a subprocess (config.ts binds KINU_HOME at
 // import); the cloud-api methods run in-process against a local Bun server.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { mkdirSync, writeFileSync } from "node:fs";
+
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   BUILTIN_PROFILE_CATALOG, JsonValueSchema, profileCatalogDigest, validateProfileCatalog,
   type JsonObject, type JsonValue, type ProfileCatalog, type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
 import * as v from 'valibot';
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function catalogA(): ProfileCatalog {
   return {
@@ -92,8 +87,7 @@ function runScenario(body: string, opts: {
   setup?: (home: string) => void;
   env?: Record<string, string>;
 } = {}): Record<string, StepOutcome> {
-  const kinuHome = mkdtempSync(join(tmpdir(), 'kinu-cli-profiles-'));
-  tempDirs.push(kinuHome);
+  const kinuHome = scratchDir('cli-profiles');
   opts.setup?.(kinuHome);
 
   const script = `

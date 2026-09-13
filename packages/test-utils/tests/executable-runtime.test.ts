@@ -7,10 +7,10 @@
  * like the other: `createWorkspace` returns an `AgentRuntime` that satisfies the
  * type completely and cannot execute anything.
  */
+import { scratchDir } from '../src/scratch';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { createWorkspace } from '../../core/src/identity/index';
 import { initWorkspaceSchema, type LLMProviderConfig } from '../../core/src/index';
@@ -25,14 +25,14 @@ const LLM: LLMProviderConfig = {
 };
 
 function scratch() {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-exec-runtime-'));
+  const dir = scratchDir('exec-runtime');
 
   return { dir, dbPath: join(dir, 'agent.db') };
 }
 
 describe('assertExecutableRuntime', () => {
   test('REFUSES the birth runtime — the one two full eval runs were taken on', async () => {
-    const { dir, dbPath } = scratch();
+    const { dbPath } = scratch();
     const db = new Database(dbPath);
 
     try {
@@ -44,12 +44,11 @@ describe('assertExecutableRuntime', () => {
         .toThrow(/NO executionRouter/);
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
   test('ACCEPTS the runtime every running surface actually opens', async () => {
-    const { dir, dbPath } = scratch();
+    const { dbPath } = scratch();
     const birth = new Database(dbPath);
 
     try {
@@ -70,7 +69,6 @@ describe('assertExecutableRuntime', () => {
       expect(() => assertExecutableRuntime(rt, 'behaviour eval')).not.toThrow();
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -92,7 +90,7 @@ describe('assertExecutableRuntime', () => {
 
 describe('the birth runtime refuses to fabricate an exploration result', () => {
   test('spawnBranch THROWS and names the runtime that implements it', async () => {
-    const { dir, dbPath } = scratch();
+    const { dbPath } = scratch();
     const db = new Database(dbPath);
 
     try {
@@ -105,7 +103,6 @@ describe('the birth runtime refuses to fabricate an exploration result', () => {
       expect(() => rt.spawnBranch('any')).toThrow(/openWorkspaceCLI/);
     } finally {
       db.close();
-      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
