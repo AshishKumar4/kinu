@@ -509,24 +509,30 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
 /**
  * The SDK builds its interception fetchers from `ctx.exports.ContainerProxy`, so
  * this class has to be exported under that exact name. Its env is wrapped, which
- * is what puts the s3fs traffic on the meter, and its fetch holds the flush open
- * with `waitUntil` — a Worker entrypoint, where `waitUntil` is real, unlike
- * inside a Durable Object.
+ * puts s3fs traffic on the meter. Request settlement flushes the proxy isolate;
+ * /ops cannot drain a different isolate's under-threshold batch.
  */
 class CountingContainerProxy extends ContainerProxy {
+  readonly #benchEnv: BenchEnv;
+
   constructor(ctx: ExecutionContext, env: BenchEnv) {
     // The counting binding is installed HERE, in the constructor, because the
     // egress handler resolves the bucket out of this entrypoint's env by
     // binding name. Wrapping the Durable Object's env instead counts almost
     // nothing: the s3fs traffic never passes through it.
     super(ctx, { ...env, BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET, env) });
+    this.#benchEnv = env;
     flushEnv = env;
   }
 
   override async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).hostname !== 'r2.internal') return await super.fetch(request);
 
-    return await observePublicationRequest(request, async (forwarded) => await super.fetch(forwarded));
+    try {
+      return await observePublicationRequest(request, async (forwarded) => await super.fetch(forwarded));
+    } finally {
+      await flushOps(this.#benchEnv);
+    }
   }
 }
 

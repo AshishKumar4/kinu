@@ -20,7 +20,11 @@ interface BodyObservation {
 
 const incomingBody = new AsyncLocalStorage<BodyObservation>();
 
-/** A FixedLengthStream preserves the R2 binding's required length guarantee. */
+/** The SDK R2 bridge owns the FixedLengthStream passed to the binding.
+ * A second native fixed-length stream here deadlocks that bridge's pipe;
+ * measured on workerd and deployed Containers, 2026-09-13:
+ * bench-artifacts/block-attach/20260913-publication/.
+ * Count with a backpressured transform and preserve the request length header. */
 export async function observePublicationRequest(
   request: Request,
   forward: (request: Request) => Promise<Response>,
@@ -49,8 +53,7 @@ export async function observePublicationRequest(
     },
   });
 
-  const fixed = new FixedLengthStream(length);
-  observation.done = request.body.pipeThrough(counted).pipeTo(fixed.writable, { signal: stop.signal }).then(
+  observation.done = request.body.pipeTo(counted.writable, { signal: stop.signal }).then(
     () => {
       observation.complete = received === length;
 
@@ -60,7 +63,7 @@ export async function observePublicationRequest(
   );
 
   try {
-    const forwarded = new Request(request, { method: 'PUT', body: fixed.readable });
+    const forwarded = new Request(request, { method: 'PUT', body: counted.readable });
 
     return await incomingBody.run(observation, async () => await forward(forwarded));
   } finally {
