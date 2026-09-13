@@ -116,22 +116,13 @@ export const EXTERNAL_TOOL_LINE = definePromptSection(
 );
 
 /**
- * The turn's guidance, in independent layers.
- *
- * Permission (workMode) renders here because it is a BAR: a Plan turn is
- * forbidden things, and a prohibition belongs at system placement. Provenance
- * does not — it is an overlay and never a bar (prompting/surface.ts), so it
- * rides the turn-local tail instead of buying a full prefix rewrite every
- * time a background job lands mid-session (prompting/volatile-context.ts
- * `BACKGROUND_RESUME_NOTICE`). The role renders as its own section
- * (ROLE_SECTION below), never as a branch of this one.
- *
- * `build` (Auto) renders nothing here, on purpose: it is the absence of
- * constraint.
+ * Stable operating doctrine. The current mode and submission reach ride the
+ * dynamic ledger, while tool execution still enforces the resolved profile.
+ * GEPA can tune this section's wording, not the mode's permission rules.
  */
 export const OPERATING_GUIDANCE = definePromptSection(
   "guidance/operating",
-  '{{familyDelta}}{{#if planMode}}{{/if}}{{#if planSubmission}}{{/if}}',
+  '{{familyDelta}}',
   operatingGuidance.trimEnd(),
 );
 

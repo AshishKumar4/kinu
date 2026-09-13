@@ -15,7 +15,12 @@ granularity) are rendered into a dynamic-context ledger whose blocks are
 frozen at birth and appended, later blocks superseding earlier ones. Decided
 2026-09-03 (staged-context cutover); reviewed 2026-09-13 against
 `prompting/volatile-context.ts` and `orchestrator/turn-context.ts`; pinned by
-`unit-volatile-context.test.ts`.
+`unit-volatile-context.test.ts`. On 2026-09-13, mode and plan-submission
+guidance moved here from the operating system section: the red control
+changed five lines of the system prompt on Build→Plan; the same surface now
+has identical system bytes in both modes. Execution remains profile-gated.
+The prompt matrix was re-pinned for this placement change, without raising
+its byte ceiling; the GEPA contract now owns only the static family slot.
 
 C2. The provider cache is addressed per provider, markers placed last. Anthropic
 gets four breakpoints (one after tools, one at the end of the system prompt,

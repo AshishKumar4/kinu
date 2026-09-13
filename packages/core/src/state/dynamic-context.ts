@@ -27,6 +27,7 @@ import {
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
 import { selectInjectableCraftedTools } from '../tools/crafted-executor';
+import { currentOperationProfile } from '../profiles/operation';
 
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
@@ -76,8 +77,10 @@ export function subordinateDelegatesOf(
  */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
+  const profile = currentOperationProfile(rt.actor)?.profile;
 
   return agentDynamicContext({
+    mode: profile ? { workMode: profile.workMode, planSubmission: profile.allowedTools.includes('submit_plan') } : undefined,
     craftedTools: selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,

@@ -18,6 +18,7 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   turnLocalContextMessage,
+  renderDynamicContextBlock,
   splitPromptSections,
   AGENTS_TOOL_ACTIONS,
   BUILTIN_SKILLS,
@@ -1130,15 +1131,14 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('success criteria');
   });
 
-  test('adds mode overlays only when requested', () => {
-    const { rt } = createTestRuntime();
-    const plan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true });
+  test('the live ledger carries both plan-submission variants', () => {
+    const plan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: true } });
     expect(plan).toContain('submit_plan');
     expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
     expect(plan).toContain('Do not expose ports or produce preview or output links');
     expect(plan).toContain('Until the plan is approved, do not begin implementation');
 
-    const delegatedPlan = buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: false });
+    const delegatedPlan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: false } });
     expect(delegatedPlan).toContain('report concrete findings to the parent Plan turn');
     expect(delegatedPlan).not.toContain('End by calling `submit_plan`');
   });
@@ -1172,7 +1172,7 @@ describe('buildSystemPromptSync', () => {
     // A Plan job's wake keeps BOTH: the read-only bar in the prefix, the
     // resume overlay in the turn.
     const planWake = { kinuEvent: 'background_job', kinuMode: 'plan' };
-    const planPrompt = buildSystemPromptSync(rt, { workMode: workModeForTurnMetadata(planWake) });
+    const planPrompt = renderDynamicContextBlock({ mode: { workMode: workModeForTurnMetadata(planWake), planSubmission: false } });
     expect(planPrompt).toContain('Do not change project files, system resources, releases, or deployments');
     expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(planWake) })!.content))
       .toContain('the referenced job result first');
@@ -1266,13 +1266,10 @@ describe('buildSystemPromptSync', () => {
   test('a role never widens Plan mode', () => {
     const { rt } = createTestRuntime();
 
-    const planOnly = buildSystemPromptSync(rt, {
-      workMode: 'plan',
-      planSubmissionAvailable: true,
-    });
+    const planOnly = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: true } }) ?? '';
 
     for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
-      const prompt = buildSystemPromptSync(rt, {
+      const system = buildSystemPromptSync(rt, {
         workMode: 'plan',
         planSubmissionAvailable: true,
         roleSection: {
@@ -1281,6 +1278,8 @@ describe('buildSystemPromptSync', () => {
           instructions: role.instructions,
         },
       });
+
+      const prompt = `${system}\n${planOnly}`;
 
       expect(prompt).toContain('Do not change project files, system resources, releases, or deployments');
       expect(prompt).toContain('Until the plan is approved, do not begin implementation');

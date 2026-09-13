@@ -52,7 +52,7 @@ import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
 } from './sections';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface';
-import { type TurnProvenance } from '../types/turn';
+import { type TurnProvenance, type WorkMode } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
   connectedDevices, describeGpuNodes, effectiveDeviceMode, sandboxCause,
@@ -114,6 +114,7 @@ export interface ActiveRoster<T> {
  *  List fields are rendered most-relevant-first and capped, with an honest
  *  count of what was elided — callers order them, the renderer bounds them. */
 export interface DynamicContext {
+  mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
   /** Live callable additions; native tool definitions remain byte-stable. */
   craftedTools?: readonly CraftedDeclaration[];
   /** Rendered recent-facts block (renderFactsBlock output). */
@@ -198,6 +199,7 @@ function flattenTaskList(
  *  how a backend journals a head run or registers a job is not this layer's
  *  business, only that it can be asked. */
 export interface DynamicContextSources {
+  readonly mode?: DynamicContext['mode'];
   readonly craftedTools?: readonly CraftedDeclaration[];
   /** The turn's rendered recent-facts block (renderFactsForTurn output). */
   readonly factsBlock: string | undefined;
@@ -251,6 +253,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
+    mode: sources.mode,
     craftedTools: sources.craftedTools,
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
@@ -581,6 +584,8 @@ const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   const sections: Array<string | null> = [];
 
+  if (ctx.mode) sections.push(renderWorkMode(ctx.mode));
+
   if (ctx.craftedTools && ctx.craftedTools.length > 0) {
     sections.push(`## Crafted tools available through execute_tools\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
   }
@@ -681,6 +686,27 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   );
 
   return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
+}
+
+function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
+  if (mode.workMode === 'build') {
+    return '## Work mode\nBuild mode: implementation is permitted within the user request and active tool permissions.';
+  }
+
+  return [
+    '## Work mode',
+    mode.planSubmission
+      ? '- Plan mode: investigate, then submit a concrete Markdown plan with affected files, risks, and verification through `submit_plan`.'
+      : '- Plan mode: investigate and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.',
+    '- Do not change project files, system resources, releases, or deployments. Use file read/list/stat/search for inspection. Research notes, task bookkeeping, and the plan itself remain allowed. After approval starts a Build turn, use mutating operations.',
+    '- Run code only through a tool that explicitly supports Plan-safe analysis. Unrestricted shell/local native execution is unavailable in Plan; do not route around that refusal through another environment.',
+    '- Do not expose ports or produce preview or output links. ' + (mode.planSubmission
+      ? 'The submitted plan is the only plan-mode output surface.'
+      : 'Your report feeds the parent plan. The parent writes the user-facing output.'),
+    mode.planSubmission
+      ? '- Until the plan is approved, do not begin implementation. When the missing answer must come from the user, ask a question. Otherwise end by calling `submit_plan`.'
+      : '- Do not begin implementation. Return your research and recommendations to the parent without calling or inventing `submit_plan`.',
+  ].join('\n');
 }
 
 /** The per-turn tail block (or null when there is nothing to say). */

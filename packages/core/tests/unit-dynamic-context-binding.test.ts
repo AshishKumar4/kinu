@@ -19,6 +19,8 @@ import type {
   ActiveRoster,
 } from '../src/prompting/volatile-context';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
+import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
+import { runOperationProfile } from '../src/profiles/operation';
 
 interface Fixture {
   readonly rt: AgentRuntime;
@@ -60,6 +62,24 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
     approvals: over.approvals,
   });
 }
+
+test('the current actor profile supplies mode and actual plan-submission reach to the ledger', () => {
+  const o = setup();
+  const catalog = { roles: {}, tiers: { default: { model: 'test' } } };
+
+  const profile = resolveTurnProfile({
+    envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+    provider: { revision: '1', availableModels: ['test'] }, roleId: 'task',
+    workMode: 'plan', availableTools: ['file', 'submit_plan'], activeSkills: [],
+  });
+
+  const operation = { actor: o.rt.actor, profile, inputs: null, runId: 'mode-run', turnId: 'mode-turn' };
+
+  expect(runOperationProfile(operation, () => collect(o).mode)).toEqual({ workMode: 'plan', planSubmission: true });
+  expect(runOperationProfile({ ...operation, profile: { ...profile, workMode: 'build', allowedTools: ['file'] } },
+    () => collect(o).mode)).toEqual({ workMode: 'build', planSubmission: false });
+  expect(collect(o).mode).toBeUndefined();
+});
 
 describe('the four store-backed planes are the reading actor\'s own', () => {
   // This is the convergence point: ONE function reads four actor-private stores
