@@ -21,7 +21,8 @@ async function devboxLifecycleTrace(event, step, run) {
 }
 `;
 
-const methods = new Set(['activate', 'durableClaim', 'adoptOrTurnOver', 'runStartHook', 'restoreInStartGate', 'readBootId', 'rawExec', 'exec', 'ensureReady', 'resolveReadiness', 'startContainerForRPC']);
+const methods = new Set(['activate', 'durableClaim', 'adoptOrTurnOver', 'runStartHook', 'restoreInStartGate', 'readBootId', 'rawExec', 'exec', 'ensureReady', 'resolveReadiness', 'startContainerForRPC',
+  'startContainer', 'recoverAndStart', 'admitControlListener', 'startAndWaitForPorts', 'startContainerIfNotRunning', 'waitForPort', 'syncPendingStoppedEvents']);
 
 for (const path of files) {
   const absolute = root + path;

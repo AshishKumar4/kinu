@@ -3376,7 +3376,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // free of an SDK type it would otherwise need in its port signature.
         return { status: checked.status as ChangeStatus, version: checked.version };
       },
-      exec: async (command) => await this.#rawExec(command),
+      exec: async (command) => await this.#rawExec(command, DEVBOX_RUNTIME_DIR),
       stamp: (phase) => this.#stampPhase(phase),
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),

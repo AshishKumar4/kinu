@@ -2,13 +2,13 @@
 // the same probe image is built from the source pinned in block-lower/upstream.json.
 import { afterAll, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 
 import { buildDeltaIndex, DELTA_BLOCK_BYTES, type DeltaOverride } from '../src/delta-index';
-import { buildDeltaAttachOps, buildDeltaStageOps, deltaProbeCommand, parseDeltaProbe, planDeltaPublication, type DeltaManifest } from '../src/chunked-delta';
+import { buildDeltaAttachOps, buildDeltaStageOps, deltaBaseStatCommand, deltaBlockHashCommand, deltaProbeCommand, parseDeltaBaseStat, parseDeltaBlockHashes, parseDeltaProbe, planDeltaPublication, type DeltaManifest } from '../src/chunked-delta';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { buildBlockImage, removeBlockImage } from './support/block-image';
 
@@ -114,4 +114,33 @@ test('a renamed replacement directory checkpoints and restores without the old l
   const missing = run('missing-marker');
   expect(missing.status).not.toBe(0);
   expect(missing.stdout + missing.stderr).toContain('missing delta source');
+}, 60_000);
+
+test('moving the checkpoint session out of the workspace reseats the base and publishes only the overwrite', () => {
+  const fixture = `${root}/reseat`;
+  mkdirSync(`${fixture}/upper`, { recursive: true });
+  const path = 'vol/dense.bin';
+  writeFileSync(`${fixture}/probe.sh`, deltaProbeCommand('/fixture/upper', []));
+  writeFileSync(`${fixture}/stat.sh`, deltaBaseStatCommand([path], '/fixture/lower-base'));
+  writeFileSync(`${fixture}/hash.sh`, deltaBlockHashCommand({ workDir: '/fixture/hash', files: [{ index: 0,
+    upperPath: `/fixture/upper/${path}`, basePath: `/fixture/lower-base/${path}` }] }));
+  const script = join(import.meta.dir, 'support/reseat-cwd-probe.sh');
+
+  const run = (phase: string) => spawnSync('docker', ['run', '--rm', '--privileged', '--device', '/dev/fuse',
+    '-v', `${fixture}:/fixture`, '-v', `${script}:/probe.sh:ro`, '--entrypoint', '/bin/bash', image, '/probe.sh', phase], { encoding: 'utf8', timeout: 60_000 });
+
+  const prepared = run('prepare');
+  expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
+  expect(prepared.stdout).toContain('cwd-control=EBUSY');
+  const probe = parseDeltaProbe(readFileSync(`${fixture}/probe.out`, 'utf8'));
+  const baseFacts = parseDeltaBaseStat(readFileSync(`${fixture}/stat.out`, 'utf8'), [path]);
+  const hashes = parseDeltaBlockHashes(readFileSync(`${fixture}/hash.out`, 'utf8'), new Map([[0, { upperBlocks: 4096, baseBlocks: 4096 }]]));
+  const plan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles: [path], whiteouts: new Set() });
+  expect(plan.chunks.size).toBe(4);
+  writeFileSync(`${fixture}/stage.sh`, ['set -e', ...buildDeltaStageOps(plan, { upperDir: '/fixture/upper', pkgDir: '/fixture/pkg' })].join('\n'));
+  writeFileSync(`${fixture}/namespace.sh`, ['set -e', ...buildDeltaAttachOps(plan.manifest, '/var/tmp/devbox/upper')].join('\n'));
+  const restored = run('restore');
+  expect(restored.status, restored.stdout + restored.stderr).toBe(0);
+  expect(Number(readFileSync(`${fixture}/delta-bytes`, 'utf8'))).toBeLessThan(196608);
+  expect(restored.stdout).toContain('reseat=outside-workspace delta=small restored=exact payload=0 index-pages=0');
 }, 60_000);
