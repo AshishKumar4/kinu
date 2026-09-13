@@ -1187,7 +1187,7 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts',
     tier: 'ci',
     // Measured 2026-08-24 after the six plan checks joined this row:
     // 177.63s and 175.02s over two runs.

@@ -1160,6 +1160,21 @@ let galleryAgentPlan: PlanReview = {
   decidedAt: null,
 };
 
+/* The reads the first-visit inspector policy is decided on, answered in the
+   shape the page actually consumes them: a pending plan is what it opens for,
+   and the stub's blanket `[]` answered `listSlates` in a shape `slates.map`
+   crashed on. A table like AGENT_RPC because both are method → fixture. */
+const WORKSPACE_PAGE_RPC = new Map(Object.entries({
+  getWorkspaceSnapshot: () => {
+    const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get("getWorkspaceSnapshot"));
+
+    return { ...snapshot, activePlan: galleryAgentPlan };
+  },
+  listSlates: () => ({ slates: [], problems: [] }),
+  getActivePlanReview: () => galleryAgentPlan,
+  savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+}));
+
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
 
@@ -1251,12 +1266,6 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     } satisfies SubordinateSnapshot).json<T>();
   }
 
-  if (method === "getActivePlanReview") return rpcResult(galleryAgentPlan).json<T>();
-
-  if (method === "savePlanReviewAnnotations") {
-    return rpcResult({ ok: true, plan: galleryAgentPlan }).json<T>();
-  }
-
   if (method === "decidePlanReview") {
     const [, , decision, feedback] = v.parse(
       v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
@@ -1282,21 +1291,11 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
   }
 
-
-  // The reads the first-visit inspector policy is decided on, in the shape the
-  // page actually consumes them: a pending plan is what it opens for, and the
-  // stub's blanket `[]` answered `listSlates` in a shape `slates.map` crashed on.
-  if (method === "getWorkspaceSnapshot") {
-    const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
-
-    return rpcResult({ ...snapshot, activePlan: galleryAgentPlan }).json<T>();
-  }
-
-  if (method === "listSlates") return rpcResult({ slates: [], problems: [] }).json<T>();
-
-  return AGENT_RPC.has(method)
-    ? rpcResult(AGENT_RPC.get(method)).json<T>()
-    : stubRpc<T>(method, args);
+  return WORKSPACE_PAGE_RPC.has(method)
+    ? rpcResult(WORKSPACE_PAGE_RPC.get(method)!()).json<T>()
+    : AGENT_RPC.has(method)
+      ? rpcResult(AGENT_RPC.get(method)).json<T>()
+      : stubRpc<T>(method, args);
 };
 
 /* ── swarm searches: the shipped model's own states ─────────────── */

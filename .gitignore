@@ -72,6 +72,10 @@ CC-CORPUS-*.md
 # Requirements may cite local turn numbers, but the transcript itself stays under
 # ~/.claude/projects/.../memory/requirements/.
 /docs/requirements/OWNER-MESSAGES-VERBATIM.md
+# The working pair in the same class: the verbatim message record and the
+# intent ledger derived from it.
+/docs/OWNER-MESSAGES.md
+/docs/OWNER-INTENTS.md
 
 # UI verification screenshots — proof-of-work, regenerated on demand, never source.
 /.ui-proof/
