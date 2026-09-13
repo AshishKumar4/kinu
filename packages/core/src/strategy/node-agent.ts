@@ -271,11 +271,11 @@ export interface NodeAgentDeps {
    * uid and a file plane that acts as it, over the filesystem it already holds.
    * Core has the credential and no way to make either from it.
    *
-   * Absent leaves {@link actor}'s own runtime in place, which is the honest
-   * state for a runtime with no provisioner at all: the node reports
-   * `shared-origin-plane` and runs exactly as the origin.
+   * null or absence leaves the hosted seat's own runtime in place. Its home
+   * may already be credentialed by the host; without a provisioner the node
+   * instead reports `shared-origin-plane`.
    */
-  runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
+  runtimeForWorkspace?: ((workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>) | null;
   /** Backend-built `execute_tools`; absent on a runtime that wired none, and then
    *  the tool is absent too rather than broken. */
   executeTool?: unknown;

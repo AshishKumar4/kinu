@@ -4114,9 +4114,21 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // with. settleBackgroundWork() drains the job; the dispatch row is found by
     // the tool that wrote it rather than by run recency, since the wake turn's
     // run can easily be the newer one.
-    const { db, session } = setup('unused', searchingModel());
+    const { db, session, events: liveEvents } = setup('unused', searchingModel());
     await session.send('go');
     await session.settleBackgroundWork();
+
+    const streams = liveEvents.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_stream'
+      ? [v.parse(v.object({ headId: v.string(), kind: v.picklist(['text', 'reasoning']), delta: v.string() }), event.event)]
+      : []);
+
+    const activity = liveEvents.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_activity'
+      ? [v.parse(v.object({ headId: v.string() }), event.event).headId]
+      : []);
+
+    expect(streams.length).toBeGreaterThan(0);
+
+    for (const frame of streams) expect(activity).toContain(frame.headId);
 
     const events = session.listRuns().items.flatMap((r) => session.getRunEvents(r.runId));
 
@@ -5104,6 +5116,15 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     });
 
     await head.run();
+
+    const frames = events.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_stream'
+      ? [v.parse(v.object({ headId: v.string(), kind: v.picklist(['text', 'reasoning']), delta: v.string() }), event.event)]
+      : []);
+
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every((frame) => frame.headId === 'h-fork' && frame.kind === 'text')).toBe(true);
+    expect(frames.map((frame) => frame.delta).join('')).toBe(MERGE_ANSWER);
+    expect(events.some((event) => event.type === 'broadcast' && event.event.type === 'head_activity')).toBe(true);
     // The fork's OWN spec reached the resolver. Without `resolveModel` on this
     // root every fork silently ran the session's model instead, so a panel
     // asked for three vendors got three copies of one.

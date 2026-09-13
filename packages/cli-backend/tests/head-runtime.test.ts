@@ -18,6 +18,7 @@ import {
   type ReasoningEffort,
   type HeadInput, type WebSearchProvider, type JsonObject, type WriteObserver,
   type ModelCallReport, type ModelOperationEvent,
+  type HeadStreamFrame,
 } from '@kinu.run/core';
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
@@ -224,6 +225,29 @@ function controllerWithCLIRuntime(model: LanguageModel, probe?: RouteProbe) {
 }
 
 describe('createCLIHeadRuntime — full split → run → merge', () => {
+  test('reasoning and prose stream in order under the emitting head identity', async () => {
+    const frames: HeadStreamFrame[] = [];
+
+    const model = scriptedTurnModel({
+      provider: 'fake', modelId: 'streamed-head',
+      doGenerate: async () => ({
+        content: [{ type: 'reasoning', text: 'checking the parser' }, { type: 'text', text: 'the answer' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 7, text: 5, reasoning: 2 },
+        }, warnings: [],
+      }),
+    });
+
+    const runtime = createCLIHeadRuntime(headDeps(model, { publishHeadStream: (frame) => { frames.push(frame); } }));
+    await (await runtime.spawnHead(aHeadInput())).run();
+    expect(frames).toEqual([
+      { headId: 'h1', kind: 'reasoning', delta: 'checking the parser' },
+      { headId: 'h1', kind: 'text', delta: 'the answer' },
+    ]);
+  });
+
   test('two heads run in-process and the merge synthesizes their findings', async () => {
     const { controller } = controllerWithCLIRuntime(fakeHeadsModel());
 

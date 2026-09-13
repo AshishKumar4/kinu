@@ -984,6 +984,7 @@ export class OrchestratorAgent extends ActorAgent {
       // seams, because a node is an actor of the WORKSPACE whoever spawned it.
       hostNode: (node) => hostNodeSeat(seams, node),
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
+      runtimeForNodeWorkspace: null,
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
       announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
     };
