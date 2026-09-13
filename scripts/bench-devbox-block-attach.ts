@@ -159,6 +159,7 @@ async function run(): Promise<number> {
   if (accessKeyId === undefined || secretAccessKey === undefined) throw new Error('provisioned R2 cleanup credentials are required before deploying');
   const revision = sourceRevision();
   const lifecycleOnly = process.argv.includes('--lifecycle');
+  const c3Only = process.argv.includes('--c3-only');
 
   if (!lifecycleOnly && !process.argv.includes('--diagnostic') && revision.dirtyDigest !== 'clean') throw new Error('commit the measured source before running the two cells');
   const runId = `b${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
@@ -170,9 +171,9 @@ async function run(): Promise<number> {
   if (names === undefined) throw new Error('no snapshot-chain fixture');
   const box = boxName(runId, 'snapshot-chain');
   const largeBox = `${box}-large`;
-  const boxes = lifecycleOnly ? [box] : [box, largeBox];
+  const boxes = lifecycleOnly || c3Only ? [box] : [box, largeBox];
 
-  if (!lifecycleOnly) {
+  if (!lifecycleOnly && !c3Only) {
     const kinds = ['do-state', 'alarm', 'mount'] as const;
     resources.manifest.entries.push(...createManifest(runId,
       kinds.map(kind => ({ kind, name: largeBox, detail: 'independent large-file cell' })),
@@ -192,7 +193,8 @@ async function run(): Promise<number> {
 
   const save = (): void => writeFileSync(join(artifacts, 'observations.json'), JSON.stringify({ runId, date: new Date().toISOString(),
     source: revision, image: SANDBOX_IMAGE, worker: names.worker, bucket: names.bucket, workerVersion: live?.workerVersion,
-    scope: lifecycleOnly ? 'empty attach then first exec; lifecycle attribution only' : 'two storage cells; not full strategy admission', c3, large, lifecycle, cleanup, errors }, null, 2));
+    scope: lifecycleOnly ? 'empty attach then first exec; lifecycle attribution only'
+      : c3Only ? 'one C3 storage cell; not full strategy admission' : 'two storage cells; not full strategy admission', c3, large, lifecycle, cleanup, errors }, null, 2));
 
   const log = (message: string): void => { process.stderr.write(`[block-attach] ${message}\n`); };
 
@@ -287,11 +289,13 @@ async function run(): Promise<number> {
       c3 = await measureLiveC3(fixture, box, runId, null, row => { c3 = row; save(); }, { deadlineMs: CELL_STARTUP_MS });
       errors.push(...evaluateLiveC3(c3).errors, ...boundedAttachErrors({ phases: c3.restoreProbe?.phases, blockReads: c3.blockReads }));
       errors.push(...chunkedPublicationErrors(c3.beforeDestroy?.state?.chain));
-      const firstCleanup = await teardownLiveArms(fixture, [box]);
 
-      errors.push(...firstCleanup);
-      large = await measureLarge(fixture, largeBox, row => { large = row; save(); });
-      errors.push(...large.errors);
+      if (!c3Only) {
+        const firstCleanup = await teardownLiveArms(fixture, [box]);
+        errors.push(...firstCleanup);
+        large = await measureLarge(fixture, largeBox, row => { large = row; save(); });
+        errors.push(...large.errors);
+      }
     }
   } catch (cause) {
     errors.push(cause instanceof Error ? cause.message : String(cause));

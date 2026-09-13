@@ -1,0 +1,46 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/store-mount-bounds.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"3906c40b-32e6-4afa-a912-48b928696e1a"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"3906c40b-32e6-4afa-a912-48b928696e1a","cwd":"","at":1789307057877}
+[devbox] {"event":"devbox.checkpoint.reseat.failed","chainId":"3906c40b-32e6-4afa-a912-48b928696e1a","ms":0,"reason":"releasing the mount at /workspace failed (1): fusermount3: failed to unmount /workspace: Device or resource busy"}
+[devbox] /workspace base 3906c40b-32e6-4afa-a912-48b928696e1a is committed and its overlay could not be reseated onto it, so the next delta still archives the upper as it stands: releasing the mount at /workspace failed (1): fusermount3: failed to unmount /workspace: Device or resource busy
+[devbox] /workspace base 3906c40b-32e6-4afa-a912-48b928696e1a (26 bytes)
+24 |     await arm.box.attachNow();
+25 |     await arm.box.writeFile('/workspace/file', 'baseline');
+26 |     await arm.box.exec('pwd');
+27 |     expect(arm.container.sessionCwd).toBe('/workspace');
+28 |     expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
+29 |     expect(arm.container.layerMounts.size).toBe(1);
+                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 0
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-block-layer-impl/packages/devbox/tests/store-mount-bounds.test.ts:29:44)
+(fail) the store mount states its own s3fs bounds > a first checkpoint seats its base with the command session outside the workspace [17.50ms]
+
+packages/devbox/tests/snapshot-chain.test.ts:
+2976 |     const record = harness({ state: null, mounts: MOUNTED });
+2977 |     const exec = record.ports.exec;
+2978 |     record.ports.exec = async command => command.includes("/usr/bin/fusermount3 -u '/workspace'")
+2979 |       ? { stdout: '', stderr: 'Device or resource busy', exitCode: 1 } : await exec(command);
+2980 |     const result = await checkpointOf(record, 'quiesce');
+2981 |     expect(result.kind).toBe('failed');
+                               ^
+error: expect(received).toBe(expected)
+
+Expected: "failed"
+Received: "committed"
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-block-layer-impl/packages/devbox/tests/snapshot-chain.test.ts:2981:25)
+(fail) discard — objects before the pointer > a committed base whose reseat is busy is a named checkpoint refusal [1.44ms]
+
+ 0 pass
+ 136 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 2 files. [66.00ms]

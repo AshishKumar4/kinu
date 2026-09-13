@@ -1,0 +1,94 @@
+--- /tmp/kinu-devbox-vendor-restore.sEAvNC/sandbox/dist/sandbox-CPj2jsbz.js	2026-09-13 08:37:42.630330168 -0500
++++ node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js	2026-09-13 08:28:54.418277145 -0500
+@@ -7747,12 +7747,12 @@
+ 		this.controlCallback = new SandboxControlCallbackImpl(() => this.tunnelExitHandler, this.logger);
+ 		this.client = this.createClientForTransport(this.transport);
+ 		this.codeInterpreter = new CodeInterpreter(() => this.client.interpreter);
+-		this.ctx.blockConcurrencyWhile(async () => {
+-			this.sandboxName = await this.ctx.storage.get("sandboxName") ?? null;
+-			this.normalizeId = await this.ctx.storage.get("normalizeId") ?? false;
+-			this.defaultSession = await this.ctx.storage.get("defaultSession") ?? null;
+-			this.keepAliveEnabled = await this.ctx.storage.get("keepAliveEnabled") ?? false;
+-			const storedTimeouts = await this.ctx.storage.get("containerTimeouts");
++		this.ctx.blockConcurrencyWhile(() => devboxLifecycleTrace('block', "sandbox-CPj2jsbz.js:7750", async () => {
++			this.sandboxName = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7751", async () => (this.ctx.storage.get("sandboxName"))) ?? null;
++			this.normalizeId = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7752", async () => (this.ctx.storage.get("normalizeId"))) ?? false;
++			this.defaultSession = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7753", async () => (this.ctx.storage.get("defaultSession"))) ?? null;
++			this.keepAliveEnabled = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7754", async () => (this.ctx.storage.get("keepAliveEnabled"))) ?? false;
++			const storedTimeouts = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7755", async () => (this.ctx.storage.get("containerTimeouts")));
+ 			if (storedTimeouts) {
+ 				this.containerTimeouts = {
+ 					...this.containerTimeouts,
+@@ -7761,12 +7761,12 @@
+ 				this.hasStoredContainerTimeouts = true;
+ 				this.client.setRetryTimeoutMs(this.computeRetryTimeoutMs());
+ 			}
+-			const storedSleepAfter = await this.ctx.storage.get("sleepAfter");
++			const storedSleepAfter = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7764", async () => (this.ctx.storage.get("sleepAfter")));
+ 			if (storedSleepAfter !== void 0) {
+ 				this.sleepAfter = storedSleepAfter;
+ 				this.renewActivityTimeout();
+ 			}
+-			const storedTransport = await this.ctx.storage.get("transport");
++			const storedTransport = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7769", async () => (this.ctx.storage.get("transport")));
+ 			if (storedTransport && storedTransport !== this.transport) {
+ 				this.transport = storedTransport;
+ 				const previousClient = this.client;
+@@ -7778,13 +7778,13 @@
+ 				previousClient.disconnect(this.buildDisconnectCause("runtime_replaced", "The sandbox transport was switched while the operation was pending."));
+ 			}
+ 			if (storedTransport) this.hasStoredTransport = true;
+-			const storedLabels = await this.ctx.storage.get("labels");
++			const storedLabels = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:7781", async () => (this.ctx.storage.get("labels")));
+ 			if (storedLabels !== void 0 && storedLabels !== null) this.labels = cloneLabels(storedLabels);
+ 			if (this.interceptHttps) this.envVars = {
+ 				...this.envVars,
+ 				SANDBOX_INTERCEPT_HTTPS: "1"
+ 			};
+-		});
++		}));
+ 	}
+ 	async setSandboxName(name, normalizeId) {
+ 		if (this.sandboxName !== null) return;
+@@ -8840,15 +8840,15 @@
+ 			// `blockConcurrencyWhile` — once per reconnect, on a container that
+ 			// never restarted. A fresh container, a stopped one, or one whose
+ 			// status has not reached healthy still takes the full path below.
+-			const state = await this.getState();
+-			if (this.ctx.container?.running !== true || state.status !== "healthy") await this.startAndWaitForPorts({
++			const state = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:8843", async () => (this.getState()));
++			if (this.ctx.container?.running !== true || state.status !== "healthy") await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:8844", async () => (this.startAndWaitForPorts({
+ 				ports: 3e3,
+ 				cancellationOptions: {
+ 					instanceGetTimeoutMS: RPC_START_INSTANCE_GET_TIMEOUT_MS,
+ 					portReadyTimeoutMS: this.containerTimeouts.portReadyTimeoutMS,
+ 					waitInterval: this.containerTimeouts.waitIntervalMS
+ 				}
+-			});
++			})));
+ 		} catch (error) {
+ 			throw this.toContainerStartError(error);
+ 		}
+@@ -9271,7 +9271,7 @@
+ 		};
+ 	}
+ 	async exec(command, options) {
+-		const context = await this.resolveExecution();
++		const context = await devboxLifecycleTrace('await', "sandbox-CPj2jsbz.js:9274", async () => (this.resolveExecution()));
+ 		const session = this.serializeExecutionContext(context);
+ 		return this.execWithSession(command, session, options);
+ 	}
+@@ -11564,4 +11564,11 @@
+ 
+ //#endregion
+ export { PortClient as A, InvalidBackupConfigError as B, collectFile as C, SandboxClient as D, isPlatformTransientError as E, BackupCreateError as F, SessionTerminatedError as G, ProcessExitedBeforeReadyError as H, BackupExpiredError as I, BackupNotFoundError as L, FileClient as M, CommandClient as N, UtilityClient as O, BackupClient as P, BackupRestoreError as R, validateTunnelName as S, isDurableObjectCodeUpdateReset as T, ProcessReadyTimeoutError as U, OperationInterruptedError as V, RPCTransportError as W, responseToAsyncIterable as _, PREVIEW_PROXY_HEADER as a, sanitizeSandboxId as b, PREVIEW_PROXY_SANDBOX_ID_HEADER as c, BucketUnmountError as d, InvalidMountConfigError as f, parseSSEStream as g, asyncIterableToSSEStream as h, proxyTerminal as i, GitClient as j, ProcessClient as k, PREVIEW_PROXY_TOKEN_HEADER as l, S3FSMountError as m, Sandbox as n, PREVIEW_PROXY_HEADERS as o, MissingCredentialsError as p, getSandbox as r, PREVIEW_PROXY_PORT_HEADER as s, ContainerProxy$1 as t, BucketMountError as u, CodeInterpreter as v, streamFile as w, validatePort as x, SandboxSecurityError as y, ContainerUnavailableError as z };
+-//# sourceMappingURL=sandbox-CPj2jsbz.js.map
+\ No newline at end of file
++//# sourceMappingURL=sandbox-CPj2jsbz.js.map
++async function devboxLifecycleTrace(event, step, run) {
++  const id = crypto.randomUUID();
++  const at = Date.now();
++  console.log(JSON.stringify({event: 'devbox.lifecycle.' + event + '.enter', step, id, at}));
++  try { return await run(); }
++  finally { console.log(JSON.stringify({event: 'devbox.lifecycle.' + event + '.exit', step, id, at: Date.now(), ms: Date.now() - at})); }
++}

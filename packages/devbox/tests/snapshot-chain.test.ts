@@ -1905,7 +1905,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // execed a file into the work directory, `/stop` answered
       // `skipped: work directory is unchanged`, and nothing was ever stored.
       // Every call reported success.
-      const record = harness({ state: null, change: { status: 'unchanged', version: 'v1' } });
+      const calls: string[] = [];
+      const record = harness({ state: null, change: { status: 'unchanged', version: 'v1' }, calls, mounts: mountsAfterAttach(calls) });
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
       expect(outcome.bytes).toBeGreaterThan(0);
@@ -2972,6 +2973,18 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 // ── discard ─────────────────────────────────────────────────────────────────
 
 describe('discard — objects before the pointer', () => {
+  test('a committed base whose reseat is busy is a named checkpoint refusal', async () => {
+    const record = harness({ state: null, mounts: MOUNTED });
+    const exec = record.ports.exec;
+    record.ports.exec = async command => command.includes("/usr/bin/fusermount3 -u '/workspace'")
+      ? { stdout: '', stderr: 'Device or resource busy', exitCode: 1 } : await exec(command);
+    const result = await checkpointOf(record, 'quiesce');
+    expect(result.kind).toBe('failed');
+    expect(result.reason).toContain('reseating');
+    expect(result.reason).toContain('Device or resource busy');
+    expect(record.state?.base.id).toBeDefined();
+  });
+
   test('all three keys go, and only then the record', async () => {
     const record = harness({ state: chainState() });
     await snapshotChainStorage(record.ports).discard();

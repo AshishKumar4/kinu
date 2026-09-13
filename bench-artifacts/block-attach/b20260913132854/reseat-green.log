@@ -1,0 +1,21 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/devbox/tests/block-lower.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+packages/devbox/tests/store-mount-bounds.test.ts:
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"b1728949-bbba-486f-b9b5-fd89aa8b021d"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"b1728949-bbba-486f-b9b5-fd89aa8b021d","cwd":"","at":1789307286423}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"b1728949-bbba-486f-b9b5-fd89aa8b021d","ms":4}
+[devbox] /workspace base b1728949-bbba-486f-b9b5-fd89aa8b021d (26 bytes)
+[devbox] attach empty: no chain recorded; an empty overlay is attached
+[devbox] {"event":"devbox.checkpoint.published","chainId":"45d68a67-3f32-450e-9ecf-acd7180d6290"}
+[devbox] {"event":"devbox.checkpoint.reseat.enter","chainId":"45d68a67-3f32-450e-9ecf-acd7180d6290","cwd":"","at":1789307286429}
+[devbox] {"event":"devbox.checkpoint.reseat.exit","chainId":"45d68a67-3f32-450e-9ecf-acd7180d6290","ms":1}
+[devbox] /workspace base 45d68a67-3f32-450e-9ecf-acd7180d6290 (30 bytes)
+
+ 141 pass
+ 0 fail
+ 673 expect() calls
+Ran 141 tests across 3 files. [4.08s]

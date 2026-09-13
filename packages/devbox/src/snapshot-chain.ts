@@ -782,7 +782,7 @@ function chainShell(exec: ContainerExec, root: string) {
       await must(`releasing the mount at ${path}`,
         `for _ in $(seq 1 ${String(MOUNT_RELEASE_ATTEMPTS)}); do `
           + `grep -qs ${shellPath(` ${path} `)} /proc/mounts || break; `
-          + `/usr/bin/fusermount3 -u ${shellPath(path)} 2>/dev/null || true; sleep 0.1; done; `
+          + `/usr/bin/fusermount3 -u ${shellPath(path)} || true; sleep 0.1; done; `
           + `if grep -qs ${shellPath(` ${path} `)} /proc/mounts; then `
           + `echo "still mounted after ${String(MOUNT_RELEASE_ATTEMPTS)} release attempts" >&2; `
           + 'false; fi');
@@ -1803,6 +1803,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
+    ports.log(JSON.stringify({ event: 'devbox.checkpoint.delta.base', chainId, deltaId, carried: carried.length,
+      fileBases: [...baseFacts.values()].filter(fact => fact?.kind === 'file').length,
+      absentBases: [...baseFacts.values()].filter(fact => fact === null).length }));
+
     let hashFiles = deltaHashCandidates(probe);
     let hashes = new Map<number, DeltaFileHashes>();
 
@@ -1839,6 +1843,15 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     const upperPlan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
+
+    for (const [file, hashed] of hashes) {
+      let matching = 0;
+
+      for (const [block, digest] of hashed.upper) if (hashed.base?.get(block) === digest) matching += 1;
+      ports.log(JSON.stringify({ event: 'devbox.checkpoint.delta.hashes', chainId, deltaId, file,
+        upperBlocks: hashed.upper.size, baseBlocks: hashed.base?.size ?? 0, matchingBlocks: matching }));
+    }
+
     const sideDir = deltaLayerMountPoint(chainId);
 
     const plan = retained === undefined ? upperPlan
@@ -1974,9 +1987,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    *  Quiesce only: clearing a live upper races writers, and a tick appends.
    *  After the record is durable, and without a second record write: the
    *  empty-upper skip in `checkpoint` covers the idle tick that follows, and
-   *  the first write into the fresh upper moves the mark. A failure leaves the
-   *  old overlay for the next wake, never a half-moved tree. */
+   *  the first write into the fresh upper moves the mark. A failed reseat
+   *  refuses the checkpoint even though the base archive is already durable. */
   const reseatAfterFirstBase = async (chainId: string): Promise<void> => {
+    const startedAt = Date.now();
+    const cwd = await ports.exec('pwd');
+    ports.log(JSON.stringify({ event: 'devbox.checkpoint.reseat.enter', chainId, cwd: cwd.stdout.trim(), at: startedAt }));
+
     try {
       await shell.unmountPath(DEVBOX_WORKDIR);
       await shell.unmountPath(blockLower);
@@ -1985,11 +2002,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       await shell.mountLayer(baseObjectKey(root, chainId), lowerBase);
       await shell.overlayAttach(DEVBOX_WORKDIR, [lowerBase]);
       await assertOverlayLanded(`chain ${chainId}`);
+      ports.log(JSON.stringify({ event: 'devbox.checkpoint.reseat.exit', chainId, ms: Date.now() - startedAt }));
     } catch (error) {
-      ports.log(
-        `${DEVBOX_WORKDIR} base ${chainId} is committed and its overlay could not be reseated onto it, `
-        + `so the next delta still archives the upper as it stands: ${describe({ cause: error })}`,
-      );
+      ports.log(JSON.stringify({ event: 'devbox.checkpoint.reseat.failed', chainId, ms: Date.now() - startedAt, reason: describe({ cause: error }) }));
+      throw new Error(`${DEVBOX_WORKDIR} base ${chainId} is committed, but reseating it failed: ${describe({ cause: error })}`, { cause: error });
     }
   };
 

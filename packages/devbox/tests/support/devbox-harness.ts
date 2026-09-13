@@ -745,6 +745,19 @@ export class FakeSandbox {
    * other command.
    */
   #execChainCommand(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+    const unmount = /\/usr\/bin\/fusermount3 -u '([^']+)'/.exec(command)?.[1];
+
+    if (unmount !== undefined) {
+      const mounted = this.overlayMounts.has(unmount) || this.layerMounts.has(unmount) || this.s3fsMounts.has(unmount);
+
+      if (mounted && this.#mountIsBusy(unmount)) return { stdout: '', stderr: `fusermount3: failed to unmount ${unmount}: Device or resource busy`, exitCode: 1 };
+      this.overlayMounts.delete(unmount);
+      this.layerMounts.delete(unmount);
+      this.s3fsMounts.delete(unmount);
+
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
     if (command.includes('/usr/bin/fuse-overlayfs')) {
       const quoted = quotedSegments(command);
       const target = quoted.at(-1);
@@ -1033,21 +1046,19 @@ export class FakeSandbox {
     // holders were killed first — which is the deterministic reason every
     // deployed stop refused, measured in probe `hp0901170218`, where the
     // identical `fusermount -u` returned 0 the moment the session was parked.
-    if (mountPath === '/workspace'
-      && (this.sessionCwd === mountPath || this.sessionCwd.startsWith(`${mountPath}/`))) {
+    if (this.#mountIsBusy(mountPath)) {
       throw new Error(
         `fusermount -u failed (exit 1): fusermount: failed to unmount ${mountPath}: `
         + 'Device or resource busy',
       );
     }
 
-    if (this.workdirHolder !== undefined && mountPath === '/workspace') {
-      // The holder is still alive, so the mount is still busy: the refusal a
-      // real fusermount gives, before any state changes hands.
-      throw new Error(`fusermount: failed to unmount ${mountPath}: Device or resource busy`);
-    }
-
     this.s3fsMounts.delete(mountPath);
+  }
+
+  #mountIsBusy(path: string): boolean {
+    return this.sessionCwd === path || this.sessionCwd.startsWith(`${path}/`)
+      || (path === '/workspace' && this.workdirHolder !== undefined);
   }
 
   async renameFile(oldPath: string, newPath: string, sessionId?: string): Promise<FileOperation> {
