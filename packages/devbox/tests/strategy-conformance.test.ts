@@ -212,6 +212,46 @@ for (const [name, open] of armEntries) {
       expect(await tree(arm)).toEqual(OLD);
     });
 
+    test('actual stop loses local bytes; only committed workspace bytes return through restore', async () => {
+      const arm = open();
+      await attach(arm);
+      expectCommitted(await commit(arm, OLD), 'the committed marker');
+      await arm.workspace.write('uncheckpointed.txt', 'local only');
+      arm.disk().writeFile('/tmp/uncheckpointed-marker', new TextEncoder().encode('ephemeral'));
+      const disk = arm.disk();
+      const remoteKeys = [...arm.durable.objects.keys()];
+
+      arm.stopContainer();
+
+      expect(disk.files.size + disk.trees.size + disk.mounts.size + disk.overlays.size).toBe(0);
+      expect([...arm.durable.objects.keys()]).toEqual(remoteKeys);
+      arm.replaceContainer();
+      expect(arm.disk().readFile('/workspace/notes.txt')).toBeUndefined();
+      expect(arm.disk().readFile('/tmp/uncheckpointed-marker')).toBeUndefined();
+
+      expect((await attach(arm)).kind).toBe('attached');
+      expect(await tree(arm)).toEqual(OLD);
+      expect(await arm.workspace.read('uncheckpointed.txt')).toBeUndefined();
+    });
+
+    test('DO recreation while the container runs retains its uncheckpointed generation', async () => {
+      const arm = open();
+      await attach(arm);
+      expectCommitted(await commit(arm, OLD), 'the committed marker');
+      await arm.workspace.write('uncheckpointed.txt', 'local only');
+      const sentinel = new TextEncoder().encode('ephemeral');
+      arm.disk().writeFile('/tmp/uncheckpointed-marker', sentinel);
+      const disk = arm.disk();
+
+      arm.resetIsolate();
+
+      expect(arm.disk()).toBe(disk);
+      expect(arm.disk().readFile('/tmp/uncheckpointed-marker')).toEqual(sentinel);
+      expect(await arm.workspace.read('uncheckpointed.txt')).toBe('local only');
+      await attach(arm);
+      expect(await tree(arm)).toEqual({ ...OLD, 'uncheckpointed.txt': 'local only' });
+    });
+
     test('a quiesce with pending changes publishes exactly once and returns', async () => {
       // THE CASE THAT FOUND THE STALL, and the reason it is its own test rather
       // than a consequence of the loop above. A commit loop that compared its
