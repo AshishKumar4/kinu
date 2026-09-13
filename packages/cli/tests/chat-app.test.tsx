@@ -7,8 +7,103 @@ import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
+import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
+import { SelectRenderable, TextareaRenderable } from '@opentui/core';
+import { flushSync } from '@opentui/react';
 
 afterEach(cleanupChats);
+
+test('prompt history recalls sent and cleared drafts, searches, and persists per workspace', async () => {
+  const sent: unknown[] = [];
+  const store = createMemoryTuiPreferenceStore();
+
+  const agent = fakeClient({ name: 'recall', send: async (input) => {
+    sent.push(input);
+
+    return TURN;
+  } });
+
+  const screen = await mountChat(agent.client, { tui: { preferenceStore: store }, kittyKeyboard: true });
+
+  for (const prompt of ['first prompt', 'second prompt', 'third prompt']) {
+    await screen.mockInput.typeText(prompt);
+    flushSync(() => screen.mockInput.pressEnter());
+    await screen.waitFor('prompt sent and saved', () => sent.length === ['first prompt', 'second prompt', 'third prompt'].indexOf(prompt) + 1
+      && Object.values(store.read().promptHistory ?? {}).some((entries) => entries.at(-1) === prompt));
+  }
+
+  screen.mockInput.pressArrow('up');
+  await screen.renderOnce();
+  expect(Object.values(store.read().promptHistory ?? {})).toEqual([['first prompt', 'second prompt', 'third prompt']]);
+  const firstRecall = screen.renderer.currentFocusedRenderable;
+
+  if (!(firstRecall instanceof TextareaRenderable)) throw new Error('composer not focused');
+  expect(firstRecall.plainText).toBe('third prompt');
+  screen.mockInput.pressArrow('up');
+  await screen.renderOnce();
+  const input = screen.renderer.currentFocusedRenderable;
+  expect(input).toBeInstanceOf(TextareaRenderable);
+
+  if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
+  expect(input.plainText).toBe('second prompt');
+  screen.mockInput.pressKey('r', { ctrl: true });
+  await screen.waitFor('history search', () => screen.frame().includes('Search sent and cleared prompts'));
+  await screen.mockInput.typeText('sec');
+  await screen.waitFor('filtered history', () => {
+    const results = screen.renderer.root.findDescendantById('prompt-history-results');
+
+    return results instanceof SelectRenderable && results.options.length === 1;
+  });
+  flushSync(() => screen.mockInput.pressEnter());
+  await screen.waitFor('selected history', () => !screen.frame().includes('Search sent and cleared prompts'));
+  expect(input.plainText).toBe('second prompt');
+  flushSync(() => input.setText('cleared draft'));
+  flushSync(() => screen.mockInput.pressKey('c', { ctrl: true }));
+  await screen.renderOnce();
+  expect(input.plainText).toBe('');
+  screen.mockInput.pressArrow('up');
+  await screen.renderOnce();
+  expect(input.plainText).toBe('cleared draft');
+  cleanupChats();
+
+  const other = await mountChat(fakeClient({ name: 'other' }).client, { tui: { preferenceStore: store } });
+  other.mockInput.pressArrow('up');
+  await other.renderOnce();
+  expect(other.frame()).not.toContain('cleared draft');
+  cleanupChats();
+  const restored = await mountChat(fakeClient({ name: 'recall' }).client, { tui: { preferenceStore: store } });
+  restored.mockInput.pressArrow('up');
+  await restored.renderOnce();
+  expect(restored.frame()).toContain('cleared draft');
+});
+
+test('Up and Down inside a multiline draft move the cursor and boundary history preserves the draft', async () => {
+  const agent = fakeClient({ name: 'history-boundary' });
+  const store = createMemoryTuiPreferenceStore();
+  const screen = await mountChat(agent.client, { tui: { preferenceStore: store } });
+  await screen.mockInput.typeText('previous prompt');
+  flushSync(() => screen.mockInput.pressEnter());
+  await screen.waitFor('sent prompt', () => Object.values(store.read().promptHistory ?? {}).some((entries) => entries.includes('previous prompt')));
+  const input = screen.renderer.currentFocusedRenderable;
+
+  if (!(input instanceof TextareaRenderable)) throw new Error('composer not focused');
+  input.setText('first line\nmiddle line\nlast line');
+  input.setCursor(1, 4);
+  screen.mockInput.pressArrow('up');
+  await screen.renderOnce();
+  expect(input.plainText).toBe('first line\nmiddle line\nlast line');
+  expect(input.logicalCursor.row).toBe(0);
+  screen.mockInput.pressArrow('up');
+  await screen.waitFor('boundary recall', () => input.plainText === 'previous prompt');
+  expect(input.plainText).toBe('previous prompt');
+  screen.mockInput.pressArrow('down');
+  await screen.renderOnce();
+  expect(input.plainText).toBe('first line\nmiddle line\nlast line');
+  input.setCursor(1, 4);
+  screen.mockInput.pressArrow('down');
+  await screen.renderOnce();
+  expect(input.logicalCursor.row).toBe(2);
+});
 
 describe('ChatApp terminal interaction', () => {
   test('command palette exposes only truthful local and cloud capabilities', async () => {

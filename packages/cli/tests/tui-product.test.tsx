@@ -56,6 +56,31 @@ const resolve = (
 const EDITING: readonly KeyScope[] = ['editor', 'conversation', 'global'];
 
 describe('TUI product registries', () => {
+  test('prompt keys retain transcript scrolling in every preset', () => {
+    for (const presetId of KEYMAP_PRESET_IDS) {
+      const registry = createKeybindingRegistry({ presetId });
+      expect(resolve(registry, key('up'), EDITING)).toBe('editor.history-previous');
+      expect(resolve(registry, key('down'), EDITING)).toBe('editor.history-next');
+      expect(resolve(registry, key('r', { ctrl: true }), EDITING)).toBe('editor.history-search');
+      expect(resolve(registry, key('c', { ctrl: true }), EDITING)).toBe('editor.clear');
+      expect(resolve(registry, key('up', { alt: true }), EDITING)).toBe('history.line-up');
+      expect(resolve(registry, key('down', { alt: true }), EDITING)).toBe('history.line-down');
+    }
+  });
+
+  test('the local preference file bounds prompt lists and reads older preferences', () => {
+    const path = join(scratchDir('tui-prompt-history-'), 'tui.json');
+    const store = createFileTuiPreferenceStore(path);
+    const defaults = store.read();
+    store.write(defaults);
+    expect(store.read().promptHistory).toBeUndefined();
+    store.write({ ...defaults, promptHistory: { workspace: Array.from({ length: 505 }, (_, index) => `prompt ${index}`) } });
+    const entries = createFileTuiPreferenceStore(path).read().promptHistory?.workspace;
+    expect(entries).toHaveLength(500);
+    expect(entries?.[0]).toBe('prompt 5');
+    expect(entries?.at(-1)).toBe('prompt 504');
+  });
+
   test('every keymap preset binds the same semantic actions and pi-omp is the default', () => {
     expect(KEYMAP_PRESET_IDS).toEqual(['pi-omp', 'kinu', 'opencode']);
     const registries = KEYMAP_PRESET_IDS.map((presetId) => createKeybindingRegistry({ presetId }));

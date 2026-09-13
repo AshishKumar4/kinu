@@ -15,6 +15,7 @@ import { createCliSession } from '../../src/session';
 import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
 import type { TuiHubData } from '../../src/tui/hubs';
 import type { TuiAgentSource } from '../../src/tui/tui-shell';
+import { createMemoryTuiPreferenceStore } from './tui-preferences';
 
 const EVOLUTION: EvolutionConfigView = {
   autoPromoteScaffold: false,
@@ -185,6 +186,7 @@ export function fakeClient(options: FakeClientOptions) {
 export async function mountChat(
   client: AgentClient,
   options: {
+    tui?: ChatAppOpts['tui'];
     listWorkspaces?: () => Array<{ name: string; label: string; mode: 'local' | 'cloud'; cloudName?: string; cwd?: string; workspaceId?: string }>;
     onWorkspaceSelect?: (name: string) => Promise<AgentClient>;
     hubData?: TuiHubData;
@@ -227,6 +229,7 @@ export async function mountChat(
   root.render(
     <ChatApp
       client={client}
+      tui={options.tui ?? { preferenceStore: createMemoryTuiPreferenceStore() }}
       onExit={() => {}}
       workspaceSource={workspaceSource}
       onWorkspaceSelect={options.onWorkspaceSelect}
