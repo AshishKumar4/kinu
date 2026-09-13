@@ -369,18 +369,18 @@ export function muxGif(framesDir: string, manifestPath: string, out: string): vo
   execFileSync('ffmpeg', [
     '-y', '-v', 'error',
     '-f', 'concat', '-safe', '0', '-i', manifestPath,
-    '-vf', 'palettegen=stats_mode=full:reserve_transparent=0',
+    '-vf', 'palettegen=stats_mode=full',
     palette,
   ]);
   execFileSync('ffmpeg', [
     '-y', '-v', 'error',
     '-f', 'concat', '-safe', '0', '-i', manifestPath,
     '-i', palette,
-    // Every frame paints the whole canvas with no transparency: offsetting
-    // would crop a frame's rectangle and transdiff would mark unchanged
-    // pixels transparent — both make a frame depend on the one beneath it,
-    // and the film's no-smear guarantee would no longer be self-evident.
-    '-gifflags', '0',
+    // ffmpeg's default gifflags — offsetting and transdiff — are the GIF's
+    // own delta encoding: a frame may crop to its changed rectangle and mark
+    // unchanged pixels transparent, which is legal under disposal 0/1. The
+    // film test's parser bounds what that means; frame 0's opacity is proven
+    // by decoding it in plan-demo-film.test.ts.
     '-lavfi', 'paletteuse=dither=bayer:bayer_scale=4',
     out,
   ]);
