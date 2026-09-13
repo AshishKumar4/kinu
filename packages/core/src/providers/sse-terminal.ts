@@ -132,7 +132,23 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
       let newline = indexOfNewline();
 
       while (newline < 0) {
-        const next = await reader.read();
+        // The union the DOM lib's `read()` answers differs from the workers
+        // types' only in the done-arm's optional `value`, so this is a
+        // handled read: on failure the lock releases and the same cause
+        // rethrows, never widening what the consumer sees.
+        let next: Awaited<ReturnType<typeof reader.read>>;
+
+        try {
+          next = await reader.read();
+        } catch (cause) {
+          // A failed upstream read propagates, but not before the lock is
+          // released — the body this reader holds must not stay locked
+          // behind an error the consumer will never drain.
+          settled = true;
+          release();
+
+          throw cause;
+        }
 
         if (settled) return;
 
