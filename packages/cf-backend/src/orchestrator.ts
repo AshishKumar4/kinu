@@ -884,6 +884,7 @@ export class OrchestratorAgent extends ActorAgent {
         turnId: () => turn.input.id,
       },
       executeTools: ({ native }) => factory.toolFor(native),
+      craftedToolExecute: null,
       agents,
       // This actor's own semantic index and its own keyed world model — the
       // rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite
@@ -983,6 +984,7 @@ export class OrchestratorAgent extends ActorAgent {
       // seams, because a node is an actor of the WORKSPACE whoever spawned it.
       hostNode: (node) => hostNodeSeat(seams, node),
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
+      runtimeForNodeWorkspace: null,
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
       announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
     };
@@ -3078,17 +3080,9 @@ export class OrchestratorAgent extends ActorAgent {
         // the spending turn's own run log; outside any turn it falls back to
         // the workspace run so the audit still lands.
         audit: (record) => {
-          try {
-            this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
-              type: 'approval_consumed', ...record,
-            });
-          } catch (err) {
-            diagnostics.failure('approval.audit_emit_failed', toKinuError({
-              doing: 'recording an approval_consumed run event',
-              cause: err,
-              otherwise: 'io',
-            }));
-          }
+          this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, {
+            type: 'approval_consumed', ...record,
+          });
         },
         announce: (notice) => this.announceDeferral(notice),
       });

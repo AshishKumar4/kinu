@@ -33,6 +33,7 @@ import type {
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
+  DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery, SettledSignals,
@@ -47,10 +48,13 @@ import { TierIdSchema,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
+  backgroundJobNotice,
+  DeferredApprovalQueue, DeferredApprovalStore,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
   EventLog,
+  writeActivityLog,
   type RunEventRecorder,
   TriggerRegistry,
   // Ingress — core owns the gates; this session owns the local clock and the
@@ -64,7 +68,7 @@ import { TierIdSchema,
   type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
-  type HeadJournal, reconcileInterruptedForks,
+  type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
@@ -287,6 +291,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
         enqueueTurn: (turn) => input.session().enqueueTurn(turn),
         turnInFlight: () => input.session().turnInFlight(),
         setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
+        reconcileDurableWake: null,
         get headRuntime() { return input.session().headRuntime; },
       },
       engine,
@@ -295,6 +300,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       oneShot: input.oneShot,
       refinementLane: () => input.session().runRefinementLane(),
       sinks: {
+        logActivity: (event, detail) => { input.session().logActivity(event, detail); },
         onToolCallEvent: (ev) => { input.session().reportToolCallEnd(ev); },
         onStepEvent: (ev) => { input.session().reportStepFinish(ev); },
       },
@@ -598,6 +604,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
+  private readonly deferrals: DeferredApprovalQueue;
   /**
    * The host every LOGICAL ACTOR this session creates is acquired from —
    * heads, swarm nodes, and (through the team transport) hires.
@@ -782,6 +789,12 @@ export class LocalAgentSession implements BackendHost {
   /** The head journal this session's controller writes to — also the live fork
    *  roster the per-step dynamic context reads. */
   private readonly headJournal: HeadJournal;
+  private readonly headActivity: AnnounceHeadActivity = (headId) => {
+    this.broadcast({ type: 'head_activity', headId });
+  };
+  private readonly publishHeadStream: PublishHeadStream = (frame) => {
+    this.broadcast({ type: 'head_stream', ...frame });
+  };
 
   /** Durable per-session compaction state (plan snapshot + the measured
    *  prompt-token trigger signal) in agent.db, and the default compaction
@@ -904,7 +917,7 @@ export class LocalAgentSession implements BackendHost {
     const stores = this.stores;
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;
-    this.headJournal = stores.headJournal;
+    this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
     this.sessionId = canonicalConversationId(this.config);
@@ -1007,6 +1020,17 @@ export class LocalAgentSession implements BackendHost {
     // holds one turn file ledger and one approval channel.
     this.rt.setModelCallSink?.(this.modelCallSink);
     this.rt.setModelOperations?.(this.modelOperations);
+    this.deferrals = new DeferredApprovalQueue({
+      store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
+      signals: this.actorSession.orchestrator.signals,
+      remember: (grants) => { this.config.grantShellApproval(grants); },
+      audit: (record) => {
+        this.eventRecorder.emit(this.currentRunId || WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
+      },
+      announce: () => { this.broadcast({ type: 'pending_actions_changed' }); },
+    });
+
+    this.rt.setApprovalDeferrals?.(this.deferrals.channel);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -1015,6 +1039,12 @@ export class LocalAgentSession implements BackendHost {
       eventLog: this.eventLog,
       scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
+      onDetached: null,
+      onCancelled: null,
+      onSettled: (job) => {
+        const notice = backgroundJobNotice(job);
+        this.emit({ type: 'background', event: 'background_job_notice', message: notice.body });
+      },
       // Process exit is the local analogue of a DO eviction: re-drive an
       // interrupted job from its durable checkpoint instead of failing it.
       resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal),
@@ -1200,7 +1230,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Install the interactive approval channel for gated shell commands, or
    *  null to remove it. Surfaces that own a live user (ACP) set this; without
-   *  one, 'strict' keeps rejecting gate hits with its explanatory message.
+   *  one, 'strict' parks gate hits in the durable owner queue.
    *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
    *  `rt.shell` and every `rt.executionRouter` provider consult, so an
    *  approval answers `run` and every registered codemode executor's `exec()`
@@ -1216,6 +1246,18 @@ export class LocalAgentSession implements BackendHost {
         this.rt.setShellApprovalChannel?.(null);
       }
     };
+  }
+
+  async listDeferredApprovals(): Promise<DeferredApproval[]> {
+    return this.deferrals.list();
+  }
+
+  async decideDeferredApprovals(
+    ids: string[], decision: DeferredApprovalAnswer,
+  ): Promise<{ decided: string[] }> {
+    const decided = await this.deferrals.decide(ids, decision);
+
+    return { decided: decided.map((action) => action.id) };
   }
 
   /**
@@ -1442,8 +1484,18 @@ export class LocalAgentSession implements BackendHost {
 
   // ── BackendHost ────────────────────────────────────────────────────
 
-  broadcast(event: BroadcastEvent): void {
+  broadcast<Event extends BroadcastEvent>(event: Event): void {
     this.emit({ type: 'broadcast', event });
+  }
+
+  logActivity(event: string, detail?: string): void {
+    const now = Date.now();
+    const startedAt = this.actorSession.orchestrator.acc.startedAt;
+
+    writeActivityLog(() => ({ sql: this.rt.storage.sql, actor: this.rt.actor }), {
+      event, detail: detail ?? null, createdAt: now,
+      elapsedMs: this.currentRunId !== null && startedAt > 0 ? now - startedAt : 0,
+    });
   }
 
   get headRuntime(): HeadRuntime {
@@ -4077,17 +4129,12 @@ export class LocalAgentSession implements BackendHost {
    * that is about the host and not about the request.
    */
   private get refinementDeps(): RefinementDeps {
-    const temporary = this.teamDeps?.temporary;
-
-    let deps: RefinementDeps = {
+    return {
       control: this.scaffoldControl,
       facts: this.factsStore,
       approvals: this.instructionApprovals,
+      refiner: this.teamDeps?.temporary ?? null,
     };
-
-    if (temporary !== undefined) deps = { ...deps, refiner: temporary };
-
-    return deps;
   }
 
   /** One step of the refinement lane plus the automatic trigger — driven by the
@@ -4262,7 +4309,9 @@ export class LocalAgentSession implements BackendHost {
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
-        const items = this.pendingShellApproval === null ? [] : [this.pendingShellApproval];
+        const items = [...this.deferrals.approvals()];
+
+        if (this.pendingShellApproval !== null) items.push(this.pendingShellApproval);
 
         return { items, total: items.length };
       },
@@ -4416,6 +4465,8 @@ export class LocalAgentSession implements BackendHost {
       // child, so this has to be a factory: a shared actor would give every
       // node of that wave one claim ledger, one loop pointer and one row set.
       hostNode: (node) => this.hostNode(node),
+      announceHeadActivity: () => this.headActivity,
+      reportNodeDelta: () => this.publishHeadStream,
       model: this.cachedModel ?? this.defaultModel("an agents swarm"),
       originContext: () => Object.freeze(structuredClone([...this.actorSession.history])),
       // Same catalog session that answers the context window and prices the
@@ -4868,11 +4919,10 @@ export class LocalAgentSession implements BackendHost {
       // the same-named native tools (tools/memory-tool.ts, tools/tasks-
       // tool.ts); `this.taskList` is the SAME TaskListStore instance the
       // dynamic-context snapshot reads.
-      // No vectorStore: Vectorize hybrid search is CF-only, same as the
-      // native `memory` tool's wiring below (search stays FTS5-only here).
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
         actor: this.rt.actor,
+        vectorStore: null,
       })),
       createTasksCodemodeProvider(
         this.taskList,
@@ -4930,6 +4980,7 @@ export class LocalAgentSession implements BackendHost {
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
       journal: () => this.headJournal,
+      publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
     };
 
@@ -5132,6 +5183,7 @@ export class LocalAgentSession implements BackendHost {
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
+      vectorStore: null,
       executeTools: (surface) => {
         // Narrowed by the SAME set the native surface is narrowed by, so a role
         // cannot lose a tool natively and keep it through the sandbox — as a

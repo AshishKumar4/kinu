@@ -154,13 +154,23 @@ export function createWorkspaceForkSource(
  * producing an incomplete one.
  */
 export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
+  return archiveFileTree({
+    readdir: async (path) => [...(await sessionPlane(bundle)).readdir(workspacePath(path))],
+    readFile: async (path) => (await sessionPlane(bundle)).readFile(workspacePath(path)),
+  });
+}
+
+/** Paths are relative to the source root; unsupported node kinds refuse the archive. */
+export function archiveFileTree(source: {
+  readdir(path: string): Promise<readonly { name: string; type: string }[]>;
+  readFile(path: string): Promise<Uint8Array>;
+}): ArchiveFileSource {
   return {
     async listEntries() {
-      const vfs = await sessionPlane(bundle);
       const entries: Array<{ path: string; type: 'file' | 'directory' }> = [];
 
-      const walk = (absolute: string, relative: string): void => {
-        const children = [...vfs.readdir(absolute)].sort((a, b) => a.name.localeCompare(b.name));
+      const walk = async (relative: string): Promise<void> => {
+        const children = [...await source.readdir(relative)].sort((a, b) => a.name.localeCompare(b.name));
 
         for (const child of children) {
           if (!child.name || child.name === '.' || child.name === '..' || child.name.includes('/')) {
@@ -177,16 +187,14 @@ export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSourc
 
           entries.push({ path, type: child.type });
 
-          if (child.type === 'directory') walk(`${absolute}/${child.name}`, path);
+          if (child.type === 'directory') await walk(path);
         }
       };
 
-      walk(WORKSPACE_ROOT, '');
+      await walk('');
 
       return entries;
     },
-    async readFile(path) {
-      return (await sessionPlane(bundle)).readFile(workspacePath(path));
-    },
+    readFile: (path) => source.readFile(path),
   };
 }

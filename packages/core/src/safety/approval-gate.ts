@@ -572,11 +572,12 @@ export interface ShellApprovalPolicy {
    *  point of a standing grant is that nobody is asked again. */
   granted?(grant: ApprovalGrant): boolean;
   /** The interactive channel consulted for a 'gate' decision under 'strict'.
-   *  Omitted, or resolving null, means nobody is listening — 'strict' falls
+   *  null declares a host without an interactive transport. Omitted, null,
+   *  or resolving null means nobody is listening — 'strict' falls
    *  through to `deferrals` if one is wired, and otherwise keeps its
    *  explanatory refusal. A live read too: a surface may attach/detach the
    *  channel after the boundary was wrapped. */
-  requestApproval?(req: ShellApprovalRequest): Promise<ShellApprovalOutcome | null>;
+  requestApproval?: ((req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>) | null;
   /** Where a 'gate' decision goes when nobody answered — parked on the owner
    *  rather than refused on their behalf. See {@link DeferredApprovalChannel}. */
   deferrals?: DeferredApprovalChannel;

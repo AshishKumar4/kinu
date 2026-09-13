@@ -36,6 +36,8 @@ function controls(input: {
     getShellApprovalMode: () => 'strict',
     setShellApprovalMode: (mode) => mode,
     setShellApprovalHandler: () => () => {},
+    listDeferredApprovals: async () => [],
+    decideDeferredApprovals: async () => ({ decided: [] }),
     listModelProviders: async () => [],
     listInstructionApprovals: async (request) => {
       if (request?.cursor?.after === LATER_ANCHOR) return input.pages[1]!;

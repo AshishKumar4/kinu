@@ -1,9 +1,10 @@
 // Reading back the agent's own running commentary.
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initAllTables, readActivityLog } from '../src/index';
+import { initAllTables, readActivityLog, writeActivityLog } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
+import { diagnostics } from '../src/obs/index';
 
 function setup() {
   const db = new Database(':memory:');
@@ -16,14 +17,27 @@ function setup() {
   const actor = createTestActors(sql, execRaw).main;
 
   const write = (event: string, detail: string | null, createdAt: number): void => {
-    void sql`INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at)
-        VALUES (${actor.actorId}, ${event}, ${detail}, ${0}, ${createdAt})`;
+    writeActivityLog(() => ({ sql, actor }), { event, detail, createdAt, elapsedMs: 0 });
   };
 
   return { sql, actor, write };
 }
 
 describe('readActivityLog', () => {
+  test('a failed writer source is reported without failing the caller or disclosing its detail', () => {
+    const failure = spyOn(diagnostics, 'failure');
+
+    try {
+      expect(() => writeActivityLog(() => { throw new Error('actor unavailable'); }, {
+        event: 'first_chunk', detail: 'private workspace text', elapsedMs: 0, createdAt: 1000,
+      })).not.toThrow();
+      expect(failure.mock.calls[0]?.[0]).toBe('activity_log.write_failed');
+      expect(failure.mock.calls[0]?.[2]).toEqual({ source: 'first_chunk' });
+    } finally {
+      failure.mockRestore();
+    }
+  });
+
   test('returns the newest entries, oldest first', () => {
     const { sql, actor, write } = setup();
     write('first', 'a', 1000);

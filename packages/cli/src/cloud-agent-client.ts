@@ -3,6 +3,7 @@ import {
   ADVISOR_SEVERITIES,
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
+  ChatHistoryEntrySchema, type ChatHistoryEntry,
   ORCHESTRATOR_AGENT_SLUG,
   SUBORDINATE_AGENT_SLUG,
   decodeJsonValue,
@@ -26,7 +27,6 @@ import {
   CloudToolDescriptionsSchema,
   createCloudAgentConnectTicket,
   listCloudAvailableModels,
-  type CloudChatMessage,
 } from './cloud-api';
 import {
   createCliSession,
@@ -121,14 +121,7 @@ const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.ob
   entries: v.array(FileCheckpointEntrySchema),
 });
 
-const CloudChatMessageSchema: v.GenericSchema<CloudChatMessage> = v.object({
-  id: v.string(),
-  role: v.picklist(['user', 'assistant', 'system']),
-  content: v.string(),
-  createdAt: v.union([v.string(), v.number()]),
-});
-
-const CloudChatPageSchema: v.GenericSchema<Page<CloudChatMessage>> = pageSchema(CloudChatMessageSchema);
+const CloudChatPageSchema = pageSchema(ChatHistoryEntrySchema);
 
 const BranchTurnResultSchema = v.nullable(v.object({
   accepted: v.optional(v.boolean()),
@@ -664,7 +657,9 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    return (await this.transcript()).map((row) => ({ id: row.id, role: row.role, content: row.content }));
+    return (await this.transcript()).map((row) => ({
+      id: row.id, role: row.role, content: row.content, metadata: row.metadata,
+    }));
   }
 
   /**
@@ -676,12 +671,12 @@ export class CloudAgentClient implements AgentClient {
    * and reports "could not locate that message" when it is not there — which
    * is what a silent cap reads as for any conversation past the page size.
    */
-  private async transcript(): Promise<CloudChatMessage[]> {
-    const rows: CloudChatMessage[] = [];
+  private async transcript(): Promise<ChatHistoryEntry[]> {
+    const rows: ChatHistoryEntry[] = [];
     let cursor: SeekCursor | null = null;
 
     for (;;) {
-      const page: Page<CloudChatMessage> = await this.callHttp(
+      const page: Page<ChatHistoryEntry> = await this.callHttp(
         'getChatHistoryPage', CloudChatPageSchema,
         [cursor === null ? {} : { cursor: { after: cursor.after } }],
       );

@@ -565,9 +565,15 @@ export class DeferredApprovalQueue {
     if (!this.deps.store.settle(spent, outcome)) return false;
 
     if (outcome === 'spent' && action) {
-      this.deps.audit?.({
-        approvalId: action.id, command: action.command, executor: action.executor,
-      });
+      try {
+        this.deps.audit?.({
+          approvalId: action.id, command: action.command, executor: action.executor,
+        });
+      } catch (cause) {
+        diagnostics.failure('approval.audit_emit_failed', toKinuError({
+          doing: 'recording an approval_consumed run event', cause, otherwise: 'io',
+        }));
+      }
     }
 
     return true;

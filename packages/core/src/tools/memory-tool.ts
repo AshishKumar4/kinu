@@ -25,9 +25,9 @@ const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 
 export interface MemoryToolDeps {
   memory: Memory;
-  /** Vectorize-backed semantic recall. search auto-hybridises (FTS5 + RRF)
-   *  when provided and available; pure FTS5 otherwise. */
-  vectorStore?: VectorStore;
+  /** null explicitly declares a backend without a semantic index. Search
+   *  reports lexical-only coverage when absent or unavailable. */
+  vectorStore?: VectorStore | null;
   /** Typed keyed world-model store. remember/recall/forget are only
    *  reachable when this is wired. */
   facts?: FactsStore;
@@ -90,9 +90,11 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
 
     const results = await memory.search(query, 10);
 
-    if (results.length === 0) return 'No results found.';
+    const coverage = 'Lexical search only; semantic recall is unavailable.';
 
-    return results
+    if (results.length === 0) return `${coverage}\nNo results found.`;
+
+    return `${coverage}\n` + results
       .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`)
       .join('\n\n');
   };

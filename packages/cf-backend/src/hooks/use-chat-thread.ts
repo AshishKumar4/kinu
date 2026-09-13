@@ -29,9 +29,9 @@
 import { useCallback, useMemo } from "react";
 import * as v from "valibot";
 import {
-  EMPTY_TRANSCRIPT_FOLD, JsonObjectSchema, extendTranscript, pageSchema,
+  EMPTY_TRANSCRIPT_FOLD, ChatHistoryEntrySchema, extendTranscript, pageSchema,
   restoredRows, sealTranscript,
-  type ChatHistoryEntry, type InlineSteer, type Page, type Transcript,
+  type ChatHistoryEntry, type InlineSteer, type Transcript,
 } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 
@@ -53,13 +53,7 @@ const CHAT_PAGE_SIZE = 40;
  * background notice kept its card while it was live and became an ordinary
  * message the moment the reader scrolled back to it.
  */
-const ChatHistoryPageSchema: v.GenericSchema<Page<ChatHistoryEntry>> = pageSchema(v.object({
-  id: v.pipe(v.string(), v.nonEmpty()),
-  role: v.picklist(["user", "assistant", "system"]),
-  content: v.string(),
-  createdAt: v.union([v.string(), v.number()]),
-  metadata: v.optional(JsonObjectSchema),
-}));
+const ChatHistoryPageSchema = pageSchema(ChatHistoryEntrySchema);
 
 export interface ChatThread {
   /** The walk, for the loading/error/exhausted affordance and the scroller. */

@@ -28,9 +28,10 @@ import {
   renderExecuteToolsDescription, renderToolsDeclaration, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
+  selectInjectableCraftedTools,
 } from "@kinu.run/core";
 import {
-  KinuSandboxExecutor, renderToolsPrelude, selectInjectableCraftedTools,
+  KinuSandboxExecutor, renderToolsPrelude,
 } from "./codemode-sandbox";
 
 export interface ExecuteToolsFactoryOptions {

@@ -196,7 +196,7 @@ export interface AgentRuntime {
    * (safety/approval-gate.ts's ShellApprovalPolicy), so attaching/detaching
    * takes effect on the very next command — no toolset rebuild needed.
    * Backends with no interactive surface (CF) never call this; 'strict'
-   * keeps its explanatory refusal there, same as before this field existed.
+   * parks the action through the host's deferred-approval queue.
    */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
   /** Bind the current turn's file ledger after the backend loop exists. The

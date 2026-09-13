@@ -307,6 +307,8 @@ export class LocalAgentClient implements AgentClient {
       getShellApprovalMode: () => this.session.getShellApprovalMode().mode,
       setShellApprovalMode: (mode: ShellApprovalMode) => this.session.setShellApprovalMode(mode).mode,
       setShellApprovalHandler: (handler) => this.session.setShellApprovalHandler(handler),
+      listDeferredApprovals: () => this.session.listDeferredApprovals(),
+      decideDeferredApprovals: (ids, decision) => this.session.decideDeferredApprovals(ids, decision),
       listInstructionApprovals: (request) => this.session.listInstructionApprovals(request),
       readInstructionApproval: (path) => this.session.readInstructionApproval(path),
       approveInstruction: (path, digest) => this.session.approveInstruction(path, digest),
