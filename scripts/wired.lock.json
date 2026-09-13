@@ -465,7 +465,7 @@
   "packages/devbox/src/durability/contracts.ts#RestoreWorkSchema (unreached-export)",
   "packages/devbox/src/incidents.ts#INCIDENT_LEDGER_MAX_ROWS (unreached-export)",
   "packages/devbox/src/incidents.ts#reapDeliveredIncidents (unreached-export)",
-  "packages/devbox/src/lifecycle.ts#ContainerStartOverrun (unreached-export)",
+
   "packages/devbox/src/lifecycle.ts#INCIDENT_STAGES (unreached-export)",
   "packages/devbox/src/lifecycle.ts#PORT_TOKEN_ALPHABET (unreached-export)",
   "packages/devbox/src/lifecycle.ts#RECOVERY_STAGES (unreached-export)",
