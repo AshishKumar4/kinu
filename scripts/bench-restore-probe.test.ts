@@ -10,6 +10,7 @@ import {
   writeArmArtifact,
 } from './bench-devbox-strategies';
 import type { Fixture, RestoreProbeRow } from './bench-devbox-strategies';
+import { stopContainer } from '../packages/devbox/bench/container-stop';
 
 // ── the restore poll ────────────────────────────────────────────────
 //
@@ -39,6 +40,27 @@ function stubFetch(answer: (url: string) => Response | Promise<Response>): () =>
 }
 
 describe('the restore poll', () => {
+  test('a stop acknowledgement does not admit a fresh start while the old container runs', async () => {
+    let running = true;
+    let acknowledgeStopped: (() => void) | undefined;
+    const stoppedSignal = new Promise<void>((resolve) => { acknowledgeStopped = resolve; });
+    let settled = false;
+
+    const stopping = stopContainer({
+      stop: async () => {},
+      running: () => running,
+      wait: async () => await stoppedSignal,
+    }).then(() => { settled = true; });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    running = false;
+    acknowledgeStopped?.();
+    await stopping;
+    expect(settled).toBe(true);
+  });
+
   test('a present probe parses to its wall time', async () => {
     const restore = stubFetch(() => new Response(JSON.stringify({
       ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',

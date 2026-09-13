@@ -1425,6 +1425,51 @@ describe('red direction — every new cell fails against a deliberately broken a
   );
 });
 
+describe('explicit collapse paths', () => {
+  for (const profile of ['chunked', 'full-upper', 'stuck-sidecar'] as const) {
+    test(`${profile} keeps its external fault direction and restores exact bytes`, async () => {
+      const arm = CONFORMANCE_ARMS['snapshot-chain']();
+      await attach(arm);
+      await arm.workspace.plant([{
+        path: 'base.bin', kind: 'file', mode: 0o644, ino: 1,
+        content: { kind: 'dense', bytes: new Seeded(81).fill(new Uint8Array(128 * 1024)) },
+      }]);
+      expectCommitted(await arm.storage().checkpoint('quiesce'), 'the baseline');
+      const base = (await arm.declaredPayload()).find((object) => object.names.includes('base'))?.key;
+      expect(base).toBeDefined();
+
+      if (profile === 'full-upper') {
+        arm.disk().processFaults.push({ match: /^# devbox-probe-v1/, exitCode: 1, stderr: 'process refused the upper probe' });
+      }
+
+      await arm.workspace.write('witness.txt', 'retained marker');
+      expectCommitted(await arm.storage().checkpoint('tick'), 'the marker delta');
+      const committed = await arm.workspace.snapshot();
+
+      if (profile === 'full-upper') expect(arm.disk().processFaultsReached).not.toHaveLength(0);
+
+      arm.replaceContainer();
+
+      if (profile === 'stuck-sidecar') {
+        arm.disk().processFaults.push({ match: /fusermount3 -u.*\/lower-delta\//, exitCode: 1, stderr: 'Device or resource busy' });
+      }
+
+      expect((await attach(arm)).kind).toBe('attached');
+      await expectTreeExact(arm, committed, 'after the forced restore');
+
+      if (profile === 'stuck-sidecar') expect(arm.disk().processFaultsReached).not.toHaveLength(0);
+
+      await arm.workspace.write('after.txt', 'next checkpoint');
+      const expected = await arm.workspace.snapshot();
+      expectCommitted(await arm.storage().checkpoint('tick'), 'the next checkpoint');
+      const nextBase = (await arm.declaredPayload()).find((object) => object.names.includes('base'))?.key;
+      expect(nextBase === base).toBe(profile === 'chunked');
+      expect((await wake(arm)).kind).toBe('attached');
+      await expectTreeExact(arm, expected, 'after the next checkpoint restore');
+    });
+  }
+});
+
 afterAll(() => {
   const arms = armEntries.map(([name]) => name);
   const width = 16;
