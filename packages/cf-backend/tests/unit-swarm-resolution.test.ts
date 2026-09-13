@@ -20,7 +20,7 @@ import type { HeadRunView } from '@kinu.run/core';
 import {
   fanInArity, fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows,
   swarmResolutionOf,
-} from '../src/components/surfaces/swarm-resolution';
+} from '@kinu.run/core';
 
 /** One journalled node, at the resolution the wire carries. */
 type JournalNode = HeadRunView['heads'][number];

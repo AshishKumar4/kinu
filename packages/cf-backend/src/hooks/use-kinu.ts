@@ -26,10 +26,10 @@ import type {
   TabPresence,
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
-import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
+import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
-} from "../components/head-chat";
+} from "@kinu.run/core";
 import { looksLikeSecretField, type InlineSteer } from "@kinu.run/core";
 import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import {

@@ -56,6 +56,7 @@ import type {
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
 import { StepInjections } from '../prompting/step-injections';
 import { nanoid } from '../utils/nanoid';
+import { metadataBroadcastEvent } from '../read-models/background-event';
 import { isWorkMode, type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { stampTurnAuthor } from '../utils/ui-message';
@@ -262,10 +263,9 @@ export class SignalDelivery implements SignalDeliverer {
    *  so one classifier renders both, and `text` is THIS delivery's rendering —
    *  what the model will actually read, never the other path's. */
   private openCard(signal: DeliveredSignal, text: string): void {
-    this.host.broadcast({
-      type: 'signal_card', id: signal.cardId, state: 'pending',
-      metadata: turnMetadata(signal), text,
-    });
+    this.host.broadcast(metadataBroadcastEvent(
+      'signal_card', turnMetadata(signal), { id: signal.cardId, state: 'pending', text },
+    ));
   }
 
   private moveCard(cardId: string, state: Exclude<SignalCardState, 'pending'>): void {

@@ -33,7 +33,7 @@ import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
-} from "@/components/head-chat";
+} from "@kinu.run/core";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, CodeBlock } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";

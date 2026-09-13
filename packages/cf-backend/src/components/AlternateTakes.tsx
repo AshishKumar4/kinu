@@ -21,8 +21,8 @@ import { ScoreBar } from "@/components/ui/score-bar";
 import { MarkdownContent } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
-import { NO_HEAD_DELTAS, type HeadDeltas } from "@/components/head-chat";
-import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "./alternate-takes-logic";
+import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
+import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 export function TakesChip({ set, onPick }: {
