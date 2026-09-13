@@ -1,0 +1,19 @@
+{
+  "text": "Yes — `ls` on the workspace runtime shows `cache-note.txt` exists (alongside `projects`, `scaffold`, and `SOUL.md`).",
+  "toolCalls": [
+    {
+      "name": "run",
+      "args": {
+        "command": "ls",
+        "runtime": "workspace"
+      },
+      "result": "cache-note.txt  projects  scaffold  SOUL.md\n",
+      "outcome": {
+        "success": true
+      }
+    }
+  ],
+  "steps": 2,
+  "durationMs": 53033,
+  "hadError": false
+}

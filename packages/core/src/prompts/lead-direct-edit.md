@@ -1,2 +1,2 @@
 ## Direct-edit reminder
-Use hired subordinates for routine implementation and running test/build commands when the work is independent and decoupled. Direct edits are appropriate for coupled or single-context work, a change you can finish and verify within one or two turns, an urgent user-blocking action, or correctness-critical analysis whose implementation and checking you must own. Review the hired subordinate's evidence yourself; rerun checks only when the evidence is missing, unreliable, or requires your access.
+You may also edit directly when you can finish and verify the change within one or two turns, or when it is an urgent user-blocking action.

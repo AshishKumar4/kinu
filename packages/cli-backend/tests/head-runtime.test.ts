@@ -23,6 +23,7 @@ import {
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
+  type ScriptedTurnResult,
 } from '@kinu.run/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
@@ -382,6 +383,32 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       'execute_tools', 'run', 'file', 'web',
       'split_subheads',
     ]));
+  });
+
+  test('a head neither advertises nor invokes workspace crafts its sandbox does not bind', async () => {
+    const parent = makeParent();
+    parent.craftStore.create({ name: 'secret_echo', description: 'A workspace-only echo', code: '(input) => input', params: null, scope: 'local' });
+    let calls = 0;
+
+    const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+      const invoke = calls++ === 0;
+
+      return {
+        content: invoke
+          ? [{ type: 'tool-call', toolName: 'execute_tools', toolCallId: 'unbound', input: JSON.stringify({ code: '// Probe an unbound function\nreturn await tools.secret_echo({});' }) }]
+          : [{ type: 'text', text: 'done' }],
+        finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+      };
+    } });
+
+    const runtime = createCLIHeadRuntime(headDeps(model, { parentRuntime: parent }));
+    await (await runtime.spawnHead(aHeadInput({ task: 'Inspect the available sandbox.' }))).run();
+
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain('secret_echo');
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('not a function');
   });
 
   test('the prompt identifies the canonical workspace reached by its file tools', async () => {

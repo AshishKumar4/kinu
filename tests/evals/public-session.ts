@@ -1197,12 +1197,15 @@ export class KinuPublicSession {
    *  `getActivitySnapshot().spend` the Activity pane draws and the operator arm
    *  meters, so there is one definition of what a workspace spent. */
   async spend(): Promise<WorkspaceSpend> {
-    const snapshot = await infraBoundary(
-      `getActivitySnapshot on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('getActivitySnapshot', []),
-    );
+    const snapshot = await this.activity();
 
     return v.parse(ActivitySpendSchema, snapshot).spend;
+  }
+
+  /** Raw public Activity evidence, including prompt-prefix telemetry. */
+  activity(): Promise<JsonValue> {
+    return infraBoundary(`getActivitySnapshot on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getActivitySnapshot', []));
   }
 
   /** One file off the workspace plane, through the route the web file manager

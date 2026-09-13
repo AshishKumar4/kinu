@@ -136,9 +136,11 @@ export function headSeatFactory(
           inputs,
         };
       },
-      dynamic: () => collectDynamicContext({
+      dynamic: (profile, tools) => collectDynamicContext({
         rt: actor.runtime,
         stores: actor.stores,
+        profile,
+        tools,
         memoryTail: undefined,
         missingCapabilities: [],
         subordinateDelegates: () => [],
@@ -261,9 +263,11 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       }),
       inputs,
     }),
-    dynamic: () => collectDynamicContext({
+    dynamic: (profile, tools) => collectDynamicContext({
       rt: runtime,
       stores,
+      profile,
+      tools,
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => [],

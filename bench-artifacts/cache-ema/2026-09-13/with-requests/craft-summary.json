@@ -1,0 +1,54 @@
+{
+  "table": [
+    {
+      "runId": "run-y4qp7eemj0rfsqp2a31jk",
+      "step": 1,
+      "input": 20443,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-y4qp7eemj0rfsqp2a31jk",
+      "step": 2,
+      "input": 21202,
+      "cacheRead": 20416,
+      "share": 0.9629280256579568
+    },
+    {
+      "runId": "run-rs2otve5gbmqeptbm4k05",
+      "step": 1,
+      "input": 21411,
+      "cacheRead": 1792,
+      "share": 0.0836952968100509
+    },
+    {
+      "runId": "run-rs2otve5gbmqeptbm4k05",
+      "step": 2,
+      "input": 21830,
+      "cacheRead": 21376,
+      "share": 0.9792029317453046
+    }
+  ],
+  "stats": {
+    "steps": 4,
+    "windowLimit": 200,
+    "tokens": {
+      "input": 84886,
+      "output": 1123,
+      "cacheRead": 43584,
+      "neurons": 6735.985592961311
+    },
+    "cacheHit": {
+      "samples": 4,
+      "last": 0.9792029317453046,
+      "mean": 0.506456563553328,
+      "p95": 0.9792029317453046,
+      "ema": 0.3324866211228875,
+      "emaAlpha": 0.2
+    },
+    "usd": 0.07409584,
+    "pricedSteps": 4,
+    "unpricedSteps": 0,
+    "stepsWithoutUsage": 0
+  }
+}

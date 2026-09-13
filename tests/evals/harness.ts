@@ -226,8 +226,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       temporaryAsk: false,
       externalTools: [],
       backend: 'cli-local',
-      workMode: 'build',
-      planSubmissionAvailable: false,
       model: { id: llm.model },
       currentDate: currentDateForPrompt(),
       sectionOverrides: activePromptSectionOverrides(sql, rt.actor),

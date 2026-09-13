@@ -1,0 +1,110 @@
+{
+  "table": [
+    {
+      "runId": "run-rabuj92s98ou663xeyr5k",
+      "step": 1,
+      "input": 20415,
+      "cacheRead": 20352,
+      "share": 0.9969140337986775
+    },
+    {
+      "runId": "run-rabuj92s98ou663xeyr5k",
+      "step": 2,
+      "input": 20661,
+      "cacheRead": 1792,
+      "share": 0.08673345917428972
+    },
+    {
+      "runId": "run-x769qtly8cn4obwffuozb",
+      "step": 1,
+      "input": 20685,
+      "cacheRead": 20096,
+      "share": 0.9715252598501329
+    },
+    {
+      "runId": "run-x769qtly8cn4obwffuozb",
+      "step": 2,
+      "input": 20714,
+      "cacheRead": 20096,
+      "share": 0.9701651057255962
+    },
+    {
+      "runId": "run-c0zy6qhvesi6v69pfyvck",
+      "step": 1,
+      "input": 20763,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-c0zy6qhvesi6v69pfyvck",
+      "step": 2,
+      "input": 20787,
+      "cacheRead": 20096,
+      "share": 0.9667580699475634
+    },
+    {
+      "runId": "run-li6uk0w9u3puybq58nn92",
+      "step": 1,
+      "input": 20918,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-li6uk0w9u3puybq58nn92",
+      "step": 2,
+      "input": 21232,
+      "cacheRead": 20864,
+      "share": 0.9826676714393369
+    },
+    {
+      "runId": "run-1vmg2b331l5zrfg7emjpm",
+      "step": 1,
+      "input": 21338,
+      "cacheRead": 1792,
+      "share": 0.08398162901865217
+    },
+    {
+      "runId": "run-1vmg2b331l5zrfg7emjpm",
+      "step": 2,
+      "input": 21371,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-w1duj236bzrm1mxikkvjg",
+      "step": 1,
+      "input": 21487,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-w1duj236bzrm1mxikkvjg",
+      "step": 2,
+      "input": 21516,
+      "cacheRead": 1792,
+      "share": 0.08328685629299126
+    }
+  ],
+  "stats": {
+    "steps": 12,
+    "windowLimit": 200,
+    "tokens": {
+      "input": 251887,
+      "output": 676,
+      "cacheRead": 106880,
+      "neurons": 21252.090344130993
+    },
+    "cacheHit": {
+      "samples": 12,
+      "last": 0.08328685629299126,
+      "mean": 0.4285026737706033,
+      "p95": 0.9969140337986775,
+      "ema": 0.30257256319015463,
+      "emaAlpha": 0.2
+    },
+    "usd": 0.233773,
+    "pricedSteps": 12,
+    "unpricedSteps": 0,
+    "stepsWithoutUsage": 0
+  }
+}

@@ -249,10 +249,12 @@ async function explorationModelSpec(
  * unreachable server to name. Passing a stub value for either would put a claim
  * nobody measured into the model's context.
  */
-function explorationDynamicContext(actor: HostedActor): DynamicContext {
+function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
   return collectDynamicContext({
     rt: actor.runtime,
     stores: actor.stores,
+    profile,
+    tools,
     memoryTail: undefined,
     missingCapabilities: [],
     subordinateDelegates: () => subordinateDelegatesOf([]),
@@ -318,7 +320,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
             isAborted: () => stopped !== null,
             abortReason: () => stopped,
             profile: (request) => seams.profile({ actor, ...request }),
-            dynamic: () => explorationDynamicContext(actor),
+            dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
             reportStep: (seq, step) => seams.recordStep(input.id, seq, step),
             reportDelta: seams.publishDelta,
           };
@@ -379,7 +381,7 @@ export async function hostNodeSeat(
     actor,
     runId: crypto.randomUUID(),
     profile: (request) => seams.profile({ actor, ...request }),
-    dynamic: () => explorationDynamicContext(actor),
+    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
   };
 }
 

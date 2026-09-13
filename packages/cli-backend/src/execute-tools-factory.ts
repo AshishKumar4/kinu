@@ -9,12 +9,11 @@
  * extras) and the ONE callable namespace core declares
  * (tools/sandbox-contract.ts): `tools.<name>` for every native tool of the
  * finished surface and for every crafted tool. The declaration the model
- * reads lists both, rendered from the same surface.
+ * reads lists natives; the live ledger describes the same crafted resolver.
  *
  * The crafted set is resolved per execute (surface.craftedTools()), so a
- * tool crafted mid-turn is callable on the next call rather than at the next
- * toolset rebuild; its declaration catches up at the next turn, when the
- * session rebuilds its surface.
+ * tool crafted mid-turn is callable and declared at the next step rather
+ * than at the next toolset rebuild.
  *
  * Node/Bun only — V8 codegen is permitted there. This module is NEVER
  * imported by the CF backend, keeping `new Function` outside the
@@ -34,6 +33,7 @@ import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
   renderExecuteToolsDescription, renderToolsDeclaration,
+  withCraftedToolDeclarations,
   codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
@@ -84,12 +84,9 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
     // prelude's own definitions do.
     const nativeBindings = nativeToolFunctions(surface.native);
 
-    const toolsDeclaration = renderToolsDeclaration(
-      surface.native,
-      Object.entries(surface.craftedTools()).map(([name, entry]) => ({ name, description: entry.description })),
-    );
+    const toolsDeclaration = renderToolsDeclaration(surface.native, []);
 
-    return tool({
+    return withCraftedToolDeclarations(tool({
       // The one description, composed in core (registry.
       // renderExecuteToolsDescription) so this builder really is the CF
       // codemode tool on a different runtime rather than a different tool. The
@@ -196,7 +193,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         }
       }),
-    });
+    }), () => Object.entries(surface.craftedTools()).map(([name, entry]) => ({ name, description: entry.description })));
   };
 }
 

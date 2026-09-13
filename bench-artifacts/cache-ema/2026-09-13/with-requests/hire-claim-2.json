@@ -1,0 +1,26 @@
+{
+  "actor": "c4cfbe54-6cc6-44c5-a397-e042514afa78",
+  "turn": {
+    "actorId": "c4cfbe54-6cc6-44c5-a397-e042514afa78",
+    "turnId": "8fd87acc-8d51-4142-a4b9-8db8c7a5a913",
+    "runId": "run-kk710bwirpw2oq3h2iium",
+    "epoch": 1,
+    "workMode": "build",
+    "program": {
+      "kind": "builtin",
+      "version": 0,
+      "digest": null,
+      "build": "1f3f2bda-3205-4d47-97ea-6f141f5b1ac0"
+    },
+    "status": "settled",
+    "outcome": "completed",
+    "consumedRevision": 3,
+    "claimedAt": 1789318114676
+  },
+  "liveTurnId": null,
+  "workingRevision": 2,
+  "headRevision": 2,
+  "stagedRevision": null,
+  "stagedBlockedBy": null,
+  "editsTakeEffect": "turn"
+}

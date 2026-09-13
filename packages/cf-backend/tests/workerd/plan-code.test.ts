@@ -7,6 +7,11 @@ it('a declared slate tool binding runs live crafted source through the codemode 
     first: { ok: true, value: { answer: 42, agent: 'undefined', agents: 'undefined' } },
     second: { ok: true, value: 63 },
     planned: { ok: true, value: 63 },
+    declarations: {
+      before: [{ name: 'calculate', description: 'Double' }],
+      after: [{ name: 'calculate', description: 'Triple' }],
+    },
+    delta: expect.stringContaining('sandbox status went from `ready on demand` to `active`'),
   });
 });
 

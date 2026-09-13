@@ -1,0 +1,27 @@
+[
+  {
+    "id": "plain",
+    "turns": [
+      "Use your file tool to write cache-note.txt with the exact text: Tea needs hot water. Then reply DONE.",
+      "Read cache-note.txt with your file tool. What does it say? Answer in one sentence.",
+      "Use run on the workspace runtime to run pwd. Tell me the directory.",
+      "Read cache-note.txt again with your file tool. Is it a recipe? Answer briefly.",
+      "Use run on the workspace runtime to run ls. Tell me whether cache-note.txt exists.",
+      "Read cache-note.txt with your file tool and summarize our conversation in two sentences."
+    ]
+  },
+  {
+    "id": "hire",
+    "turns": [
+      "Use your file tool to write delegate-note.txt with the exact text: Tea needs hot water. Reply DONE.",
+      "Hire one subordinate named tea-reader to read delegate-note.txt and report its exact contents. Send it a message asking it to keep its answer to one sentence. Collect its answer and tell me what it said."
+    ]
+  },
+  {
+    "id": "craft",
+    "turns": [
+      "Use execute_tools and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it.",
+      "Use your saved cache_echo crafted tool through execute_tools with the text CACHE_ECHO_OK. Reply with the returned text."
+    ]
+  }
+]

@@ -1,0 +1,27 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/cf-backend/tests/unit-hosted-task-surface.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+{"event":"analytics.sink_installed","fields":{"agentMetrics":false,"feedbackMarkers":false,"controlPlaneOps":false}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+220 |     reader: { description: 'Files only', instructions: 'Inspect files.', tier: 'default', preset: 'ideate', allowedTools: ['file'] },
+221 |   } });
+222 |   child.actor.stores.config.setRoleSelection('reader');
+223 |   await workspace.agent.runHostedTaskTurn(child.actor, 'Inspect the remaining capabilities.');
+224 |   const last = model.doStreamCalls.at(-1);
+225 |   expect(last?.tools?.map((entry) => entry.name)).not.toContain('execute_tools');
+                                                            ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "execute_tools"
+Received: [ "execute_tools", "run", "file", "memory", "tasks", "web", "report", "agents" ]
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/cf-backend/tests/unit-hosted-task-surface.test.ts:225:55)
+(fail) a hosted child advertises only its callable crafted surface and loses it when code reach is revoked [112.00ms]
+
+ 0 pass
+ 2 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [450.00ms]

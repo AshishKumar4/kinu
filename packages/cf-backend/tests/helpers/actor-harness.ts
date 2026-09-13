@@ -876,7 +876,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   declareTurnInFlight(inFlight: boolean): void { this._inFlight = inFlight; }
   /** The per-step dynamic context, assembled exactly as a model step sees it —
    *  the shared core assembler over this actor's own stores. */
-  observeDynamicContext(): DynamicContext { return this.dynamicContextSnapshot(); }
+  observeDynamicContext(): DynamicContext {
+    return this.dynamicContextSnapshot({ workMode: 'build', allowedTools: [] }, {}, undefined);
+  }
 }
 
 /** A candidate under trial, so sampling has something to sample against.

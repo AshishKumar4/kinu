@@ -30,6 +30,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { buildSystemPromptSync } from '../src/prompt';
+import { renderDynamicContextBlock } from '../src/prompting/volatile-context';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import { definePromptSection, templateContract } from '../src/prompting/template';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
@@ -112,7 +113,8 @@ describe('every registered section reaches a rendered prompt', () => {
       const prompt = buildSystemPromptSync(rt, testCase.opts);
       expect({ name: testCase.name, long: prompt.length > 200 })
         .toEqual({ name: testCase.name, long: true });
-      rendered.add(prompt);
+      const mode = testCase.mode ?? { workMode: 'build', planSubmission: false };
+      rendered.add(`${prompt}\n${renderDynamicContextBlock({ mode })}`);
     }
 
     expect(rendered.size).toBe(PROMPT_MATRIX.length);

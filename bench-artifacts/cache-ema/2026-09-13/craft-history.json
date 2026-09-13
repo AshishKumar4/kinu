@@ -1,0 +1,18 @@
+[
+  {
+    "role": "user",
+    "text": "Use execute_tools and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it."
+  },
+  {
+    "role": "assistant",
+    "text": "No existing crafted tools, no prior lessons, and no docs at the relative path. The VFS has more roots (`sandbox`, `context`, `etc`, `opt`) — let me look there for a spec on how crafted-tool code is invoked.No spec docs, no prior tools, no lessons — the workspace has nothing describing a different convention, and the declaration in the `workspace` namespace is `createTool(name, description, code)` with three string arguments. I'll save `cache_echo` with that signature, writing the body defensively (top-level program with `args` in scope, mirroring how these sandbox programs run, plus a `module.exports` assignment so it also works if the host loads it as a module).The refusal is informative: the source is parsed as plain JavaScript, so a top-level `return` is illegal — the tool code must be a module that exports its logic. Let me retry with an explicit default export of a named function.Saved — `cache_echo` is created (`{ok:true, name:\"cache_echo\", action:\"created\"}`). Let me record the convention lesson so future turns don't repeat the failed first attempt.SAVED"
+  },
+  {
+    "role": "user",
+    "text": "Use your saved cache_echo crafted tool through execute_tools with the text CACHE_ECHO_OK. Reply with the returned text."
+  },
+  {
+    "role": "assistant",
+    "text": "CACHE_ECHO_OK"
+  }
+]

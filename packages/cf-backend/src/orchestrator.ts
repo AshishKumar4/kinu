@@ -117,7 +117,7 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SettledSignals,
   type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
-  type ReasoningEffort, type ShellApprovalMode,
+  type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA run lineage (the pass itself is core's evolution control plane)
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
@@ -799,7 +799,7 @@ export class OrchestratorAgent extends ActorAgent {
       profile: (input) => this.hostedActorProfile({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
-      dynamic: (actor) => this.hostedActorDynamicContext(actor),
+      dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       mission: () => null,
       announce: () => { this.broadcastSubordinatesChanged(); },
       scheduleDrain: (actor) => { actor.session.orchestrator.scheduleDrain(); },
@@ -939,7 +939,6 @@ export class OrchestratorAgent extends ActorAgent {
         agentsActions: agentsActionsFor(agents),
         temporaryAsk: agents.team?.temporary !== undefined,
         backend: 'cf',
-        workMode: turn.input.mode,
         roleSection: turn.profile.profile.role,
         model: { id: turn.profile.profile.tier.model },
         currentDate: currentDateForPrompt(),
@@ -1056,10 +1055,12 @@ export class OrchestratorAgent extends ActorAgent {
    * `MEMORY.md`, and a hosted actor connects no MCP servers of its own, so
    * there is no unreachable server to name.
    */
-  private hostedActorDynamicContext(actor: HostedActor): DynamicContext {
+  private hostedActorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
     return collectDynamicContext({
       rt: actor.runtime,
       stores: actor.stores,
+      profile,
+      tools,
       memoryTail: undefined,
       missingCapabilities: [],
       subordinateDelegates: () => subordinateDelegatesOf(

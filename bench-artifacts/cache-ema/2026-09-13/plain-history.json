@@ -1,0 +1,50 @@
+[
+  {
+    "role": "user",
+    "text": "Use your file tool to write cache-note.txt with the exact text: Tea needs hot water. Then reply DONE."
+  },
+  {
+    "role": "assistant",
+    "text": "DONE"
+  },
+  {
+    "role": "user",
+    "text": "Read cache-note.txt with your file tool. What does it say? Answer in one sentence."
+  },
+  {
+    "role": "assistant",
+    "text": "cache-note.txt says: \"Tea needs hot water.\""
+  },
+  {
+    "role": "user",
+    "text": "Use run on the workspace runtime to run pwd. Tell me the directory."
+  },
+  {
+    "role": "assistant",
+    "text": "The workspace runtime's working directory is `/home/user`."
+  },
+  {
+    "role": "user",
+    "text": "Read cache-note.txt again with your file tool. Is it a recipe? Answer briefly."
+  },
+  {
+    "role": "assistant",
+    "text": "No, it's not a recipe — it's just a single note saying \"Tea needs hot water.\""
+  },
+  {
+    "role": "user",
+    "text": "Use run on the workspace runtime to run ls. Tell me whether cache-note.txt exists."
+  },
+  {
+    "role": "assistant",
+    "text": "Yes, cache-note.txt exists — it appears in the `/home/user` directory listing alongside `projects`, `scaffold`, and `SOUL.md`."
+  },
+  {
+    "role": "user",
+    "text": "Read cache-note.txt with your file tool and summarize our conversation in two sentences."
+  },
+  {
+    "role": "assistant",
+    "text": "I created cache-note.txt containing \"Tea needs hot water.\" at your request, then repeatedly read it back to confirm its contents. Along the way, I ran `pwd` (showing `/home/user`) and `ls` (confirming the file exists), and determined the note is not a recipe."
+  }
+]

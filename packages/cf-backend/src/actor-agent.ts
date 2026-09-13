@@ -6201,6 +6201,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    this._turnDynamicSnapshot = null;
+
     return runOperationProfile(null, async () => {
       const turnMessages = await this.turnInputHistory(ctx);
       this._turnProgram = null;
@@ -6433,9 +6435,7 @@ export abstract class ActorAgent extends Think<Env> {
         externalTools: mcpToolNames.filter(toolAllowed)
           .map((name) => ({ name, source: 'mcp' as const })),
         backend: 'cf',
-        workMode,
         roleSection: profile.role,
-        planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
         model,
         currentDate: currentDateForPrompt(),
         // Prompt sections the evolution loop promoted. Read here, not inside the
@@ -6474,7 +6474,7 @@ export abstract class ActorAgent extends Think<Env> {
       // same bounded tail the CLI supplies) — the reflection loop assumes the
       // model sees its latest lessons in-turn. Read once here rather than per
       // step: it is the one dynamic-context input that needs an await.
-      this._turnMemoryTail = await readMemoryTail(this.rt.memory);
+      const memoryTail = await readMemoryTail(this.rt.memory);
       const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
 
       // The shared turn-context assembly (core orchestrator/turn-context.ts) —
@@ -6514,6 +6514,13 @@ export abstract class ActorAgent extends Think<Env> {
       // `owned-model-services.ts` already did the normalised thing for its own
       // copy — three answers to one question.
       const tierModel = parseModelSpec(providers.normalizeSpecSync(profile.tier.model));
+
+      const activeToolSurface = Object.fromEntries(effectiveActiveTools.flatMap((name) => {
+        const entry = submittedTools[name];
+
+        return entry === undefined ? [] : [[name, entry]];
+      }));
+
       assembly.admission = {
         count: (request) => countRequestInputTokens(
           providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
@@ -6521,13 +6528,7 @@ export abstract class ActorAgent extends Think<Env> {
         // Think filters the merged surface by activeTools before submission.
         // Count that exact subset: including inactive workspace tools inflates
         // the request while omitting native active tools undercounts it.
-        tools: Object.fromEntries(
-          effectiveActiveTools.flatMap((name) => {
-            const entry = submittedTools[name];
-
-            return entry === undefined ? [] : [[name, entry]];
-          }),
-        ),
+        tools: activeToolSurface,
         limits: { contextWindow: this._turnContextWindow, modelOutputLimit: this.modelCatalog.modelOutputLimit() },
       };
       cfg.messages = await assembleTurnMessages(assembly);
@@ -6537,6 +6538,7 @@ export abstract class ActorAgent extends Think<Env> {
       this._turnTaskPlan = taskPlan;
       cfg.tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
       cfg.activeTools = effectiveActiveTools;
+      this._turnDynamicSnapshot = () => this.dynamicContextSnapshot(profile, activeToolSurface, memoryTail);
 
       // Prompt-cache plan for this turn — the same core derivation `runChat`
       // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
@@ -6662,9 +6664,9 @@ export abstract class ActorAgent extends Think<Env> {
   protected _turnContextWindow = 0;
   private _turnOriginContext: readonly ModelMessage[] = [];
 
-  /** The bounded MEMORY.md tail read at turn assembly — the one dynamic-context
-   *  input behind an await, so the per-step snapshot closes over it. */
-  private _turnMemoryTail: string | undefined;
+  /** The prepared profile, actual active surface and awaited memory tail,
+   *  captured together before this turn can issue a model step. */
+  private _turnDynamicSnapshot: (() => DynamicContext) | null = null;
 
   /**
    * The planes only a subclass's own stores can answer, as typed source
@@ -6683,13 +6685,15 @@ export abstract class ActorAgent extends Think<Env> {
    * own — and nothing is clock-derived: a wall-clock field would re-fingerprint
    * the block on every request and append a block per step.
    */
-  protected dynamicContextSnapshot(): DynamicContext {
+  protected dynamicContextSnapshot(profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>, tools: ToolSet, memoryTail: string | undefined): DynamicContext {
     const extras = this.extraDynamicContext();
 
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
-      memoryTail: this._turnMemoryTail,
+      profile,
+      tools,
+      memoryTail,
       missingCapabilities: [
         ...this._mcpUnavailable,
         ...(extras.extraMissingCapabilities?.() ?? []),
@@ -6700,6 +6704,10 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
+    const snapshot = this._turnDynamicSnapshot;
+
+    if (snapshot === null) throw new Error('a model step requires a prepared profile and tool surface');
+
     // The shared step pipeline (core prompting/prepare-step.ts, identical on
     // the CLI): typed SDK error projection, extension rewrites, tool-output
     // pruning against the window budget, dynamic-context weave,
@@ -6724,7 +6732,7 @@ export abstract class ActorAgent extends Think<Env> {
         }
         : null,
       budget: this.budget,
-      dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
+      dynamic: { ledger: this.dynamicLedger, snapshot },
       meter: this.acc.composition,
       // The claim's context plane: the array this step consumes becomes the
       // revision it ran on, recorded here — the one place holding the FINAL
