@@ -10,6 +10,7 @@
 // orchestrator — the exact drift the shared assembler exists to close. What is
 // pinned here is that the assembled block actually carries them.
 import { describe, expect, test } from 'bun:test';
+import { DeferredApprovalStore, formatApproval } from '@kinu.run/core';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 describe('the orchestrator dynamic context reads its own planes', () => {
@@ -32,14 +33,17 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
   test('a deferred shell approval is parked on the user in the block', () => {
     const agent = harness().agent;
+    const rt = agent.observeRuntime();
 
-    const parked = agent.harnessParkShellApproval({
+    const parked = new DeferredApprovalStore(rt.storage.sql, rt.actor).create({
+      id: `defer-${crypto.randomUUID()}`,
       command: 'bun run deploy',
       executor: 'workspace',
-      review: { decision: 'gate', hits: [] },
+      reason: formatApproval({ decision: 'gate', hits: [] }),
+      requestedAt: Date.now(),
     });
 
-    expect(parked.outcome).toBe('queued');
+    expect(parked.status).toBe('queued');
 
     const approvals = agent.observeDynamicContext().approvals;
     expect(approvals?.total).toBe(1);
@@ -51,7 +55,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
     // The prompt is observable before its owner answers. Settle the caller's
     // promise afterward so this fixture does not leave work detached.
-    const consent = agent.harnessAwaitDeviceConsent({
+    const consent = agent.awaitDeviceConsent({
       deviceId: 'dev-1',
       deviceLabel: 'laptop',
       method: 'shell',

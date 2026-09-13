@@ -1,5 +1,5 @@
 {
-  "measured": "794e0f0df: 965 test files, 869 runnable suites, 11845 tests, 36 runners, 64 non-public product members",
+  "measured": "d9db63b67: 989 test files, 889 runnable suites, 12041 tests, 33 runners, 61 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -307,11 +307,11 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: one turn always makes the same sampling decision :: harness bridge to a non-public member",
-      "count": 4
+      "count": 3
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: only a completed build turn declares a shadow trial :: harness bridge to a non-public member",
-      "count": 5
+      "count": 3
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: re-entering an unfinished sequence says so, and a released one reads as fresh :: harness bridge to a non-public member",
@@ -327,10 +327,6 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: the tick marker says entered, not armed :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-dynamic-context-planes.test.ts :: a deferred shell approval is parked on the user in the block :: harness bridge to a non-public member",
       "count": 1
     },
     {

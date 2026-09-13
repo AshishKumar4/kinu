@@ -2491,6 +2491,38 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1440, height: 900 });
+      // The first visit mounts the column collapsed — worth-showing state is a
+      // resource read, so the collapse lasts only until the snapshot lands,
+      // and under load that whole window fits inside one rAF: no selector or
+      // polling wait can catch it. The observer is installed before the page's
+      // own scripts run and records the mount itself, so the insertion record
+      // — not the element's presence at sample time — is the observable state.
+      await page.evaluateOnNewDocument(() => {
+        // SAFETY: the recorder is this test's own global; the cast names its
+        // shape because a plain `window` carries no such field.
+        const w = window as Window & { __inspectorMount?: { inserted: boolean; expand: boolean; width: number }[] };
+        w.__inspectorMount = [];
+        new MutationObserver((mutations) => {
+          // SAFETY: same recorder, re-narrowed inside the callback's own scope.
+          const w = window as Window & { __inspectorMount?: { inserted: boolean; expand: boolean; width: number }[] };
+          const record = w.__inspectorMount!;
+
+          if (record.length >= 500) return;
+
+          const containsExpand = (node: Node): boolean => node instanceof Element
+            && (node.hasAttribute('data-inspector-expand') || node.querySelector('[data-inspector-expand]') !== null);
+
+          const panel = document.querySelectorAll('[data-panel]')[1];
+
+          record.push({
+            inserted: mutations.some((m) => [...m.addedNodes].some(containsExpand)),
+            expand: document.querySelector('[data-inspector-expand]') !== null,
+            width: panel === undefined ? -1 : Math.round(panel.getBoundingClientRect().width),
+          });
+        }).observe(document, {
+          childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'],
+        });
+      });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
@@ -2498,9 +2530,23 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       const inspectorWidth = () => page.$$eval('[data-panel]', (panels) => Math.round(panels[1]?.getBoundingClientRect().width ?? -1));
 
       // A first visit with nothing to show collapses the column behind its
-      // expand handle. The signal has not arrived yet, so nothing reopens it.
-      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
-      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+      // expand handle — the insertion proves the collapsed render committed,
+      // and a zero-width panel sample proves it committed as a layout. The
+      // signal has not arrived yet, so nothing reopens it.
+      await page.waitForFunction(
+        () => {
+          // SAFETY: `__inspectorMount` is constructed on this window by the
+          // evaluateOnNewDocument recorder installed above, so the field is
+          // present from page load.
+          const record = (window as Window & { __inspectorMount?: { inserted: boolean; expand: boolean; width: number }[] })
+            .__inspectorMount;
+
+          return record !== undefined
+            && record.some((sample) => sample.inserted || sample.expand)
+            && record.some((sample) => sample.width >= 0 && sample.width <= 2);
+        },
+        { timeout: 20_000 },
+      );
 
       // The passive arrival is the something worth seeing: the column opens
       // on the workspace's behalf AND raises the chip where the reader is —

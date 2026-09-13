@@ -8,7 +8,7 @@
 // coming from Devbox's own heartbeat fail-safe, not from the host.
 import { describe, expect, test } from 'bun:test';
 
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
+import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, harness } from './support/devbox-harness';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
@@ -36,13 +36,9 @@ class IdleHostBox extends TestBox {
   }
 }
 
-// The durable row names Devbox reads the lease through, mirrored the way
-// container-gone.test.ts mirrors the boot-id row: the seeding below has to
-// name them, and every assertion reads back through the public devboxState().
-const LAST_INTERACTION_KEY = 'devbox:last-interaction';
-
-const QUIET_SINCE_KEY = 'devbox:quiet-since';
-
+// The durable row names come from lifecycle.ts beside the policy: the seeding
+// below has to name them, and every assertion reads back through the public
+// devboxState().
 describe('noteTerminalActivity refuses before it stamps', () => {
   test('a box the platform admitted nothing to stamps no interaction', async () => {
     const { box, container } = harness(TestBox);

@@ -14,7 +14,7 @@
  *      "active".
  */
 import { describe, expect, test } from 'bun:test';
-import { RunEventRecorder, WORKSPACE_RUN_ID } from '@kinu.run/core';
+import { RunEventRecorder, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval } from '@kinu.run/core';
 import { orchestratorHarness, hostedSubordinateHarness } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -47,18 +47,21 @@ describe('getWorkspaceOverview', () => {
 
   test('a pending consent and a parked command both wait on the owner', async () => {
     const { agent } = orchestratorHarness();
+    const rt = agent.observeRuntime();
 
-    const consent = agent.harnessAwaitDeviceConsent({
+    const consent = agent.awaitDeviceConsent({
       deviceId: 'dev-1', deviceLabel: 'laptop', method: 'shell', command: 'git push',
     });
 
-    const parked = agent.harnessParkShellApproval({
-      command: 'bun run deploy', executor: 'workspace',
-      review: { decision: 'gate', hits: [] },
+    const parked = new DeferredApprovalStore(rt.storage.sql, rt.actor).create({
+      id: `defer-${crypto.randomUUID()}`,
+      command: 'bun run deploy',
+      executor: 'workspace',
+      reason: formatApproval({ decision: 'gate', hits: [] }),
+      requestedAt: Date.now(),
     });
 
-    expect(parked.outcome).toBe('queued');
-
+    expect(parked.status).toBe('queued');
     const overview = await agent.getWorkspaceOverview();
 
     expect(overview.decisionsWaiting).toBe(2);

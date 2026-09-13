@@ -32,11 +32,10 @@ import {
   type TierAssignments,
   projectJsonValue,
   type BackgroundJobStore, type JsonValue,
-  type DeviceConsentDecision, type DeviceConsentRequest, type DeviceStatus,
+  type DeviceStatus,
   type WorkMode, type JsonObject,
   startBranchHead, branchHeadId,
   type HeadInput, type HeadReport, type HeadRuntime,
-  type ShellApprovalRequest,
   type NimbusExecResult,
   type FactsStore, type SleepTimeUpdate,
   type AgentSignal, type SignalOutcome, type ReleaseBoard,
@@ -874,15 +873,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** The per-step dynamic context, assembled exactly as a model step sees it —
    *  the shared core assembler over this actor's own stores. */
   observeDynamicContext(): DynamicContext { return this.dynamicContextSnapshot(); }
-  /** Park one deferred shell approval, the way the run gate does. */
-  harnessParkShellApproval(req: ShellApprovalRequest) {
-    return this.deferrals.park(req);
-  }
-  /** Raise one device-consent prompt without awaiting its answer — the parked
-   *  state a dynamic-context approval row names. The caller owns the promise. */
-  harnessAwaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
-    return this.awaitDeviceConsent(req);
-  }
 }
 
 /** A candidate under trial, so sampling has something to sample against.
