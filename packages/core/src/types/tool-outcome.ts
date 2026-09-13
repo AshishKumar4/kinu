@@ -10,6 +10,10 @@ export const ToolFailureValueSchema = v.object({
   reason: v.nullable(v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS])),
   error: v.string(),
   execution: v.optional(v.object({ exitCode: v.number() })),
+  /** db.batch's refused operation, when one is named — the index is part of
+   *  the refusal a program branches on, like `execution` is part of a
+   *  substrate exit. */
+  failedIndex: v.optional(v.number()),
 });
 
 export const BindingFailureSchema = v.object({
