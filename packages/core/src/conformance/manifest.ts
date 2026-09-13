@@ -677,6 +677,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // reads them. A resumed turn reads the context revision it was interrupted at
     // rather than the newest one, so the revisions travel with the claims.
     actor_turn_claims: EVERYWHERE,
+    actor_turn_inputs: EVERYWHERE,
     actor_context_revisions: EVERYWHERE,
     // The raw working history a `/context` edit rewrites, numbered per ACTOR
     // rather than per turn: an edit authored between turns, or before the
