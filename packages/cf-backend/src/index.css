@@ -964,9 +964,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 .landing-shell {
   width: 100%;
-  /* One measure on every screen. Copy inside carries its own narrower
-     max-width, so the room past it goes to the demos and the hero tree. */
-  max-width: 80rem;
+  /* One measure on every screen, a step wider for the demos and the hero
+     tree. Copy inside carries its own narrower max-width, so the room past
+     it is never prose. */
+  max-width: 84rem;
   margin-inline: auto;
   padding-inline: 2.5rem;
 }
@@ -1348,4 +1349,45 @@ body > .annotation-toolbar {
   [data-plan-decisions] > * {
     width: 100%;
   }
+}
+/* ── Workbench scale — the earlier, denser measure the owner reads the
+   workspace at ────────────────────────────────────────────────────────────
+   The d04 scale unified the workbench on the marketing-read sizes; the owner
+   kept that scale everywhere EXCEPT the workspace. Every selector below is
+   the pre-d04 size for the SAME role — the role names stay, only the rungs
+   the workbench sits on change. The scope is `html[data-workbench]` (set by
+   WorkspacePage while it is mounted, so rail, drawer and portaled chrome
+   follow the page) or `.p-workbench` (the landing frames, whose mock must
+   photograph the workspace at this scale). Unlayered, so they outrank the
+   layered role declarations above. Sizes are rem at a 16px root; comments
+   carry the pixels a default root renders. */
+:is(html[data-workbench], .p-workbench) {
+  .prose-chat {
+    /* 14.496px on 1.7 — the scale the owner approved for assistant prose. */
+    font-size: 0.906rem;
+    line-height: 1.7;
+
+    /* Headings were em-scaled off the prose size before d04: they keep that
+       hierarchy rather than rem rungs. */
+    h1, h2, h3 { line-height: 1.7; }
+    h1 { font-size: 1.1em; } h2 { font-size: 1.05em; } h3 { font-size: 1em; }
+  }
+  .p-t-chat    { font-size: 0.875rem; line-height: 1.6; }    /* user bubble — 14px */
+  .p-t-control { font-size: 0.6875rem; }                     /* navigation & controls — 11px */
+  .p-t-status  { font-size: 0.6875rem; }                     /* status labels — 11px */
+  .p-t-code    { font-size: 0.78125rem; line-height: 1.55; } /* code — 12.5px */
+  .p-label     { font-size: 0.78125rem; line-height: 18px; } /* section label — 12.5px */
+
+  .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
+    font-size: 11px; line-height: 16px;
+  }
+
+  .p-code .p-code-highlight pre { font-size: 0.78125rem; line-height: 1.55; } /* 12.5px */
+
+  /* Inline code read slightly under its sentence before d04. */
+  .p-code-inline { font-size: 0.9em; }
+  [data-plan-title] code { font-size: 0.82em; }
+  .plan-review-document [data-block-id] :not(pre) > code { font-size: 0.9em; }
+  .plan-review-document pre[data-block-id] { font-size: 0.8125rem; line-height: 1.65; } /* 13px */
+  .plan-review-document pre[data-block-id]::before { font-size: 0.6875rem; } /* 11px */
 }

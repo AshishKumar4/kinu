@@ -938,10 +938,10 @@ describe('public pages are responsive', () => {
   });
 
   test('the wide landing keeps its intended measure', () => {
-    // The shell is one measure, 80rem: 1200 inside its 40px gutters on every
+    // The shell is one measure, 84rem: 1264 inside its 40px gutters on every
     // screen from a laptop to 4K, so the page reads as one page rather than
     // growing with the viewport. Copy blocks keep their own max-width.
-    const expected = { '1568': 1200, '1920': 1200, '2560': 1200, '3840': 1200 };
+    const expected = { '1568': 1264, '1920': 1264, '2560': 1264, '3840': 1264 };
 
     for (const [where, target] of Object.entries(expected)) {
       const width = required(facts.wideColumns[where], `measured width @${where}`);

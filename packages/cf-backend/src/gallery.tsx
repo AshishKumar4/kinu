@@ -2676,7 +2676,7 @@ function Shell(
   },
 ) {
   return (
-    <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+    <div className="p-workbench flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
           different surface than the app renders is worse than no harness. */}
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
