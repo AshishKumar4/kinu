@@ -2,11 +2,11 @@
   Kinu.Exploration.Rebase — a stale verdict never applies. 0 sorry.
 
   Models `MemberVerdict`, `memberDigestOf`, `baseDigestOf`, rule 4 of `gate` and
-  `reverified` (`packages/core/src/strategy/merge-back.ts:161-198`, `:731-742`,
-  `:764-785`), plus the sequential apply that makes staleness arise in the first
+  `reverified` (`packages/core/src/strategy/merge-back.ts#MemberVerdict`, #memberDigestOf,
+  #baseDigestOf, #gate and #reverified), plus the sequential apply that makes staleness arise in the first
   place.
 
-  -- WHAT THE INVARIANT IS. `merge-back.ts:727-730` states it: "The pair is the
+  -- WHAT THE INVARIANT IS. `packages/core/src/strategy/merge-back.ts#gate` states it: "The pair is the
   binding: the member digest never changes for an immutable diff, so the base digest
   is the half that can differ, and under a rebase it differs for every member after
   the first." The theorem that says this is
@@ -38,7 +38,7 @@
 
   1. RULES 5 AND 6, scope escape and base drift. Rule 5 is a property of the diff
      alone and independent of everything here. Rule 6 is NOT independent — it fires at
-     exactly the paths a rebase moved, and `merge-back.ts:720-725` records that
+     exactly the paths a rebase moved, and `packages/core/src/strategy/merge-back.ts#gate` records that
      checking it before rule 4 would refuse every rebased member as drift and leave
      this comparison as dead code. That ORDER is a real property and it is not
      modelled here; what is modelled is that rule 4 has teeth, which is the half a
@@ -88,25 +88,25 @@ structure FileChange where
   after : String
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- `MemberDiff` (`merge-back.ts:143-145`): self-contained, which is the property that
+/-- `MemberDiff` (`packages/core/src/strategy/merge-back.ts#MemberDiff`): self-contained, which is the property that
     makes it portable and the reason its digest cannot move. -/
 structure Diff where
   nodeId : String
   files : List FileChange
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- `memberDigestOf`'s argument tuple (`merge-back.ts:177-182`). Nothing here is read
+/-- `memberDigestOf`'s argument tuple (`packages/core/src/strategy/merge-back.ts#memberDigestOf`). Nothing here is read
     from the origin, and that is the whole of the immutability claim. -/
 def memberKey (d : Diff) : String × List (String × String × String) :=
   (d.nodeId, d.files.map (fun f => (f.path, f.base, f.after)))
 
-/-- `baseDigestOf`'s argument tuple (`merge-back.ts:192-198`): the LIVE origin content
+/-- `baseDigestOf`'s argument tuple (`packages/core/src/strategy/merge-back.ts#baseDigestOf`): the LIVE origin content
     at the paths this member touches, and nothing else. `Option` because an absent path
     is not an empty one. -/
 def baseKey (d : Diff) (o : Origin) : List (String × Option String) :=
   d.files.map (fun f => (f.path, readAt o f.path))
 
-/-- `MemberVerdict` (`merge-back.ts:161-171`). The pair is the key. -/
+/-- `MemberVerdict` (`packages/core/src/strategy/merge-back.ts#MemberVerdict`). The pair is the key. -/
 structure Verdict where
   memberKey : String × List (String × String × String)
   baseKey : List (String × Option String)
@@ -124,9 +124,9 @@ structure Member where
 abbrev Reverifier := Member → List (String × Option String) → Option Verdict
 
 inductive Cause where
-  /-- Rule 3 (`merge-back.ts:700`). -/
+  /-- Rule 3 (`packages/core/src/strategy/merge-back.ts#gate`). -/
   | verdictUnclean
-  /-- Rule 4, all four of its paths (`merge-back.ts:732-741`, `:768-783`). -/
+  /-- Rule 4, all four of its paths (`packages/core/src/strategy/merge-back.ts#gate`). -/
   | verdictStale
   deriving Repr, BEq, DecidableEq, Inhabited
 
@@ -148,7 +148,7 @@ def gate (rv : Option Reverifier) (o : Origin) (m : Member) : Outcome :=
       | none => .refused .verdictStale
       | some fresh =>
         -- A re-verification bound to a different base has not answered the question
-        -- that was asked (`merge-back.ts:776-783`).
+        -- that was asked (`packages/core/src/strategy/merge-back.ts#reverified`).
         if fresh.baseKey ≠ baseKey m.diff o then .refused .verdictStale
         else if fresh.clean = false then .refused .verdictStale
         else .applied
@@ -190,7 +190,7 @@ theorem applied_is_bound_to_the_base_it_lands_on (rv : Option Reverifier) (o : O
 /-! ## The sequential rebase, which is where staleness arises
 
   Applying a member changes the origin at the paths it touches, so the base every
-  LATER member is measured against has moved. `merge-back.ts:728-729`: "under a rebase
+  LATER member is measured against has moved. `packages/core/src/strategy/merge-back.ts#gate`: "under a rebase
   it differs for every member after the first". -/
 
 def applyDiff (o : Origin) (d : Diff) : Origin :=
@@ -206,7 +206,7 @@ structure Step where
 
 /-- The rebase: gate, apply, move on; a refusal is recorded and the member skipped,
     which is what `mergeBack` does under `sequential-rebase`
-    (`merge-back.ts:651-660`): the skipped member joins neither `applied` nor the
+    (`packages/core/src/strategy/merge-back.ts#mergeBack`): the skipped member joins neither `applied` nor the
     rebase frontier, so the tail is gated against the origin as it stood without the
     refused writes. -/
 def rebase (rv : Option Reverifier) : Origin → List Member → List Step
@@ -425,7 +425,7 @@ theorem the_rebase_skips_the_refused_member :
 
 /-- **The skipped member leaves no write for the tail.** The third step is gated
     against the origin with only the first member's write — the refused member joins
-    neither `applied` nor the rebase frontier (`merge-back.ts:651-657`). This is the
+    neither `applied` nor the rebase frontier (`packages/core/src/strategy/merge-back.ts#mergeBack`). This is the
     mechanism the safety half below rests on: whatever the refused member would have
     written is absent from every base a later member is checked against. -/
 theorem the_skipped_member_leaves_no_write_for_the_tail :

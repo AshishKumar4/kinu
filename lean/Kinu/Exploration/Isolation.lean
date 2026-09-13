@@ -9,7 +9,7 @@
   `MCTS/StorageIsolation.lean`'s `transition_preserves_isolation` holds precisely
   BECAUSE branches are toolless. There is no `toolless` identifier in Lean;
   toollessness is encoded as a frame condition on the two branch-side actions
-  (`StorageIsolation.lean:32-37`), whose second conjunct says a branch may not
+  (`StorageIsolation.lean (mctsTransition)`), whose second conjunct says a branch may not
   introduce any storage identity not already held by an existing branch.
   **Acquiring storage — that is, having tools — is exactly what that conjunct
   forbids.**
@@ -36,7 +36,7 @@
   a NEW action with a NEW postcondition — a fresh, provably-disjoint storage id
   per node — and its own preservation proof. That region is now UNBLOCKED and
   UNWRITTEN, and those are two different states. Per-node isolation exists in the
-  code: `agentHomeNodeProvisioner` (`strategy/node-workspace.ts`) gives a node a
+  code: `facetHomeProvisioner` (`packages/core/src/strategy/node-workspace.ts#facetHomeProvisioner`) gives a node a
   real home in the one global view, owned by the node's own uid, so there is now
   something for that postcondition to be REFINED FROM where before there was
   nothing to refine. Writing it ahead of that provisioner would have been the
@@ -48,8 +48,8 @@
   What the residue is, and *Isolation* names it: there are exactly two isolation
   states, and under `shared-origin-plane` there is no boundary, said out loud. In
   the shared-workspace layout heads are still merely ASKED to isolate themselves
-  (`head-inference.ts`, the `shared-workspace` branch), and
-  `heads/file-changes.ts` states that shell-command changes a head ran are not
+  (`packages/core/src/heads/head-inference.ts#buildHeadSystemPrompt`, the `shared-workspace` branch), and
+  `packages/core/src/heads/file-changes.ts#HeadFileChanges` states that shell-command changes a head ran are not
   attributed to it.
 -/
 
@@ -97,7 +97,7 @@ theorem agent_node_is_not_a_branch_evaluate (s s' : MCTSSystemState) (score : Fl
 
     So the existing proof cannot be stretched over agent nodes by weakening the
     conjunct the `.BranchExplore` case consumes at
-    `StorageIsolation.lean:73-77`. An agent-node region needs its own
+    `StorageIsolation.lean (mctsTransition)`. An agent-node region needs its own
     postcondition and its own proof. -/
 theorem dropping_the_frame_condition_breaks_isolation :
     ∃ s s' : MCTSSystemState,
