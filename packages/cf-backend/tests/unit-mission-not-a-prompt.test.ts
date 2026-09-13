@@ -38,16 +38,16 @@ describe("the creation box is a mission, not a first prompt", () => {
     expect(page).not.toContain("location.state");
   });
 
-  test("the creation surface says what the box is, and that nothing runs yet", () => {
+  test("the creation surface asks for the mission in the workspace's own voice", () => {
     const copy = source("src/hooks/use-create-workspace.ts");
     expect(copy).toContain('MISSION_LABEL = "Mission"');
-    expect(copy).toContain("A standing brief for the whole workspace.");
-    expect(copy).toContain("Nothing runs until the first message.");
+    expect(copy).toContain('MISSION_PLACEHOLDER = "What would you like help with?"');
 
     const ui = source("src/pages/HomePage.tsx");
+    expect(ui).toContain("What do you wanna work on?");
     expect(ui).toContain("MISSION_LABEL");
     expect(ui).toContain("MISSION_PLACEHOLDER");
-    expect(ui).toContain("MISSION_HELP");
+    expect(ui).not.toContain("MISSION_HELP");
     expect(ui).not.toContain("first turn");
     expect(() => source("src/components/CreateWorkspaceModal.tsx")).toThrow("ENOENT");
   });
