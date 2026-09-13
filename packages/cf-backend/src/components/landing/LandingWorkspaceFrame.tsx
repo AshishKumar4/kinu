@@ -141,11 +141,15 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       : null
   ));
 
-  const decidePlan = useMemo(() => planRpc(setDecided, MOVIE_PLAN), []);
+  // One source for the plan: the decided override, else the timeline's. The
+  // rpc serves THIS plan, so the Plans read and the pane agree — a workspace
+  // that has not submitted a plan answers [] rather than advertising the
+  // fixture's.
+  const plan = isMovie ? (decided ?? discrete.plan) : null;
+  const decidePlan = useMemo(() => planRpc(setDecided, plan), [plan]);
   const [, setWorkVersion] = useState(0);
   const work = useMemo(() => checkoutWorkFixture(() => setWorkVersion((version) => version + 1)), []);
   const rpc = kind === 'plan' ? decidePlan : work.rpc;
-  const plan = isMovie ? (decided ?? discrete.plan) : null;
   const planLocked = planReviewAwaitingDecision(plan);
   const [mode, setMode] = useState<ChatMode>(frame.mode);
   useEffect(() => {

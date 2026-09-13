@@ -301,8 +301,11 @@ export const PLAN_FIXTURE: PlanReview = {
 /** The plan's decisions, answered the way the product answers them: a saved
  *  annotation stays, a decision records and the next turn is queued. `base` is
  *  the plan under review — the static frame's annotated one by default, the
- *  movie's clean one when the walkthrough drives it. */
-export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview = PLAN_FIXTURE): Rpc {
+ *  movie's CURRENT one when the walkthrough drives it, and `null` while the
+ *  story has not submitted one yet: the Plans read answers empty, and an
+ *  annotation or decision addressed to a plan that does not exist refuses
+ *  rather than claim a success the pane would display. */
+export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview | null = PLAN_FIXTURE): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
 
@@ -313,15 +316,21 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview =
 
       if (request.view === 'planTasks') return answer({ view: 'planTasks', path: request.path, tasks: [] });
 
-      return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' ? [base] : [] } });
+      return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' && base !== null ? [base] : [] } });
     }
 
     if (method === 'getEvolutionChangelog') return answer({ seenAt: NOW, unseenCount: 0, entries: [] });
 
-    if (method === 'savePlanReviewAnnotations') return answer({ ok: true, plan: base });
+    if (method === 'savePlanReviewAnnotations') {
+      if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
+
+      return answer({ ok: true, plan: base });
+    }
 
     if (method === 'decidePlanReview') {
       const [, , decision, feedback] = v.parse(DecideArgsSchema, args);
+
+      if (base === null) return answer({ ok: false, error: 'no plan under review', plan: null });
 
       const decided: PlanReview = {
         ...base,
