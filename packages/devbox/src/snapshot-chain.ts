@@ -402,7 +402,7 @@ export interface ChainGeneration {
   /** The cumulative changed set, or undefined until the first delta lands. */
   readonly delta: ChainDeltaLayer | undefined;
   /** How the delta's bytes are laid out. `chunked` is a sidecar of changed
-  *  extents plus a per-file map, materialized into the upper at attach.
+  *  extents plus per-file indexes, served through composed lazy lowers.
   *  Absent means the legacy layout: a full squashfs of the upper, composed
   *  as an overlay lower. Absent is the only legacy value because every
   *  record written before chunked deltas existed holds a full delta; a box
@@ -1023,7 +1023,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       };
     }
 
-    if (stored.bytes === generation.delta.bytes) {
+    if (generation.delta.id !== undefined || stored.bytes === generation.delta.bytes) {
       const corrupt = layerIntegrityFailure({
         declared: generation.delta,
         stored,
@@ -1293,9 +1293,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         await layerFailed('delta', { cause: error });
       }
 
-      // The mounted manifest decides the format, including a delta whose PUT
-      // outlived its record write. Chunked bytes materialize into the upper;
-      // a legacy image becomes the newest lower.
+      // The mounted manifest decides the format. Chunked records use the
+      // block server and tree lower; a legacy image is one whole lower.
       const manifest = await readSidecarManifest(deltaLayer, generation, layerFailed);
 
       if (manifest === null) {
@@ -1332,10 +1331,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
 
-    // The shape decides the next commit: `base+delta layered` means the first
-    // commit with anything to say collapses the chain; an absorbed sidecar
-    // leaves the upper holding the cumulative changed set, so the next commit
-    // publishes a delta of it.
+    // Only a legacy layered delta requires collapse. A v2 publication merges
+    // retained records with the cumulative upper and writes an immutable key.
     const restored = !haveDelta
       ? 'base'
       : held ? 'base+delta already in this upper' : chunked ? 'base+delta block-composed' : 'base+delta layered';
