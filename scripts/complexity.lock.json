@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-13",
-  "files": 2202,
-  "functions": 54844,
+  "files": 2207,
+  "functions": 55094,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -106,6 +106,10 @@
       "complexity": 45
     },
     {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 45
+    },
+    {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 45
     },
@@ -143,10 +147,6 @@
     },
     {
       "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
-      "complexity": 40
-    },
-    {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
       "complexity": 40
     },
     {
