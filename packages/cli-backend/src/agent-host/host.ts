@@ -76,6 +76,7 @@ import {
   type LocalPeerEndpoint,
   type PeerMessage,
   type ReceiveResult,
+  metadataBroadcastEvent,
   subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
@@ -1396,12 +1397,9 @@ export class LocalAgentHost {
         };
 
         if (report.task) metadata.task = report.task;
-        parent.session.broadcast({
-          type: 'subordinate_event',
-          status: report.status,
-          text: report.content,
-          metadata,
-        });
+        parent.session.broadcast(metadataBroadcastEvent(
+          'subordinate_event', metadata, { status: report.status, text: report.content },
+        ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
       // A temporary child's answer belongs to the `agents.ask` call waiting on
@@ -1470,15 +1468,11 @@ export class LocalAgentHost {
       ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
       broadcast: (event) => parent.session.broadcast(event),
-      broadcastTask: (event) => parent.session.broadcast({
-        type: 'subordinate_event',
-        status: 'task',
-        text: event.content,
-        metadata: {
-          subordinate: event.subordinate,
-          timestamp: event.timestamp,
-        },
-      }),
+      broadcastTask: (event) => parent.session.broadcast(metadataBroadcastEvent(
+        'subordinate_event',
+        { subordinate: event.subordinate, timestamp: event.timestamp },
+        { status: 'task', text: event.content },
+      )),
     };
 
     // STRUCTURAL CONTAINMENT AT THE CAP FOR THIS RUNG — the same MECHANISM the

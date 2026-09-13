@@ -29,7 +29,7 @@
  */
 
 import * as v from "valibot";
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /* ── timeout classification ─────────────────────────────────────────────────── */
 
@@ -169,6 +169,14 @@ export function createSessionRecovery(
 
 const HealthBuildSchema = v.object({ sha: v.pipe(v.string(), v.trim(), v.minLength(1)) });
 
+/**
+ * Bound on the best-effort public health read. Its own policy, not the
+ * synthetic-probe TIMEOUT_MS in monitor/probes.ts: that one bounds
+ * server-side probe verdicts, while this one bounds a browser read whose
+ * failures are tolerated into "no signal" — and the two never share a fetch.
+ */
+const HEALTH_READ_TIMEOUT_MS = 10_000;
+
 const HealthBodySchema = v.object({ build: v.nullable(HealthBuildSchema) });
 
 /** Transport-level failures of a best-effort public read: the request timed
@@ -187,7 +195,7 @@ function isTolerableHealthFailure<ErrorValue>(cause: ErrorValue): boolean {
  *  records any unexpected defect before it reaches a page consumer. */
 export async function fetchDeployedBuildSha(): Promise<string | null> {
   try {
-    const res = await fetch("/api/health", { signal: AbortSignal.timeout(10_000) });
+    const res = await fetch("/api/health", { signal: AbortSignal.timeout(HEALTH_READ_TIMEOUT_MS) });
 
     if (!res.ok) return null;
     const parsed = v.safeParse(HealthBodySchema, await res.json());

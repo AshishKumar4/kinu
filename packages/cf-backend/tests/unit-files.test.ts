@@ -11,7 +11,7 @@ import { fileResponseHeaders } from "@kinu.run/core";
 import {
   entryRevision, fileTextEditable, nextTreeCache, putFileBytes, sandboxedHtml,
   textRenderOf, viewerKindOf,
-} from "../src/components/surfaces/files-plane";
+} from "@kinu.run/core";
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {

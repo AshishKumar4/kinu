@@ -1,5 +1,5 @@
 [
-  "handler_absorbs/wire packages/cf-backend/src/components/surfaces/plan-annotation-save.ts#enqueue",
+  "handler_absorbs/wire packages/core/src/plans/plan-annotation-save.ts#enqueue",
   "handler_absorbs/wire packages/core/src/execution/device-tunnel.ts#probeLiveness",
   "handler_absorbs/wire packages/core/src/obs/tracer.ts#span",
   "logged_default/wire packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#annotationSaves",

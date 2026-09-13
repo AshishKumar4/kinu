@@ -17,7 +17,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { between } from '@kinu.run/test-utils';
-import { terminalChatError } from '../src/hooks/chat-turn-error';
+import { terminalChatError } from '@kinu.run/core';
 
 const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-kinu.ts'), 'utf8');
 

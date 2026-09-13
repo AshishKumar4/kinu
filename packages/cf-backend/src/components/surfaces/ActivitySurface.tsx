@@ -46,7 +46,7 @@ import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/c
 import type {
   ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
 } from "@kinu.run/core";
-import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "./activity-breakdown";
+import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "@kinu.run/core";
 
 /** Live surface: a turn in flight re-measures every step. */
 const STREAMING_POLL_MS = 1500;

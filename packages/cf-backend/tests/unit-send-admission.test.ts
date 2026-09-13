@@ -3,7 +3,7 @@
 // reactive guard both presses read before either had committed, so a test that
 // awaits between presses cannot see it.
 import { describe, test, expect } from 'bun:test';
-import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from '../src/hooks/send-admission';
+import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from '@kinu.run/core';
 
 /** A turn whose terminal settle this test controls. */
 interface DeferredTurn {

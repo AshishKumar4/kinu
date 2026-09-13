@@ -132,7 +132,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { APP_ROUTES } from "@/app-routes";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import type { SubordinateSnapshot } from "@/hooks/use-kinu";
-import { primePageDeployedBuildSha } from "@/hooks/session-recovery";
+import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
