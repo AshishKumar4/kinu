@@ -594,6 +594,8 @@ interface AdvisorLaneDeps {
    *  that forgot to pass it would write a note no scorer can read while looking
    *  exactly like one that works. */
   readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
+  readonly actor?: ActorHandle;
+  readonly parent?: (signal: AgentSignal) => Promise<SignalOutcome>;
 }
 
 /**
@@ -625,6 +627,7 @@ export const AdvisorRecoverySnapshotSchema = v.object({
   reachable: v.array(v.string()),
   minSeverity: v.picklist(ADVISOR_SEVERITIES),
   recent: v.array(v.string()),
+  model: v.optional(v.string()),
 });
 
 export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
@@ -675,9 +678,14 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   // durable id, because a fabricated key would collide two different turns.
   const keyed: AgentSignal = deps.turn.turnId === undefined || deps.turn.turnId === ''
     ? signal
-    : { ...signal, idempotencyKey: `advisor:${deps.turn.turnId}` };
+    : { ...signal, idempotencyKey: deps.actor === undefined
+      ? `advisor:${deps.turn.turnId}` : `advisor:${deps.actor.actorId}:${deps.turn.turnId}` };
 
   await deps.deliver(keyed);
+
+  if (note.severity === 'blocker' && deps.actor !== undefined && deps.parent !== undefined) {
+    await deps.parent({ ...keyed, text: `[Actor ${deps.actor.name}]\n${keyed.text}` });
+  }
 
   return 'deliver';
 }
@@ -780,6 +788,8 @@ export async function reviewRecordedTurn(deps: {
   readonly deliver: AdvisorLaneDeps['deliver'];
   readonly record: AdvisorLaneDeps['record'];
   readonly workspace?: AdvisorWorkspace;
+  readonly actor?: ActorHandle;
+  readonly parent?: AdvisorLaneDeps['parent'];
 }): Promise<AdvisorDisposition | null> {
   const { snapshot, llm } = deps;
 
@@ -799,6 +809,8 @@ export async function reviewRecordedTurn(deps: {
         guidance: await workspaceAdvisorGuidance(deps.workspace),
         deliver: deps.deliver,
         record: deps.record,
+        actor: deps.actor,
+        parent: deps.parent,
       });
     } catch (cause) {
       const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });

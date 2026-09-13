@@ -323,6 +323,53 @@ describe('the context axis carries the inheritance question, at one spelling', (
 });
 
 describe('a tool-using node over a shared workspace is a runnable composition', () => {
+  test('the advisor reviews agent nodes, not the judge samples scoring those nodes', async () => {
+    const { rt, testSql } = createTestRuntime();
+    rt.actor.config.setAdvisorEnabled(true);
+    let reviews = 0;
+    let scores = 0;
+    rt.advisorLlm = {
+      async *stream() { yield ''; },
+      complete: async () => {
+        reviews++;
+
+        return JSON.stringify({ note: 'The result omitted the requested verification.', severity: 'nit', class: 'wrong-work' });
+      },
+    };
+    rt.judgeModel = {
+      async *stream() { yield ''; },
+      complete: async () => { scores++;
+
+ return '{"score":0.7}'; },
+    };
+    const call = unitCall({ unit: { kind: 'answer' }, context: 'fresh' });
+    const resolved = resolveSwarm({ ...call, config: { ...call.config, score: { kind: 'judge', samples: 2 } } });
+
+    if ('reason' in resolved) throw new Error(resolved.error);
+
+    const result = await runSwarm({
+      rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true }).hostNode,
+      mode: 'build',
+      model: scriptedTurnModel({ doGenerate: async () => ({
+        content: [{ type: 'text', text: 'A candidate solution.' }],
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 3, text: 3, reasoning: undefined },
+        },
+        warnings: [],
+      }) }),
+    }, resolved);
+
+    if ('reason' in result) throw new Error(result.error);
+    expect(result.report.expansions).toBe(3);
+    expect(scores).toBe(6);
+    expect(reviews).toBe(3);
+    expect(rt.storage.sql`SELECT actor_id FROM completed_turns`).toEqual([]);
+    expect(rt.storage.sql<{ actor_id: string }>`SELECT actor_id FROM evolution_events WHERE type = 'advisor_note'`)
+      .toHaveLength(3);
+  });
+
   test('a tool-using node run starts — no `unsupported` about a shared workspace', async () => {
     // Reaching the model at all is the claim: `regionRefusal` is the first thing
     // `runSwarm` does and it spends nothing, so a refusal would come back before any

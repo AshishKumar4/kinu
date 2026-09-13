@@ -653,15 +653,20 @@ export class LocalAgentHost {
         };
       },
       orchestrationFor: (bound) => {
+        const ownsSession = bound.record.kind === 'main' || bound.record.kind === 'subordinate';
+        const clientId = ownsSession ? bound.reference.actorId : bound.reference.parentActorId;
+
+        if (clientId === null) throw new KinuError('missing', 'A reporting actor has no session to publish through.');
+
         const orchestration = createLocalOrchestration({
           runtime: bound.runtime,
           // This ACTOR's own durable event rail — the queue both of its
           // ingresses publish into.
           eventLog: new EventLog(hubSql, bound.handle),
-          // Resolved at CALL time: the host builds orchestration BEFORE the
-          // ActorSession exists (it needs orchestration to construct one), and
-          // the session that answers these ports is built from that session.
-          session: () => this.requireActorEntry(bound.reference.actorId).session,
+          // Reporting actors have no LocalAgentSession: their parent's session
+          // publishes events, while the runtime and all ledgers stay actor-scoped.
+          // Resolve at call time because the host builds orchestration first.
+          session: () => this.requireActorEntry(clientId).session,
           oneShot: false,
         });
 
@@ -670,7 +675,7 @@ export class LocalAgentHost {
         // owned by its seat and dies with it, so retaining it here would grow a
         // map for the length of the process and hand a re-acquired id an object
         // from a seat that is already over.
-        if (bound.record.kind === 'main' || bound.record.kind === 'subordinate') {
+        if (ownsSession) {
           orchestrations.set(bound.reference.actorId, orchestration);
         }
 

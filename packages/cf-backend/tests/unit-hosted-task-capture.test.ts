@@ -25,7 +25,7 @@
  */
 import { expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
-import { createProviderRegistry, type JsonObject } from '@kinu.run/core';
+import { ADVISOR_HEADER, createProviderRegistry, type JsonObject } from '@kinu.run/core';
 import { scriptedTurnModel, type ScriptedTurnResult, type ScriptedTurnOptions } from '@kinu.run/test-utils';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 
@@ -98,4 +98,61 @@ test("a delegated turn's tool call reaches the answer its caller gets", async ()
   // own capture, and the builtins are wrapped by the surface builder rather
   // than by the runner that reads the report.
   expect(turn.text).toBe('Ran 1 tool call(s): file');
+});
+
+test('a hosted subordinate is advised without adding a turn to either evolution window', async () => {
+  const workspace = orchestratorHarness();
+  const rt = workspace.agent.observeRuntime();
+  rt.actor.config.setAdvisorEnabled(true);
+  const note = 'The probe failed but the reply claimed success. Read the exit status.';
+  const requests: string[] = [];
+  const reviews: string[] = [];
+
+  const model = scriptedTurnModel({
+    provider: 'fake', modelId: 'fake-task',
+    doGenerate: async (options): Promise<ScriptedTurnResult> => {
+      const prompt = JSON.stringify(options.prompt);
+      const reviewing = prompt.includes('You are reviewing one finished turn');
+
+      if (reviewing) reviews.push(prompt);
+      else requests.push(prompt);
+
+      return {
+        content: [{ type: 'text', text: reviewing
+          ? JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }) : 'The probe succeeded.' }],
+        finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [],
+      };
+    },
+  });
+
+  workspace.agent.overrideProviderRegistry({
+    registry: createProviderRegistry(),
+    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
+    resolveModel: () => model,
+    normalizeSpecSync: (spec) => spec ?? 'test/model',
+  });
+
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'advised', displayName: 'Advised', nameOrigin: 'user', mission: 'Check the probe.',
+  });
+
+  Object.defineProperty(child.actor.runtime, 'advisorLlm', { value: {
+    async *stream() { yield ''; },
+    complete: async (prompt: string) => {
+      reviews.push(prompt);
+
+      return JSON.stringify({ note, severity: 'concern', class: 'wrong-work' });
+    },
+  } });
+  const before = rt.storage.sql<{ actor_id: string; turn: string }>`SELECT actor_id, turn FROM completed_turns`;
+  const result = await workspace.agent.runHostedTaskTurn(child.actor, 'Check the probe.');
+  expect(result.text).toBe('The probe succeeded.');
+  expect(reviews).toHaveLength(2);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toContain(ADVISOR_HEADER);
+  expect(rt.storage.sql<{ message: string }>`SELECT message FROM evolution_events
+    WHERE actor_id = ${child.actor.handle.actorId} AND type = 'advisor_note'`).toEqual([{ message: note }]);
+  expect(rt.storage.sql`SELECT actor_id, turn FROM completed_turns`).toEqual(before);
+  expect(rt.storage.sql`SELECT message FROM evolution_events
+    WHERE actor_id = ${rt.actor.actorId} AND type = 'advisor_note'`).toEqual([]);
 });
