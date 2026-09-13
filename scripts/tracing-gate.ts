@@ -357,6 +357,7 @@ async function main(): Promise<number> {
 
   console.log(`${gate}: ok — ${measured}`);
   console.log('  blind: the span tree shape. tailStream is not dispatched locally or on the deployed runtime, so shape is readable only from Cloudflare ingestion');
+  console.log('  blind: the census detects direct calls under the original createWorkersTracer identifier only; aliased and namespace calls are not detected');
   console.log(`  blind: a call site outside the product corpus — a script, a fixture, a test — is uncounted; the census is ${instrumented.join(', ')}`);
 
   return 0;
