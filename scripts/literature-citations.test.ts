@@ -46,6 +46,19 @@ describe('the register governs itself before it judges prose', () => {
 });
 
 describe('a number with no locator', () => {
+  test('a benchmark decimal with an impossible arXiv month is not a citation', () => {
+    expect(auditFile('bench-artifacts/fixture.json',
+      '{"wallMs":6416.85754,"bytesWritten":96468480}', coverage())).toEqual([]);
+  });
+
+  test.each(Array.from({ length: 12 }, (_, month) => String(month + 1).padStart(2, '0')))(
+    'a bare identifier in month %s still requires a registered source', (month) => {
+      const found = audit(`Study 24${month}.99999 reports 42%.`);
+      expect(found).toHaveLength(1);
+      expect(found[0]).toContain('cites an external work with numbers and no register entry');
+    },
+  );
+
   test('an unregistered figure beside a cited source is refused', () => {
     const found = audit(
       'Koh et al. 2407.01476 Table 4 reports 41.7% on the same 200-task subset.',

@@ -137,7 +137,9 @@ const CITATION_FORM = [
   /\b[A-Z][A-Za-z\u00C0-\u024F'\u2019-]+ et al\./,
   /\b[A-Z][A-Za-z\u00C0-\u024F'\u2019-]+ & [A-Z][A-Za-z\u00C0-\u024F'\u2019-]+\b/,
   /\barXiv[: ]/i,
-  /(?<![\w.])\d{4}\.\d{4,5}(?![\w])/,
+  // arXiv's YYMM identifiers require a calendar month:
+  // https://info.arxiv.org/help/arxiv_identifier.html (read 2026-09-13).
+  /(?<![\w.])\d{2}(?:0[1-9]|1[0-2])\.\d{4,5}(?![\w])/,
 ];
 
 /**
