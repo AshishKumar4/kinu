@@ -1,0 +1,29 @@
+bun test v1.4.0 (34cbb9a40)
+
+scripts/literature-citations.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+46 | });
+47 |
+48 | describe('a number with no locator', () => {
+49 |   test('a benchmark decimal with an impossible arXiv month is not a citation', () => {
+50 |     expect(auditFile('bench-artifacts/fixture.json',
+51 |       '{"wallMs":6416.85754,"bytesWritten":96468480}', coverage())).toEqual([]);
+                                                                         ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "bench-artifacts/fixture.json: cites an external work with numbers and no register entry — "{"wallMs":6416.85754,"bytesWritten":96468480}"",
++ ]
+
+- Expected  - 1
++ Received  + 3
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-devbox-admission/scripts/literature-citations.test.ts:51:69)
+(fail) a number with no locator > a benchmark decimal with an impossible arXiv month is not a citation [1.26ms]
+
+ 12 pass
+ 46 filtered out
+ 1 fail
+ 25 expect() calls
+Ran 13 tests across 1 file. [49.00ms]
