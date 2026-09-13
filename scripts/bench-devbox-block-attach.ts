@@ -4,7 +4,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  BENCH_ACCOUNT_ID, SANDBOX_IMAGE, boxName, boxState, checkpointOperation,
+  BENCH_ACCOUNT_ID, CELL_STARTUP_MS, SANDBOX_IMAGE, boxName, boxState, checkpointOperation,
   cleanupObservationProbes, createFixtureResources, deployFixture, destroyBox,
   drainBucketResidue, execInBox, measureLiveC3, r2ResiduePlane, readBlockAttachMetrics,
   readRestoreProbe, sourceRevision, startupOperation, teardownLiveArms, writeFileInBox,
@@ -20,9 +20,7 @@ const REPO = new URL('..', import.meta.url).pathname;
 
 const LARGE_BYTES = 2 * 1024 * 1024 * 1024;
 
-/** Observation ceiling only. A refused fixture is torn down; no runtime
- * timeout is extended and no retry shares the abandoned container. */
-export const CELL_STARTUP_MS = 55_000;
+export { CELL_STARTUP_MS } from './bench-devbox-strategies';
 
 export function chunkedPublicationErrors(chain: StartupState['chain']): string[] {
   if (chain?.deltaFormat === 'chunked') return [];

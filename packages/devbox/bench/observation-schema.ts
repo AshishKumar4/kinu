@@ -63,7 +63,7 @@ export interface StartupState {
   bootId?: string;
   chain?: {
     base?: LayerObservation & { id?: string };
-    delta?: LayerObservation | null;
+    delta?: LayerObservation & { id?: string } | null;
     mode?: string;
     rev?: number;
     deltaFormat?: 'chunked';
@@ -92,7 +92,7 @@ export const StateReplySchema = v.looseObject({
     running: v.optional(v.boolean()), unready: v.optional(v.string()), lastAttach: v.optional(AttachOutcomeSchema), bootId: v.optional(v.string()),
     chain: v.optional(v.nullable(v.looseObject({
       base: v.optional(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) })),
-      delta: v.optional(v.nullable(LayerObservationSchema)), mode: v.optional(v.string()), rev: v.optional(v.number()),
+      delta: v.optional(v.nullable(v.looseObject({ ...LayerObservationSchema.entries, id: v.optional(v.string()) }))), mode: v.optional(v.string()), rev: v.optional(v.number()),
       deltaFormat: v.optional(v.literal('chunked')), deltaFallback: v.optional(DeltaFallbackSchema),
     }))),
     incidents: v.optional(v.looseObject({ total: v.optional(v.number()), undelivered: v.optional(v.number()) })),

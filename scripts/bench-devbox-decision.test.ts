@@ -214,13 +214,21 @@ async function withFastClock<Result>(run: () => Promise<Result>): Promise<Result
 
 const OLD_CUT: ChainCutFacts = {
   recordPresent: true,
+  preDeltaId: 'delta-before', postDeltaId: 'delta-before',
   preBaseId: 'base-before', preHasDelta: true, preRev: 7, preDeltaEtag: 'etag-before',
   postBaseId: 'base-before', postHasDelta: true, postRev: 7, postDeltaEtag: 'etag-before',
-  servedWord: 'base+delta absorbed into the upper',
+  servedWord: 'base+delta block-composed',
   cutMarkerPresent: false, baseExists: true, deltaExists: true,
 };
 
 describe('cut observation completeness', () => {
+  test('immutable cuts refuse changed bytes or delta identities under an unchanged record revision', () => {
+    expect(judgeChainCut({ ...OLD_CUT, postDeltaEtag: 'rewritten', cutMarkerPresent: true }).verdict).toBe('mixed');
+    expect(judgeChainCut({ ...OLD_CUT, postDeltaId: 'delta-after', cutMarkerPresent: true }).verdict).toBe('mixed');
+    expect(judgeChainCut({ ...OLD_CUT, postDeltaId: null }).verdict).toBe('unjudged');
+    expect(judgeChainCut({ ...OLD_CUT, postRev: 8, postDeltaId: 'delta-after', postDeltaEtag: 'etag-after', cutMarkerPresent: true }).verdict).toBe('all-new');
+  });
+
   test('publication accounting includes every fully observed PUT attempt and refuses unknown bodies', () => {
     const window: PublicationWindow = {
       schema: 'devbox-publication-window/1', token: 'window', prefix: 'boxes/test/', openedAt: 1, closedAt: 10,
@@ -657,8 +665,12 @@ const WITNESSED: ControlWitnessFacts = {
     collapsedNamesDelta: false,
   },
   mutableDelta: {
-    key: 'backups/chain-7/delta.sqsh', etagBefore: 'e1', etagAfter: 'e2',
+    key: 'backups/delta-2/delta.sqsh', previousKey: 'backups/delta-1/delta.sqsh', etagBefore: 'e1', etagAfter: 'e2',
     bytesBefore: 65_536, bytesAfter: 131_072,
+    retainedHead: { ok: true, exists: true, etag: 'e1', size: 65_536 },
+    beforeState: { state: { chain: { base: { id: 'chain-7' }, delta: { id: 'delta-1' }, rev: 2 } } },
+    afterState: { state: { chain: { base: { id: 'chain-7' }, delta: { id: 'delta-2' }, rev: 3 } } },
+    checkpoint: { ok: true, outcome: { kind: 'committed' } },
   },
 };
 
@@ -690,7 +702,7 @@ const COPIED_INTO_THE_UPPER: ControlWitnessFacts = {
 
 
 describe('the preregistered witness cells', () => {
-  test('normal chunked absorption requires its manifest, both marker reads and a committed next checkpoint', () => {
+  test('chunked restore serves the marker from its composed lower with zero attach payload', () => {
     const digest = 'a'.repeat(64);
 
     const marker: FileObservation = {
@@ -704,11 +716,14 @@ describe('the preregistered witness cells', () => {
         markerPath: 'witness.txt', markerDigest: digest,
         manifest: { v: 2, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
         manifestRead: { ok: true, exitCode: 0 }, markerInMerged: marker,
-        markerInUpper: { ...marker, path: '/var/tmp/devbox/upper/witness.txt' },
-        sidecarMounted: false, mounts: { ok: true, exitCode: 0 },
+        markerInUpper: { ...marker, path: '/var/tmp/devbox/upper/witness.txt', evidence: { kind: 'missing' } },
+        sidecarMounted: true, blockMounted: true, mounts: { ok: true, exitCode: 0 },
+        blockReads: { generation: 'chain-before:boot-new', payloadBytes: 0, indexPages: 0, readRequests: 0 },
         before: 'chain-before', after: 'chain-before', afterNamesDelta: true,
         nextCheckpoint: { ok: true, outcome: { kind: 'committed' } },
-        wake: null,
+        wake: { ms: 100, startedAt: 1, redrives: 0, attach: { kind: 'attached', detail: 'chain chain-before 123B base+delta block-composed' },
+          state: { state: { bootId: 'boot-new', chain: { deltaFormat: 'chunked' } } } },
+        beforeState: { state: { bootId: 'boot-old' } },
       },
     };
 
@@ -719,8 +734,11 @@ describe('the preregistered witness cells', () => {
 
     for (const changed of [
       { manifest: null }, { markerInMerged: { ...marker, evidence: null } },
-      { markerInUpper: { ...marker, evidence: null } }, { sidecarMounted: true },
+      { markerInUpper: { ...marker, path: '/var/tmp/devbox/upper/witness.txt' } }, { sidecarMounted: false },
       { manifestRead: null }, { mounts: { ok: false, error: 'pending' } },
+      { blockMounted: false }, { blockReads: null }, { wake: null },
+      { blockReads: { generation: 'chain-before:boot-new', payloadBytes: 16384, indexPages: 0, readRequests: 1 } },
+      { blockReads: { generation: 'chain-before:boot-new', payloadBytes: 0, indexPages: 1, readRequests: 1 } },
       { nextCheckpoint: { ok: true, outcome: { kind: 'skipped' } } },
     ]) {
       expect(check({ ...facts, chunkedAbsorption: { ...facts.chunkedAbsorption!, ...changed } })?.observed).toBe(false);
@@ -771,14 +789,24 @@ describe('the preregistered witness cells', () => {
     expect(collapse?.detail).toContain('delta 0B');
   });
 
-  test('one key holding the same bytes twice is no longer a mutable delta', () => {
-    const [mutable] = controlWitnessChecks('snapshot-chain', {
-      ...WITNESSED,
-      mutableDelta: { ...WITNESSED.mutableDelta!, etagAfter: 'e1' },
-    });
+  test('immutable publication preserves the mounted key and CAS advances the record to a new key', () => {
+    const check = (mutableDelta: NonNullable<ControlWitnessFacts['mutableDelta']>) =>
+      controlWitnessChecks('snapshot-chain', { mutableDelta })[0];
 
-    expect(mutable?.observed).toBe(false);
-    expect(mutable?.detail).toContain('NOT rewritten');
+    const facts = WITNESSED.mutableDelta!;
+
+    expect(check(facts)?.observed).toBe(true);
+
+    for (const changed of [
+      { previousKey: facts.key },
+      { retainedHead: { ok: true, exists: true, etag: 'rewritten', size: 65_536 } },
+      { retainedHead: { ok: true, exists: false } },
+      { retainedHead: { ok: true, exists: true, etag: 'e1', size: 1 } },
+      { etagAfter: '' },
+      { afterState: facts.beforeState },
+      { afterState: { state: { chain: { base: { id: 'chain-7' }, delta: { id: 'delta-2' }, rev: 2 } } } },
+      { checkpoint: { ok: true, outcome: { kind: 'skipped' } } },
+    ]) expect(check({ ...facts, ...changed })?.observed).toBe(false);
   });
 
 
@@ -1202,15 +1230,15 @@ describe('the chain arm asks the store for what its record names', () => {
   const CHAIN = 'c0ffee00-0000-4000-8000-00000000beef';
 
   test('a record naming a delta wants both archives present', () => {
-    expect(chainArchiveExpectations(CHAIN, true)).toEqual([
+    expect(chainArchiveExpectations(CHAIN, 'delta-uuid', 'boxes/witness/')).toEqual([
       {
         name: 'the base object the record names exists in the store with non-zero size',
-        key: `backups/${CHAIN}/data.sqsh`,
+        key: `boxes/witness/backups/${CHAIN}/data.sqsh`,
         present: true,
       },
       {
         name: 'the delta object the record names exists in the store with non-zero size',
-        key: `backups/${CHAIN}/delta.sqsh`,
+        key: 'boxes/witness/backups/delta-uuid/delta.sqsh',
         present: true,
       },
     ]);
@@ -1223,7 +1251,7 @@ describe('the chain arm asks the store for what its record names', () => {
     // 20260831184750, whose 71,389,184 bytes are a bare base. Asking for a
     // delta there failed the arm's verify for holding exactly the shape its
     // strategy documents, and G1 refused the run for it.
-    const expectations = chainArchiveExpectations(CHAIN, false);
+    const expectations = chainArchiveExpectations(CHAIN, undefined);
     expect(expectations.map((row) => [row.key, row.present])).toEqual([
       [`backups/${CHAIN}/data.sqsh`, true],
       [`backups/${CHAIN}/delta.sqsh`, false],
@@ -1234,7 +1262,7 @@ describe('the chain arm asks the store for what its record names', () => {
     // The other direction, so the correction is not simply "ask for less". An
     // archive under a generation whose record names none is a publication that
     // lost its record or a sweep that never ran.
-    const absent = chainArchiveExpectations(CHAIN, false)
+    const absent = chainArchiveExpectations(CHAIN, undefined)
       .find((row) => row.key.endsWith('delta.sqsh'));
 
     expect(absent?.present).toBe(false);
@@ -1242,8 +1270,8 @@ describe('the chain arm asks the store for what its record names', () => {
   });
 
   test('a record with no generation asks nothing, so a caller must say so itself', () => {
-    expect(chainArchiveExpectations(undefined, true)).toEqual([]);
-    expect(chainArchiveExpectations('', false)).toEqual([]);
+    expect(chainArchiveExpectations(undefined, 'delta-uuid')).toEqual([]);
+    expect(chainArchiveExpectations('', undefined)).toEqual([]);
   });
 
   test('the arm checks every expectation the record produced, in both directions', () => {
@@ -1444,8 +1472,8 @@ describe('the instruments restate nothing unchecked', () => {
 
   test('the chain served words are the product ternary’s', () => {
     const chain = repo('packages', 'devbox', 'src', 'snapshot-chain.ts');
-    const product = /\? '([^']+)'\s*:\s*held \? '([^']+)' : sidecar !== null \? '([^']+)' : '([^']+)'/.exec(chain);
-    expect(product?.slice(1)).toEqual(['base', 'base+delta already in this upper', 'base+delta absorbed into the upper', 'base+delta layered']);
+    const product = /\? '([^']+)'\s*:\s*held \? '([^']+)' : chunked \? '([^']+)' : '([^']+)'/.exec(chain);
+    expect(product?.slice(1)).toEqual(['base', 'base+delta already in this upper', 'base+delta block-composed', 'base+delta layered']);
     const restated = /CHAIN_SERVED_WORDS = \[([^\]]+)\]/.exec(driver)?.[1] ?? '';
     const words = [...restated.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
     expect(words).toEqual([...(product?.slice(1) ?? [])].sort());
