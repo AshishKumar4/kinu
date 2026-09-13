@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { writeSoul } from '@kinu.run/core';
 import { deliverCloudFork, type CloudForkRegistry, type CloudForkTarget } from '../src/user/workspace-fork';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import { createTestWorkspace, createTestActor } from '../../core/tests/helpers';
 
 const caller = { workspaceToken: 'source-token' } satisfies UserCaller;

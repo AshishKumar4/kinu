@@ -65,8 +65,9 @@ export const EGRESS_PLACEHOLDER_PREFIX = 'pxs1_';
  *  another was authorised. */
 export const EGRESS_PLACEHOLDER_BYTES = 32;
 
-/** 32 bytes, base64url, unpadded. */
-const PLACEHOLDER_BODY_LENGTH = 43;
+/** 32 bytes, base64url, unpadded. Exported for the vault's mint, whose output
+ *  length the scanner below is the contract over. */
+export const PLACEHOLDER_BODY_LENGTH = 43;
 
 /** Scanner for placeholders sitting anywhere inside a larger string — a URL,
  *  a header value. Non-global on purpose: callers that need every match build

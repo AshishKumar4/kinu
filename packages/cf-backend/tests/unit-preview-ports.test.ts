@@ -5,7 +5,7 @@ import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
   type PinnedPreviewPort,
-} from '../src/lib/preview-ports';
+} from '@kinu.run/core';
 
 const acceptsUrl = (url: string) => url.startsWith('https://preview.example/');
 

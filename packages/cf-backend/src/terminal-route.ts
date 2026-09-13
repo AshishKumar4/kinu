@@ -33,11 +33,11 @@ import { getAgentByName } from "agents";
 import { diagnostics, renderCauseChain, toKinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 import type { KinuSandbox } from "./kinu-sandbox";
-import { err, json } from "./lib/http";
+import { err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
-import { terminalLane } from "./lib/terminal-lane";
+import { terminalLane } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { sandboxIdForWorkspace } from "./lib/preview-exposures";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
 
 /**
  * The PTY entry points the SDK's client proxy adds around the container stub.

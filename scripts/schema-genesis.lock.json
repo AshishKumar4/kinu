@@ -159,7 +159,7 @@
     "created_at",
     "settled_at"
   ],
-  "cli_agent_connect_tickets@packages/cf-backend/src/user/schema.ts": [
+  "cli_agent_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash",
     "user_id",
     "agent_class",
@@ -170,7 +170,7 @@
     "expires_at",
     "used_at"
   ],
-  "codex_device_flow@packages/cf-backend/src/user/schema.ts": [
+  "codex_device_flow@packages/core/src/state/user-schema.ts": [
     "id",
     "device_auth_id",
     "user_code",
@@ -215,7 +215,7 @@
     "rev",
     "synced_rev"
   ],
-  "cp_audit@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_audit@packages/core/src/control-plane/store.ts": [
     "id",
     "at",
     "actor_email",
@@ -226,7 +226,7 @@
     "outcome",
     "detail"
   ],
-  "cp_feedback@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_feedback@packages/core/src/control-plane/store.ts": [
     "id",
     "created_at",
     "user_id",
@@ -239,14 +239,14 @@
     "bytes",
     "user_agent"
   ],
-  "cp_users@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_users@packages/core/src/control-plane/store.ts": [
     "user_id",
     "email",
     "display_name",
     "first_seen_at",
     "last_seen_at"
   ],
-  "cp_workspaces@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_workspaces@packages/core/src/control-plane/store.ts": [
     "user_id",
     "name",
     "display_name",
@@ -277,7 +277,7 @@
     "decided_at",
     "spend_seq"
   ],
-  "device_connect_tickets@packages/cf-backend/src/user/schema.ts": [
+  "device_connect_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash",
     "device_id",
     "created_at",
@@ -295,7 +295,7 @@
     "created_at",
     "expires_at"
   ],
-  "device_consent@packages/cf-backend/src/user/schema.ts": [
+  "device_consent@packages/core/src/state/user-schema.ts": [
     "agent_name",
     "device_id",
     "policy",
@@ -303,7 +303,7 @@
     "last_summary",
     "updated_at"
   ],
-  "device_inflight_requests@packages/cf-backend/src/user/device-inflight.ts": [
+  "device_inflight_requests@packages/core/src/execution/device-inflight.ts": [
     "request_id",
     "device_id",
     "workspace",
@@ -312,7 +312,7 @@
     "cancel_claim",
     "cancel_outcome"
   ],
-  "driver_lease@packages/cli-backend/src/agent-host/driver-lease.ts": [
+  "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id",
     "pid",
     "token",
@@ -1051,7 +1051,7 @@
     "created_at",
     "evidence"
   ],
-  "user_access_tokens@packages/cf-backend/src/cli/access-token-store.ts": [
+  "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash",
     "name",
     "scopes",
@@ -1059,12 +1059,12 @@
     "last_used_at",
     "revoked_at"
   ],
-  "user_auth_generation@packages/cf-backend/src/user/schema.ts": [
+  "user_auth_generation@packages/core/src/state/user-schema.ts": [
     "id",
     "generation",
     "updated_at"
   ],
-  "user_browser_sessions@packages/cf-backend/src/user/schema.ts": [
+  "user_browser_sessions@packages/core/src/state/user-schema.ts": [
     "token_hash",
     "expires_at",
     "email",
@@ -1073,7 +1073,7 @@
     "provider_sub",
     "auth_time"
   ],
-  "user_cli_tokens@packages/cf-backend/src/user/schema.ts": [
+  "user_cli_tokens@packages/core/src/state/user-schema.ts": [
     "token_hash",
     "label",
     "created_at",
@@ -1082,30 +1082,30 @@
     "revoked_at",
     "authorization_hash"
   ],
-  "user_config@packages/cf-backend/src/user/schema.ts": [
+  "user_config@packages/core/src/state/user-schema.ts": [
     "key",
     "value",
     "updated_at",
     "version"
   ],
-  "user_credential_revisions@packages/cf-backend/src/user/schema.ts": [
+  "user_credential_revisions@packages/core/src/state/user-schema.ts": [
     "key",
     "revision",
     "updated_at"
   ],
-  "user_credentials_revision@packages/cf-backend/src/user/schema.ts": [
+  "user_credentials_revision@packages/core/src/state/user-schema.ts": [
     "id",
     "revision",
     "updated_at"
   ],
-  "user_credentials@packages/cf-backend/src/user/schema.ts": [
+  "user_credentials@packages/core/src/state/user-schema.ts": [
     "key",
     "kind",
     "value",
     "created_at",
     "updated_at"
   ],
-  "user_devices@packages/cf-backend/src/user/schema.ts": [
+  "user_devices@packages/core/src/state/user-schema.ts": [
     "id",
     "token_hash",
     "prev_token_hash",
@@ -1130,7 +1130,7 @@
     "tier",
     "unstopped_at"
   ],
-  "user_egress_secrets@packages/cf-backend/src/user/egress-vault.ts": [
+  "user_egress_secrets@packages/core/src/safety/egress-vault.ts": [
     "id",
     "label",
     "host",
@@ -1139,7 +1139,7 @@
     "created_at",
     "updated_at"
   ],
-  "user_mcp_servers@packages/cf-backend/src/user/schema.ts": [
+  "user_mcp_servers@packages/core/src/state/user-schema.ts": [
     "id",
     "name",
     "server_url",
@@ -1149,23 +1149,23 @@
     "created_at",
     "updated_at"
   ],
-  "user_peer_grants@packages/cf-backend/src/user/schema.ts": [
+  "user_peer_grants@packages/core/src/state/user-schema.ts": [
     "sender_user_id",
     "sender_agent_name",
     "created_at"
   ],
-  "user_profile@packages/cf-backend/src/user/schema.ts": [
+  "user_profile@packages/core/src/state/user-schema.ts": [
     "id",
     "email",
     "display_name",
     "created_at",
     "last_seen_at"
   ],
-  "user_schema_meta@packages/cf-backend/src/user/schema.ts": [
+  "user_schema_meta@packages/core/src/state/user-schema.ts": [
     "key",
     "value"
   ],
-  "user_workspaces@packages/cf-backend/src/user/schema.ts": [
+  "user_workspaces@packages/core/src/state/user-schema.ts": [
     "name",
     "display_name",
     "name_origin",
@@ -1215,14 +1215,14 @@
     "retiring_at",
     "deleted_at"
   ],
-  "workspace_capability_reconcile@packages/cf-backend/src/user/workspace-capability.ts": [
+  "workspace_capability_reconcile@packages/core/src/safety/workspace-capability.ts": [
     "workspace_name",
     "token_hash",
     "attempts",
     "created_at",
     "updated_at"
   ],
-  "workspace_capability_tokens@packages/cf-backend/src/user/workspace-capability.ts": [
+  "workspace_capability_tokens@packages/core/src/safety/workspace-capability.ts": [
     "workspace_name",
     "token_hash",
     "created_at"

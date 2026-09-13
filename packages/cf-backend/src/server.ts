@@ -42,12 +42,12 @@ import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath, hostedActorRoute,
-} from "./agent-routing";
-import { handlePcRequest } from "./pc-handler";
+} from "@kinu.run/core";
+import { handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
 import { handleRunEventsRequest, handleWorkspaceEventRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
-import { handleHealthRequest } from "./health-route";
+import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
 import { handleCliRequest } from "./cli/routes";
@@ -65,13 +65,13 @@ import {
 } from "./auth/session";
 import {
   containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
-} from "./lib/preview-origin";
-import { withAppSecurityHeaders } from "./lib/security-headers";
+} from "@kinu.run/core";
+import { withAppSecurityHeaders } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
-import { ownerCaller } from "./user/workspace-capability";
+import { ownerCaller } from "@kinu.run/core";
 import { AUTH_TIME_HEADER, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER, USER_ID_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
-import { err } from "./lib/http";
+import { err } from "@kinu.run/core";
 import { handleFeedbackRequest } from "./feedback/routes";
 import { handleControlRequest } from "./control-plane/routes";
 import {
@@ -81,7 +81,7 @@ import {
   adminDenialMessage, adminDenialStatus, reportAdminDenial,
 } from "./control-plane/admin-caller";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
-import { installAnalyticsDiagnostics } from "./analytics/install";
+import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 
 // The ONE actor-bearing Durable Object class. Every logical actor in a
 // workspace — the main actor, a hired subordinate, an ask-by-role temporary, a
@@ -486,7 +486,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //    port, capability-gated by that hostname. It is the ONLY thing served there: no
   //    SPA, no login, no OAuth callback, so nothing ever mints a session on
   //    those origins and hostile preview HTML has none to steal
-  //    (lib/preview-origin.ts).
+  //    (core preview/preview-origin.ts).
   if (isPreviewHostRequest(url, env)) {
     const nimbus = await handleNimbusPreviewHostRequest(request, env);
 

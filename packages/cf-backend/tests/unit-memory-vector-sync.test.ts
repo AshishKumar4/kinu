@@ -11,7 +11,7 @@ import {
   createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
   type Embedder, type VectorizeIndex, type VectorStore, type IndexedChunk,
 } from '@kinu.run/core';
-import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
+import { adaptMemory, backfillMemoryVectors } from '@kinu.run/core';
 
 function createStore() {
   const database = new Database(':memory:');

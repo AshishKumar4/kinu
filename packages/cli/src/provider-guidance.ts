@@ -15,6 +15,7 @@
  */
 
 import { describeProviderError, providerFailureFacts } from '@kinu.run/core';
+import { MODEL_OPTION_FLAG } from './options';
 
 export interface GuidedFailure {
   /** The failure in the provider's own words. Never empty —
@@ -35,7 +36,7 @@ const ACCOUNT_HINT =
 
 const MODEL_HINT =
   'That model is not available on the connected provider. Pick another with /model in chat, '
-  + 'or pass --model <provider>/<id>.';
+  + `or pass ${MODEL_OPTION_FLAG} <provider>/<id>.`;
 
 const RATE_LIMIT_HINT =
   'The provider is rate-limiting this account. Retry shortly, or switch model with /model in chat.';

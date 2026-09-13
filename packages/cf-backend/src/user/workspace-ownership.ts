@@ -19,8 +19,8 @@
  */
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { ownerCaller, type OwnerCapabilityEnv } from './workspace-capability';
-import { classifyTransientDO, retryTransientDO } from '../lib/do-rpc';
+import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
+import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** The bindings an ownership question needs, stated structurally so the control

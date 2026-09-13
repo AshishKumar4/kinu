@@ -55,17 +55,14 @@ import type { ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
-} from "./events/webhook-route";
+} from "@kinu.run/core";
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
-import type {
-  ActivitySnapshot,
-  SubordinateRosterEntry,
-  TabPresence,
-} from "./lib/protocol";
+import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
+import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
-import { nextAlarmTime } from "./lib/cron";
+import { nextAlarmTime } from '@kinu.run/core';
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
@@ -236,7 +233,7 @@ import {
   type ActorDynamicContextExtras,
   type ActorToolDeps,
 } from "./actor-agent";
-import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "./analytics/record";
+import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.run/core/analytics";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
   createAgentSelfProvider,
@@ -259,7 +256,7 @@ import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
-import { EmailOutbox } from "./email/outbox";
+import { EmailOutbox } from "@kinu.run/core";
 import {
   FIBER_RECOVERY_MAX_AGE_MS, SWEEP_MAX_ROWS, dispatchRecoveredNotice, type RecoveredNotice,
 } from "./fiber-recovery";
@@ -268,7 +265,8 @@ import {
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
+import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
   takesTerminalEffect, branchesTerminalEffect,
@@ -4708,7 +4706,7 @@ export class OrchestratorAgent extends ActorAgent {
     // screenshot, a bookmark — would prove an exposure whose object no longer
     // exists, and answering it would CREATE a fresh empty container object.
     // One write, no enumeration: the watermark outranks every record published
-    // before now (lib/preview-exposures.ts).
+    // before now (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
       await sandboxPreviewExposures(
         this.env.AUTH_KV, sandboxIdForWorkspace(this.name),

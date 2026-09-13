@@ -30,12 +30,13 @@ import {
 } from "@phosphor-icons/react";
 import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
-import type { BackgroundJob, Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
+import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, Section } from "./shared";
-import { timeAgo } from "@/lib/format";
+import { timeAgo } from "@kinu.run/core";
 import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";

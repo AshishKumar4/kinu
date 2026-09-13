@@ -33,13 +33,13 @@ import { isFreshAuthTime, type AuthIdentity } from '../auth/session';
 import type { AccessDenial, AccessIdentity } from './access-gate';
 import {
   adminControlToken, ControlPlaneUnconfiguredError, type ControlCaller, type ControlSecretEnv,
-} from './capability';
+} from '@kinu.run/core/control-plane';
 
 /** The Worker-side door to the gate's module. Exactly what a Worker route needs
  *  and nothing more: the DO takes its half from `./capability` directly, and a
  *  name re-exported here that nobody imports through here is a second door to
  *  the same room. */
-export { internalCaller, type ControlCaller } from './capability';
+export { internalCaller, type ControlCaller } from '@kinu.run/core/control-plane';
 
 /**
  * The operator caller.

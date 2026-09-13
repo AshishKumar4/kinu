@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createTestActor, makeExecRaw, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import type { VectorStore } from '@kinu.run/core';
-import { adaptMemory } from '../src/memory-sync';
+import { adaptMemory } from '@kinu.run/core';
 
 const PATH = 'memory/MEMORY.md';
 

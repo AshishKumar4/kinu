@@ -6,7 +6,7 @@ import {
   normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
-} from '../src/model-catalog';
+} from '@kinu.run/core';
 
 const FEED: AgentModelEntry[] = [
   { spec: 'workers-ai/@cf/meta/llama-4', label: 'Llama 4', provider: 'workers-ai' },
@@ -17,6 +17,23 @@ const FEED: AgentModelEntry[] = [
 ];
 
 describe('menu model dedupe', () => {
+  test('admits only known capabilities while preserving valid rows and failures', () => {
+    const menu = normalizeModelMenu({ payload: {
+      models: [
+        { spec: ' groq/m ', provider: ' groq ', capabilities: [' streaming ', 'tools', 'invented', 7], contextWindow: Infinity },
+        null,
+        { spec: 'groq/m', provider: 'groq', capabilities: ['vision', 'tools'] },
+      ],
+      failures: [{ provider: ' other ', reason: ' unavailable ', label: ' Other ' }, null],
+    } });
+
+    expect(menu.models).toEqual([{
+      spec: 'groq/m', label: 'groq/m', provider: 'groq',
+      capabilities: ['tools', 'vision', 'streaming'],
+    }]);
+    expect(menu.failures).toEqual([{ provider: 'other', reason: 'unavailable', label: 'Other' }]);
+  });
+
   const menuModels = (models: unknown[]) =>
     normalizeModelMenu({ payload: { models, failures: [] } }).models;
 
@@ -66,7 +83,7 @@ describe('menu entry normalization + contextWindowForSpec', () => {
     expect(rows).toEqual([
       {
         spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'GLM 5.3', provider: 'workers-ai',
-        capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1048576,
+        capabilities: ['tools', 'reasoning', 'streaming'], contextWindow: 1048576,
       },
       {
         spec: 'my-gateway/openai/gpt-4.1', label: 'GPT-4.1', provider: 'my-gateway',

@@ -7,7 +7,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 mockAgentsSdk();
 

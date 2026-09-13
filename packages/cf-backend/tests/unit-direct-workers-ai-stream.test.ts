@@ -17,7 +17,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
+import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { ProviderPacer, type RateLimitRetryOptions } from '@kinu.run/core';
 
 const MODEL = '@cf/moonshotai/kimi-k2.6';

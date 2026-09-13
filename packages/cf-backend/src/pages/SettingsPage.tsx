@@ -20,14 +20,14 @@ import {
   type Page, type SeekCursor,
   ArchiveCursorSchema,
 } from "@kinu.run/core";
-import { executorLabel } from "@/lib/executors";
+import { executorLabel } from "@kinu.run/core";
 import { useKinu } from "@/hooks/use-kinu";
 import { Card, Field, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import type { Rpc } from '@/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 

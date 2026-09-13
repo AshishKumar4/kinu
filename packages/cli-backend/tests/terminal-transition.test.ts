@@ -473,7 +473,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
   /** The checkpoint a previous process left behind: one advisor lane, stashed and
    *  then interrupted before it recorded anything.
    *
-   *  Written through the runtime's own handle, in the shape `createLinuxFiber`
+   *  Written through the runtime's own handle, in the shape `createSqlFiber`
    *  writes: `fibers` is keyed `(actor_id, id)` because every agent kind is a
    *  logical actor of one workspace database, and a row stashed without an owner
    *  is a lane no recovery could ever claim. */

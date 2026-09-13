@@ -17,8 +17,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import type { PresentedCaller } from '../src/control-plane/capability';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { PresentedCaller } from '@kinu.run/core/control-plane';
+import type { UserCaller } from '@kinu.run/core';
 
 mockAgentsSdk();
 

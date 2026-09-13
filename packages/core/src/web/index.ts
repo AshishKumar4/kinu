@@ -10,6 +10,8 @@ export {
   type DefaultWebSearchProviderDeps,
 } from './provider';
 
+export { buildCfWebSearchProvider } from './provider-factory';
+
 export { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety';
 
 export { htmlToMarkdown, stripBase64Images, looksLikeHtml } from './markdown';

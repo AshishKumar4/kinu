@@ -3,7 +3,7 @@ import { Loader } from "@cloudflare/kumo/components/loader";
 import * as v from "valibot";
 import type { SlateCallResult } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
-import type { Rpc } from "@/lib/protocol";
+import type { Rpc } from "@kinu.run/core";
 import { PreviewFrame } from '@/components/PreviewFrame';
 
 const SlatePreviewSchema = v.object({ url: v.string(), port: v.number() });

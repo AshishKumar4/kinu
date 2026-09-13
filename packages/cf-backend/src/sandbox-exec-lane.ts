@@ -36,8 +36,8 @@ import type { Process } from "@cloudflare/sandbox";
 import { decodeJsonValue, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
 import type { KinuSandbox } from "./kinu-sandbox";
-import { sandboxPreviewLabelOf } from "./lib/preview-origin";
-import type { SandboxPreviewExposures } from "./lib/preview-exposures";
+import { sandboxPreviewLabelOf } from "@kinu.run/core";
+import type { SandboxPreviewExposures } from "@kinu.run/core";
 
 /**
  * Why an exposure is refused when this deployment cannot publish it.

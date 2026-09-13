@@ -42,7 +42,7 @@
  */
 
 import { lazy, useState, type ComponentType } from 'react';
-import { fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha } from './hooks/session-recovery';
+import { fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha } from '@kinu.run/core';
 
 /**
  * The messages browsers use when a dynamic import does not load, lowercased.

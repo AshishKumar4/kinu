@@ -6,7 +6,7 @@ import {
   reduceInput,
   type InputMachineEvent,
   type InputState,
-} from '../src/tui/input-state';
+} from '@kinu.run/core';
 
 function run(state: InputState, ...events: InputMachineEvent[]) {
   let current = state;

@@ -77,6 +77,7 @@ import {
   type LocalPeerEndpoint,
   type PeerMessage,
   type ReceiveResult,
+  metadataBroadcastEvent,
   subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
@@ -100,10 +101,11 @@ import {
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
 } from '../actor-identity';
+import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold,
   type DriverKind, type DriverLeaseHolder,
-} from './driver-lease';
+} from '@kinu.run/core';
 import {
   LocalAgentSession,
   createLocalOrchestration,
@@ -684,7 +686,7 @@ export class LocalAgentHost {
 
     return {
       dbPath, db, host, directory, runtimes, orchestrations, driving: 0,
-      hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db) }, this.driverKind),
+      hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
 
@@ -1397,12 +1399,9 @@ export class LocalAgentHost {
         };
 
         if (report.task) metadata.task = report.task;
-        parent.session.broadcast({
-          type: 'subordinate_event',
-          status: report.status,
-          text: report.content,
-          metadata,
-        });
+        parent.session.broadcast(metadataBroadcastEvent(
+          'subordinate_event', metadata, { status: report.status, text: report.content },
+        ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
       // A temporary child's answer belongs to the `agents.ask` call waiting on
@@ -1472,15 +1471,11 @@ export class LocalAgentHost {
       ownMission: () => localActorMission(parent.ws.rt, makeSqlExec(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
       broadcast: (event) => parent.session.broadcast(event),
-      broadcastTask: (event) => parent.session.broadcast({
-        type: 'subordinate_event',
-        status: 'task',
-        text: event.content,
-        metadata: {
-          subordinate: event.subordinate,
-          timestamp: event.timestamp,
-        },
-      }),
+      broadcastTask: (event) => parent.session.broadcast(metadataBroadcastEvent(
+        'subordinate_event',
+        { subordinate: event.subordinate, timestamp: event.timestamp },
+        { status: 'task', text: event.content },
+      )),
     };
 
     // STRUCTURAL CONTAINMENT AT THE CAP FOR THIS RUNG — the same MECHANISM the

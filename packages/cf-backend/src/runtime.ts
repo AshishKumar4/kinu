@@ -55,17 +55,18 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution } from './node-home';
-import type { HostedNodeHome } from './node-home';
+import { withHostedNodeExecution } from '@kinu.run/core';
+import type { HostedNodeHome } from '@kinu.run/core';
 
-export { withHostedNodeExecution, type HostedNodeHome } from './node-home';
+export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { previewHostSuffix } from "./lib/preview-origin";
-import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
+import { previewHostSuffix } from "@kinu.run/core";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
+import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
 import { generateText, type LanguageModelUsage } from "ai";
@@ -75,15 +76,15 @@ import {
   createHubDeviceTransport,
   type DeviceHubClient,
   type HubDeviceTransportOpts,
-} from "./device-transport";
+} from "@kinu.run/core";
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
 } from "./providers/agent-registry";
-import { ownerCaller, type UserCaller } from "./user/workspace-capability";
-import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
+import { ownerCaller, type UserCaller } from "@kinu.run/core";
+import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import {
   agentAffinityKey, normalizeUsage,
 } from "@kinu.run/core";

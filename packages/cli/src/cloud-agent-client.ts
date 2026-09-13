@@ -35,7 +35,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
+import { normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
 import { pageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult, type Page, type SeekCursor } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {

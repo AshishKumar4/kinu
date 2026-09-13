@@ -7,8 +7,8 @@ import {
   handlePcRequest,
   type PcIngressEnv,
   type PcUserNamespace,
-} from "../src/pc-handler";
-import type { UserCaller } from "../src/user/workspace-capability";
+} from "@kinu.run/core";
+import type { UserCaller } from "@kinu.run/core";
 import { makeKv } from "./helpers/kv";
 import * as v from "valibot";
 

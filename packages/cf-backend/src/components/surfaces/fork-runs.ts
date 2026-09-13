@@ -25,9 +25,9 @@ import type {
 } from "@kinu.run/core";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
-import { explorationForkTree } from "@/lib/fork-tree-rows";
-import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
-import { swarmResolutionOf } from "./swarm-resolution";
+import { explorationForkTree, swarmResolutionOf } from "@kinu.run/core";
+import type { ForkNode, Rpc } from "@kinu.run/core";
+import type { BackgroundJob } from "@kinu.run/core/protocol";
 
 /** A settled Pareto front, as the canvas row carries it. Null on the row for
  *  every run that settled to one number. */

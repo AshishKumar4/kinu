@@ -31,17 +31,18 @@ import { isRateLimitedTurnError } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
-import type { HeadDeltas } from "@/components/head-chat";
-import { cleanNodeLabel, type ExplorerSelection } from "@/components/swarm-tree-model";
-import { explorationForkTree, type MctsRow } from "@/lib/fork-tree-rows";
-import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
+import type { HeadDeltas } from "@kinu.run/core";
+import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core";
+import { explorationForkTree, type MctsRow } from "@kinu.run/core";
+import type { ForkNode, Rpc } from "@kinu.run/core";
+import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
 import { EmptyState, EMPTY_HINTS, formatScore } from "./shared";
-import { timeAgo } from "@/lib/format";
+import { timeAgo } from "@kinu.run/core";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
   useExplorationCanvas, type ExplorationFrontier, type ForkParamRow,
@@ -49,7 +50,7 @@ import {
 import {
   fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf,
   type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution,
-} from "./swarm-resolution";
+} from "@kinu.run/core";
 
 export interface ExplorationSurfaceProps {
   /** Trees of the searches in flight, keyed by search, fed by `mcts-progress`

@@ -1,5 +1,4 @@
-// Runtime-agnostic model providers. CF-specific providers (workers-ai env.AI
-// binding, ai-gateway env var-based) live in `cf-backend/src/providers/`.
+// Runtime-agnostic model providers over caller-supplied credentials and transports.
 export * from './types';
 
 export * from './reasoning-effort';
@@ -30,6 +29,8 @@ export * from './codex';
 
 export * from './codex-oauth';
 
+export * from './cloudflare-oauth';
+
 export * from './anthropic';
 
 export * from './fetch-shim';
@@ -41,5 +42,15 @@ export * from './pacing';
 export * from './rate-limit-retry';
 
 export * from './judge-model';
+
+export * from './workers-ai-catalog';
+
+export * from './ai-gateway';
+
+export * from './cloudflare-ai-fetch';
+
+export * from './direct-workers-ai-fetch';
+
+export * from './stream-usage-repair';
 
 export * from './tool-call-id';

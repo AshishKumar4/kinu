@@ -14,7 +14,7 @@ import {
   parseAccessTokenUserId,
   revokeAccessToken,
   verifyAccessToken,
-} from '../src/cli/access-token-store';
+} from '@kinu.run/core';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -39,6 +39,18 @@ describe('access token format', () => {
 });
 
 describe('mint', () => {
+  test('concurrent requests cannot mint two active tokens with one name', async () => {
+    const { sql } = setup();
+
+    const results = await Promise.all([
+      mintAccessToken(sql, USER_ID, 'ci', ['workspace.read']),
+      mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec']),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(listAccessTokens(sql)).toHaveLength(1);
+  });
+
   test('stores only the hash — the raw token never lands in SQLite', async () => {
     const { db, sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec', 'workspace.read']);

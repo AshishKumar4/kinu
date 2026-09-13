@@ -12,8 +12,8 @@ import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '@ki
 import type { AuthIdentity } from '../src/auth/session';
 import { routeFeedback, type FeedbackDeps } from '../src/feedback/submit';
 import { handleFeedbackRequest, type FeedbackEnv } from '../src/feedback/routes';
-import type { UserCaller } from '../src/user/workspace-capability';
-import type { FeedbackMarker } from '../src/analytics/feedback-marker';
+import type { UserCaller } from '@kinu.run/core';
+import type { FeedbackMarker } from '@kinu.run/core/analytics';
 import {
   FEEDBACK_ENDPOINT,
   FEEDBACK_FIELDS,
@@ -23,7 +23,7 @@ import {
   FEEDBACK_MAX_SCREENSHOT_BYTES,
   FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
-} from '../src/feedback/contract';
+} from '@kinu.run/core';
 
 const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-7' };
 

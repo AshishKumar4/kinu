@@ -49,6 +49,8 @@ export { ChatHistoryEntrySchema } from './types/chat';
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
+export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
+
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -139,6 +141,8 @@ export {
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
   type WorkspaceTitleState,
+  isWorkspaceName,
+  validateWorkspaceName,
 } from './identity/naming';
 
 // Evolution engine (3-timescale auto-evolution)
@@ -1189,6 +1193,13 @@ export {
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
+  DeviceSocketHub, deviceIdFromSocket,
+  type DeviceSocket, type DeviceSocketCtx,
+  DeviceRequestLedger, initDeviceInflightTable,
+  type ClaimedDeviceRequest, type SweptDeviceRequest,
+  type DeviceCancelOutcome, type DeviceTransferOutcome,
+  DeviceTerminalHub, terminalFromSocket,
+  type TerminalHolder,
   createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
   type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
   type NimbusStartResult, type NimbusExecOptions, type NimbusExecResult, type NimbusPortInfo,
@@ -1428,6 +1439,24 @@ export * from './providers/index';
 // CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store';
 
+// Credential store policy: at-rest sealing, header projection, and the
+// request validators that keep bad payloads out of the store.
+export {
+  createCredentialCipher,
+  type CredentialCipher,
+  type CredentialEncryptionEnv,
+} from './credentials/envelope';
+
+export {
+  credentialToHeaders,
+  type CredentialHeaders,
+} from './credentials/headers';
+
+export {
+  validateCredential,
+  validateCredentialKey,
+} from './credentials/validate';
+
 // Durable plan review — shared domain and the submit_plan edit contract.
 export {
   MAX_PLAN_ANNOTATIONS_BYTES,
@@ -1520,6 +1549,7 @@ export {
   type ApprovalSpend,
   EGRESS_PLACEHOLDER_PREFIX,
   EGRESS_PLACEHOLDER_BYTES,
+  PLACEHOLDER_BODY_LENGTH,
   isEgressPlaceholder,
   EGRESS_EXECUTOR,
   grantedEgressBindings,
@@ -1550,7 +1580,35 @@ export {
   type DeferredApprovalAnswer,
   type DeferredApprovalVerdict,
   type DeferredApprovalNotice,
-  type DeferredApprovalQueueDeps,
+  initEgressVaultTables,
+  listEgressSecrets,
+  putEgressSecret,
+  revokeEgressSecret,
+  resolveEgressInjection,
+  rewrapEgressSecrets,
+  type EgressSecretSummary,
+  type PutEgressSecretInput,
+  type EgressInjection,
+  type EgressInjectionResult,
+  type EgressVaultDeps,
+  ownerCaller,
+  OwnerCapabilityUnavailableError,
+  CapabilityDeniedError,
+  initWorkspaceCapabilityTables,
+  pendingCapabilityReconcile,
+  armCapabilityReconcile,
+  clearCapabilityReconcile,
+  workspaceCapabilityHash,
+  freshWorkspaceCapability,
+  commitWorkspaceCapability,
+  revokeWorkspaceCapability,
+  requireTier,
+  type CapabilityFloor,
+  type WorkspaceCapability,
+  type UserCaller,
+  type ResolvedCaller,
+  type OwnerCapabilityEnv,
+  type CapabilityDenialReason,
   argumentDigest,
   sha256Hex,
   stableStringify,
@@ -1595,7 +1653,7 @@ export { nanoid } from './utils/nanoid';
 // reason the search records.
 export { abortCause } from './utils/abort';
 
-export { hmacSha256Hex, timingSafeEqual } from './utils/crypto';
+export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
 
 // One POSIX quoting rule for every command this system composes, on either
 // backend — the shells the executors talk to are the same shells.
@@ -2168,3 +2226,391 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // Rendered from the preset table in the same module, so a surface reading this cannot
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
+
+export { fmtPct, fmtTokens, fmtUsd, timeAgo } from './utils/format';
+
+export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
+
+export {
+  type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
+  type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
+  type TabPresence, type ToolInfo,
+} from './protocol';
+
+export {
+  decodeJsonWire, decodeRunEventWire, decodeScaffoldRunWire, resumeIndexFromLastEventId,
+  type RunEventWire, type ScaffoldRunWire,
+} from './protocol/orchestrator-wire';
+
+export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
+
+export {
+  executorDescription, executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
+  pickDefaultExecutor, releaseSubstrate, type ExecutorAvailability, type ReleaseSubstrate,
+} from './read-models/executors';
+
+export {
+  BUSY, LINE_MODE_LABEL, LineTerminalState, type TerminalLane, type TerminalPaneOutput,
+  type TerminalWriter, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
+} from './execution/terminal-lane';
+
+export {
+  type WorkspacePreviewHost, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
+} from './preview/nimbus-preview-host';
+
+export {
+  PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
+  isPreviewUrl, previewHostSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
+  type SandboxPreviewLabel,
+} from './preview/preview-origin';
+
+export {
+  reconcilePreviewPorts,
+  type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort, type PreviewPortState,
+} from './preview/preview-ports';
+
+export {
+  sandboxPreviewExposed, sandboxPreviewExposures,
+  type SandboxPreviewClaim, type SandboxPreviewExposures,
+} from './preview/preview-exposures';
+
+export {
+  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, json, kinuUserAgent,
+  readBounded, readBoundedStream, reoriginateRequest, safeJson,
+} from './http/http';
+
+export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
+
+export { ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
+
+export {
+  CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
+  fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
+} from './http/deployed-assets';
+
+export {
+  COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
+  mark, markDocument, publicFooter, publicPage,
+  type MarkId, type Mode, type PublicPageOptions, type PublicToken, type RadiusRole, type TokenSet,
+} from './http/public-shell';
+
+export {
+  approvalDocument, authDocument, installDocument, loginDocument, type LoginProvider,
+} from './http/public-pages';
+
+export {
+  currentTakeIndex, takeChipLabel, cycleTakeIndex, hasComparableTakes,
+} from './read-models/alternate-takes';
+
+export {
+  classifyProgrammaticTurn, messageSignalId, isSteeredMessage, applySignalCard,
+  parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
+  metadataBroadcastEvent,
+  type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
+} from './read-models/background-event';
+
+export {
+  appendHeadDelta, retireHeadDelta, stepAsMessage, deltaAsMessage, NO_HEAD_DELTAS,
+  type HeadDelta, type HeadDeltaKind, type HeadDeltas,
+} from './read-models/head-chat';
+
+export { liveTail, type LiveTail } from './read-models/message-live-tail';
+
+export {
+  breakdownView, shareOfMeasured,
+  type BreakdownRow, type BreakdownPlane, type BreakdownView,
+} from './read-models/activity-breakdown';
+
+export {
+  PLANE, viewerKindOf, FileWriteConflict, textRenderOf, fileTextEditable,
+  entryRevision, nextTreeCache, sandboxedHtml, putFileBytes,
+  type FileText, type ViewerKind, type TextRender, type CachedDir,
+} from './read-models/files-plane';
+
+export {
+  createPlanAnnotationSaveQueue, type PlanAnnotationSaveQueue,
+} from './plans/plan-annotation-save';
+
+export {
+  swarmResolutionOf, swarmAxisRows, fanInArity, fanInVertices, nodeRationales,
+  runRefusal, runLiveness, formatEvidenceValue,
+  type SwarmAxis, type SwarmAxisRow, type SwarmResolution, type RunRefusal,
+  type RunLevel, type RunLiveness,
+} from './read-models/swarm-resolution';
+
+export { terminalChatError, type ChatTurnError, type TerminalFrame } from './utils/chat-turn-error';
+
+export {
+  newSendLatch, admitTurn, abandonTurn, abandonTurnIfOwner, type SendLatch,
+} from './utils/send-admission';
+
+export {
+  createSessionRecovery, fetchDeployedBuildSha, pageDeployedBuildSha,
+  primePageDeployedBuildSha, isNewerDeployedBuild,
+  type SessionRecoveryCallbacks, type SessionRecoveryOptions, type SessionRecovery,
+} from './utils/session-recovery';
+
+export {
+  isModelInferenceCredentialKey,
+} from './providers/inference-credentials';
+
+export {
+  MY_GATEWAY_PROVIDER_ID,
+  createMyGatewayProvider,
+} from './providers/my-gateway';
+
+export {
+  type WorkersAIOptions,
+  createWorkersAIProvider,
+} from './providers/workers-ai-provider';
+
+export {
+  scoreBand,
+  type ExplorerSelection,
+  cleanNodeLabel,
+  clipToWidth,
+  isCompeted,
+  principalVariation,
+  ancestorIds,
+  findForkNode,
+  terminalForkNode,
+  treeStats,
+  maxVisits,
+  subtreeCount,
+  losingBranchIds,
+  NODE_R_MAX,
+  NODE_R_UNSCORED,
+  nodeRadius,
+  linkWidth,
+  LABEL_MIN_SCALE,
+  viewNoteFor,
+} from './read-models/swarm-tree-model';
+
+export {
+  type AnyToolPart,
+  type PartBlock,
+  groupMessageParts,
+  parseProvisionError,
+  partOutput,
+  partInput,
+  partEffect,
+  callFailed,
+} from './read-models/tool-call-grouping';
+
+export {
+  ACCESS_TOKEN_SCOPES,
+  type AccessTokenScope,
+  type AccessTokenRecord,
+  type AccessTokenMint,
+  type AccessTokenVerification,
+  initAccessTokenTable,
+  parseAccessTokenUserId,
+  normalizeAccessTokenScopes,
+  mintAccessToken,
+  verifyAccessToken,
+  listAccessTokens,
+  type AccessTokenRevocation,
+  revokeAccessToken,
+  getActiveAccessTokenScopes,
+} from './cli/access-tokens';
+
+export {
+  bunResolutionShell,
+  cliPlatformShell,
+} from './cli/bun-runtime';
+
+export {
+  type CliInstallCommandOptions,
+  normalizeCliOrigin,
+  buildCliInstallCommand,
+  buildCliSetupCommand,
+  buildCliAuthCommand,
+} from './cli/install-command';
+
+export {
+  FEEDBACK_ENDPOINT,
+  FEEDBACK_MAX_SCREENSHOT_BYTES,
+  FEEDBACK_MAX_REQUEST_BYTES,
+  FEEDBACK_MAX_NOTE_CHARS,
+  FEEDBACK_MAX_ROUTE_CHARS,
+  FEEDBACK_MAX_USER_AGENT_CHARS,
+  FEEDBACK_SCREENSHOT_TYPE,
+  FEEDBACK_REDACT_ATTR,
+  FEEDBACK_OMIT_ATTR,
+  FEEDBACK_FIELDS,
+  type FeedbackAccepted,
+  type FeedbackRecord,
+} from './feedback/contract';
+
+export {
+  type PngFault,
+  type SanitizedPng,
+  type PngRejection,
+  sanitizePng,
+} from './feedback/png';
+
+export {
+  type AgentModelEntry,
+  type AgentModelMenu,
+  EMPTY_MODEL_MENU,
+  filterModels,
+  type ModelSpecValidation,
+  validateModelSpec,
+  normalizeModelMenu,
+  contextWindowForSpec,
+} from './providers/model-menu';
+
+export {
+  type TextForContextEstimate,
+  modelDisplayName,
+  estimateContextTokens,
+  formatContextUsage,
+} from './tui/context-status';
+
+export {
+  clipText,
+  agentDisplayLabel,
+} from './tui/format';
+
+export {
+  ESC_ESC_BEAT_MS,
+  type InputState,
+  initialInputState,
+  type InputMachineEvent,
+  type InputEffect,
+  type InputTransition,
+  reduceInput,
+} from './tui/input-state';
+
+export {
+  type WaitOptions,
+  type StoppableWaitOptions,
+  waitForAnswer,
+} from './utils/wait';
+
+export {
+  sandboxIdForWorkspace,
+  isKinuSandboxId,
+} from './preview/sandbox-id';
+
+export {
+  extractOrchestratorAgentName,
+  extractTicketOrchestratorAgentName,
+  isForeignAgentNamespacePath,
+  hostedActorRoute,
+} from './http/agent-routing';
+
+export {
+  APP_ROUTES,
+  type ReportedRoute,
+  REPORTED_ROUTES,
+  routeTemplateOf,
+} from './read-models/app-routes';
+
+export {
+  CLIENT_ERROR_ENDPOINT,
+  CLIENT_RENDER_FAILED,
+  CLIENT_ERROR_MAX_REQUEST_BYTES,
+  STACK_FRAME,
+  COMPONENT_STACK_FRAME,
+  stackFrames,
+  ClientErrorReportSchema,
+  type ClientErrorReport,
+  fitClientErrorReport,
+  type ReleaseMatch,
+} from './read-models/client-error-contract';
+
+export {
+  type PageIdentity,
+  reportRenderFailure,
+} from './read-models/client-error-report';
+
+export {
+  KINU_NODE_MODULE_NAME,
+  KINU_NODE_MODULE_SOURCE,
+} from './execution/codemode-node-shim';
+
+export {
+  type DeviceHubClient,
+  type DeviceRpcOptions,
+  type HubDeviceTransportOpts,
+  createHubDeviceTransport,
+} from './execution/hub-device-transport';
+
+export {
+  type OutboundEmailMessage,
+  type OutboundSendResult,
+  EmailOutbox,
+} from './events/email-outbox';
+
+export {
+  type WebhookRouteEnv,
+  WEBHOOK_ROUTE_UNAVAILABLE,
+  webhookRouteSecret,
+  type WebhookRouteIdentity,
+  type WebhookRouteMatch,
+  type SignedWebhookRoute,
+  webhookRoutePath,
+  matchWebhookDeliveryPath,
+  verifyWebhookRoute,
+} from './events/webhook-route';
+
+export {
+  handleHealthRequest,
+} from './http/health-route';
+
+export {
+  adaptMemory,
+  backfillMemoryVectors,
+} from './memory/vector-sync';
+
+export {
+  type ProbeOutcome,
+  type ProbeDeps,
+  runSyntheticProbes,
+} from './http/synthetic-probes';
+
+export {
+  type HostedNodeHome,
+  withHostedNodeExecution,
+} from './execution/node-home';
+
+export {
+  type PcUserStub,
+  type PcUserNamespace,
+  type PcIngressEnv,
+  handlePcRequest,
+} from './http/pc-ingress';
+
+export {
+  type DriverKind,
+  type DriverLeaseHolder,
+  type LeaseProcess,
+  type DriverLeaseRefusal,
+  type DriverLeaseDeps,
+  DriverLeaseHold,
+} from './execution/driver-lease';
+
+export {
+  BRANCH_EXPLORE,
+  BRANCH_REFLECT,
+  BRANCH_READY,
+  BRANCH_METHODS,
+  BranchCallSchema,
+  BranchReplySchema,
+  BranchCallAttributionSchema,
+  type BranchCall,
+  type BranchReply,
+  type BranchMethod,
+  type BranchCallReply,
+} from './protocol/branch';
+
+export {
+  type OrphanedFiber,
+  createSqlFiber,
+  detectOrphanedFibers,
+} from './execution/fiber';
+
+export {
+  readAllOutcome,
+} from './utils/spawned-output';

@@ -2,8 +2,8 @@ import { TUI_MARKS, type ReasoningEffort, type ResolvedTurnProfile } from '@kinu
 
 import type { AgentClientMode } from '../agent-client';
 import { useKeybindingRegistry } from './actions';
-import { formatContextUsage, modelDisplayName } from './context-status';
-import { clipText } from './format';
+import { formatContextUsage, modelDisplayName } from '@kinu.run/core';
+import { clipText } from '@kinu.run/core';
 import { useTuiTheme } from './theme';
 import { useSceneWidth } from './tui-shell';
 

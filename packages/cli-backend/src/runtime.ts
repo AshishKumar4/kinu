@@ -59,7 +59,7 @@ import { createHostCheckpoints } from './checkpoints';
 import { hostResourceLimits } from './cgroup-limits';
 import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-toolchain';
 import { createCwdPlaneVFS, createHostMountVFS } from './host-mount';
-import { createLinuxFiber, detectOrphanedFibers } from './fiber';
+import { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
 import { createBranchSpawner } from './branch-process';
 import {
   createLocalModelResolver, createLocalProviderLLM,
@@ -542,7 +542,7 @@ export function createCLIRuntime(
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
     cron: async () => {},
-    fiber: createLinuxFiber(sql, actor),
+    fiber: createSqlFiber(sql, actor),
   };
 
   // `:memory:` is SQLite's in-memory sentinel, not a path — see the spawner's

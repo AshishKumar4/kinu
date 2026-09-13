@@ -7,8 +7,8 @@
  */
 
 import { AuthError, authenticateRequest } from './auth/session';
-import { publicHtmlHeaders } from './lib/security-headers';
-import { markDocument } from './lib/public-shell';
+import { publicHtmlHeaders } from '@kinu.run/core';
+import { markDocument } from '@kinu.run/core';
 
 export async function handleLandingRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);

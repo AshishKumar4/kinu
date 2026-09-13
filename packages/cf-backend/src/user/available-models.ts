@@ -9,8 +9,8 @@ import {
   type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
-import { retryTransientDO } from '../lib/do-rpc';
-import type { UserCaller } from './workspace-capability';
+import { retryTransientDO } from '@kinu.run/core';
+import type { UserCaller } from '@kinu.run/core';
 
 export interface ModelMenuEntry {
   /** Full spec — `<provider>/<modelId>`, used as the actor_config.model value. */

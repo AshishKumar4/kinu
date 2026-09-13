@@ -34,13 +34,13 @@
 
 import type { AuthIdentity } from '../auth/session';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-import { err, json, readBounded } from '../lib/http';
-import { sanitizePng, type PngFault } from './png';
+import { err, json, readBounded } from '@kinu.run/core';
+import { sanitizePng, type PngFault } from '@kinu.run/core';
 import {
   feedbackRouteFamily,
   type FeedbackMarker,
   type FeedbackRejectReason,
-} from '../analytics/feedback-marker';
+} from '@kinu.run/core/analytics';
 import {
   FEEDBACK_ENDPOINT,
   FEEDBACK_FIELDS,
@@ -52,7 +52,7 @@ import {
   FEEDBACK_SCREENSHOT_TYPE,
   type FeedbackAccepted,
   type FeedbackRecord,
-} from './contract';
+} from '@kinu.run/core';
 
 /** Where the screenshot bytes go. Two methods, because two are used: the write
  *  and the orphan delete. Narrower than `R2Bucket` so the policy below can be
@@ -212,12 +212,19 @@ const UNREADABLE_FORM = 'Could not read the feedback form.';
 async function parseMultipart(
   url: string,
   contentType: string,
-  bytes: Uint8Array<ArrayBuffer>,
+  bytes: Uint8Array,
 ): Promise<FormData | KinuError> {
+  // `RequestInit.body` takes an exact `Uint8Array<ArrayBuffer>`, and core's
+  // `readBounded` can only promise the `ArrayBufferLike` flavor its own lib
+  // names — so copy once into a precisely-backed buffer. Bounded by `limit`
+  // upstream, so the copy is bounded too.
+  const exact = new Uint8Array(bytes.byteLength);
+  exact.set(bytes);
+
   const carrier = new Request(url, {
     method: 'POST',
     headers: { 'content-type': contentType },
-    body: bytes,
+    body: exact,
   });
 
   try {

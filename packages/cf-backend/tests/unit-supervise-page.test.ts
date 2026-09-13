@@ -24,7 +24,7 @@ import { describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import type { Rpc } from '../src/lib/protocol';
+import type { Rpc } from '@kinu.run/core';
 import type { EvolutionEntry } from '../src/components/surfaces/supervise-evolution';
 
 // Namespace imports keep every row reporting when a symbol is absent: the red

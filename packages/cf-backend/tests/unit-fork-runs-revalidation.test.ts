@@ -16,13 +16,13 @@ import { join } from 'node:path';
 import type {
   ExplorationCanvasRun, ForkRunParams, ForkRunSummary, HeadRunView, SearchRunParams,
 } from '@kinu.run/core';
-import type { BackgroundJob } from '../src/lib/protocol';
+import type { BackgroundJob } from '@kinu.run/core/protocol';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
   hasActiveForkWork, selectForkRun, forkParamRows, unexplainedForkRoots,
 } from '../src/components/surfaces/fork-runs';
-import { explorationForkTree } from '../src/lib/fork-tree-rows';
-import { isCompeted, principalVariation, maxVisits } from '../src/components/swarm-tree-model';
+import { explorationForkTree } from '@kinu.run/core';
+import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {

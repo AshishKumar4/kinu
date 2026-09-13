@@ -8,7 +8,7 @@
 // rejected valid image.
 import { describe, test, expect } from 'bun:test';
 import { deflateSync } from 'node:zlib';
-import { sanitizePng, type SanitizedPng } from '../src/feedback/png';
+import { sanitizePng, type SanitizedPng } from '@kinu.run/core';
 
 const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 

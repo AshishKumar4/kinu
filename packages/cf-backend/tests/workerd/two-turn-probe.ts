@@ -89,7 +89,7 @@ import {
   HttpCallSchema,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
-import { ownerCaller } from '../../src/user/workspace-capability';
+import { ownerCaller } from '@kinu.run/core';
 
 // Re-exported under their production names so the auxiliary worker's
 // durableObjects bind the classes themselves — the same mechanism

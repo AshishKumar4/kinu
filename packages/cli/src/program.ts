@@ -6,6 +6,7 @@
  */
 
 import { Command, Option } from 'commander';
+import { MODEL_OPTION_FLAG } from './options';
 import { createCommand } from './commands/create';
 import { acpCommand } from './commands/acp';
 import { chatCommand } from './commands/chat';
@@ -70,7 +71,7 @@ export function buildProgram(): Command {
 
   // Shared LLM options
   const llmOpts = (cmd: Command) => cmd
-    .option('--model <id>', 'Model ID (env: KINU_MODEL)')
+    .option(`${MODEL_OPTION_FLAG} <id>`, 'Model ID (env: KINU_MODEL)')
     .option('--base-url <url>', 'LLM API base URL (env: KINU_BASE_URL)')
     .option('--auth <header>', 'Auth header value (env: KINU_AUTH)');
 
@@ -82,7 +83,7 @@ export function buildProgram(): Command {
     .description('Connect your account; optionally configure local-only model credentials')
     .option('--origin <url>', 'Kinu app origin')
     .option('--provider <name>', 'Provider: workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, skip')
-    .option('--model <id>', 'Default model for the selected provider')
+    .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local-model', 'Configure credentials for local-only agents')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
     .option('-y, --yes', 'Accept recommended setup choices where possible')
@@ -96,7 +97,7 @@ export function buildProgram(): Command {
     .helpGroup(ACCOUNT)
     .description('List, connect, or disconnect model and account providers')
     .option('--origin <url>', 'Kinu app origin')
-    .option('--model <id>', 'Default model for the selected provider')
+    .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
     .action(wrapAction(providersCommand));
 

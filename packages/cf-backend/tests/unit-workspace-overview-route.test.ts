@@ -14,7 +14,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { WorkspaceOverviewSchema } from '@kinu.run/core';
-import type { PresentedCaller } from '../src/control-plane/capability';
+import type { PresentedCaller } from '@kinu.run/core/control-plane';
 import { makeEnv } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';

@@ -20,7 +20,7 @@ import type { KinuSandbox } from '../src/kinu-sandbox';
 // of it living outside `runtime.ts`.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
-import type { EgressInjectionResult } from '../src/user/egress-vault';
+import type { EgressInjectionResult } from '@kinu.run/core';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -28,7 +28,7 @@ import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
-import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '../src/lib/http';
+import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 
 // The gate's own resolver of the shipped SDK copy, loaded rather than repeated:
 // `bun run gate:egress-interception` and this test must read one copy, and two

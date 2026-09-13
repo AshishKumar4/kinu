@@ -27,7 +27,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
-import { readAllOutcome } from './spawned-output';
+import { readAllOutcome } from '@kinu.run/core';
 
 export const OPENCODE_PROVIDER_ID = 'opencode';
 

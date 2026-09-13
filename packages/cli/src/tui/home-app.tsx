@@ -23,7 +23,7 @@ import {
 } from '../config';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver';
 import { installTurnDiagnostics } from '../turn-log';
-import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '../model-catalog';
+import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '@kinu.run/core';
 import { requireInteractiveTerminal } from '../prompt';
 import { VERSION } from '../display';
 import {
@@ -37,7 +37,7 @@ import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import { GuidedOnboarding, type OnboardingRoleChoice, type TuiOnboardingOperations } from './onboarding';
 import { createFileTuiPreferenceStore } from './preferences';
 import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays';
-import { clipText } from './format';
+import { clipText } from '@kinu.run/core';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { useTuiTheme } from './theme';
 import {

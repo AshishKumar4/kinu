@@ -22,7 +22,8 @@
  * an inline box. Without it a redacted secret collapses to nothing, the line
  * reflows, and the block that was supposed to cover it covers a different place.
  */
-import { FEEDBACK_REDACT_ATTR } from "@/feedback/contract";
+import { FEEDBACK_REDACT_ATTR } from "@kinu.run/core";
+import type { ReactElement } from 'react';
 
 /**
  * Spread onto any element whose rendered content is a credential. Frozen and
@@ -37,7 +38,7 @@ export const SECRET_REGION = Object.freeze({ [FEEDBACK_REDACT_ATTR]: "" });
  * `<code>` because that is what a token is, and because both call sites render
  * it in a monospace block already.
  */
-export function SecretValue({ value, className }: { value: string; className?: string }) {
+export function SecretValue({ value, className }: { value: string; className?: string }): ReactElement {
   return (
     <code {...SECRET_REGION} className={className} style={{ display: "inline-block" }}>
       {value}

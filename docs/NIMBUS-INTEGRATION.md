@@ -175,7 +175,7 @@ boundary. Platform credentials are isolated, but browser `Domain` cookies can
 still span sibling preview hosts. Strong registrable-site isolation needs a
 preview suffix whose DNS and PSL policy makes each capability hostname a
 separate site. A Worker-only flag cannot deliver it honestly.
-`packages/cf-backend/src/lib/preview-origin.ts` carries the reasoning.
+`packages/core/src/preview/preview-origin.ts` carries the reasoning.
 
 ## Lifecycle and portability
 

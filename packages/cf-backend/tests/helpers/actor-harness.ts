@@ -18,7 +18,7 @@ import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import type { LanguageModel, ToolSet, UIMessage } from 'ai';
 import type { ChatResponseResult, TurnConfig, TurnContext } from '@cloudflare/think';
-import type { UserCaller } from '../../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import type { UserDO } from '../../src/user/user-do';
 import {
   shadowTrialPlan, claimToolEffect, actorReferenceOf,

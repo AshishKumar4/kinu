@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
-import { callFailed } from '../src/components/tool-call-grouping';
+import { callFailed } from '@kinu.run/core';
 import { MessageView } from '../src/components/MessageView';
 
 type Part = UIMessage['parts'][number];

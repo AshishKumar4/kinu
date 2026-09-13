@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import {
   applySignalCard, classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel,
   messageSignalId, parseDrainedEvents, parseSignalCardEvent, type SignalCard,
-} from '../src/components/background-event';
+} from '@kinu.run/core';
 import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
 
 describe('programmatic turn provenance', () => {

@@ -34,7 +34,7 @@ import {
   type AccessTokenMint,
   type AccessTokenRecord,
   type AccessTokenScope,
-} from "../cli/access-token-store";
+} from "@kinu.run/core";
 import type { MCPClientManager } from "agents/mcp/client";
 import {
   DurableObjectOAuthClientProvider,
@@ -97,8 +97,8 @@ import {
   toKinuError,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import {
+  initUserTables, PROFILE_CATALOG_CONFIG_KEY,
   CapabilityDeniedError,
   armCapabilityReconcile,
   clearCapabilityReconcile,
@@ -112,27 +112,25 @@ import {
   type UserCaller,
   type WorkspaceCapability,
   type ResolvedCaller,
-} from './workspace-capability';
-import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
-import { DeviceTerminalHub, terminalFromSocket } from './device-terminal';
-import {
+  DeviceSocketHub, deviceIdFromSocket,
+  DeviceTerminalHub, terminalFromSocket,
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
-} from './device-inflight';
-import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers';
-import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate';
-import { createCredentialCipher, type CredentialCipher } from './credential-envelope';
-import {
+  credentialToHeaders, codexAccessTokenExpiring,
+  validateCredential, validateCredentialKey, validateWorkspaceName,
+  createCredentialCipher, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
-} from './egress-vault';
-import { randomToken, sha256Hex } from '../lib/crypto';
-import { resolveWorkspaceTitle } from '../lib/agent-naming';
-import { installAnalyticsDiagnostics } from '../analytics/install';
-import { recordReleaseTransition } from '../analytics/record';
-import { openAnalyticsWindow } from '../analytics/writer';
+} from '@kinu.run/core';
+import { initAccessTokenTable } from '@kinu.run/core';
+import { isModelInferenceCredentialKey } from '@kinu.run/core';
+import { randomToken, sha256Hex } from '@kinu.run/core';
+import { resolveWorkspaceTitle } from '@kinu.run/core';
+import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { recordReleaseTransition } from '@kinu.run/core/analytics';
+import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
@@ -166,7 +164,7 @@ import {
   withCloudflareAccount,
   type CloudflareAccount,
   type CloudflareAIGatewaySummary,
-} from '../lib/cloudflare-oauth';
+} from '@kinu.run/core';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 
@@ -745,6 +743,7 @@ export class UserDO extends Agent<Env> {
   private ensureInit(): void {
     if (this._initialized) return;
     initUserTables(this.ctx.storage.sql);
+    initAccessTokenTable(this.ctx.storage.sql);
     this._inflight.releaseAbandonedClaims();
     this._initialized = true;
   }
@@ -4182,7 +4181,7 @@ export class UserDO extends Agent<Env> {
       const refreshToken = cred.refreshToken;
 
       if (!refreshToken) return null;
-      const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
+      const needRefresh = opts?.forceRefresh || codexAccessTokenExpiring(cred.accessToken);
 
       if (needRefresh) {
         const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });

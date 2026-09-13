@@ -17,7 +17,7 @@ import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
 } from '../src/email/outbound';
-import { EmailOutbox } from '../src/email/outbox';
+import { EmailOutbox } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
 function makeExec(db: Database): SqlExec {

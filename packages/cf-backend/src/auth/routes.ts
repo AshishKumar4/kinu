@@ -7,9 +7,9 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile,
 } from './store';
-import { escapeHtml, json, KINU_USER_AGENT } from '../lib/http';
-import { authDocument, loginDocument } from '../lib/public-pages';
-import { publicHtmlHeaders } from '../lib/security-headers';
+import { escapeHtml, json, KINU_USER_AGENT } from '@kinu.run/core';
+import { authDocument, loginDocument } from '@kinu.run/core';
+import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
   type OAuthProviderConfig,
@@ -17,12 +17,13 @@ import {
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareTokenToCredential,
+  readJsonObject,
   type CloudflareTokenPayload,
-} from '../lib/cloudflare-oauth';
-import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu.run/core';
+} from '@kinu.run/core';
+import { JsonObjectSchema, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
-import { ownerCaller } from '../user/workspace-capability';
+import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const CloudflareUserEnvelopeSchema = v.object({
@@ -611,17 +612,6 @@ function scopeClaim<Value>(value: Value): string | null {
   }
 
   return null;
-}
-
-async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
-  try {
-    return v.parse(JsonObjectSchema, await response.json());
-  } catch (error) {
-    throw new Error(
-      `${label} returned HTTP ${response.status} with a body that is not JSON.`,
-      { cause: error },
-    );
-  }
 }
 
 interface OAuthFailureSummary { reason: string; log: string }
