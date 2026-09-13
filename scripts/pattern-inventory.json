@@ -85,7 +85,7 @@
       "decision": "framing"
     },
     {
-      "file": "packages/cf-backend/src/lib/terminal-lane.ts",
+      "file": "packages/core/src/execution/terminal-lane.ts",
       "kind": "hand-parser",
       "owner": "scanCommandLine",
       "sourceSha256": "f73dc9be912ee73c0c139a6dadc29b85f5db07f243d9a7dbca6505b80ee3cde5",
