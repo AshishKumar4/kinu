@@ -10,6 +10,7 @@ import { KinuError, renderThrownChain } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, UserSteerDrain, type LandedSteerRow, type UserSteer } from './user-steer';
 import { startActorTurn } from './actor-turn';
+import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
   programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
@@ -132,8 +133,12 @@ export class ActorSession {
 
   get history(): readonly ModelMessage[] { return this.messages; }
   get workMode(): WorkMode { return this.mode; }
-  get profile(): ResolvedTurnProfile | null { return this.active?.profile ?? null; }
-  get profileInputs(): ProfileAuthorityInputs | null { return this.active?.profileInputs ?? null; }
+  get profile(): ResolvedTurnProfile | null { return currentOperationProfile(this.runtime.actor)?.profile ?? this.active?.profile ?? null; }
+  get profileInputs(): ProfileAuthorityInputs | null {
+    const operation = currentOperationProfile(this.runtime.actor);
+
+    return operation ? operation.inputs : this.active?.profileInputs ?? null;
+  }
   get landedSteers(): readonly LandedSteerRow[] { return this.landed; }
   get inFlight(): boolean { return this.active !== null && this.active.phase !== 'settling'; }
   /** The admitted turn's durable claim, or null before it is written. A host
@@ -336,7 +341,7 @@ export class ActorSession {
 
       active.claim = claim;
 
-      const events = startActorTurn({
+      const events = operationProfileStream(startActorTurn({
         runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
         program, scaffoldSpend: input.scaffoldSpend,
         assertActive: input.assertActive,
@@ -344,7 +349,10 @@ export class ActorSession {
         chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
           meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
           stepContext: this.context.steps(claim) } satisfies ChatOptions,
-      });
+      }), captureOperationProfile({
+        actor: this.runtime.actor, profile: active.profile,
+        inputs: active.profileInputs, runId: lease.runId, turnId: lease.turnId,
+      }));
 
       for await (const event of events) {
         this.requireTurn(lease);

@@ -28,6 +28,7 @@
 import { contextWindowForModel } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
+import type { PromptModelContext } from '../prompting/model-profile';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
@@ -93,6 +94,14 @@ export class ModelCatalogSession {
     return this.info()?.contextWindow ?? contextWindowForModel(this.deps.effectiveSpec());
   }
 
+  /** Await the selected operation's catalog, independent of the live chat cache. */
+  async contextFor(spec: string): Promise<PromptModelContext> {
+    const info = await this.lookup(spec);
+    const contextWindow = info?.contextWindow ?? contextWindowForModel(spec);
+
+    return Object.freeze({ id: spec, contextWindow, modelOutputLimit: info?.modelOutputLimit ?? contextWindow });
+  }
+
   /**
    * The largest answer the resolved model will produce, out of the window
    * {@link contextWindow} reports.
@@ -126,10 +135,17 @@ export class ModelCatalogSession {
   }
 
   private async armLookup(spec: string): Promise<void> {
+    await this.lookup(spec, info => {
+      if (info && this.cached?.spec === spec) this.cached.info = info;
+    });
+  }
+
+  private async lookup(spec: string, accept?: (info: ModelInfo | null) => void): Promise<ModelInfo | null> {
     try {
       const info = await this.deps.lookup(spec);
+      accept?.(info);
 
-      if (info && this.cached?.spec === spec) this.cached.info = info;
+      return info;
     } catch (cause) {
       // Nothing to propagate to: reads never block, while the cache retains this
       // lookup until it settles. The static fallbacks stay authoritative, but an
@@ -140,6 +156,8 @@ export class ModelCatalogSession {
         toKinuError({ doing: 'look a model up in the provider catalog', cause, otherwise: 'unavailable' }),
         { model: spec },
       );
+
+      return null;
     }
   }
 }

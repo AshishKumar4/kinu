@@ -216,7 +216,7 @@ const SHARED_TRANSPORTS = {
   // `refinementDebt` is the direct call the delegation check can see; the row
   // view beside it (`refinementRequestView`) is passed by reference into map.
   listRefinements: 'refinementDebt',
-  makeScaffoldCallTool: 'createScaffoldCallTool',
+
   makeScaffoldHistory: 'createScaffoldHistory',
 
   markChangelogSeen: 'markChangelogSeen',

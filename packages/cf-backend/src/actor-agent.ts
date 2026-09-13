@@ -224,6 +224,8 @@ import {
   JsonObjectSchema, JsonValueSchema, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile,
+  captureOperationProfile, currentOperationProfile, withOperationProfile,
+  runOperationProfile, operationProfileStream, type OperationProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   beginModelOperation, toolSurfaceTokens, McpToolSurfaceSchema,
@@ -1561,6 +1563,7 @@ export abstract class ActorAgent extends Think<Env> {
     // is allowed again from here forward. Evolution (the orchestrator's detached engine.reviewTurn)
     // runs fire-and-forget and does NOT extend the busy window.
     this._inFlight = false;
+    this._turnOperation = null;
     this._cliCwd = null;
     // The turn's durable claim closes here, named by what the response did.
     // The claim carries an OUTCOME rather than vanishing, so a later reader can
@@ -3313,10 +3316,11 @@ export abstract class ActorAgent extends Think<Env> {
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
-        profile: () => this.routingProfile(),
+        profile: () => this.routingProfile([...Object.keys(this.getRawTools()), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))]),
         bindModel: spec => this.ownedModelServices.resolveModel(spec),
-        tools: this.getRawTools(),
-        callTool: this.makeScaffoldCallTool(callScope),
+        modelContext: spec => this.modelCatalog.contextFor(spec),
+        tools: () => this.getRawToolsForWorkMode(this.turnWorkMode(), callScope),
+        callScope,
         history: this.makeScaffoldHistory(),
         spend: this.scaffoldSpend(),
       }, task, context),
@@ -3380,10 +3384,10 @@ export abstract class ActorAgent extends Think<Env> {
   protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
     return createScaffoldCandidateSurface({
       rt: this.rt,
-      profile: () => this.routingProfile(),
+      profile: () => this.routingProfile([...Object.keys(this.getRawTools()), ...codemodeCapabilitiesFor(this.turnCodemodeProviders('build'))]),
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
-      tools: this.getRawTools(),
-      callTool: undefined,
+      modelContext: spec => this.modelCatalog.contextFor(spec),
+      tools: () => this.getRawTools(),
       history: undefined,
       signal,
       spend: this.scaffoldSpend(),
@@ -3456,10 +3460,13 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected _transformInferenceResult(result: StreamableResult): StreamableResult {
     const selected = this._turnProgram;
+    const operation = this.operationProfile();
 
     if (selected === null) throw new KinuError('missing', 'the actor turn program was not prepared');
 
-    return runTaskPlan(this._turnTaskPlan ?? null, () => scaffoldInferenceTransform({
+    if (operation === null) throw new KinuError('missing', 'the actor turn profile was not admitted');
+
+    const transformed = runOperationProfile(operation, () => runTaskPlan(this._turnTaskPlan ?? null, () => scaffoldInferenceTransform({
       program: selected.program,
       result,
       run: {
@@ -3473,7 +3480,12 @@ export abstract class ActorAgent extends Think<Env> {
         callTool: this.makeScaffoldCallTool(undefined, selected.signal),
         history: this.makeScaffoldHistory(),
       },
-    }));
+    })));
+
+    return {
+      output: transformed.output,
+      toUIMessageStream: options => operationProfileStream(transformed.toUIMessageStream(options), operation),
+    };
   }
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
@@ -3814,7 +3826,7 @@ export abstract class ActorAgent extends Think<Env> {
     });
 
     try {
-      this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
+      this.eventRecorder.emit(currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID), event);
     } catch (err) {
       diagnostics.failure('event.model_call_emit_failed', toKinuError({
         doing: 'recording a model_call run event',
@@ -3861,7 +3873,7 @@ export abstract class ActorAgent extends Think<Env> {
     // the same rule `state/agent-stores.ts` states for its own laziness: a
     // Durable Object must not reach storage while field initializers run.
     { emit: (runId, input) => { this.eventRecorder.emit(runId, input); } },
-    () => this._currentRunId || WORKSPACE_RUN_ID,
+    () => currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID),
   );
 
   // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
@@ -4258,7 +4270,11 @@ export abstract class ActorAgent extends Think<Env> {
       budget: this.budget,
     };
 
-    deps.profile = () => agentsProfileContext(this._turnProfile, this._turnProfileInputs);
+    deps.profile = () => {
+      const operation = this.operationProfile();
+
+      return agentsProfileContext(operation?.profile ?? null, operation?.inputs ?? null);
+    };
 
     if (actorDeps.team) deps.team = actorDeps.team;
 
@@ -4272,8 +4288,11 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Skills (turn-scoped) ───────────────────────────────────────
   /** Immutable role/tier/tool profile resolved once for the active turn. */
-  private _turnProfileInputs: ProfileAuthorityInputs | null = null;
-  private _turnProfile: ResolvedTurnProfile | null = null;
+  private _turnOperation: OperationProfile | null = null;
+
+  private operationProfile(): OperationProfile | null {
+    return currentOperationProfile(this.actorHandle()) ?? (this._inFlight ? this._turnOperation : null);
+  }
   /** Resolved active skill set for the current turn. Built in beforeTurn, read
    *  by the per-step dynamic context and the turn-local tail. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
@@ -4691,7 +4710,6 @@ export abstract class ActorAgent extends Think<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
-        turnProfile: () => this._turnProfile,
         resolveProfile: () => this.routingProfile(),
         contextPlane: {
           actorId: this.actorHandle().actorId,
@@ -4931,7 +4949,9 @@ export abstract class ActorAgent extends Think<Env> {
    * tool keys the caller is deciding on.
    */
   private async slateReach(providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = []): Promise<ToolSurfaceNarrowing> {
-    if (this._inFlight && this._turnProfile !== null) return narrowToolSurface(this._turnProfile.allowedTools);
+    const operation = this.operationProfile();
+
+    if (operation) return narrowToolSurface(operation.profile.allowedTools);
 
     const profile = resolveAgentTurnProfile({
       ...(await this.profileInputs()),
@@ -4949,7 +4969,7 @@ export abstract class ActorAgent extends Think<Env> {
    * A HOSTED actor's current tool reach, for a binding call that hopped to it.
    *
    * Deliberately not `slateReach`: that one reads `this._inFlight` and
-   * `this._turnProfile`, which are the ROOT's turn, and `this.actorToolDeps()`,
+   * the root's admitted operation, and `this.actorToolDeps()`,
    * which is the root's surface. Using it for a child answered every binding
    * hop with the root's unrestricted reach — the defect this exists to close.
    *
@@ -5046,8 +5066,9 @@ export abstract class ActorAgent extends Think<Env> {
     // active tool names, which two roles can share while reaching different
     // namespaces — so without the digest the first role's provider set is
     // served to the next one for the rest of this DO's life.
-    const narrowing = narrowToolSurface(this._turnProfile?.allowedTools);
-    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${this._turnProfile?.digest ?? ''}`;
+    const profile = this.operationProfile()?.profile;
+    const narrowing = narrowToolSurface(profile?.allowedTools);
+    const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}`;
 
     if (!this._craftExecTools.has(key)) {
       this._craftExecTools.set(key, createExecuteToolsFactory({
@@ -5163,7 +5184,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   protected resolvedTurnProfile(): ResolvedTurnProfile | null {
-    return this._turnProfile;
+    return this.operationProfile()?.profile ?? null;
   }
 
   // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
@@ -5404,7 +5425,7 @@ export abstract class ActorAgent extends Think<Env> {
    * a warm hint; beforeTurn always overrides this turn with its fresh profile. */
   getModel(): LanguageModel {
     this.actorHandle();
-    const spec = this._turnProfile?.tier.model ?? this.getStoredModelId();
+    const spec = this.operationProfile()?.profile.tier.model ?? this.getStoredModelId();
 
     return this.ownedModelServices.resolveModel(spec);
   }
@@ -5656,7 +5677,10 @@ export abstract class ActorAgent extends Think<Env> {
     // injects an unsolicited "job completed" turn into the user's chat.
     this._turnT0 = performance.now();
 
-    return this.wrapToolsForBackground(this.getRawTools());
+    const tools = this.wrapToolsForBackground(this.getRawTools());
+    const operation = this.operationProfile();
+
+    return operation ? withOperationProfile(tools, operation) : tools;
   }
 
   /** The UNWRAPPED tool surface — built + cached. Shared by the chat path (via
@@ -5675,7 +5699,7 @@ export abstract class ActorAgent extends Think<Env> {
     // because effective-score filtering depends on recency. The actor profile
     // is turn-sensitive for subordinate reporting: an owner chat must never
     // reuse an assigned turn's upward-reporting surface.
-    const cacheKey = `${mode}:${profileKey}:${this._craftCacheKey()}`;
+    const cacheKey = `${mode}:${profileKey}:${this.operationProfile()?.profile.digest ?? ''}:${this._craftCacheKey()}`;
 
     // The cache is the CHAT surface's. A scoped rollout's surface differs only
     // in the identity its effect claims key on and is asked for once per
@@ -5704,7 +5728,7 @@ export abstract class ActorAgent extends Think<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: claimScope === undefined
-            ? () => this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
+            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
         },
         // The sandbox declares the FINISHED native surface, so core builds it
@@ -5729,7 +5753,7 @@ export abstract class ActorAgent extends Think<Env> {
         // stays lazy per action, so the cached toolset stays valid across
         // claimOwner.
         agents: this.getAgentsToolDeps(mode),
-        roleAuthority: () => this._turnProfileInputs?.envelope ?? null,
+        roleAuthority: () => this.operationProfile()?.inputs?.envelope ?? null,
         // Vectorize-backed semantic memory. memory.search auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
@@ -5985,7 +6009,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  workspace's own catalog session, which is this resolution. */
   protected effectiveModelSpec(): string {
     return resolveEffectiveModelSpec({
-      live: () => this._turnProfile?.tier.model,
+      live: () => this.operationProfile()?.profile.tier.model,
       stored: () => this.getStoredModelId(),
       normalize: (spec) => this.providerRegistry().normalizeSpecSync(spec),
     });
@@ -6136,446 +6160,452 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    this._turnProgram = null;
-    ctx.signal?.throwIfAborted();
-    // The scaffold and the soul are both files this turn is about to read, and
-    // this is the first place with a promise to await them on.
-    await this.ensureOwnedScaffold();
+    return runOperationProfile(null, async () => {
+      this._turnProgram = null;
+      ctx.signal?.throwIfAborted();
+      // The scaffold and the soul are both files this turn is about to read, and
+      // this is the first place with a promise to await them on.
+      await this.ensureOwnedScaffold();
 
-    if (this._cachedSoulText === null) await this.refreshSoulText();
-    this._turnProfile = null;
+      if (this._cachedSoulText === null) await this.refreshSoulText();
+      this._turnOperation = null;
 
-    // Four reads of the owner's UserDO, each a Durable Object hop, started
-    // together: the profile catalog, the MCP descriptor surface, the device
-    // presence and the workspace title. None depends on another, so the turn
-    // pays one hop of latency instead of four. Each keeps its own failure arm.
-    const [profileInputs, mcpTools, deviceStatus, identity] = await Promise.all([
-      this.profileInputs(),
-      // `ctx.tools` is the actor's own surface, handed over because the remote
-      // catalog is admitted against what the step context limit has LEFT after
-      // it: the builtins are not negotiable, so they are priced first. A failed
-      // read answers no tools and records why; the turn runs on builtins.
-      this.buildUserMcpTools(ctx.tools),
-      // One authoritative hub check so the executor list reflects the CURRENT
-      // device state; the transport's TTL-cached snapshot can lag a mid-session
-      // `kinu connect` by a turn. `refreshStatus` records its own failure and
-      // answers the last snapshot.
-      this.rt.deviceTransport.refreshStatus(),
-      // Names, on the authoritative prompt only: a title is read from the
-      // owner's registry, which is an await.
-      this.promptIdentity(),
-    ]);
+      // Four reads of the owner's UserDO, each a Durable Object hop, started
+      // together: the profile catalog, the MCP descriptor surface, the device
+      // presence and the workspace title. None depends on another, so the turn
+      // pays one hop of latency instead of four. Each keeps its own failure arm.
+      const [profileInputs, mcpTools, deviceStatus, identity] = await Promise.all([
+        this.profileInputs(),
+        // `ctx.tools` is the actor's own surface, handed over because the remote
+        // catalog is admitted against what the step context limit has LEFT after
+        // it: the builtins are not negotiable, so they are priced first. A failed
+        // read answers no tools and records why; the turn runs on builtins.
+        this.buildUserMcpTools(ctx.tools),
+        // One authoritative hub check so the executor list reflects the CURRENT
+        // device state; the transport's TTL-cached snapshot can lag a mid-session
+        // `kinu connect` by a turn. `refreshStatus` records its own failure and
+        // answers the last snapshot.
+        this.rt.deviceTransport.refreshStatus(),
+        // Names, on the authoritative prompt only: a title is read from the
+        // owner's registry, which is an await.
+        this.promptIdentity(),
+      ]);
 
-    this._turnProfileInputs = profileInputs;
-    const activeRoleId = this.activeRoleLabel();
-    const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
-    // Per-turn accounting reset + the turn's mission scope, together: what the
-    // turn is allowed to spend is part of what the turn is.
-    // The continuation flag resets mid-turn signal splice state: a continuation
-    // turn re-absorbs the just-settled signals so they ride into it the way the
-    // queued path's durable message does. Signals still waiting ride either way.
-    this.orch.beginTurn(Date.now(), this.turnUserMetadata(), ctx.continuation);
-    this._executorsUsedThisTurn.clear();
-    const body = jsonObject(ctx.body);
-    this._cliCwd = readCliCwd(body);
-    this._turnContinuity = readTurnContinuity(body);
-    this._inFlight = true;
-    // The evolution gate, read WHERE THE TURN OPENS: core derives the same value
-    // at `beginTurn`, and the recorded turn carries it so a recovering host's
-    // own engine cannot re-judge a turn it did not run.
-    this._turnEvolutionEnabled = this.turnRecordsEvolution();
-    this._turnOriginContext = Object.freeze(structuredClone([...ctx.messages]));
-    // Fresh splice coordinates for this streamText call. Steers already
-    // buffered survive — they were typed for the turn that is about to run.
-    this.userSteer.beginTurn();
-    this.logActivity("beforeturn", "streamText() called next");
+      const activeRoleId = this.activeRoleLabel();
+      const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
+      // Per-turn accounting reset + the turn's mission scope, together: what the
+      // turn is allowed to spend is part of what the turn is.
+      // The continuation flag resets mid-turn signal splice state: a continuation
+      // turn re-absorbs the just-settled signals so they ride into it the way the
+      // queued path's durable message does. Signals still waiting ride either way.
+      this.orch.beginTurn(Date.now(), this.turnUserMetadata(), ctx.continuation);
+      this._executorsUsedThisTurn.clear();
+      const body = jsonObject(ctx.body);
+      this._cliCwd = readCliCwd(body);
+      this._turnContinuity = readTurnContinuity(body);
+      this._inFlight = true;
+      // The evolution gate, read WHERE THE TURN OPENS: core derives the same value
+      // at `beginTurn`, and the recorded turn carries it so a recovering host's
+      // own engine cannot re-judge a turn it did not run.
+      this._turnEvolutionEnabled = this.turnRecordsEvolution();
+      this._turnOriginContext = Object.freeze(structuredClone([...ctx.messages]));
+      // Fresh splice coordinates for this streamText call. Steers already
+      // buffered survive — they were typed for the turn that is about to run.
+      this.userSteer.beginTurn();
+      this.logActivity("beforeturn", "streamText() called next");
 
-    // A real user message is the verdict on the previous turn — dispatch the
-    // detached outcome review (Hermes-style forked background review). Runs
-    // concurrently with this turn; never blocks it. Programmatic turns
-    // (reactor / job wake) are not user verdicts.
-    if (!this.lastUserTurnIsProgrammatic()) {
-      this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
-    }
+      // A real user message is the verdict on the previous turn — dispatch the
+      // detached outcome review (Hermes-style forked background review). Runs
+      // concurrently with this turn; never blocks it. Programmatic turns
+      // (reactor / job wake) are not user verdicts.
+      if (!this.lastUserTurnIsProgrammatic()) {
+        this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
+      }
 
-    // Start a new run for the event log, with provenance so cross-run history
-    // (Supervise altitude) can show what kicked each run off. This is the chat
-    // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
-    this._currentRunId = `run-${nanoid()}`;
-    // Each run opens a new analytics write window.
-    openAnalyticsWindow(this.env);
-    this.restoreTurnCheckpoint();
-    openTurnRun(this.eventRecorder, this._currentRunId, {
-      agentId: this.actorHandle().actorId,
-      causedBy: 'chat',
-      userMessage: extractLastUserText(ctx.messages),
-      turnIndex: this.orch.sessionTurnIndex,
+      // Start a new run for the event log, with provenance so cross-run history
+      // (Supervise altitude) can show what kicked each run off. This is the chat
+      // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
+      this._currentRunId = `run-${nanoid()}`;
+      // Each run opens a new analytics write window.
+      openAnalyticsWindow(this.env);
+      this.restoreTurnCheckpoint();
+      openTurnRun(this.eventRecorder, this._currentRunId, {
+        agentId: this.actorHandle().actorId,
+        causedBy: 'chat',
+        userMessage: extractLastUserText(ctx.messages),
+        turnIndex: this.orch.sessionTurnIndex,
+      });
+
+      this._workspaceInstructionApprovals = null;
+      // ── Skills resolution for this turn (core turn-surface) ──────────────
+      this._turnActiveSkills = null;
+      // The actor's REAL tool surface: deps-gated builtins (report) are
+      // advertised only when this actor class wires them, and the agents
+      // ladder renders only the actions this profile supports — then
+      // restricted to the active skills' allowed union (core turn-surface).
+      const turnActorDeps = this.actorToolDeps();
+      const requestedWorkMode = this.turnWorkMode();
+      let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
+      const trust = this.instructionTrust();
+
+      const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
+        vfs: this.getSkillsVfs(),
+        config: this.config,
+        userText: extractLastUserText(ctx.messages),
+        roleSkills,
+        trust,
+        limits: {
+          contextWindow: this.sessionContextWindow(),
+          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        },
+      });
+
+      if (activeSetForPrompt) {
+        this._turnActiveSkills = activeSetForPrompt;
+        activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
+        this.logActivity('skills_active',
+          activeSetForPrompt.active.map(s => s.name).join(',') || '(none)');
+      }
+
+      const mcpToolNames = Object.keys(mcpTools);
+
+      const extensionTools = Object.fromEntries(
+        Object.entries(this.extensions.tools())
+          .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
+      );
+
+      const extensionToolNames = Object.keys(extensionTools);
+      const availableAgentActions = actorAgentsActions(turnActorDeps);
+      // The turn's WHOLE nameable surface. `release` / `agent` / `llm` are
+      // reachable only inside `execute_tools`, so no native tool id names them and
+      // without them here the role intersection drops every one — a narrowed role
+      // would silently lose its codemode lanes wholesale. Derived from the
+      // providers actually wired for this mode, so a capability is never offered
+      // whose namespace is absent (Plan mode drops `release` for free).
+      const turnCodemodeProviders = this.turnCodemodeProviders(requestedWorkMode);
+
+      const availableTools = [
+        ...activeTools,
+        ...mcpToolNames,
+        ...extensionToolNames,
+        ...(turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
+        ...codemodeCapabilitiesFor(turnCodemodeProviders),
+      ];
+
+      const profile = resolveAgentTurnProfile({
+        ...profileInputs,
+        activeRoleId: this.activeRoleLabel(),
+        workMode: requestedWorkMode,
+        availableTools,
+        activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
+        // Most specific first: the tier named on THIS request, then the tier the
+        // parent pinned when it hired this agent, then nothing — which lets the
+        // resolver take the role's own default. An absent pin must not read as
+        // "the workspace default"; the role's tier is what an unpinned hire asked
+        // for.
+        explicitTier: readTurnTier(body) ?? this.config.getAssignedTier() ?? undefined,
+        // The workspace's pinned model overrides the role's tier model inside
+        // the resolver. Without it a setModel pin is accepted and never run on.
+        workspaceModel: this.config.getModel(),
+      });
+
+      const operation = captureOperationProfile({
+        actor: this.actorHandle(), profile, inputs: profileInputs,
+        runId: this._currentRunId || WORKSPACE_RUN_ID, turnId: this.durableTurnId() ?? this._currentRunId,
+      });
+
+      this._turnOperation = operation;
+      const workMode = profile.workMode;
+      this.orch.restrictTurnWorkMode(workMode);
+      const modeTools = workMode === requestedWorkMode ? ctx.tools : this.getRawToolsForWorkMode(workMode);
+      const allowedTools = new Set(profile.allowedTools);
+      const toolAllowed = (name: string): boolean => allowedTools.has(name);
+      const promptActiveTools = activeTools.filter(toolAllowed);
+      const resolvedAgentActions = toolAllowed('agents') ? availableAgentActions : [];
+
+      const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed(SUBMIT_PLAN_TOOL)
+        ? [SUBMIT_PLAN_TOOL]
+        : [];
+
+      const effectiveActiveTools = [
+        ...promptActiveTools,
+        ...planToolNames,
+        ...mcpToolNames.filter(toolAllowed),
+        ...extensionToolNames.filter(toolAllowed),
+      ];
+
+      const effectiveTools: ToolSet = Object.fromEntries(
+        [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
+          .filter(([name]) => toolAllowed(name)),
+      );
+
+      // The persisted watermark is only a diff anchor for the one-turn change
+      // notice; the hub stays the single source of truth.
+      let deviceNotice: string | null = null;
+
+      try {
+        deviceNotice = observeDevicePresence(this.config, deviceStatus).notice;
+      } catch (err) {
+        diagnostics.failure('device.status_refresh_failed', toKinuError({
+          doing: 'recording the device hub presence for this turn',
+          cause: err,
+          otherwise: 'unavailable',
+        }));
+      }
+
+      // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
+      // when one is already active. Like skills/MCP, this is turn-scoped state,
+      // so it rides the beforeTurn system override, not the cached base prompt.
+      const agentsMd = await collectWorkspaceAgentsMd(
+        this.rt.storage.vfs,
+        {
+          contextWindow: this.sessionContextWindow(),
+          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        },
+        trust,
+        this.rt.executionRouter?.getProvider('sandbox'),
+      );
+
+      // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
+      // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
+      // this path can reflect the turn's active skills and MCP tools. It is the
+      // byte-stable cache prefix: it changes only on real agent events (soul,
+      // model, skill set, tool surface, AGENTS.md). System state — facts, the
+      // live executor status — rides the dynamic ledger's frozen blocks, and
+      // turn-local state — the device notice, activation reasons — rides one
+      // trailing message (prompting/volatile-context.ts), so neither ever
+      // re-prefills the prefix.
+      const execs = this.rt.executionRouter?.listExecutors() ?? [];
+      const model = this.promptModelContext();
+
+      const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
+        soulOverride: this.getSoulText(),
+        executors: execs,
+        availableTools: promptActiveTools,
+        agentsActions: resolvedAgentActions,
+        // The temporary rung is wired wherever this actor holds team deps, and
+        // the ladder's middle rung has to be advertised on the ONE authoritative
+        // prompt (this object; TurnConfig.system overrides getSystemPrompt's
+        // cached base) or no shipped turn ever mentions it.
+        temporaryAsk: turnActorDeps.team?.temporary !== undefined,
+        externalTools: mcpToolNames.filter(toolAllowed)
+          .map((name) => ({ name, source: 'mcp' as const })),
+        backend: 'cf',
+        workMode,
+        roleSection: profile.role,
+        planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
+        model,
+        currentDate: currentDateForPrompt(),
+        // Prompt sections the evolution loop promoted. Read here, not inside the
+        // builder: the builder is the byte-stable cacheable prefix and does no
+        // I/O, exactly as with the soul.
+        sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
+        identity,
+      };
+
+      if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
+
+      if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
+      promptOptions.agentsMd = agentsMd;
+      const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
+      this.recordSystemPromptHash(systemOverride);
+
+      const cfg: TurnConfig = {
+        system: systemOverride,
+        model: this.ownedModelServices.resolveModel(profile.tier.model),
+      };
+
+      // The measured compaction trigger, read from the durable state by core in
+      // the one correct order (orchestrator/turn-context.ts). Attachment
+      // sanitization is copy-on-write per message with per-part replacement, so
+      // the raw count IS the sanitized durable length — and it is stashed because
+      // recordTurnTelemetry writes the next measurement against the same number.
+      const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+      this._turnDurableLength = rawMessages.length;
+      this._turnContextWindow = this.sessionContextWindow();
+      const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
+
+      // The forced rebuild was armed either by overflow recovery (onChatResponse,
+      // on a context_length failure) or by the agent itself (agent.compactNow).
+      if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
+      // The newest MEMORY.md lessons/reflections ride the dynamic block too (the
+      // same bounded tail the CLI supplies) — the reflection loop assumes the
+      // model sees its latest lessons in-turn. Read once here rather than per
+      // step: it is the one dynamic-context input that needs an await.
+      this._turnMemoryTail = await readMemoryTail(this.rt.memory);
+      const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
+
+      // The shared turn-context assembly (core orchestrator/turn-context.ts) —
+      // the SAME ordering runChat runs on the CLI: attachment sanitize →
+      // extension onTurnStart → awaited transformContext (compaction, over the
+      // DURABLE history only) → turn-local tail. Dynamic context is NOT assembled
+      // here: it is re-read and re-woven at every step by beforeStep.
+      const assembly: Parameters<typeof assembleTurnMessages>[0] = {
+        system: systemOverride,
+        history: rawMessages,
+        attachments: {
+          accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
+        },
+        extensions: this.extensions,
+        abortSignal: this.currentTurnSignal(),
+        turnLocal,
+        sessionKey: this.name,
+        contextWindow: this._turnContextWindow,
+        trigger: measured.trigger,
+      };
+
+      if (measured.providerReportedTokens !== undefined) {
+        assembly.providerReportedTokens = measured.providerReportedTokens;
+      }
+
+      const submittedTools = { ...modeTools, ...effectiveTools };
+      const providers = this.providerRegistry();
+      // NORMALISED, and by the same registry that will serve the request. The
+      // model actually submitted comes from `resolveModel`, which normalises
+      // first, so parsing the RAW tier spec answered differently for exactly the
+      // forms normalisation exists to accept: a bare model id has no slash and
+      // `parseModelSpec` THROWS on it inside turn assembly, and a bare `@cf/…`
+      // parses to provider `@cf`, which no registry knows.
+      //
+      // ONE parse, read by both the admission counter and the reasoning-effort
+      // options below. Those were two separate raw parses of the same field, and
+      // `owned-model-services.ts` already did the normalised thing for its own
+      // copy — three answers to one question.
+      const tierModel = parseModelSpec(providers.normalizeSpecSync(profile.tier.model));
+      assembly.admission = {
+        count: (request) => countRequestInputTokens(
+          providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
+        ),
+        // Think filters the merged surface by activeTools before submission.
+        // Count that exact subset: including inactive workspace tools inflates
+        // the request while omitting native active tools undercounts it.
+        tools: Object.fromEntries(
+          effectiveActiveTools.flatMap((name) => {
+            const entry = submittedTools[name];
+
+            return entry === undefined ? [] : [[name, entry]];
+          }),
+        ),
+        limits: { contextWindow: this._turnContextWindow, modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+      };
+      cfg.messages = await assembleTurnMessages(assembly);
+      this._turnDurableInput = cfg.messages.slice(0, cfg.messages.length - turnLocal.length);
+
+      const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
+      this._turnTaskPlan = taskPlan;
+      cfg.tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
+      cfg.activeTools = effectiveActiveTools;
+
+      // Prompt-cache plan for this turn — the same core derivation `runChat`
+      // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
+      // strategy resolution, system eligibility or routing reaches both loops.
+      // Only the message tail differs: request-level cache routing rides
+      // TurnConfig.providerOptions, while the cache-eligible system message and
+      // the rolling tail breakpoints for marker providers (Anthropic) ride
+      // beforeStep — PrepareStepResult carries typed system/messages overrides
+      // for every step's request, whereas TurnConfig.system is string-typed.
+      const cachePlan = promptCachePlan({
+        providerId: model.provider,
+        modelId: model.id,
+        system: systemOverride,
+        sessionKey: this.ownedModelServices.affinityKey,
+        retention: this.config.getCacheRetention(),
+      });
+
+      this._turnCachePlan = hasCacheMarkers(cachePlan.strategy)
+        ? { strategy: cachePlan.strategy, system: cachePlan.system }
+        : null;
+      const cacheOptions = cachePlan.providerOptions;
+
+      const reasoningOptions = reasoningEffortOptions(
+        profile.tier.reasoningEffort,
+        tierModel.provider,
+      );
+
+      const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
+
+      if (providerOptions) cfg.providerOptions = providerOptions;
+
+      // THE TURN'S STEP BOUND, on the config Think actually consumes.
+      //
+      // `_lastTurnOpts` is a mirror only the shadow-eval replay reads, and only
+      // ever for its `messages` and `tools`: a bound set there never reaches
+      // the live loop.
+      //
+      // `maxSteps` is the lever: Think resolves `config.maxSteps ?? this.maxSteps`
+      // and OR-s `stepCountIs(...)` of it ahead of anything the caller passes.
+      // `stopWhen` rides beside it so the caller's slot is declared where the live
+      // config is assembled — a future real stop condition composes here, and a
+      // grep for the name now lands on the loop instead of the mirror.
+      cfg.maxSteps = UNBOUNDED_MAX_STEPS;
+      cfg.stopWhen = UNBOUNDED_STEPS;
+      // AI SDK reports provider failures as typed error chunks, before Think's
+      // message-only serializer. Keep the native cause graph until this boundary.
+      cfg.experimental_transform = () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
+        transform(chunk, controller) {
+          controller.enqueue(chunk.type === 'error'
+            ? { ...chunk, error: renderThrownChain({ cause: chunk.error }) }
+            : chunk);
+        },
+      });
+
+      const runtime = this.rt;
+      const mode = this.turnWorkMode();
+      const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
+      this._turnProgram = { program, signal: ctx.signal };
+      // THE DURABLE CLAIM, and this is the last statement before Think starts
+      // inference — everything above it is preparation that has issued nothing.
+      // It persists the issued actor, this activation's run, the turn, the next
+      // execution epoch, the immutable work mode, the SELECTED program's identity
+      // (version + the digest of the source that version retains, or the builtin
+      // loop and the build this host publishes for it) and the exact context the
+      // turn was admitted against. A crash after this leaves a claim a recovery
+      // can verify; a crash before it leaves a turn that provably did nothing.
+      const turnId = this.durableTurnId() ?? this._currentRunId;
+
+      // The plane rebases before the claim, not after: `admitted.messages` is this
+      // actor's history with any edit staged while the turn was preparing already
+      // applied, and with input delivered since preserved after it exactly once.
+      // The claim records THAT array, so the context a turn was admitted against
+      // and the context its first request carries are one value.
+      //
+      // The LIVE array, always. The plane lays its active revision over the
+      // prefix this array shares with it and keeps the rest — the previous
+      // answer and the message that started this turn — after it. Handing it a
+      // copy of the previous boundary instead made that copy the whole history.
+      const admitted = this.contextPlane.startTurn({ turnId, history: cfg.messages });
+
+      this._turnClaim = this.stores.claims.admit({
+        runId: this._currentRunId,
+        turnId,
+        workMode: mode,
+        program: programIdentityOf(program, this.installedBuildIdentity()),
+        context: admitted.messages,
+        workingRevision: admitted.workingRevision,
+      });
+      cfg.messages = [...admitted.messages];
+
+      const lastTurnOpts: Parameters<typeof streamText>[0] = {
+        model: cfg.model ?? ctx.model,
+        system: systemOverride,
+        messages: this.stores.claims.admittedFor(this._turnClaim).messages,
+        tools: { ...ctx.tools, ...cfg.tools },
+        activeTools: cfg.activeTools,
+      };
+
+      if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
+      this._lastTurnOpts = lastTurnOpts;
+      // A tool call the SDK cannot parse is rewritten where a rewrite is settled
+      // (case-only name drift, fenced or double-encoded arguments) and left to
+      // the model's own retry otherwise — no inference behind the spend ledger.
+      cfg.repairToolCall = repairToolCall();
+      // The turn's constants for the per-step context breakdown. Tool schemas
+      // ride every request of the turn and are otherwise invisible to anyone
+      // asking where the window went.
+      this.acc.composition.openTurn({ system: systemOverride, tools: this._lastTurnOpts.tools });
+
+      return cfg;
     });
-
-    this._workspaceInstructionApprovals = null;
-    // ── Skills resolution for this turn (core turn-surface) ──────────────
-    this._turnActiveSkills = null;
-    // The actor's REAL tool surface: deps-gated builtins (report) are
-    // advertised only when this actor class wires them, and the agents
-    // ladder renders only the actions this profile supports — then
-    // restricted to the active skills' allowed union (core turn-surface).
-    const turnActorDeps = this.actorToolDeps();
-    const requestedWorkMode = this.turnWorkMode();
-    let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
-    const trust = this.instructionTrust();
-
-    const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
-      vfs: this.getSkillsVfs(),
-      config: this.config,
-      userText: extractLastUserText(ctx.messages),
-      roleSkills,
-      trust,
-      limits: {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      },
-    });
-
-    if (activeSetForPrompt) {
-      this._turnActiveSkills = activeSetForPrompt;
-      activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
-      this.logActivity('skills_active',
-        activeSetForPrompt.active.map(s => s.name).join(',') || '(none)');
-    }
-
-    const mcpToolNames = Object.keys(mcpTools);
-
-    const extensionTools = Object.fromEntries(
-      Object.entries(this.extensions.tools())
-        .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
-    );
-
-    const extensionToolNames = Object.keys(extensionTools);
-    const availableAgentActions = actorAgentsActions(turnActorDeps);
-    // The turn's WHOLE nameable surface. `release` / `agent` / `llm` are
-    // reachable only inside `execute_tools`, so no native tool id names them and
-    // without them here the role intersection drops every one — a narrowed role
-    // would silently lose its codemode lanes wholesale. Derived from the
-    // providers actually wired for this mode, so a capability is never offered
-    // whose namespace is absent (Plan mode drops `release` for free).
-    const turnCodemodeProviders = this.turnCodemodeProviders(requestedWorkMode);
-
-    const availableTools = [
-      ...activeTools,
-      ...mcpToolNames,
-      ...extensionToolNames,
-      ...(turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
-      ...codemodeCapabilitiesFor(turnCodemodeProviders),
-    ];
-
-    const profile = resolveAgentTurnProfile({
-      ...profileInputs,
-      activeRoleId: this.activeRoleLabel(),
-      workMode: requestedWorkMode,
-      availableTools,
-      activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
-      // Most specific first: the tier named on THIS request, then the tier the
-      // parent pinned when it hired this agent, then nothing — which lets the
-      // resolver take the role's own default. An absent pin must not read as
-      // "the workspace default"; the role's tier is what an unpinned hire asked
-      // for.
-      explicitTier: readTurnTier(body) ?? this.config.getAssignedTier() ?? undefined,
-      // The workspace's pinned model overrides the role's tier model inside
-      // the resolver. Without it a setModel pin is accepted and never run on.
-      workspaceModel: this.config.getModel(),
-    });
-
-    this._turnProfile = profile;
-    const workMode = profile.workMode;
-    this.orch.restrictTurnWorkMode(workMode);
-    const modeTools = workMode === requestedWorkMode ? ctx.tools : this.getRawToolsForWorkMode(workMode);
-    const allowedTools = new Set(profile.allowedTools);
-    const toolAllowed = (name: string): boolean => allowedTools.has(name);
-    const promptActiveTools = activeTools.filter(toolAllowed);
-    const resolvedAgentActions = toolAllowed('agents') ? availableAgentActions : [];
-
-    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed(SUBMIT_PLAN_TOOL)
-      ? [SUBMIT_PLAN_TOOL]
-      : [];
-
-    const effectiveActiveTools = [
-      ...promptActiveTools,
-      ...planToolNames,
-      ...mcpToolNames.filter(toolAllowed),
-      ...extensionToolNames.filter(toolAllowed),
-    ];
-
-    const effectiveTools: ToolSet = Object.fromEntries(
-      [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
-        .filter(([name]) => toolAllowed(name)),
-    );
-
-    // The persisted watermark is only a diff anchor for the one-turn change
-    // notice; the hub stays the single source of truth.
-    let deviceNotice: string | null = null;
-
-    try {
-      deviceNotice = observeDevicePresence(this.config, deviceStatus).notice;
-    } catch (err) {
-      diagnostics.failure('device.status_refresh_failed', toKinuError({
-        doing: 'recording the device hub presence for this turn',
-        cause: err,
-        otherwise: 'unavailable',
-      }));
-    }
-
-    // AGENTS.md (agents.md standard) — agent VFS root + the sandbox workspace
-    // when one is already active. Like skills/MCP, this is turn-scoped state,
-    // so it rides the beforeTurn system override, not the cached base prompt.
-    const agentsMd = await collectWorkspaceAgentsMd(
-      this.rt.storage.vfs,
-      {
-        contextWindow: this.sessionContextWindow(),
-        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-      },
-      trust,
-      this.rt.executionRouter?.getProvider('sandbox'),
-    );
-
-    // The per-turn system prompt is ALWAYS assembled here (TurnConfig.system
-    // overrides) — Think calls getSystemPrompt() BEFORE beforeTurn, so only
-    // this path can reflect the turn's active skills and MCP tools. It is the
-    // byte-stable cache prefix: it changes only on real agent events (soul,
-    // model, skill set, tool surface, AGENTS.md). System state — facts, the
-    // live executor status — rides the dynamic ledger's frozen blocks, and
-    // turn-local state — the device notice, activation reasons — rides one
-    // trailing message (prompting/volatile-context.ts), so neither ever
-    // re-prefills the prefix.
-    const execs = this.rt.executionRouter?.listExecutors() ?? [];
-    const model = this.promptModelContext();
-
-    const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
-      soulOverride: this.getSoulText(),
-      executors: execs,
-      availableTools: promptActiveTools,
-      agentsActions: resolvedAgentActions,
-      // The temporary rung is wired wherever this actor holds team deps, and
-      // the ladder's middle rung has to be advertised on the ONE authoritative
-      // prompt (this object; TurnConfig.system overrides getSystemPrompt's
-      // cached base) or no shipped turn ever mentions it.
-      temporaryAsk: turnActorDeps.team?.temporary !== undefined,
-      externalTools: mcpToolNames.filter(toolAllowed)
-        .map((name) => ({ name, source: 'mcp' as const })),
-      backend: 'cf',
-      workMode,
-      roleSection: profile.role,
-      planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
-      model,
-      currentDate: currentDateForPrompt(),
-      // Prompt sections the evolution loop promoted. Read here, not inside the
-      // builder: the builder is the byte-stable cacheable prefix and does no
-      // I/O, exactly as with the soul.
-      sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
-      identity,
-    };
-
-    if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
-
-    if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
-    promptOptions.agentsMd = agentsMd;
-    const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
-    this.recordSystemPromptHash(systemOverride);
-
-    const cfg: TurnConfig = {
-      system: systemOverride,
-      model: this.ownedModelServices.resolveModel(profile.tier.model),
-    };
-
-    // The measured compaction trigger, read from the durable state by core in
-    // the one correct order (orchestrator/turn-context.ts). Attachment
-    // sanitization is copy-on-write per message with per-part replacement, so
-    // the raw count IS the sanitized durable length — and it is stashed because
-    // recordTurnTelemetry writes the next measurement against the same number.
-    const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
-    this._turnDurableLength = rawMessages.length;
-    this._turnContextWindow = this.sessionContextWindow();
-    const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
-
-    // The forced rebuild was armed either by overflow recovery (onChatResponse,
-    // on a context_length failure) or by the agent itself (agent.compactNow).
-    if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
-    // The newest MEMORY.md lessons/reflections ride the dynamic block too (the
-    // same bounded tail the CLI supplies) — the reflection loop assumes the
-    // model sees its latest lessons in-turn. Read once here rather than per
-    // step: it is the one dynamic-context input that needs an await.
-    this._turnMemoryTail = await readMemoryTail(this.rt.memory);
-    const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
-
-    // The shared turn-context assembly (core orchestrator/turn-context.ts) —
-    // the SAME ordering runChat runs on the CLI: attachment sanitize →
-    // extension onTurnStart → awaited transformContext (compaction, over the
-    // DURABLE history only) → turn-local tail. Dynamic context is NOT assembled
-    // here: it is re-read and re-woven at every step by beforeStep.
-    const assembly: Parameters<typeof assembleTurnMessages>[0] = {
-      system: systemOverride,
-      history: rawMessages,
-      attachments: {
-        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
-      },
-      extensions: this.extensions,
-      abortSignal: this.currentTurnSignal(),
-      turnLocal,
-      sessionKey: this.name,
-      contextWindow: this._turnContextWindow,
-      trigger: measured.trigger,
-    };
-
-    if (measured.providerReportedTokens !== undefined) {
-      assembly.providerReportedTokens = measured.providerReportedTokens;
-    }
-
-    const submittedTools = { ...modeTools, ...effectiveTools };
-    const providers = this.providerRegistry();
-    // NORMALISED, and by the same registry that will serve the request. The
-    // model actually submitted comes from `resolveModel`, which normalises
-    // first, so parsing the RAW tier spec answered differently for exactly the
-    // forms normalisation exists to accept: a bare model id has no slash and
-    // `parseModelSpec` THROWS on it inside turn assembly, and a bare `@cf/…`
-    // parses to provider `@cf`, which no registry knows.
-    //
-    // ONE parse, read by both the admission counter and the reasoning-effort
-    // options below. Those were two separate raw parses of the same field, and
-    // `owned-model-services.ts` already did the normalised thing for its own
-    // copy — three answers to one question.
-    const tierModel = parseModelSpec(providers.normalizeSpecSync(profile.tier.model));
-    assembly.admission = {
-      count: (request) => countRequestInputTokens(
-        providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
-      ),
-      // Think filters the merged surface by activeTools before submission.
-      // Count that exact subset: including inactive workspace tools inflates
-      // the request while omitting native active tools undercounts it.
-      tools: Object.fromEntries(
-        effectiveActiveTools.flatMap((name) => {
-          const entry = submittedTools[name];
-
-          return entry === undefined ? [] : [[name, entry]];
-        }),
-      ),
-      limits: { contextWindow: this._turnContextWindow, modelOutputLimit: this.modelCatalog.modelOutputLimit() },
-    };
-    cfg.messages = await assembleTurnMessages(assembly);
-    this._turnDurableInput = cfg.messages.slice(0, cfg.messages.length - turnLocal.length);
-
-    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
-    this._turnTaskPlan = taskPlan;
-    cfg.tools = withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan);
-    cfg.activeTools = effectiveActiveTools;
-
-    // Prompt-cache plan for this turn — the same core derivation `runChat`
-    // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
-    // strategy resolution, system eligibility or routing reaches both loops.
-    // Only the message tail differs: request-level cache routing rides
-    // TurnConfig.providerOptions, while the cache-eligible system message and
-    // the rolling tail breakpoints for marker providers (Anthropic) ride
-    // beforeStep — PrepareStepResult carries typed system/messages overrides
-    // for every step's request, whereas TurnConfig.system is string-typed.
-    const cachePlan = promptCachePlan({
-      providerId: model.provider,
-      modelId: model.id,
-      system: systemOverride,
-      sessionKey: this.ownedModelServices.affinityKey,
-      retention: this.config.getCacheRetention(),
-    });
-
-    this._turnCachePlan = hasCacheMarkers(cachePlan.strategy)
-      ? { strategy: cachePlan.strategy, system: cachePlan.system }
-      : null;
-    const cacheOptions = cachePlan.providerOptions;
-
-    const reasoningOptions = reasoningEffortOptions(
-      profile.tier.reasoningEffort,
-      tierModel.provider,
-    );
-
-    const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
-
-    if (providerOptions) cfg.providerOptions = providerOptions;
-
-    // THE TURN'S STEP BOUND, on the config Think actually consumes.
-    //
-    // `_lastTurnOpts` is a mirror only the shadow-eval replay reads, and only
-    // ever for its `messages` and `tools`: a bound set there never reaches
-    // the live loop.
-    //
-    // `maxSteps` is the lever: Think resolves `config.maxSteps ?? this.maxSteps`
-    // and OR-s `stepCountIs(...)` of it ahead of anything the caller passes.
-    // `stopWhen` rides beside it so the caller's slot is declared where the live
-    // config is assembled — a future real stop condition composes here, and a
-    // grep for the name now lands on the loop instead of the mirror.
-    cfg.maxSteps = UNBOUNDED_MAX_STEPS;
-    cfg.stopWhen = UNBOUNDED_STEPS;
-    // AI SDK reports provider failures as typed error chunks, before Think's
-    // message-only serializer. Keep the native cause graph until this boundary.
-    cfg.experimental_transform = () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
-      transform(chunk, controller) {
-        controller.enqueue(chunk.type === 'error'
-          ? { ...chunk, error: renderThrownChain({ cause: chunk.error }) }
-          : chunk);
-      },
-    });
-
-    const runtime = this.rt;
-    const mode = this.turnWorkMode();
-    const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
-    this._turnProgram = { program, signal: ctx.signal };
-    // THE DURABLE CLAIM, and this is the last statement before Think starts
-    // inference — everything above it is preparation that has issued nothing.
-    // It persists the issued actor, this activation's run, the turn, the next
-    // execution epoch, the immutable work mode, the SELECTED program's identity
-    // (version + the digest of the source that version retains, or the builtin
-    // loop and the build this host publishes for it) and the exact context the
-    // turn was admitted against. A crash after this leaves a claim a recovery
-    // can verify; a crash before it leaves a turn that provably did nothing.
-    const turnId = this.durableTurnId() ?? this._currentRunId;
-
-    // The plane rebases before the claim, not after: `admitted.messages` is this
-    // actor's history with any edit staged while the turn was preparing already
-    // applied, and with input delivered since preserved after it exactly once.
-    // The claim records THAT array, so the context a turn was admitted against
-    // and the context its first request carries are one value.
-    //
-    // The LIVE array, always. The plane lays its active revision over the
-    // prefix this array shares with it and keeps the rest — the previous
-    // answer and the message that started this turn — after it. Handing it a
-    // copy of the previous boundary instead made that copy the whole history.
-    const admitted = this.contextPlane.startTurn({ turnId, history: cfg.messages });
-
-    this._turnClaim = this.stores.claims.admit({
-      runId: this._currentRunId,
-      turnId,
-      workMode: mode,
-      program: programIdentityOf(program, this.installedBuildIdentity()),
-      context: admitted.messages,
-      workingRevision: admitted.workingRevision,
-    });
-    cfg.messages = [...admitted.messages];
-
-    const lastTurnOpts: Parameters<typeof streamText>[0] = {
-      model: cfg.model ?? ctx.model,
-      system: systemOverride,
-      messages: this.stores.claims.admittedFor(this._turnClaim).messages,
-      tools: { ...ctx.tools, ...cfg.tools },
-      activeTools: cfg.activeTools,
-    };
-
-    if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
-    this._lastTurnOpts = lastTurnOpts;
-    // A tool call the SDK cannot parse is rewritten where a rewrite is settled
-    // (case-only name drift, fenced or double-encoded arguments) and left to
-    // the model's own retry otherwise — no inference behind the spend ledger.
-    cfg.repairToolCall = repairToolCall();
-    // The turn's constants for the per-step context breakdown. Tool schemas
-    // ride every request of the turn and are otherwise invisible to anyone
-    // asking where the window went.
-    this.acc.composition.openTurn({ system: systemOverride, tools: this._lastTurnOpts.tools });
-
-    return cfg;
   }
 
   /** The in-flight turn's prompt-cache plan — set in beforeTurn, non-null only
@@ -6742,7 +6772,7 @@ export abstract class ActorAgent extends Think<Env> {
   /** What the turn may do. Plan is explicit user intent on the driving
    * message; everything else is ordinary unconstrained work. */
   protected turnWorkMode(): WorkMode {
-    return this._inFlight && this._turnProfile !== null ? this._turnProfile.workMode : workModeForTurnMetadata(this.turnDrivingMetadata());
+    return this.operationProfile()?.profile.workMode ?? workModeForTurnMetadata(this.turnDrivingMetadata());
   }
 
   /** Why the turn is running — read from the event alone, never from the work
@@ -6902,14 +6932,14 @@ export abstract class ActorAgent extends Think<Env> {
    * MODEL_ROUTE_POLICY is read against THIS, so a producer that resolves a
    * model any other way has bypassed the one routing table.
    */
-  protected async routingProfile(): Promise<ResolvedTurnProfile> {
+  protected async routingProfile(availableTools: readonly string[] = []): Promise<ResolvedTurnProfile> {
     return resolveRoutingProfile({
-      live: () => this._turnProfile,
+      actor: this.actorHandle(),
       resolve: async () => resolveAgentTurnProfile({
         ...(await this.profileInputs()),
         activeRoleId: this.activeRoleLabel(),
         workMode: this.turnWorkMode(),
-        availableTools: [],
+        availableTools,
         activeSkills: [],
         explicitTier: this.config.getAssignedTier() ?? undefined,
       }),
@@ -6939,8 +6969,8 @@ export abstract class ActorAgent extends Think<Env> {
    * intersection is `resolveAgentTurnProfile`'s own rule for a chat turn, which
    * is exactly why the role is handed to it instead of applied here.
    *
-   * NOT `resolveRoutingProfile`: that returns the root's LIVE `_turnProfile`
-   * when one exists, which is the root's turn and never this actor's.
+   * The requested actor resolves its own authority; the root's admitted
+   * operation is not this actor's profile.
    */
   protected async hostedActorProfile(input: {
     readonly actor: ActorHandle;

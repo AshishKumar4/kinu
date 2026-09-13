@@ -49,7 +49,7 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   decodeJsonValue,
   initAgentConfigTable, initActorTables,
-  parseModelSpec, reasoningEffortOptions, resolveModelRoute,
+  parseModelSpec, reasoningEffortOptions, createRoutedModelLane,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -356,8 +356,6 @@ export interface CFRuntimeHooks {
    * hides.
    */
   reportModelCall?: ModelCallSink;
-  /** Immutable profile resolved for the active turn. */
-  turnProfile?: () => ResolvedTurnProfile | null;
   /** Resolve a profile for durable work that starts without a chat turn. */
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   /**
@@ -520,7 +518,7 @@ export function createCFRuntime(
   // three inputs they all resolve from (see `createProfileLaneLLM`), so no
   // call site repeats that binding.
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM(
-    agent, env, actor, hooks.turnProfile, hooks.resolveProfile, source, hooks.reportModelCall,
+    agent, env, actor, hooks.resolveProfile, source, hooks.reportModelCall,
   );
 
   // The one REQUIRED lane. `judgeModel`/`fastLlm`/`advisorLlm` may be absent —
@@ -1077,41 +1075,37 @@ function createProfileLaneLLM(
   agent: AgentHost,
   env: Env,
   actor: ActorRuntimeIdentity,
-  turnProfile: (() => ResolvedTurnProfile | null) | undefined,
   resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined,
   source: FixedTierSource,
   report?: ModelCallSink,
 ): LLM | undefined {
-  if (!turnProfile && !resolveProfile) return undefined;
+  if (!resolveProfile) return undefined;
 
-  return {
-    async *stream() { yield ""; },
-    async complete(prompt: string): Promise<string> {
-      const profile = turnProfile?.() ?? await resolveProfile?.();
+  return createRoutedModelLane(actor.actor, source, {
+    resolveProfile,
+    llm: route => ({
+      async *stream() { yield ""; },
+      async complete(prompt: string): Promise<string> {
+        const registry = actorProviderRegistry(agent, env, actor, `Kinu (${source})`);
 
-      if (!profile) throw new Error(`${source} model lane has no active profile`);
-      const route = resolveModelRoute(source, profile);
+        const providerOptions = reasoningEffortOptions(
+          route.reasoningEffort,
+          parseModelSpec(route.model).provider,
+        );
 
-      if (!route) throw new Error(`${source} cannot use the fixed platform model route`);
-      const registry = actorProviderRegistry(agent, env, actor, `Kinu (${source})`);
+        const request: Parameters<typeof generateText>[0] = {
+          model: registry.resolveModel(route.model),
+          prompt,
+        };
 
-      const providerOptions = reasoningEffortOptions(
-        route.reasoningEffort,
-        parseModelSpec(route.model).provider,
-      );
+        if (providerOptions) request.providerOptions = providerOptions;
+        const result = await generateText(request);
+        reportCall(report, source, route.model, result);
 
-      const request: Parameters<typeof generateText>[0] = {
-        model: registry.resolveModel(route.model),
-        prompt,
-      };
-
-      if (providerOptions) request.providerOptions = providerOptions;
-      const result = await generateText(request);
-      reportCall(report, source, route.model, result);
-
-      return result.text.trim();
-    },
-  };
+        return result.text.trim();
+      },
+    }),
+  });
 }
 
 // ── Schedule: real runFiber from Agent base class ────────────────

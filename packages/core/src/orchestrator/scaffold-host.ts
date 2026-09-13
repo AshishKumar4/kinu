@@ -47,6 +47,7 @@ export type {
 export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   model: LanguageModel;
   spec?: string;
+  modelContext?: ChatOptions['modelContext'];
   /** The live tool surface, resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
   /** Shared chat options and the existing pre-step extension hook. */
@@ -104,7 +105,7 @@ async function* streamScaffoldChat(
 
   try {
     for await (const event of runChat({
-      ...frame, model: opts.model,
+      ...frame, model: opts.model, modelContext: opts.modelContext ?? frame.modelContext,
       signal: opts.signal, extensions,
       providerOptions: opts.streamOptions?.providerOptions,
       stopWhen: opts.streamOptions?.stopWhen,

@@ -36,7 +36,7 @@ import {
   withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount,
-  resolveModelRoute,
+  resolveRoutingProfile, createRoutedModelLane,
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
 } from '@kinu.run/core';
@@ -140,8 +140,6 @@ export interface CLIRuntime extends AgentRuntime {
    *  runtime keeps the in-SQLite plane. See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
-  setTurnProfile?(profile: ResolvedTurnProfile): void;
-  turnProfile?(): ResolvedTurnProfile | null;
   modelForRoute?(resolution: ModelRouteResolution): LLM;
   /**
    * The turn-profile authority every routed lane resolves through when no turn
@@ -164,14 +162,7 @@ export interface CLIRuntime extends AgentRuntime {
    * say so rather than invent a model.
    */
   setProfileResolver?(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
-  /**
-   * The profile routed lanes must have. Returns the installed one when a turn
-   * is open, else resolves one now and installs it, so durable work that began
-   * outside a chat turn — the review lane, the evolution cadence, reflection,
-   * the advisor — routes through the same table a turn does instead of finding
-   * every lane unset. An already-installed profile is never replaced, so this
-   * cannot disturb a running turn.
-   */
+  /** The issued operation's profile, or current authority for new work. */
   ensureProfile?(): Promise<ResolvedTurnProfile>;
   /**
    * The three host-owned things a swarm node's private home needs — the uid-0
@@ -488,7 +479,6 @@ export function createCLIRuntime(
   // reads and writes scaffold tables on its first identity.scaffold touch.
   initScaffoldTables(execRaw);
   const agentConfig = actor.config;
-  let turnProfile: ResolvedTurnProfile | null = null;
   // The model plane a PROFILE resolves against: how a stored spec is spelled in
   // full, and what the account can reach. Built from the same endpoint and
   // credentials the routed-lane factory below uses, so a tier's model and the
@@ -521,25 +511,14 @@ export function createCLIRuntime(
   let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
     () => profiles.resolvePreTurn();
 
-  /**
-   * The profile a routed lane runs against. A turn's own resolution wins; with
-   * no turn open the live resolver supplies one and it is installed, so the
-   * next lane in the same pass does not resolve it again. The `??=` is the race
-   * guard: a turn that landed while this awaited keeps its own profile, because
-   * a turn's profile is immutable for the length of the turn.
-   */
-  const ensureProfile = async (): Promise<ResolvedTurnProfile> => {
-    if (turnProfile) return turnProfile;
+  const ensureProfile = (): Promise<ResolvedTurnProfile> => resolveRoutingProfile({
+    actor,
+    resolve: () => {
+      if (!profileResolver) throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
 
-    if (!profileResolver) {
-      throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
-    }
-
-    const resolved = await profileResolver();
-    turnProfile ??= resolved;
-
-    return turnProfile;
-  };
+      return profileResolver();
+    },
+  });
 
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
@@ -552,22 +531,12 @@ export function createCLIRuntime(
   const modelForRoute = (resolution: ModelRouteResolution): LLM =>
     modelRouteFactory(resolution);
 
-  const llm: LLM = {
-    async *stream() { yield ""; },
-    async complete(prompt: string): Promise<string> {
-      const resolution = resolveModelRoute('reflection', await ensureProfile());
-
-      if (!resolution) throw new Error('reflection cannot use the fixed platform model route');
-
-      return modelForRoute(resolution).complete(prompt);
-    },
-  };
-
   const modelLanes = {
-    turnProfile: () => turnProfile,
+    resolveProfile: ensureProfile,
     llm: modelForRoute,
   };
 
+  const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
   const schedule: Schedule = {
     after: async (_ms, fn) => { setTimeout(fn, 0); },
@@ -711,8 +680,6 @@ export function createCLIRuntime(
     cwd,
     setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
-    setTurnProfile: (profile: ResolvedTurnProfile) => { turnProfile = profile; },
-    turnProfile: () => turnProfile,
     profiles,
     modelForRoute,
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
@@ -1050,12 +1017,12 @@ async function buildCLIHeadRuntime(
   };
 
   if (checkpoints) runtimeOptions.checkpoints = checkpoints;
-  const parentProfile = parent.turnProfile;
+  const parentProfile = parent.ensureProfile;
   const parentModelForRoute = parent.modelForRoute;
 
   if (parentProfile && parentModelForRoute) {
     runtimeOptions.modelLanes = {
-      turnProfile: parentProfile,
+      resolveProfile: parentProfile,
       llm: parentModelForRoute,
     };
   }

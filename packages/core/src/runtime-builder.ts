@@ -22,12 +22,9 @@ import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellAp
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';
 import type { TurnFileLedger } from './tools/file-ledger';
-import { resolveModelRoute } from './profiles/model-route';
 import { createScaffoldSurface } from './scaffold/surface';
-import type { ModelRouteResolution } from './profiles/model-route';
-import type { ResolvedTurnProfile } from './profiles/resolve';
-import type { SpendSource } from './events/model-call';
 import type { ActorHandle } from './identity/actor-handle';
+import { createRoutedModelLane, type ModelLaneComponents } from './profiles/model-lane';
 
 /**
  * Where the fixed-tier producer lanes come from. The route POLICY is core's
@@ -36,17 +33,7 @@ import type { ActorHandle } from './identity/actor-handle';
  * resolved tier. Read per call — never cached here — so a role or catalog
  * change lands on the next producer call without a rebuild.
  */
-export interface ModelLaneComponents {
-  /** The immutable turn profile for the current context, or null when no
-   *  profile authority has resolved one yet. Read fresh on every lane call. */
-  turnProfile(): ResolvedTurnProfile | null;
-  /** Build one producer LLM from its resolved tier. */
-  llm(resolution: ModelRouteResolution): LLM;
-  /** What a producer uses before any authority exists (pre-claim facets,
-   *  bare fixtures). Undefined leaves the lane unset so consumers' documented
-   *  `?? rt.llm` fallback runs. */
-  fallbackLlm?(): LLM | undefined;
-}
+export type { ModelLaneComponents } from './profiles/model-lane';
 
 export interface RuntimeComponents {
   actor: ActorHandle;
@@ -118,19 +105,6 @@ interface PinnedLanes {
   advisor?: LLM;
 }
 
-/** One routed producer's lane, read fresh: resolve the current turn profile,
- *  push it through the exhaustive route table, and let the backend build the
- *  client. No profile → the backend's fallback; no lanes component → unset. */
-function resolveRoutedLane(lanes: ModelLaneComponents | undefined, source: SpendSource): LLM | undefined {
-  if (!lanes) return undefined;
-  const profile = lanes.turnProfile();
-
-  if (!profile) return lanes.fallbackLlm?.();
-  const resolution = resolveModelRoute(source, profile);
-
-  return resolution ? lanes.llm(resolution) : undefined;
-}
-
 /**
  * Build a complete AgentRuntime from platform-specific components.
  * Constructs the Identity.scaffold interface from VFS + SQL.
@@ -149,6 +123,13 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   };
 
   const lanes = components.modelLanes;
+
+  const routed = lanes ? {
+    judge: createRoutedModelLane(components.actor, 'judge', lanes),
+    fast: createRoutedModelLane(components.actor, 'fast', lanes),
+    advisor: createRoutedModelLane(components.actor, 'advisor', lanes),
+  } : {};
+
   const pinned: PinnedLanes = {};
 
   return {
@@ -161,11 +142,11 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     schedule,
     identity,
     craftStore,
-    get judgeModel() { return pinned.judge ?? resolveRoutedLane(lanes, 'judge'); },
+    get judgeModel() { return pinned.judge ?? routed.judge; },
     set judgeModel(llm: LLM | undefined) { pinned.judge = llm; },
-    get fastLlm() { return pinned.fast ?? resolveRoutedLane(lanes, 'fast'); },
+    get fastLlm() { return pinned.fast ?? routed.fast; },
     set fastLlm(llm: LLM | undefined) { pinned.fast = llm; },
-    get advisorLlm() { return pinned.advisor ?? resolveRoutedLane(lanes, 'advisor'); },
+    get advisorLlm() { return pinned.advisor ?? routed.advisor; },
     set advisorLlm(llm: LLM | undefined) { pinned.advisor = llm; },
     spawnBranch: components.spawnBranch,
     abortBranch: components.abortBranch,

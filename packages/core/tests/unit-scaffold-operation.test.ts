@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
+import { jsonSchema, tool, type ToolSet } from 'ai';
 import { createScaffoldLLMStream, createScaffoldCandidateSurface, buildSystemPromptSync, currentDateForPrompt,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveTurnProfile,
+  currentOperationProfile,
   type ModelCallReport, type ModelOperationEvent, type ProfileCatalog,
 } from '../src/index';
 import { createTestRuntime } from './helpers';
@@ -42,6 +44,20 @@ function fixture(failure?: Error) {
   })({ system: 'Answer the question.', messages: [{ role: 'user', content: 'Question' }] });
 
   return { model, stream, operations, reports };
+}
+
+function candidateProfile(spec: string) {
+  const catalog: ProfileCatalog = {
+    roles: BUILTIN_PROFILE_CATALOG.roles,
+    tiers: { default: { model: 'openai/chat-fast', reasoningEffort: 'low' },
+      deep: { model: spec, reasoningEffort: 'high' } },
+  };
+
+  return resolveTurnProfile({
+    envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+    provider: { revision: 'one', availableModels: ['openai/chat-fast', spec] },
+    roleId: 'general', workMode: 'build', availableTools: ['tool_a', 'tool_b'], activeSkills: [],
+  });
 }
 
 test('closing a scaffold model stream records exactly one failed terminal operation', async () => {
@@ -100,17 +116,7 @@ for (const provider of ['openai', 'anthropic']) {
   test(`a ${provider} scaffold candidate uses deep routing, native effort, one frame and metered default inference`, async () => {
     const spec = `${provider}/candidate-deep`;
 
-    const catalog: ProfileCatalog = {
-      roles: BUILTIN_PROFILE_CATALOG.roles,
-      tiers: { default: { model: 'openai/chat-fast', reasoningEffort: 'low' },
-        deep: { model: spec, reasoningEffort: 'high' } },
-    };
-
-    const profile = resolveTurnProfile({
-      envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
-      provider: { revision: 'one', availableModels: ['openai/chat-fast', spec] },
-      roleId: 'general', workMode: 'build', availableTools: [], activeSkills: [],
-    });
+    const profile = candidateProfile(spec);
 
     const { rt } = createTestRuntime();
     const { model, operations, reports } = fixture();
@@ -118,7 +124,8 @@ for (const provider of ['openai', 'anthropic']) {
     let resolutions = 0;
 
     const surface = createScaffoldCandidateSurface({
-      rt, tools: {}, callTool: undefined, history: undefined,
+      rt, tools: () => ({}), history: undefined,
+      modelContext: async modelSpec => ({ id: modelSpec, contextWindow: 100_000, modelOutputLimit: 10_000 }),
       profile: async () => {
         resolutions += 1;
 
@@ -155,3 +162,62 @@ for (const provider of ['openai', 'anthropic']) {
     expect(reports[0]).toMatchObject({ spec, source: 'scaffold', usage: { input: 2, output: 1 } });
   });
 }
+
+test('a long-lived candidate surface snapshots tools and profile per issued request across A/B interleaving', async () => {
+  const { rt } = createTestRuntime();
+  const { model } = fixture();
+  const held = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const bound: string[] = [];
+  const scopes: Array<string | undefined> = [];
+  let profile = candidateProfile('openai/deep-a');
+
+  const native = tool({
+    inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false }),
+    execute: async () => 'observed',
+  });
+
+  const tools: ToolSet = { tool_a: native };
+
+  const surface = createScaffoldCandidateSurface({
+    rt, profile: async () => profile,
+    tools: () => {
+      scopes.push(currentOperationProfile(rt.actor)?.profile.tiers.deep.model);
+
+      return tools;
+    },
+    bindModel: spec => {
+      bound.push(spec);
+
+      return model;
+    },
+    modelContext: async spec => {
+      if (spec === 'openai/deep-a') {
+        started.resolve();
+        await held.promise;
+      }
+
+      return { id: spec, contextWindow: 100_000, modelOutputLimit: 10_000 };
+    },
+    history: undefined, spend: { source: 'scaffold', report: () => {} },
+  }, 'answer');
+
+  const drain = async () => {
+    for await (const event of surface.llmStream({ system: 'Answer.', messages: [{ role: 'user', content: 'task' }] })) {
+      expect(event.type).toBeDefined();
+    }
+  };
+
+  const first = drain();
+  await started.promise;
+  profile = candidateProfile('openai/deep-b');
+  delete tools.tool_a;
+  tools.tool_b = native;
+  await drain();
+  held.resolve();
+  await first;
+
+  expect(bound).toEqual(['openai/deep-b', 'openai/deep-a']);
+  expect(scopes).toEqual(['openai/deep-a', 'openai/deep-b']);
+  expect(model.doStreamCalls.map(call => call.tools?.map(entry => entry.name))).toEqual([['tool_b'], ['tool_a']]);
+});

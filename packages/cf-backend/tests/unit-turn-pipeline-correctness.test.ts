@@ -7,6 +7,7 @@ import {
 } from '@kinu.run/test-utils';
 import {
   MergeOutputSchema, WORKSPACE_RUN_ID, listQueuedShadowTrials,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
   type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
 } from '@kinu.run/core';
 import { SDK_SESSION_DDL } from '../../core/tests/helpers';
@@ -17,6 +18,7 @@ import {
 import { createHeadRuntime } from '../src/head-runtime';
 import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
+import { jsonSchema, tool } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { ChatResponseResult, PrepareStepContext } from '@cloudflare/think';
 import * as v from 'valibot';
@@ -150,6 +152,53 @@ function reboundJudgeRoute(profile: ResolvedTurnProfile): ResolvedTurnProfile {
 }
 
 describe('turn-pipeline correctness wiring', () => {
+  test('a detached hosted tool retains profile A after release and admission of profile B', async () => {
+    const { agent } = orchestratorHarness();
+    const started = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const seen: Array<ReasoningEffort | undefined> = [];
+
+    const tools = { probe: tool({
+      inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false }),
+      execute: async () => {
+        seen.push(agent.observeResolvedTurnProfile()?.tier.reasoningEffort);
+        started.resolve();
+        await held.promise;
+        seen.push(agent.observeResolvedTurnProfile()?.tier.reasoningEffort);
+
+        return 'settled';
+      },
+    }) };
+
+    const admit = (effort: ReasoningEffort) => {
+      agent.harnessInstallCatalog({ tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, reasoningEffort: effort } } });
+
+      return agent.beforeTurn({ system: 'sys', messages: [{ role: 'user', content: effort }],
+        tools, model: 'harness-model', continuation: false, body: {},
+      });
+    };
+
+    const turnA = await admit('low');
+    const probe = turnA?.tools?.probe;
+
+    if (!probe) throw new Error('the admitted tool is missing');
+
+    const invoke = toolExecute<Record<string, never>, unknown>(probe);
+    const detached = invoke({});
+    await started.promise;
+    await agent.onChatResponse({
+      message: { id: 'profile-A', role: 'assistant', parts: [{ type: 'text', text: 'detached' }] },
+      requestId: 'profile-A', continuation: false, status: 'completed',
+    });
+    expect(agent.observeResolvedTurnProfile()).toBeNull();
+    await admit('high');
+    expect(agent.observeResolvedTurnProfile()?.tier.reasoningEffort).toBe('high');
+    held.resolve();
+    await detached;
+
+    expect(seen).toEqual(['low', 'low']);
+  });
+
   test('the turn prompt carries the loaded SOUL', async () => {
     // `beforeTurn` refreshes the soul only when nothing is cached, so the
     // observed text is the one the turn renders.
