@@ -126,7 +126,7 @@ import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
-import { FEEDBACK_ENDPOINT } from "@/feedback/contract";
+import { FEEDBACK_ENDPOINT } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@/client-error/contract";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { APP_ROUTES } from "@/app-routes";

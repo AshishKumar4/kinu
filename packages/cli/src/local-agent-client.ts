@@ -42,7 +42,7 @@ import {
   type CliSessionOptions,
 } from './session';
 import { SessionRecorder } from './session-recorder';
-import { normalizeModelMenu, type AgentModelMenu } from './model-catalog';
+import { normalizeModelMenu, type AgentModelMenu } from '@kinu.run/core';
 import {
   findForkPivot,
   promptFiles,

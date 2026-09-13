@@ -20,7 +20,7 @@ import type {
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
-import type { AgentModelMenu } from './model-catalog';
+import type { AgentModelMenu } from '@kinu.run/core';
 import * as v from 'valibot';
 
 export type AgentClientMode = 'local' | 'cloud';

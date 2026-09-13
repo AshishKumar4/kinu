@@ -16,7 +16,7 @@ import { SwarmTree } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import {
   findForkNode, terminalForkNode, treeStats, type ExplorerSelection,
-} from "@/components/swarm-tree-model";
+} from "@kinu.run/core";
 import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
 import {
   runStateLine, FrontierPanel, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,

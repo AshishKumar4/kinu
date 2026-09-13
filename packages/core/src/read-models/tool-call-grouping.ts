@@ -7,10 +7,11 @@
 import { isToolUIPart, getToolName } from "ai";
 import type { DynamicToolUIPart, ToolUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import { JsonObjectSchema, JsonValueSchema, toolCallEffect } from "@kinu.run/core";
-import { tolerate } from "@kinu.run/core/obs";
-import type { JsonObject, JsonValue } from "@kinu.run/core";
-import { extractPreviewUrl } from "@kinu.run/core";
+import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
+import { toolCallEffect } from '../tools/tool-call-summary';
+import { tolerate } from "../obs/index";
+import { type JsonObject, type JsonValue } from '../utils/json';
+import { extractPreviewUrl } from '../preview/preview-origin';
 
 type Part = UIMessage["parts"][number];
 

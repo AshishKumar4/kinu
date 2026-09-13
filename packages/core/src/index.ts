@@ -2343,3 +2343,145 @@ export {
   primePageDeployedBuildSha, isNewerDeployedBuild,
   type SessionRecoveryCallbacks, type SessionRecoveryOptions, type SessionRecovery,
 } from './utils/session-recovery';
+
+export {
+  isModelInferenceCredentialKey,
+} from './providers/inference-credentials';
+
+export {
+  MY_GATEWAY_PROVIDER_ID,
+  createMyGatewayProvider,
+} from './providers/my-gateway';
+
+export {
+  type WorkersAIOptions,
+  createWorkersAIProvider,
+} from './providers/workers-ai-provider';
+
+export {
+  type ExplorerSelection,
+  cleanNodeLabel,
+  clipToWidth,
+  isCompeted,
+  principalVariation,
+  ancestorIds,
+  findForkNode,
+  terminalForkNode,
+  treeStats,
+  maxVisits,
+  subtreeCount,
+  losingBranchIds,
+  NODE_R_MAX,
+  NODE_R_UNSCORED,
+  nodeRadius,
+  linkWidth,
+  LABEL_MIN_SCALE,
+  viewNoteFor,
+} from './read-models/swarm-tree-model';
+
+export {
+  type AnyToolPart,
+  type PartBlock,
+  groupMessageParts,
+  parseProvisionError,
+  partOutput,
+  partInput,
+  partEffect,
+  callFailed,
+} from './read-models/tool-call-grouping';
+
+export {
+  ACCESS_TOKEN_SCOPES,
+  type AccessTokenScope,
+  type AccessTokenRecord,
+  type AccessTokenMint,
+  type AccessTokenVerification,
+  initAccessTokenTable,
+  parseAccessTokenUserId,
+  normalizeAccessTokenScopes,
+  mintAccessToken,
+  verifyAccessToken,
+  listAccessTokens,
+  type AccessTokenRevocation,
+  revokeAccessToken,
+  getActiveAccessTokenScopes,
+} from './cli/access-tokens';
+
+export {
+  bunResolutionShell,
+  cliPlatformShell,
+} from './cli/bun-runtime';
+
+export {
+  type CliInstallCommandOptions,
+  normalizeCliOrigin,
+  buildCliInstallCommand,
+  buildCliSetupCommand,
+  buildCliAuthCommand,
+} from './cli/install-command';
+
+export {
+  FEEDBACK_ENDPOINT,
+  FEEDBACK_MAX_SCREENSHOT_BYTES,
+  FEEDBACK_MAX_REQUEST_BYTES,
+  FEEDBACK_MAX_NOTE_CHARS,
+  FEEDBACK_MAX_ROUTE_CHARS,
+  FEEDBACK_MAX_USER_AGENT_CHARS,
+  FEEDBACK_SCREENSHOT_TYPE,
+  FEEDBACK_REDACT_ATTR,
+  FEEDBACK_OMIT_ATTR,
+  FEEDBACK_FIELDS,
+  type FeedbackAccepted,
+  type FeedbackRecord,
+} from './feedback/contract';
+
+export {
+  type PngFault,
+  type SanitizedPng,
+  type PngRejection,
+  sanitizePng,
+} from './feedback/png';
+
+export {
+  type AgentModelEntry,
+  type AgentModelMenu,
+  EMPTY_MODEL_MENU,
+  filterModels,
+  type ModelSpecValidation,
+  validateModelSpec,
+  normalizeModelMenu,
+  contextWindowForSpec,
+} from './providers/model-menu';
+
+export {
+  type TextForContextEstimate,
+  modelDisplayName,
+  estimateContextTokens,
+  formatContextUsage,
+} from './tui/context-status';
+
+export {
+  clipText,
+  agentDisplayLabel,
+} from './tui/format';
+
+export {
+  ESC_ESC_BEAT_MS,
+  type InputState,
+  initialInputState,
+  type InputMachineEvent,
+  type InputEffect,
+  type InputTransition,
+  reduceInput,
+} from './tui/input-state';
+
+export {
+  type WaitOptions,
+  type StoppableWaitOptions,
+  waitForAnswer,
+} from './utils/wait';
+
+export {
+  sandboxIdForWorkspace,
+  isKinuSandboxId,
+} from './preview/sandbox-id';

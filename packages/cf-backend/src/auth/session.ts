@@ -14,7 +14,7 @@ import {
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
-import type { AccessTokenScope } from '../cli/access-token-store';
+import type { AccessTokenScope } from '@kinu.run/core';
 
 export const SESSION_COOKIE_NAME = '__Host-kinu_session';
 

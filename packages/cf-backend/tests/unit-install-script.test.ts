@@ -24,8 +24,8 @@ import { describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
-import { buildCliInstallCommand } from '../src/cli/install-command';
-import { bunResolutionShell } from '../src/cli/bun-runtime';
+import { buildCliInstallCommand } from '@kinu.run/core';
+import { bunResolutionShell } from '@kinu.run/core';
 import { CLI_DIST_PATHS } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';

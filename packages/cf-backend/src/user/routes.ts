@@ -44,7 +44,7 @@ import type { UserDO } from './user-do';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
+import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
 import { err, json, safeJson } from '@kinu.run/core';

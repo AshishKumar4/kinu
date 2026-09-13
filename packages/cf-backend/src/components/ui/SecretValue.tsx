@@ -22,7 +22,7 @@
  * an inline box. Without it a redacted secret collapses to nothing, the line
  * reflows, and the block that was supposed to cover it covers a different place.
  */
-import { FEEDBACK_REDACT_ATTR } from "@/feedback/contract";
+import { FEEDBACK_REDACT_ATTR } from "@kinu.run/core";
 
 /**
  * Spread onto any element whose rendered content is a credential. Frozen and

@@ -94,10 +94,3 @@ export interface FeedbackRecord {
   /** From the request header, not from the body. */
   userAgent: string | null;
 }
-
-// The analytics marker's own types — `FeedbackMarker`, `FeedbackRouteFamily`,
-// `FeedbackRejectReason` — are NOT declared here. They are the parameter type of
-// `writeFeedbackMarker`, and a callee owning its own parameter type is the
-// direction that cannot drift: were they declared here, the analytics module
-// would have to import the feedback route to type its own signature. Import them
-// from `../analytics/feedback-marker`.

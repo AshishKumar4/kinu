@@ -1,18 +1,16 @@
 // Workers AI provider. Production uses the logged-in user's Cloudflare OAuth
-// credential, so billing stays on that account. A development identity can use
-// the Worker's direct AI binding; staging uses this for the isolated
-// eval-service account.
+// credential, so billing stays on that account. The eval identity can use
+// a caller-supplied direct AI binding.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from '@kinu.run/core';
+import { type ModelProvider, type ModelInfo } from './types';
 
-import {
-  DEFAULT_WORKERS_AI_MODEL_ID, listModelsDevProviderModels,
-  createCloudflareAIFetch, createDirectWorkersAIFetch,
-  WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS,
-  WORKERS_AI_REASONING_EFFORTS,
-} from '@kinu.run/core';
-import { CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID } from './workers-ai';
+import { listModelsDevProviderModels } from './models-dev';
+import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
+import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
+import { WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS, WORKERS_AI_REASONING_EFFORTS } from './workers-ai-catalog';
+import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
 export interface WorkersAIOptions {
   /** Prefix-cache affinity key — routes same-key requests to the same replica. */
@@ -21,7 +19,7 @@ export interface WorkersAIOptions {
 
 export function createWorkersAIProvider(
   opts: WorkersAIOptions = {},
-  developmentBinding?: Ai,
+  developmentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0],
 ): ModelProvider {
   return {
     id: 'workers-ai',

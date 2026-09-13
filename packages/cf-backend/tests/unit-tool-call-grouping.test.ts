@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
 import type { JsonObject, JsonValue } from '@kinu.run/core';
-import { groupMessageParts, partEffect } from '../src/components/tool-call-grouping';
+import { groupMessageParts, partEffect } from '@kinu.run/core';
 import { describeCommand, describeToolCall, toolCallEffect } from '@kinu.run/core';
 
 type Part = UIMessage['parts'][number];

@@ -265,7 +265,7 @@ import {
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { sandboxIdForWorkspace } from "./lib/preview-exposures";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,

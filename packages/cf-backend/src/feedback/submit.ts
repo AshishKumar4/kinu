@@ -35,7 +35,7 @@
 import type { AuthIdentity } from '../auth/session';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import { err, json, readBounded } from '@kinu.run/core';
-import { sanitizePng, type PngFault } from './png';
+import { sanitizePng, type PngFault } from '@kinu.run/core';
 import {
   feedbackRouteFamily,
   type FeedbackMarker,
@@ -52,7 +52,7 @@ import {
   FEEDBACK_SCREENSHOT_TYPE,
   type FeedbackAccepted,
   type FeedbackRecord,
-} from './contract';
+} from '@kinu.run/core';
 
 /** Where the screenshot bytes go. Two methods, because two are used: the write
  *  and the orphan delete. Narrower than `R2Bucket` so the policy below can be

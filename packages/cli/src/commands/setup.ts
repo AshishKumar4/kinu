@@ -12,7 +12,7 @@ import { bumpProviderRevision, loadConfigFile, resolveCloudSession, setDefaultMo
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm } from '../prompt';
 import { authCommand, openBrowser } from './auth';
-import { waitForAnswer } from '../wait';
+import { waitForAnswer } from '@kinu.run/core';
 
 /**
  * Where a provider secret is written.

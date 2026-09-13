@@ -1,9 +1,6 @@
-// The credential-key allowlist for model inference. This half of the module
-// stays adapter-side because the key list names `lib/cloudflare-oauth.ts`'s
-// constants; the header mapping itself lives in core
-// (`credentials/headers.ts`).
-import { CODEX_CRED_KEY } from '@kinu.run/core';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
+// Credential keys that carry model-inference authority.
+import { CODEX_CRED_KEY } from './codex';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
 /** The credential-key shapes that resolve to a model provider — the same set
  *  `listConnectedProviders` derives the model picker from: the two OAuth

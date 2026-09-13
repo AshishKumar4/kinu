@@ -1,6 +1,4 @@
-// Runtime-agnostic model providers. The user-credential Cloudflare providers
-// (workers-ai OAuth path, my-gateway) live in `cf-backend/src/providers/`
-// until their credential-key source joins core.
+// Runtime-agnostic model providers over caller-supplied credentials and transports.
 export * from './types';
 
 export * from './reasoning-effort';

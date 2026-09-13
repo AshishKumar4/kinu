@@ -57,7 +57,7 @@ import {
   ControlActionSchema, describeAction, runControlAction, UserIdSchema,
   type ActionEnv, type ActionIdentity,
 } from './actions';
-import { controlPlaneMetrics } from './metrics';
+import { controlPlaneMetrics } from '@kinu.run/core/control-plane';
 import type { MetricsRequest } from '@kinu.run/core/control-plane';
 import type {
   AuditOutcome, AuditSettlement, ControlAuditRow, OperationMarker,

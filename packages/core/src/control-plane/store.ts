@@ -14,14 +14,14 @@
  * account from its source at any moment. The audit log is this store's own
  * primary record, and it has no update and no delete path anywhere in this file —
  * an audit log an admin can edit is a diary.
- *
- * The feedback slice (recordFeedback, listFeedback) stays in
- * `cf-backend/src/control-plane/store.ts` until the feedback contract joins
- * core; it imports this module's primitives rather than restating them.
  */
 import { seekPage, type Page, type PageRequest } from '../read-models/page';
 import * as v from 'valibot';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
+import {
+  FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS, FEEDBACK_MAX_USER_AGENT_CHARS,
+  type FeedbackRecord,
+} from '../feedback/contract';
 
 export type { ControlPlaneSql } from './sql';
 
@@ -292,13 +292,6 @@ function clampText(value: string, max: number): string {
 function run(sql: ControlPlaneSql, query: string, ...bindings: ControlPlaneSqlValue[]): void {
   sql.exec(query, ...bindings);
 }
-
-/**
- * Primitives shared with the feedback remainder in
- * `cf-backend/src/control-plane/store.ts` until the feedback contract joins
- * core. Re-exported through the subpath barrel; not for general use.
- */
-export { clampPage, anchor, readAnchor, clampText, run, select };
 
 /**
  * Run a query and PARSE its rows.
@@ -690,5 +683,78 @@ function projectAudit(row: AuditSqlRow): ControlAuditRow {
     // narrowed on read so a hand-edited database cannot widen the type.
     outcome: AUDIT_OUTCOMES.find((known) => known === row.outcome) ?? 'failed',
     detail: row.detail,
+  };
+}
+
+export type ControlFeedbackRow = FeedbackRecord;
+
+const FeedbackSqlRowSchema = v.object({
+  id: v.string(),
+  created_at: v.number(),
+  user_id: v.string(),
+  email: v.string(),
+  note: v.string(),
+  route: v.string(),
+  workspace: v.nullable(v.string()),
+  object_key: v.nullable(v.string()),
+  content_type: v.nullable(v.string()),
+  bytes: v.nullable(v.number()),
+  user_agent: v.nullable(v.string()),
+});
+
+type FeedbackSqlRow = v.InferOutput<typeof FeedbackSqlRowSchema>;
+
+/** Store one feedback submission's metadata. The screenshot bytes are already in
+ *  R2 and are not touched here: the row carries `objectKey` and this store never
+ *  holds an image. */
+/** What a stored submission answers with: the id the producer minted, echoed so
+ *  the caller has one value to treat as its commit acknowledgement. */
+export interface FeedbackWritten { id: string }
+
+export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): FeedbackWritten {
+  run(sql,
+    `INSERT INTO cp_feedback
+       (id, created_at, user_id, email, note, route, workspace,
+        object_key, content_type, bytes, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+    row.id, row.createdAt, row.userId, row.email,
+    clampText(row.note, FEEDBACK_MAX_NOTE_CHARS),
+    clampText(row.route, FEEDBACK_MAX_ROUTE_CHARS),
+    row.workspace, row.objectKey, row.contentType, row.bytes,
+    row.userAgent === null ? null : clampText(row.userAgent, FEEDBACK_MAX_USER_AGENT_CHARS));
+
+  return { id: row.id };
+}
+
+export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
+  const limit = clampPage(request.limit);
+  const from = readAnchor(request.cursor, 2);
+
+  const found = select(sql, FeedbackSqlRowSchema,
+    `SELECT id, created_at, user_id, email, note, route, workspace,
+            object_key, content_type, bytes, user_agent
+       FROM cp_feedback
+      ${from ? `WHERE (created_at < ?) OR (created_at = ? AND id > ?)` : ''}
+      ORDER BY created_at DESC, id ASC
+      LIMIT ?`,
+    ...(from ? [from[0], from[0], from[1]] : []), limit + 1);
+
+  return seekPage(found.map(projectFeedback), limit, (row) => anchor(row.createdAt, row.id));
+}
+
+function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {
+  return {
+    id: row.id,
+    createdAt: row.created_at,
+    userId: row.user_id,
+    email: row.email,
+    note: row.note,
+    route: row.route,
+    workspace: row.workspace,
+    objectKey: row.object_key,
+    contentType: row.content_type,
+    bytes: row.bytes,
+    userAgent: row.user_agent,
   };
 }

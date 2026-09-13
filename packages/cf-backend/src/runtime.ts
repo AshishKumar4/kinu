@@ -65,7 +65,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
 import { adaptCloudflareSandbox, SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { previewHostSuffix } from "@kinu.run/core";
-import { sandboxIdForWorkspace } from "./lib/preview-exposures";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";

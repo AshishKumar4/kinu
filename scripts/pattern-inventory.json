@@ -295,7 +295,7 @@
       "decision": "cli"
     },
     {
-      "file": "packages/cli/src/tui/context-status.ts",
+      "file": "packages/core/src/tui/context-status.ts",
       "kind": "hand-parser",
       "owner": "stripKnownProvider",
       "sourceSha256": "e41b2bd0d7a20cf88067b46fe3b82a4bf4b1f46553a1145c06fcfaebab55aab4",

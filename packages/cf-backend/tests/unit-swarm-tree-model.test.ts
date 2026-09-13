@@ -9,7 +9,7 @@ import {
   ancestorIds, cleanNodeLabel, clipToWidth, findForkNode, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
   NODE_R_MAX, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats,
   viewNoteFor,
-} from '../src/components/swarm-tree-model';
+} from '@kinu.run/core';
 
 let seq = 0;
 

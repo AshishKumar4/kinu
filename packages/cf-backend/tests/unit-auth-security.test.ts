@@ -13,7 +13,7 @@ import {
   isCloudflareCredentialUsable,
   withCloudflareAccount,
 } from '@kinu.run/core';
-import { buildCliInstallCommand } from '../src/cli/install-command';
+import { buildCliInstallCommand } from '@kinu.run/core';
 import { handleCliRequest } from '../src/cli/routes';
 import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';

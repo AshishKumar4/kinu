@@ -10,7 +10,7 @@ import type {
   DeviceConsentSurface,
   LocalSessionControls,
 } from '../../src/agent-client';
-import type { AgentModelMenu } from '../../src/model-catalog';
+import type { AgentModelMenu } from '@kinu.run/core';
 import { createCliSession } from '../../src/session';
 import { ChatApp, type ChatAppOpts } from '../../src/tui/chat-app';
 import type { TuiHubData } from '../../src/tui/hubs';

@@ -34,7 +34,7 @@ import {
   groupMessageParts,
   partOutput, partInput, partEffect, callFailed, parseProvisionError,
   type AnyToolPart,
-} from "@/components/tool-call-grouping";
+} from "@kinu.run/core";
 import { liveTail } from "@kinu.run/core";
 import { redactPayload, segmentBySteers } from "@kinu.run/core";
 import {

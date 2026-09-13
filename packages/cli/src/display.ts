@@ -7,7 +7,7 @@ import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS, describeToolCall, summarizeToolCall, TUI_MARKS } from '@kinu.run/core';
 import type { SearchNode, ReasoningEffort, JsonObject, JsonValue, ToolOutcome } from '@kinu.run/core';
-import { clipText } from './tui/format';
+import { clipText } from '@kinu.run/core';
 import { guideFailure } from './provider-guidance';
 import cliPackage from '../package.json' with { type: 'json' };
 

@@ -21,7 +21,7 @@ import { Database } from 'bun:sqlite';
 import type { AuthIdentity } from '../src/auth/session';
 import type { AccessIdentity } from '../src/control-plane/access-gate';
 import * as store from '@kinu.run/core/control-plane';
-import * as feedbackStore from '../src/control-plane/store';
+import * as feedbackStore from '@kinu.run/core/control-plane';
 import type { ControlCapability, PresentedCaller } from '@kinu.run/core/control-plane';
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';

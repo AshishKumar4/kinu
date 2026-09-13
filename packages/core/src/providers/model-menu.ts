@@ -1,6 +1,9 @@
 /** Model catalog entries as both backends expose them through AgentClient. */
 
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, knownReasoningEfforts, type ProviderFailure, type ReasoningEffort } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
+import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
+import { type ProviderFailure } from './registry';
+import { MODEL_CAPABILITIES, type ModelCapability } from './types';
 import * as v from 'valibot';
 
 const ModelMenuPayloadSchema = v.object({
@@ -28,7 +31,7 @@ export interface AgentModelEntry {
   spec: string;
   label: string;
   provider: string;
-  capabilities?: string[];
+  capabilities?: ModelCapability[];
   contextWindow?: number;
   /** The effort levels the model accepts, in the provider's order; absent
    *  when the catalog could not say. */
@@ -84,8 +87,8 @@ export function validateModelSpec(models: readonly AgentModelEntry[], spec: stri
   return { status: 'unknown-model', provider, suggestions };
 }
 
-/** Narrow an untrusted model menu (HTTP body, RPC result) into the CLI's
- *  shape: entries normalized and deduped, failures kept verbatim. */
+/** Admit each model and failure independently so one malformed row cannot
+ *  erase another provider's catalog or its failure reason. */
 export function normalizeModelMenu(input: { payload: unknown }): AgentModelMenu {
   const parsed = v.safeParse(ModelMenuPayloadSchema, input.payload);
   const source = parsed.success ? parsed.output : { models: [], failures: [] };
@@ -133,13 +136,15 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
       provider: provider || spec.split('/', 1)[0] || 'model',
     };
 
-    const filteredCapabilities = capabilities.success
+    const capabilityNames = capabilities.success
       ? capabilities.output.flatMap((value): string[] => {
           const parsedCapability = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
 
           return parsedCapability.success ? [parsedCapability.output] : [];
         })
       : [];
+
+    const filteredCapabilities = MODEL_CAPABILITIES.filter((capability) => capabilityNames.includes(capability));
 
     if (filteredCapabilities.length > 0) entry.capabilities = filteredCapabilities;
     const contextWindow = numberValue({ value: item.contextWindow });
@@ -172,7 +177,8 @@ function dedupeModelEntries(rows: AgentModelEntry[]): AgentModelEntry[] {
 
     bySpec.set(row.spec, {
       ...existing,
-      capabilities: [...new Set([...(existing.capabilities ?? []), ...(row.capabilities ?? [])])],
+      capabilities: MODEL_CAPABILITIES.filter((capability) =>
+        existing.capabilities?.includes(capability) || row.capabilities?.includes(capability)),
     });
   }
 

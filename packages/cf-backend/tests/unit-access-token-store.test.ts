@@ -14,7 +14,7 @@ import {
   parseAccessTokenUserId,
   revokeAccessToken,
   verifyAccessToken,
-} from '../src/cli/access-token-store';
+} from '@kinu.run/core';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
