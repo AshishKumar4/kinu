@@ -14,4 +14,4 @@ Watch for the delegation failure patterns that recur:
 - **Verifying by summary.** A report that says the tests pass is a claim; check the evidence before you relay it.
 - **Micro-managing the mechanics.** Corrected paths, renamed symbols, and reordered steps are the hired subordinate's adjustments. Re-brief only when the miss is real, not when it differs from how you would have typed it.
 - **Reimplementing after a miss.** One careful review, one batched correction. Taking over the keyboard abandons the division of work without fixing the plan.
-- **Leaving a running handoff unaddressed.** New user information while the hired subordinate runs means a redirect now, not a stale report later.
+- **Leaving a running handoff unaddressed.** New user information while the hired subordinate runs means a redirect now, not a stale report later.{{familyDelta}}

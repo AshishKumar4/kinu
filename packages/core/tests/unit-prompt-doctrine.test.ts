@@ -10,6 +10,18 @@ const full = PROMPT_MATRIX.find(({ name }) => name === 'cf-full-surface');
 if (!full) throw new Error('Full prompt proof surface is missing');
 
 describe('lead doctrine follows actor authority and available delegation', () => {
+  test('a durable-only root is never told to call the unavailable task lifetime', () => {
+    const { rt } = createTestRuntime();
+
+    const prompt = buildSystemPromptSync(rt, {
+      ...full.opts, temporaryAsk: false, model: { id: 'gpt-5-codex' },
+    });
+
+    expect(prompt).not.toContain("lifetime:'task'");
+    expect(prompt).toContain('This turn supports durable hires, not task-lifetime calls.');
+    expect(prompt).toContain('Concrete implementation packets');
+  });
+
   test('both hired lifetimes retain their subordinate surface even when hire is available', () => {
     const { rt } = createTestRuntime();
 
@@ -29,13 +41,13 @@ describe('lead doctrine follows actor authority and available delegation', () =>
       });
 
       const child = buildSystemPromptSync({ ...rt, actor }, { ...full.opts, identity: {} });
-      const withoutLead = leadSections.reduce((prompt, section) => prompt.replace(`${section.source}\n\n`, ''), root);
+      const withoutLead = leadSections.reduce((prompt, section) => prompt.replace(`${section.render({ familyDelta: '', hasTaskHire: true })}\n\n`, ''), root);
 
       expect(child).toBe(withoutLead);
 
       for (const section of leadSections) {
-        expect(root).toContain(section.source);
-        expect(child).not.toContain(section.source);
+        expect(root).toContain(section.render({ familyDelta: '', hasTaskHire: true }));
+        expect(child).not.toContain(section.render({ familyDelta: '', hasTaskHire: true }));
       }
     }
   });
@@ -51,7 +63,10 @@ describe('lead doctrine follows actor authority and available delegation', () =>
     expect(prompt).not.toContain('UNAVAILABLE_HIRE');
 
     for (const section of PROMPT_SECTIONS.filter(({ id }) => id.startsWith('lead/'))) {
-      expect(prompt).not.toContain(section.source);
+      const heading = section.source.split('\n')[0];
+
+      if (!heading) throw new Error(`Missing heading: ${section.id}`);
+      expect(prompt).not.toContain(heading);
     }
   });
 });

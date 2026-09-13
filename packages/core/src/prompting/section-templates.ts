@@ -50,7 +50,12 @@ import leadReview from '../prompts/lead-review.md' with { type: 'text' };
 import leadInterruptions from '../prompts/lead-interruptions.md' with { type: 'text' };
 import leadDelivery from '../prompts/lead-delivery.md' with { type: 'text' };
 import leadDirectEdit from '../prompts/lead-direct-edit.md' with { type: 'text' };
+import operatingKimi from '../prompts/operating-guidance.kimi.md' with { type: 'text' };
+import operatingGpt from '../prompts/operating-guidance.gpt.md' with { type: 'text' };
+import operatingGemini from '../prompts/operating-guidance.gemini.md' with { type: 'text' };
+import briefGpt from '../prompts/lead-brief.gpt.md' with { type: 'text' };
 import { definePromptSection, type PromptSection } from './template';
+import type { PromptModelFamily } from './model-profile';
 
 /**
  * Who the model is, by name.
@@ -126,7 +131,7 @@ export const EXTERNAL_TOOL_LINE = definePromptSection(
  */
 export const OPERATING_GUIDANCE = definePromptSection(
   "guidance/operating",
-  "{{#if gpt}}{{/if}}{{#if kimi}}{{/if}}{{#if planMode}}{{/if}}{{#if planSubmission}}{{/if}}",
+  '{{familyDelta}}{{#if planMode}}{{/if}}{{#if planSubmission}}{{/if}}',
   operatingGuidance.trimEnd(),
 );
 
@@ -368,11 +373,11 @@ export const WORKSPACE_INSTRUCTIONS_SECTION = definePromptSection(
  */
 // Separate rule families remain evolvable under GEPA's unchanged 4,800-byte
 // section ceiling. Only the root actor with a wired hire action renders these.
-export const LEAD_RESPONSIBILITY = definePromptSection('lead/responsibility', '', leadResponsibility.trimEnd());
+export const LEAD_RESPONSIBILITY = definePromptSection('lead/responsibility', '{{#if hasTaskHire}}{{/if}}', leadResponsibility.trimEnd());
 
-export const LEAD_BRIEF = definePromptSection('lead/brief', '', leadBrief.trimEnd());
+export const LEAD_BRIEF = definePromptSection('lead/brief', '{{familyDelta}}', leadBrief.trimEnd());
 
-export const LEAD_PARALLEL = definePromptSection('lead/parallel', '', leadParallel.trimEnd());
+export const LEAD_PARALLEL = definePromptSection('lead/parallel', '{{#if hasTaskHire}}{{/if}}', leadParallel.trimEnd());
 
 export const LEAD_REVIEW = definePromptSection('lead/review', '', leadReview.trimEnd());
 
@@ -381,6 +386,28 @@ export const LEAD_INTERRUPTION = definePromptSection('lead/interruptions', '', l
 export const LEAD_DELIVERY = definePromptSection('lead/delivery', '', leadDelivery.trimEnd());
 
 export const LEAD_DIRECT_EDIT = definePromptSection('lead/direct-edit', '', leadDirectEdit.trimEnd());
+
+// Files contain only differing paragraphs. No entry means base wording, not
+// another copy of the base. The required familyDelta slot survives promotion,
+// so GEPA replaces one whole section while the selected delta still composes.
+// GPT packet and Gemini redirect wording come from the same fork cited above;
+// Claude has no fork-authored delta and deliberately uses the shared base.
+const FAMILY_DELTAS = new Map<string, Readonly<Partial<Record<PromptModelFamily, PromptSection<''>>>>>([
+  [OPERATING_GUIDANCE.id, {
+    kimi: definePromptSection('delta/operating-kimi', '', operatingKimi.trimEnd()),
+    gpt: definePromptSection('delta/operating-gpt', '', operatingGpt.trimEnd()),
+    gemini: definePromptSection('delta/operating-gemini', '', operatingGemini.trimEnd()),
+  }],
+  [LEAD_BRIEF.id, {
+    gpt: definePromptSection('delta/brief-gpt', '', briefGpt.trimEnd()),
+  }],
+]);
+
+export function promptFamilyDelta(sectionId: string, family: PromptModelFamily): string {
+  const delta = FAMILY_DELTAS.get(sectionId)?.[family];
+
+  return delta ? `\n${delta.render({})}` : '';
+}
 
 export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   OPERATING_GUIDANCE,

@@ -161,6 +161,15 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     },
   },
   {
+    name: 'family-gemini',
+    opts: {
+      availableTools: ['run', 'memory'],
+      backend: 'cf',
+      model: { id: 'gemini-3-pro', provider: 'google' },
+      currentDate: '2026-01-01',
+    },
+  },
+  {
     name: 'plan-mode-with-submission',
     opts: {
       availableTools: ALL_TOOLS,

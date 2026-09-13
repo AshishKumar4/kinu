@@ -1,6 +1,6 @@
 import type { ModelCapability } from '../providers/types';
 
-export type PromptModelFamily = 'kimi' | 'gpt' | 'generic';
+export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'generic';
 
 /** Same vocabulary as the provider catalogs — one capability taxonomy. */
 export type PromptModelCapability = ModelCapability;
@@ -74,6 +74,10 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
   const text = `${model?.provider ?? ''} ${model?.id ?? ''}`.toLowerCase();
 
   if (text.includes('kimi')) return 'kimi';
+
+  if (text.includes('claude') || text.includes('anthropic')) return 'claude';
+
+  if (text.includes('gemini')) return 'gemini';
 
   if (text.includes('gpt') || text.includes('codex') || text.includes('openai')) return 'gpt';
 
