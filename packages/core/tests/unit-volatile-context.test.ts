@@ -52,6 +52,18 @@ const connectedLaptop: PromptExecutorInfo = { name: 'laptop', available: true, c
 
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
 
+test('mode and plan-submission changes do not rewrite the system prefix', () => {
+  const { rt, testSql } = createTestRuntime();
+
+  try {
+    const build = buildSystemPromptSync(rt, { workMode: 'build' });
+    expect(buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true })).toBe(build);
+    expect(buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: false })).toBe(build);
+  } finally {
+    testSql.close();
+  }
+});
+
 /** The owner's answer for every body these tests read. They are about what the
  *  allocation pays for and how the result renders at system placement, so the
  *  approval is stated once here instead of per call. */

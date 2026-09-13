@@ -147,8 +147,6 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
 
   return render(OPERATING_GUIDANCE, {
     familyDelta: promptFamilyDelta(OPERATING_GUIDANCE.id, family),
-    planMode: surface.workMode === 'plan',
-    planSubmission: surface.planSubmissionAvailable,
   });
 }
 
