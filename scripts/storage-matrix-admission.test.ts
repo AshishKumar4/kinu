@@ -44,16 +44,24 @@ const WITNESSED_FACTS: ControlWitnessFacts = {
     markerPath: 'witness.txt', markerDigest: 'a'.repeat(64),
     manifest: { v: 2, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
     manifestRead: { ok: true, exitCode: 0 },
-    markerInMerged: MARKER, markerInUpper: { ...MARKER, path: '/var/tmp/devbox/upper/witness.txt' },
-    sidecarMounted: false, mounts: { ok: true, exitCode: 0 }, before: 'chain-7', after: 'chain-7',
-    afterNamesDelta: true, nextCheckpoint: { ok: true, outcome: { kind: 'committed' } }, wake: null,
+    markerInMerged: MARKER, markerInUpper: { ...MARKER, path: '/var/tmp/devbox/upper/witness.txt', evidence: { kind: 'missing' } },
+    sidecarMounted: true, blockMounted: true, mounts: { ok: true, exitCode: 0 }, before: 'chain-7', after: 'chain-7',
+    blockReads: { generation: 'chain-7:boot-new', payloadBytes: 0, indexPages: 0, readRequests: 0 },
+    afterNamesDelta: true, nextCheckpoint: { ok: true, outcome: { kind: 'committed' } },
+    beforeState: { state: { bootId: 'boot-old' } },
+    wake: { ms: 100, startedAt: 1, redrives: 0, attach: { kind: 'attached', detail: 'chain chain-7 123B base+delta block-composed' },
+      state: { state: { bootId: 'boot-new', chain: { deltaFormat: 'chunked' } } } },
   },
   mutableDelta: {
-    key: 'backups/chain-7/delta.sqsh',
+    key: 'backups/delta-2/delta.sqsh', previousKey: 'backups/delta-1/delta.sqsh',
     etagBefore: 'e1',
     etagAfter: 'e2',
     bytesBefore: 65_536,
     bytesAfter: 131_072,
+    retainedHead: { ok: true, exists: true, etag: 'e1', size: 65_536 },
+    beforeState: { state: { chain: { base: { id: 'chain-7' }, delta: { id: 'delta-1' }, rev: 2 } } },
+    afterState: { state: { chain: { base: { id: 'chain-7' }, delta: { id: 'delta-2' }, rev: 3 } } },
+    checkpoint: { ok: true, outcome: { kind: 'committed' } },
   },
 };
 
@@ -241,11 +249,11 @@ describe('G0-G9 storage run admission', () => {
       phases: [],
       checkpoints: [],
       decisiveTicks: [],
-      // The delta is immutable now — which would be an improvement, and is
-      // exactly the drift a witness exists to notice rather than absorb.
+      // An in-place rewrite violates the preregistered immutable identity.
       witnessChecks: controlWitnessChecks('snapshot-chain', {
         ...WITNESSED_FACTS,
         mutableDelta: {
+          ...WITNESSED_FACTS.mutableDelta!,
           key: 'backups/chain-7/delta.sqsh',
           etagBefore: 'e1',
           etagAfter: 'e1',

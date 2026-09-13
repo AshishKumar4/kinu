@@ -81,6 +81,7 @@ test('real squashfuse and overlay compose indexed bytes with zero payload read a
 
   expect(result.status, result.stdout + result.stderr).toBe(0);
   expect(result.stdout).toContain('attach-payload-bytes=0');
+  expect(result.stdout).toContain('matrix-composed-witness=marker-readable,upper-absent,sidecar-mounted,block-mounted');
   expect(result.stdout).toContain('composed-read=exact copyup=file-local');
 }, 360_000);
 
