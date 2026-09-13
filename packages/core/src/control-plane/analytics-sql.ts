@@ -19,7 +19,7 @@
  * weighted; this file's job is to not undo that, which it does by never
  * post-processing a number.
  */
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import * as v from 'valibot';
 
 /** Documented endpoint shape. The account id is a var and the token a secret. */

@@ -34,7 +34,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
 import {
   adminControlToken, internalCaller, type ControlCaller, type PresentedCaller,
-} from '../../src/control-plane/capability';
+} from '@kinu.run/core/control-plane';
 import { controlPlaneStub, type ControlPlaneEnv } from '../../src/control-plane/stub';
 
 export { ControlPlaneDO };
