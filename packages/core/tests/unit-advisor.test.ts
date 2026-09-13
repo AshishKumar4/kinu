@@ -10,6 +10,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { KinuError } from '../src/obs/error';
+import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '../src/obs/index';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_HEADER, ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
@@ -564,4 +565,132 @@ describe('reviewRecordedTurn', () => {
     })).toBeNull();
   });
 
+});
+
+// ── Transient retry ─────────────────────────────────────────────────────────
+// One provider failure must not lose the turn's only review: a transient
+// failure earns another attempt, up to three, and every attempt's failure is
+// recorded on `advisor.review_failed` with its number. A definitive failure
+// is recorded once and thrown, as before.
+
+describe('advisor review retries', () => {
+  const snapshot = (over: Partial<CompletedTurn> = {}) => ({
+    turn: aTurn(over), reachable: ['run'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
+  });
+
+  const attempts = (rec: RecordingLogger) => rec.emitted
+    .filter((line) => line.event === 'advisor.review_failed')
+    .map((line) => line.fields);
+
+  test('a reviewer that fails twice transiently then answers is heard, with both failures recorded', async () => {
+    let calls = 0;
+
+    const limited: LLM = {
+      async *stream() { yield ''; },
+      complete: async () => {
+        calls++;
+
+        // What a 429 has become by this seam: `toProviderError` maps 429 and
+        // 5xx to `unavailable`, so the lane retries on the code, not the status.
+        if (calls <= 2) throw new KinuError('unavailable', 'advisor model rate-limited (HTTP 429)');
+
+        return JSON.stringify(NOTE);
+      },
+    };
+
+    const rec = createRecordingLogger();
+    const restore = setDiagnosticsSink(rec);
+
+    try {
+      const delivered: AgentSignal[] = [];
+
+      const disposition = await reviewRecordedTurn({
+        snapshot: snapshot(), llm: limited, govern: (llm) => llm, gateOpen: false,
+        deliver: async (signal) => {
+          delivered.push(signal);
+
+          return 'queued';
+        },
+        record: () => {},
+      });
+
+      expect(disposition).toBe('deliver');
+      expect(delivered).toHaveLength(1);
+    } finally {
+      restore();
+    }
+
+    expect(calls).toBe(3);
+    expect(attempts(rec)).toEqual([{ attempt: 1 }, { attempt: 2 }]);
+  });
+
+  test('a definitive failure is recorded once and thrown, never retried', async () => {
+    let calls = 0;
+
+    const refusing: LLM = {
+      async *stream() { yield ''; },
+      complete: async () => {
+        calls++;
+
+        throw new KinuError('denied', 'advisor model credentials rejected');
+      },
+    };
+
+    const rec = createRecordingLogger();
+    const restore = setDiagnosticsSink(rec);
+
+    try {
+      await expect(reviewRecordedTurn({
+        snapshot: snapshot(), llm: refusing, govern: (llm) => llm, gateOpen: false,
+        deliver: async () => 'queued', record: () => {},
+      })).rejects.toMatchObject({ code: 'denied' });
+    } finally {
+      restore();
+    }
+
+    expect(calls).toBe(1);
+    // Just the one attempt: `reviewRecordedTurn` rethrows a definitive
+    // failure without a second line, exactly as before.
+    expect(attempts(rec)).toEqual([{ attempt: 1 }]);
+  });
+
+  test('three transient failures leave the turn unreviewed, with all three attempts recorded', async () => {
+    let calls = 0;
+
+    const down: LLM = {
+      async *stream() { yield ''; },
+      complete: async () => {
+        calls++;
+
+        throw new KinuError('unavailable', 'advisor model unreachable');
+      },
+    };
+
+    const rec = createRecordingLogger();
+    const restore = setDiagnosticsSink(rec);
+
+    try {
+      const delivered: AgentSignal[] = [];
+      const recorded: AdvisorNote[] = [];
+
+      const disposition = await reviewRecordedTurn({
+        snapshot: snapshot(), llm: down, govern: (llm) => llm, gateOpen: false,
+        deliver: async (signal) => {
+          delivered.push(signal);
+
+          return 'queued';
+        },
+        record: (note) => { recorded.push(note); },
+      });
+
+      expect(disposition).toBeNull();
+      expect(delivered).toEqual([]);
+      expect(recorded).toEqual([]);
+    } finally {
+      restore();
+    }
+
+    expect(calls).toBe(3);
+    expect(attempts(rec)).toEqual([{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }]);
+  });
 });
