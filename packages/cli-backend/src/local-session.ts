@@ -4103,17 +4103,12 @@ export class LocalAgentSession implements BackendHost {
    * that is about the host and not about the request.
    */
   private get refinementDeps(): RefinementDeps {
-    const temporary = this.teamDeps?.temporary;
-
-    let deps: RefinementDeps = {
+    return {
       control: this.scaffoldControl,
       facts: this.factsStore,
       approvals: this.instructionApprovals,
+      refiner: this.teamDeps?.temporary ?? null,
     };
-
-    if (temporary !== undefined) deps = { ...deps, refiner: temporary };
-
-    return deps;
   }
 
   /** One step of the refinement lane plus the automatic trigger — driven by the
