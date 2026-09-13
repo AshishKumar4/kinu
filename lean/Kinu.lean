@@ -46,6 +46,7 @@ import Kinu.Storage.FTS5Search
 import Kinu.Storage.SqliteFSCorrectness
 import Kinu.Storage.CostModel
 import Kinu.Storage.SnapshotChain
+import Kinu.Storage.BlockLayer
 
 -- Execution layer proofs (5-tool architecture + capability routing)
 import Kinu.Execution.Capabilities
