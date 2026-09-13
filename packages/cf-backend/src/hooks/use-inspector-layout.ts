@@ -37,12 +37,10 @@ const INSPECTOR_PANEL_ID = "inspector";
 interface InspectorTarget { readonly collapsed: boolean; readonly widthPx: number }
 
 /** The WIDTH is the account's: a preference about this person's display,
- *  stored as a plain pixel number beside the theme choice. A legacy
- *  `<width>:<0|1>` value still reads as its width; the collapsed half cannot
- *  name a workspace, so it is deliberately dropped. */
+ *  stored as a plain pixel number beside the theme choice. */
 function readInspectorWidth(account: string): number | null {
   const raw = localStorage.getItem(`kinu.inspector.${account}`);
-  const width = raw === null ? NaN : Number(raw.split(":")[0]);
+  const width = raw === null ? NaN : Number(raw);
 
   return Number.isFinite(width) ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : null;
 }
