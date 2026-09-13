@@ -12,6 +12,7 @@ import {
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
+  WorkspaceOverviewSchema,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -515,3 +516,9 @@ export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts)
 
 export const cancelTrigger = (agentName: string, trigger_id: string) =>
   agentApi(v.object({ ok: v.boolean(), changed: v.boolean() }), 'DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);
+
+// ── Workspace overview (the home card's one read) ─────────────────
+// Agent-scoped like the triggers above: the route re-proves ownership against
+// the stamped session id before answering.
+export const getWorkspaceOverview = (agentName: string) =>
+  agentApi(WorkspaceOverviewSchema, 'GET', agentName, '/overview');

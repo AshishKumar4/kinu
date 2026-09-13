@@ -314,6 +314,11 @@ export const AGENT_RPC_ACCESS = {
   // aggregate is only as open as its strictest input: it folds the changelog,
   // the scaffold archive and the curriculum, all of which are interactive.
   listPendingActions: 'interactive',
+  // The home card's one read. Interactive for the same reason as the queue it
+  // folds: `decisionsWaiting` counts the consent registry and the parked
+  // commands, both of which are interactive reads in their own right, so a
+  // scoped token must not reach the aggregate either.
+  getWorkspaceOverview: 'interactive',
   listScaffoldVersions: 'interactive',
   listTurnFeedback: 'interactive',
   markChangelogSeen: 'interactive',

@@ -1,0 +1,110 @@
+/**
+ * The home card's summary of one workspace.
+ *
+ * The wire shape is `WorkspaceOverviewSchema`; `buildWorkspaceOverview` folds
+ * the caller's own queue reads into it and `workspaceOverviewStatus` names the
+ * one slot a card may speak from. Only what can actually wait on the owner —
+ * a parked command, a device consent, a plan review, a scaffold trial the
+ * deployment does not auto-promote — is a decision; unseen changes and
+ * auto-promoted trials are updates, and a curriculum proposal is neither.
+ */
+import * as v from 'valibot';
+import type { PendingAction, PendingActionKind } from './pending-actions';
+import type { PendingDeviceConsent } from '../safety/device-consent';
+import type { PlanReviewStatus } from '../types/plans';
+
+const TASK_PREVIEW_MAX = 240;
+
+const WorkspaceOverviewRunSchema = v.object({
+  status: v.nullable(v.string()),
+  task: v.nullable(v.string()),
+});
+
+export const WorkspaceOverviewSchema = v.object({
+  observedAt: v.number(),
+  activity: v.picklist(['working', 'unfinished', 'idle']),
+  decisionsWaiting: v.number(),
+  hasUpdates: v.boolean(),
+  latestRun: v.nullable(WorkspaceOverviewRunSchema),
+});
+
+export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
+
+export interface WorkspaceOverviewInputs {
+  readonly observedAt: number;
+  /** A live turn on this actor or a hosted child. */
+  readonly working: boolean;
+  /** Durable unfinished work — owed turns, recovery, parked effects. */
+  readonly unfinished: boolean;
+  readonly pendingActions: readonly PendingAction[];
+  readonly pendingConsents: readonly PendingDeviceConsent[];
+  readonly activePlan: { readonly status: PlanReviewStatus } | null;
+  /** auto_promote_scaffold: a pending trial the engine applies itself is an
+   *  update to read; one it cannot apply waits on the owner. */
+  readonly scaffoldAutoApply: boolean;
+  readonly latestRun: { readonly status: string | null; readonly task: string | null } | null;
+}
+
+type QueueEffect = 'decision' | 'update' | 'ignore';
+
+function pendingActionEffect(kind: PendingActionKind, scaffoldAutoApply: boolean): QueueEffect {
+  switch (kind) {
+    case 'release_approval':
+    case 'deferred_action':
+      return 'decision';
+    case 'unseen_changes':
+      return 'update';
+    case 'scaffold_version':
+      return scaffoldAutoApply ? 'update' : 'decision';
+    case 'curriculum_task':
+      return 'ignore';
+  }
+}
+
+export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
+  let decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0);
+  let hasUpdates = false;
+
+  for (const action of inputs.pendingActions) {
+    const effect = pendingActionEffect(action.kind, inputs.scaffoldAutoApply);
+
+    if (effect === 'decision') decisionsWaiting += 1;
+
+    if (effect === 'update') hasUpdates = true;
+  }
+
+  const task = inputs.latestRun?.task ?? null;
+
+  return {
+    observedAt: inputs.observedAt,
+    activity: inputs.working ? 'working' : inputs.unfinished ? 'unfinished' : 'idle',
+    decisionsWaiting,
+    hasUpdates,
+
+    latestRun: inputs.latestRun === null
+      ? null
+      : { status: inputs.latestRun.status, task: task === null ? null : task.slice(0, TASK_PREVIEW_MAX) },
+  };
+}
+
+/** The one slot a card may speak from, in precedence order. Text and tone are
+ *  the caller's; the ordering is shared so no surface can green a run the log
+ *  did not seal or outrank a waiting decision with live work. */
+export type WorkspaceOverviewStatus =
+  | { readonly kind: 'attention' }
+  | { readonly kind: 'working' }
+  | { readonly kind: 'unfinished' }
+  | { readonly kind: 'run'; readonly status: string | null }
+  | { readonly kind: 'idle' };
+
+export function workspaceOverviewStatus(overview: WorkspaceOverview): WorkspaceOverviewStatus {
+  if (overview.decisionsWaiting > 0) return { kind: 'attention' };
+
+  if (overview.activity === 'working') return { kind: 'working' };
+
+  if (overview.activity === 'unfinished') return { kind: 'unfinished' };
+
+  if (overview.latestRun !== null) return { kind: 'run', status: overview.latestRun.status };
+
+  return { kind: 'idle' };
+}

@@ -264,25 +264,6 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
   );
 }
 
-/**
- * How long ago, in the one wording the Work surface uses.
- *
- * There were two of these — the jobs card counted seconds, the changelog said
- * "just now" and fell back to a date — and they now render in the SAME feed,
- * where one row reading "8s ago" beside another reading "just now" is two
- * clocks, not one.
- */
-export function timeAgo(at: number): string {
-  const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
-
-  if (s < 60) return "just now";
-
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-
-  return new Date(at).toLocaleDateString();
-}
 
 /**
  * The top of the transcript: what is above the oldest message on screen.

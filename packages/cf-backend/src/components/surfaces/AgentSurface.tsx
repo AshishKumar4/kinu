@@ -27,7 +27,8 @@ import {
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
 import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
-import { MarkdownContent, EmptyState, EMPTY_HINTS, Section, timeAgo } from "./shared";
+import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
+import { timeAgo } from "@/lib/format";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { LoadFailure } from "@/components/ui/LoadFailure";
