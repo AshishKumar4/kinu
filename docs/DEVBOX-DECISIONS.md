@@ -191,6 +191,26 @@ against the old installed SDK and passes the storage-only blocks. It follows
 named methods, virtual hooks and direct callback arguments; computed names
 and imported/indirect callbacks remain outside its static claim.
 
+D9. Opaque directories are directory records (`40f16afc6`, 2026-09-13).
+The native probe observes overlay xattrs or `.wh..wh..opq`; an unreadable
+opacity decision refuses publication. The package writes the mask in
+`delta/tree`, below the chunked inodes and beside this checkpoint's whole
+records. A mask on the higher block directory would hide those whole records
+too. The Rust lower validates the declared marker before mounting.
+Cumulative publication removes retained descendants on opaque replacement
+and retains the mask on later edits. An opaque root is `p:"", opaque:true`.
+H still counts one directory record; it never counts that record's hidden
+lower children. The namespace precedence and unchanged count are checked in
+`BlockLayer.lean`.
+
+The Docker control renamed a directory over a removed lower directory,
+checkpointed, restored and listed exactly the replacement names. Mixed whole
+and chunked children stayed readable with zero payload bytes and index pages
+at attachment. Missing marker metadata refused readiness. The same planner
+was red before the fix. The image and source are pinned in
+`block-lower/upstream.json`; evidence is under
+`bench-artifacts/block-attach/opaque-20260913/`.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
@@ -242,7 +262,27 @@ the final residue scan counted zero objects and zero multipart uploads.
 Raw observations, verdict and receipts are under
 `bench-artifacts/block-attach/b20260913114625/` and
 `bench-artifacts/teardown/b20260913114625.json`. O1 remains open on opaque
-directory support and the unmeasured changed-file restores.
+directory support and the unmeasured changed-file restores at that revision.
+
+D9 removed the opaque publication refusal. In `b20260913131044` on clean
+`40f16afc6`, C3's base committed in 15,268 ms and its edited checkpoint
+committed as chunked in 23,610 ms. The edit nevertheless uploaded 67,559,424
+bytes, with two zero-byte PUTs and one multipart completion (13 parts).
+These were successful directory/placeholder operations, not retries, and
+the one-object/196,608-byte gate remains red. The reason for the full-file
+delta is unmeasured; the first-base reseat and lower-base hash inputs need a
+trace.
+
+C3's cold restore and the independent dense cell's empty baseline then
+exhausted the 55-second startup observation ceiling while reporting
+`running:true, restoration:unstarted`. Both changed-file attach times and
+payload/index counters remain unmeasured. Worker, container application,
+both boxes, bucket and generated configuration were removed; all ten
+teardown entries completed and the final object/multipart counts were zero.
+The observations, precise refusals and receipt are under
+`bench-artifacts/block-attach/b20260913131044/` and
+`bench-artifacts/teardown/b20260913131044.json`. O1 stays open on startup
+admission and publication cost, not on opaque-record support.
 O2. Storage implementation closed by D7. Deployed latency evidence remains
 part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is
