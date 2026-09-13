@@ -1,6 +1,12 @@
 /-
-  Kinu.Execution.ToolSystem — 5-tool architecture formalization.
-  Models: orchestrator.ts getTools() — the 5 tools the LLM sees.
+  Kinu.Execution.ToolSystem — historical five-tool classifier.
+  Current surface: packages/core/src/tools/registry.ts#BUILTIN_TOOLS,
+  derived from #TOOL_REACH. It ships eight native tools, not these five.
+  Production has no actionTool classifier; memory and delegation route through
+  memory/agents, and file operations also have a native file tool. The theorems
+  below describe only this legacy abstract classifier, not the current surface.
+  Crafted calls use the contract in packages/core/src/tools/sandbox-contract.ts;
+  workspace-only isolation below is a restricted example, not that contract.
   0 sorry.
 -/
 

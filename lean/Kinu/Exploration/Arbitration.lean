@@ -1,7 +1,7 @@
 /-
   Kinu.Exploration.Arbitration — S8, with S3 as its consequence. 0 sorry.
 
-  Models `BranchProposal` / `BranchVerdict` (`swarm.ts:927-946`, `swarm.ts:1105-1107`).
+  Models `BranchProposal` / `BranchVerdict` (`packages/core/src/strategy/swarm.ts#BranchProposal`, #BranchVerdict).
   Specified by docs/EXPLORATION.md — "Arbitration", "Inherited context" and
   "The Lean invariants".
 
@@ -30,13 +30,13 @@
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
   1. THE BUILD-TIME GATE. *Build-time exclusion* requires that a tool which can
-     only ever refuse MUST NOT BE OFFERED (`head-tools.ts:110` omits
+     only ever refuse MUST NOT BE OFFERED (`packages/core/src/heads/head-tools.ts#buildHeadToolSet` omits
      `split_subheads` when `maxDepth === 0`). `arbitrate_at_zero_depth_always_refuses`
      proves the "can only ever refuse" half; that the tool is consequently ABSENT
      from the assembled surface is a property of tool assembly, which Lean does not
      see. The danger does live there — an offered-then-refused tool spends a step
      to learn a limit the surface already knew — and the mechanism that covers it
-     is `unit-exploration-containment.test.ts:132-141`, which is the right shape
+     is `packages/cf-backend/tests/unit-exploration-containment.test.ts`, which is the right shape
      for it: a test that reads the built surface.
   2. WHAT AN ACCEPTED PROPOSAL ACTUALLY SPAWNS. The verdict is a number of
      children; that the engine then creates exactly that many at exactly that
@@ -55,7 +55,7 @@ namespace Kinu.Exploration.Arbitration
 open Kinu.Exploration.Settle
 
 /-- What a child STARTS FROM: `inherit` takes the parent's conversation verbatim,
-    `fresh` starts from what the parent REPORTED (`SWARM_CONTEXTS`, `swarm.ts:74`,
+    `fresh` starts from what the parent REPORTED (`SWARM_CONTEXTS`, `packages/core/src/types/swarm.ts#SWARM_CONTEXTS`,
     and *Inherited context*). Two values, because the inherited conversation is the only
     difference between them.
 
@@ -79,7 +79,7 @@ structure Caps where
   remainingBudget : Nat
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- A node's request to expand at itself (`swarm.ts:927-946`). Note what is
+/-- A node's request to expand at itself (`packages/core/src/strategy/swarm.ts#BranchProposal`). Note what is
     absent: there is no `deps` field, because *Dependency order* makes a dropped
     edge a refusal, so a discovered dependency is an explicit decision and the API
     does not make the omission possible. -/
@@ -114,7 +114,7 @@ inductive Refusal where
   | contextConflict
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- What arbitration returned (`swarm.ts:1105-1107`). Returned as a VALUE, never
+/-- What arbitration returned (`packages/core/src/strategy/swarm.ts#BranchVerdict`). Returned as a VALUE, never
     thrown, and there is no third constructor — in particular none meaning
     "ignored". -/
 inductive Verdict where
@@ -141,7 +141,7 @@ def arbitrate (c : Caps) (ctx : Context) (adv : Advance) (p : Proposal) : Verdic
 
 /-- The arbiter's acceptance region, once. Every S8 theorem below is a projection
     of this, which keeps the five conditions in one place: a cap enforced in two
-    derivations that drift apart is the hazard `objective.ts:702-706` names for
+    derivations that drift apart is the hazard `packages/core/src/types/objective.ts#Objective` names for
     `isBetter`, and it applies to an arbiter with equal force. -/
 theorem accepted_iff (c : Caps) (ctx : Context) (adv : Advance) (p : Proposal)
     (n : Nat) :
@@ -203,7 +203,7 @@ theorem accepted_respects_context (c : Caps) (adv : Advance) (p : Proposal)
   simpa using hctx
 
 /-- **A selector that does not expand at a node refuses**, naming the policy
-    (`swarm.ts:1317-1321`'s example refusal, "advance:'archive' does not expand at
+    (`packages/core/src/strategy/swarm.ts#arbitrateBranch`'s example refusal, "advance:'archive' does not expand at
     a node"). -/
 theorem archive_refuses_at_node (c : Caps) (ctx : Context) (p : Proposal) :
     arbitrate c ctx .archive p = .refused .doesNotExpandAtNode := by
@@ -223,7 +223,7 @@ theorem arbitrate_at_zero_depth_always_refuses (c : Caps) (ctx : Context)
     exact absurd (show c.maxDepth ≤ p.atDepth by omega) hd
 
 /-- **No proposal is dropped silently.** Two constructors and no third, so there
-    is no outcome meaning "ignored" — the failure mode `swarm.ts:1319` says this
+    is no outcome meaning "ignored" — the failure mode `packages/core/src/strategy/swarm.ts#arbitrateBranch` says this
     codebase spent the night removing. A by-construction witness whose value
     is that widening `Verdict` breaks it. -/
 theorem every_proposal_gets_a_verdict (c : Caps) (ctx : Context) (adv : Advance)

@@ -2,7 +2,7 @@
   Kinu.MCTS.Backpropagation — exact-arithmetic model of the MCTS
   running-mean backpropagation. 0 sorry, 0 axioms.
 
-  Models: packages/core/src/mcts/backpropagation.ts:47-51
+  Models: packages/core/src/mcts/backpropagation.ts#backpropagate
     visits = visits + 1
     value  = (value * visits + reward) / (visits + 1)
 
@@ -10,7 +10,7 @@
   The TS executes that formula in IEEE-754 doubles (SQLite REAL column). This
   model is exact instead: a node's statistic is the pair (scaledSum, visits),
   where rewards are integers scaled by a fixed positive factor S (TS reward
-  r ∈ [0,1] — clamped at backpropagation.ts:37 — corresponds to a scaled
+  r ∈ [0,1] — clamped at packages/core/src/mcts/backpropagation.ts#backpropagate — corresponds to a scaled
   reward in [0, S]), and the stored float `value` corresponds to
   scaledSum / (S · visits). Every statement below is division-free
   (numerator/denominator or inequality form), so no rounding is modeled away.
@@ -31,7 +31,7 @@ structure NodeStats where
   scaledSum : Int
   deriving Repr, BEq, Inhabited
 
-/-- One backprop touch (backpropagation.ts:49-50): visits+1, and the mean
+/-- One backprop touch (packages/core/src/mcts/backpropagation.ts#backpropagate): visits+1, and the mean
     numerator value·visits + r becomes, exactly, scaledSum + r. -/
 def update (s : NodeStats) (r : Int) : NodeStats :=
   { s with visits := s.visits + 1, scaledSum := s.scaledSum + r }
@@ -116,7 +116,7 @@ theorem sum_invariant (id : String) (rs : List Int) :
   simpa using h
 
 /-- The ancestor-walk UPDATE touches visits/value only; row IDs are unchanged
-    (cited from backpropagation.ts:29). -/
+    (cited from packages/core/src/mcts/backpropagation.ts#backpropagate). -/
 theorem backprop_preserves_ids (nodes : List NodeStats) (r : Int) :
     (nodes.map (update · r)).map (·.id) = nodes.map (·.id) := by
   induction nodes with

@@ -1,269 +1,350 @@
 /-!
-# The published head survives stop and wake across generations
+# Port-proven, generation-fenced start admission
 
-A model of the candidate control plane in
-`packages/devbox/src/candidates/control.ts`, which `bounded-layers` and
-`merkle-pack` share. The durable record holds one head pointer and at most
-one operation. `sealedCas` is the one write that moves the head. A stop and a
-wake touch the container and never the record. A wake reads the head and
-serves the envelope it names (`candidateRunControl`).
+Models current packages/devbox/src/devbox.ts: Devbox.onStart,
+#restoreInStartGate, #runStartHook, #adoptOrTurnOver, #settle,
+#claimRecovery, #recover and resolveReadiness; and lifecycle.ts:
+classifyRecovery, recoveryStep, ContainerStartInterrupted.
 
-The model keeps the transitions the record admits and the guards it applies.
-A refused transition leaves the record as it was, because the store update
-throws before it writes.
+A hook first joins its generation's flight, recovers an interrupted durable
+claim, adopts a matching settled boot, or claims a fresh restore. Materializing
+and completing services are represented by one successful attach event.
+Settlement has TWO events: durable write, then memory publication. A reset
+between them can adopt the durable result. A reset before the write retains
+restoring and takes recovery, never a second attach on the abandoned boot.
 
-The theorems at the end state the invariant the decision relies on.
-`wake_serves_newest_publication` says that after any run, a wake serves the
-newest published root, whatever stops and wakes the run interleaved between
-generations. `stale_parent_keeps_head` says a sealed result whose expected
-parent is no longer the head never moves it, which is the racing-containers
-rule of cells 6.10 and 6.17.
+Generation checks model the checks after awaits; recovery also checks its
+durable minted token (represented by a monotone fresh counter). Storage writes
+are atomic events here, not a refinement of asynchronous storage internals.
+The SDK's port proof is an input; Lean does not prove the network listener.
+Repair admits commands but never claims full readiness.
+
+The former candidate-head model cited deleted candidates/control.ts. It is
+replaced, not claimed as coverage of the shipped chain. ChainHeadSurvives
+composes this lifecycle with the current revision-CAS record.
 -/
 
-namespace Devbox
+namespace Devbox.StartGate
 
-/-- A root envelope id: the digest of canonical envelope bytes. -/
-abbrev RootId := String
-
-/-- The phases `OperationRecordSchema` declares. `intent` is absent because
-`beginCandidateOperation` writes `transferring` directly. -/
 inductive Phase where
-  | transferring
-  | sealed (result : RootId)
-  | completionPending (result : RootId)
-  | published (result : RootId)
-  | failed
+  | unstarted | restoring | attached | repair | unattached
+  deriving DecidableEq, Repr, BEq
+
+def admits : Phase → Bool
+  | .attached | .repair => true
+  | _ => false
+
+def settled : Phase → Bool
+  | .attached | .repair | .unattached => true
+  | _ => false
+
+inductive Branch where
+  | none | refused | joined | adopted | restore | recovery
   deriving DecidableEq, Repr
 
-structure Operation where
-  expectedParent : Option RootId
-  phase : Phase
+structure State where
+  generation : Nat := 0
+  boot : Option Nat := none
+  durableBoot : Option Nat := none
+  durablePhase : Phase := .unstarted
+  memoryPhase : Phase := .unstarted
+  flight : Option Nat := none
+  materialized : Bool := false
+  attaches : Nat := 0
+  claims : Nat := 0
+  recoveryOwner : Option Nat := none
+  recoveryPending : Bool := false
+  branch : Branch := .none
   deriving DecidableEq, Repr
 
-/-- `CandidateControlStateV1`: the durable record. -/
-structure Control where
-  head : Option RootId
-  operation : Option Operation
-  deriving DecidableEq, Repr
+def initial : State := {}
 
-inductive Container where
-  | running
-  | stopped
-  deriving DecidableEq, Repr
+def canAdopt (s : State) : Bool :=
+  decide (s.boot ≠ none ∧ s.durableBoot = s.boot) && settled s.durablePhase
 
-/-- One box: the durable record, the container, what the last attach served,
-and every publication newest first with the parent each one named. -/
-structure Box where
-  control : Control
-  container : Container
-  restored : Option RootId
-  log : List (RootId × Option RootId)
-  deriving Repr
+def owns (s : State) (generation : Nat) : Bool := decide (s.generation = generation)
 
-/-- Every transition the record and the container admit. -/
-inductive Step where
-  | start
-  | sealPayload (result : RootId)
-  | cas
-  | complete
-  | abandon
+def adopt (s : State) : State :=
+  if canAdopt s then { s with memoryPhase := s.durablePhase, branch := .adopted } else s
+
+/-- The precedence is intentional: an extant flight joins before the durable
+    restoring claim can be mistaken for an interrupted prior activation. -/
+def onStart (s : State) (portProven : Bool) : State :=
+  if !portProven || s.boot.isNone then { s with branch := .refused }
+  else if s.flight = some s.generation then { s with branch := .joined }
+  else if s.durablePhase = .restoring then
+    { s with claims := s.claims + 1, recoveryOwner := some (s.claims + 1), branch := .recovery }
+  else if canAdopt s then adopt s
+  else if s.memoryPhase = .unstarted ∧ s.recoveryPending = false then
+    { s with durablePhase := .restoring, memoryPhase := .restoring, flight := some s.generation,
+             materialized := false, branch := .restore,
+             claims := s.claims + 1, recoveryOwner := some (s.claims + 1) }
+  else { s with branch := .refused }
+
+def attach (s : State) (generation : Nat) : State :=
+  if owns s generation && decide (s.flight = some generation) &&
+      decide (s.memoryPhase = .restoring) && !s.materialized then
+    { s with materialized := true, attaches := s.attaches + 1 }
+  else s
+
+def writeSettlement (s : State) (generation : Nat) (phase : Phase) : State :=
+  if owns s generation && decide (s.flight = some generation) && s.materialized &&
+      decide (s.memoryPhase = .restoring) && admits phase then
+    { s with durablePhase := phase, durableBoot := s.boot }
+  else s
+
+def publishSettlement (s : State) (generation : Nat) : State :=
+  if owns s generation && decide (s.flight = some generation) &&
+      canAdopt s && admits s.durablePhase then
+    { s with memoryPhase := s.durablePhase, flight := none }
+  else s
+
+/-- Isolate reset retains disk and durable rows, but not a flight or admission. -/
+def reset (s : State) : State :=
+  { s with generation := s.generation + 1, memoryPhase := .unstarted,
+           flight := none, materialized := false, branch := .none }
+
+/-- Interrupted work is classified abandoned. The actual ladder may replace
+    or terminally refuse at its final stage; neither branch attaches. -/
+def recover (s : State) (generation token : Nat) (replace : Bool) : State :=
+  if owns s generation && decide (s.recoveryOwner = some token) &&
+      decide (s.branch = .recovery ∨ s.memoryPhase = .restoring) then
+    { s with durablePhase := .unattached, memoryPhase := .unattached,
+             recoveryPending := replace, flight := none }
+  else s
+
+/-- The coordinator discharges a replacement before another start. -/
+def executeRecovery (s : State) : State :=
+  if s.recoveryPending then
+    { reset s with boot := none, durableBoot := none, durablePhase := .unstarted,
+                   recoveryPending := false, recoveryOwner := none }
+  else s
+
+inductive Action where
+  | provision (boot : Nat)
+  | onStart (portProven : Bool)
+  | attach (generation : Nat)
+  | writeSettlement (generation : Nat) (phase : Phase)
+  | publishSettlement (generation : Nat)
+  | reset
   | stop
-  | wake
+  | request
+  | heartbeat
+  | recover (generation token : Nat) (replace : Bool)
+  | executeRecovery
   deriving DecidableEq, Repr
 
-/-- `freshOperation` refuses while an operation is transferring, sealed or
-completion-pending. -/
-def Control.idle (c : Control) : Bool :=
-  match c.operation with
-  | none => true
-  | some op =>
-    match op.phase with
-    | .published _ => true
-    | .failed => true
-    | _ => false
+def step (s : State) : Action → State
+  | .provision boot => if s.boot = none then { s with boot := some boot } else s
+  | .onStart proven => onStart s proven
+  | .attach generation => attach s generation
+  | .writeSettlement generation phase => writeSettlement s generation phase
+  | .publishSettlement generation => publishSettlement s generation
+  | .reset => reset s
+  | .stop => { reset s with boot := none }
+  | .request | .heartbeat => adopt s
+  | .recover generation token replace => recover s generation token replace
+  | .executeRecovery => executeRecovery s
 
-/-- Advance the record after a sealed operation, exactly as `sealedCas` does:
-the head moves only when the expected parent is still the head. A stale
-parent fails the operation and leaves the head alone. -/
-def casStep (b : Box) (op : Operation) (r : RootId) : Box :=
-  if b.control.head = op.expectedParent then
-    { b with
-      control := { head := some r, operation := some { op with phase := .completionPending r } }
-      log := (r, op.expectedParent) :: b.log }
-  else
-    { b with control := { b.control with operation := some { op with phase := .failed } } }
+def run (s : State) (as : List Action) : State := as.foldl step s
 
-def step (b : Box) : Step → Box
-  | .start =>
-    if b.container = .running ∧ b.control.idle = true then
-      { b with control := { head := b.control.head,
-                            operation := some { expectedParent := b.control.head, phase := .transferring } } }
-    else b
-  | .sealPayload r =>
-    match b.container, b.control.operation with
-    | .running, some op =>
-      match op.phase with
-      | .transferring => { b with control := { b.control with operation := some { op with phase := .sealed r } } }
-      | _ => b
-    | _, _ => b
-  | .cas =>
-    match b.control.operation with
-    | some op =>
-      match op.phase with
-      | .sealed r => casStep b op r
-      | _ => b
-    | none => b
-  | .complete =>
-    match b.control.operation with
-    | some op =>
-      match op.phase with
-      | .completionPending r =>
-        if b.control.head = some r then
-          { b with control := { b.control with operation := some { op with phase := .published r } } }
-        else b
-      | _ => b
-    | none => b
-  | .abandon =>
-    match b.control.operation with
-    | some op =>
-      match op.phase with
-      | .transferring => { b with control := { b.control with operation := some { op with phase := .failed } } }
-      | _ => b
-    | none => b
-  | .stop => { b with container := .stopped }
-  | .wake => { b with container := .running, restored := b.control.head }
+def Safe (s : State) : Prop :=
+  admits s.memoryPhase = true →
+    s.memoryPhase = s.durablePhase ∧ s.durableBoot = s.boot ∧ s.boot ≠ none
 
-def run (b : Box) (steps : List Step) : Box := steps.foldl step b
+theorem initial_safe : Safe initial := by simp [Safe, initial, admits]
 
-def Box.initial : Box :=
-  { control := { head := none, operation := none }, container := .running, restored := none, log := [] }
+private theorem adoption_evidence (s : State) (h : canAdopt s = true) :
+    s.durableBoot = s.boot ∧ s.boot ≠ none := by
+  have hh : (s.boot ≠ none ∧ s.durableBoot = s.boot) ∧ settled s.durablePhase = true := by
+    simpa [canAdopt] using h
+  exact ⟨hh.1.2, hh.1.1⟩
 
-/-- The newest publication, or none before the first one. -/
-def newest (log : List (RootId × Option RootId)) : Option RootId :=
-  match log with
-  | [] => none
-  | (r, _) :: _ => some r
+theorem adoption_safe (s : State) (h : Safe s) : Safe (adopt s) := by
+  unfold adopt
+  split
+  · rename_i ha
+    intro _
+    exact ⟨rfl, adoption_evidence s ha⟩
+  · exact h
 
-/-- Every publication names the head it replaced as its parent. -/
-def Chain : List (RootId × Option RootId) → Prop
-  | [] => True
-  | [(_, p)] => p = none
-  | (_, p) :: (r', p') :: rest => p = some r' ∧ Chain ((r', p') :: rest)
-
-/-- The invariant every step preserves: the head is the newest publication,
-and the publications form one parent chain. -/
-def Inv (b : Box) : Prop := b.control.head = newest b.log ∧ Chain b.log
-
-theorem initial_inv : Inv Box.initial := by
-  exact ⟨rfl, trivial⟩
-
-theorem stop_control (b : Box) : (step b .stop).control = b.control := rfl
-
-theorem wake_control (b : Box) : (step b .wake).control = b.control := rfl
-
-theorem wake_serves_head (b : Box) : (step b .wake).restored = b.control.head := rfl
-
-theorem stop_log (b : Box) : (step b .stop).log = b.log := rfl
-
-theorem wake_log (b : Box) : (step b .wake).log = b.log := rfl
-
-/-- A sealed result whose expected parent is no longer the head never moves
-the head. This is the rule that keeps two racing containers on one head. -/
-theorem stale_parent_keeps_head (b : Box) (op : Operation) (r : RootId)
-    (stale : b.control.head ≠ op.expectedParent) :
-    (casStep b op r).control.head = b.control.head := by
-  unfold casStep
-  simp [stale]
-
-/-- The head CAS preserves the invariant: it appends the new root with the
-head it replaced as parent. -/
-theorem casStep_inv (b : Box) (op : Operation) (r : RootId) (h : Inv b) :
-    Inv (casStep b op r) := by
-  unfold casStep
-  by_cases parent : b.control.head = op.expectedParent
-  · simp only [parent, if_true]
-    obtain ⟨hhead, hchain⟩ := h
-    constructor
-    · rfl
-    · cases hlog : b.log with
-      | nil =>
-        simp only [hlog, newest] at hhead
-        show op.expectedParent = none
-        rw [← parent, hhead]
-      | cons entry rest =>
-        obtain ⟨r', p'⟩ := entry
-        simp only [hlog, newest] at hhead
-        rw [hlog] at hchain
-        show op.expectedParent = some r' ∧ Chain ((r', p') :: rest)
-        exact ⟨by rw [← parent, hhead], hchain⟩
-  · simp only [parent, if_false]
-    exact h
-
-theorem step_inv (b : Box) (s : Step) (h : Inv b) : Inv (step b s) := by
-  cases s with
-  | start =>
-    dsimp only [step]
+theorem step_preserves_durable_admission (s : State) (a : Action) (h : Safe s) :
+    Safe (step s a) := by
+  cases a with
+  | request => exact adoption_safe s h
+  | heartbeat => exact adoption_safe s h
+  | onStart proven =>
+    simp only [step, onStart]
     split
     · exact h
-    · exact h
-  | sealPayload r =>
-    dsimp only [step]
-    split
     · split
       · exact h
-      · exact h
-    · exact h
-  | cas =>
-    dsimp only [step]
-    split
-    · split
-      · exact casStep_inv _ _ _ h
-      · exact h
-    · exact h
-  | complete =>
-    dsimp only [step]
-    split
-    · split
       · split
         · exact h
-        · exact h
-      · exact h
-    · exact h
-  | abandon =>
-    dsimp only [step]
+        · split
+          · exact adoption_safe s h
+          · split
+            · simp [Safe, admits]
+            · exact h
+  | attach generation =>
+    simp only [step, attach]
+    split <;> exact h
+  | publishSettlement generation =>
+    simp only [step, publishSettlement]
     split
-    · split
-      · exact h
-      · exact h
+    · rename_i hp
+      have ha : canAdopt s = true := by simp_all
+      intro _
+      exact ⟨rfl, adoption_evidence s ha⟩
     · exact h
-  | stop => exact h
-  | wake => exact h
+  | writeSettlement generation phase =>
+    simp only [step, writeSettlement]
+    split
+    · rename_i hw
+      have hm : s.memoryPhase = .restoring := by simp_all
+      simp [Safe, hm, admits]
+    · exact h
+  | provision boot =>
+    simp only [step]
+    split
+    · rename_i hb
+      intro hm
+      exact False.elim ((h hm).2.2 hb)
+    · exact h
+  | reset => simp [step, reset, Safe, admits]
+  | stop => simp [step, reset, Safe, admits]
+  | recover generation token replace =>
+    simp only [step, recover]
+    split
+    · simp [Safe, admits]
+    · exact h
+  | executeRecovery =>
+    simp only [step, executeRecovery]
+    split
+    · simp [reset, Safe, admits]
+    · exact h
 
-theorem run_inv (b : Box) (steps : List Step) (h : Inv b) : Inv (run b steps) := by
-  induction steps generalizing b with
+theorem run_preserves_durable_admission (s : State) (as : List Action) (h : Safe s) :
+    Safe (run s as) := by
+  induction as generalizing s with
   | nil => exact h
-  | cons s rest ih => exact ih (step b s) (step_inv b s h)
+  | cons a as ih => exact ih (step s a) (step_preserves_durable_admission s a h)
 
-theorem run_append (b : Box) (xs ys : List Step) : run b (xs ++ ys) = run (run b xs) ys := by
-  unfold run
-  exact List.foldl_append
+theorem readiness_requires_durable_settlement (as : List Action)
+    (h : (run initial as).memoryPhase = .attached) :
+    (run initial as).durablePhase = .attached ∧
+      (run initial as).durableBoot = (run initial as).boot := by
+  have hs := run_preserves_durable_admission initial as initial_safe
+  have ha : admits (run initial as).memoryPhase = true := by simp [h, admits]
+  exact ⟨by rw [← (hs ha).1, h], (hs ha).2.1⟩
 
-/-- After any run from a fresh box that ends in a wake, the attach serves the
-newest published root, whatever stops and wakes the run interleaved between
-generations. -/
-theorem wake_serves_newest_publication (steps : List Step) :
-    (run Box.initial (steps ++ [.wake])).restored = newest (run Box.initial (steps ++ [.wake])).log := by
-  rw [run_append]
-  have h := run_inv Box.initial steps initial_inv
-  show (step (run Box.initial steps) .wake).restored = newest (step (run Box.initial steps) .wake).log
-  rw [wake_serves_head, wake_log]
-  exact h.1
+theorem repair_is_not_ready : Phase.repair ≠ Phase.attached := by decide
 
-/-- A stop followed by a wake changes neither the record nor the publications,
-so the generations published before the stop are the generations after the
-wake. -/
-theorem stop_wake_preserves_record (b : Box) :
-    (run b [.stop, .wake]).control = b.control ∧ (run b [.stop, .wake]).log = b.log := by
-  exact ⟨rfl, rfl⟩
+theorem premature_memory_readiness_is_unsafe :
+    ¬ Safe { initial with memoryPhase := .attached } := by
+  simp [Safe, initial, admits]
 
-end Devbox
+theorem repeated_attach_in_one_flight_is_idempotent (s : State) (g : Nat) :
+    attach (attach s g) g = attach s g := by
+  unfold attach
+  split
+  · simp
+  · rfl
+
+theorem reset_after_durable_settlement_adopts_without_reattach (s : State)
+    (ha : canAdopt s = true) :
+    (onStart (reset s) true).memoryPhase = s.durablePhase ∧
+      (onStart (reset s) true).attaches = s.attaches := by
+  have hb := (adoption_evidence s ha).2
+  have hh := ha
+  simp only [canAdopt, Bool.and_eq_true, decide_eq_true_eq] at hh
+  have hp : s.durablePhase ≠ .restoring := by
+    intro he
+    simpa [he, settled] using hh.2
+  simp [onStart, reset, canAdopt, hb, hp, hh.1.2, hh.2, adopt,
+    Option.isNone_iff_eq_none]
+
+theorem unproven_port_never_starts_restore (s : State) :
+    (onStart s false).attaches = s.attaches ∧ (onStart s false).branch = .refused := by
+  simp [onStart]
+
+theorem matching_flight_joins (s : State) (hboot : s.boot ≠ none)
+    (hflight : s.flight = some s.generation) :
+    (onStart s true).branch = .joined ∧ (onStart s true).attaches = s.attaches := by
+  simp [onStart, hboot, hflight, Option.isNone_iff_eq_none]
+
+theorem same_boot_start_adopts_without_reattach (s : State)
+    (hflight : s.flight ≠ some s.generation) (ha : canAdopt s = true) :
+    (onStart s true).memoryPhase = s.durablePhase
+      ∧ (onStart s true).branch = .adopted
+      ∧ (onStart s true).attaches = s.attaches := by
+  have hb := (adoption_evidence s ha).2
+  have hp : s.durablePhase ≠ .restoring := by
+    have hh := ha
+    simp only [canAdopt, Bool.and_eq_true, decide_eq_true_eq] at hh
+    have hs := hh.2
+    intro he
+    simp [he, settled] at hs
+  simp [onStart, hb, hflight, hp, ha, adopt, Option.isNone_iff_eq_none]
+
+theorem interrupted_restore_retains_durable_claim (s : State) (h : s.durablePhase = .restoring) :
+    (reset s).durablePhase = .restoring := h
+
+theorem interrupted_restore_next_start_recovers (s : State)
+    (h : s.durablePhase = .restoring) (hb : s.boot ≠ none) :
+    (onStart (reset s) true).branch = .recovery
+      ∧ (onStart (reset s) true).attaches = s.attaches
+      ∧ (onStart (reset s) true).claims = s.claims + 1 := by
+  simp [onStart, reset, h, hb, Option.isNone_iff_eq_none]
+
+theorem interrupted_stop_then_fresh_start_recovers (s : State) (boot : Nat)
+    (h : s.durablePhase = .restoring) :
+    (onStart (step (step s .stop) (.provision boot)) true).branch = .recovery ∧
+      (onStart (step (step s .stop) (.provision boot)) true).attaches = s.attaches := by
+  simp [step, onStart, reset, h]
+
+theorem requests_never_attach (s : State) :
+    (step s .request).attaches = s.attaches := by
+  simp [step, adopt]
+  split <;> rfl
+
+theorem heartbeats_never_attach (s : State) :
+    (step s .heartbeat).attaches = s.attaches := requests_never_attach s
+
+theorem stale_generation_cannot_attach (s : State) (g : Nat) (h : s.generation ≠ g) :
+    attach s g = s := by simp [attach, owns, h]
+
+theorem stale_generation_cannot_publish (s : State) (g : Nat) (h : s.generation ≠ g) :
+    publishSettlement s g = s := by simp [publishSettlement, owns, h]
+
+theorem stale_recovery_claim_is_inert (s : State) (g token : Nat) (replace : Bool)
+    (h : s.recoveryOwner ≠ some token) :
+    recover s g token replace = s := by simp [recover, h]
+
+theorem durable_write_does_not_publish_memory (s : State) (g : Nat) (phase : Phase) :
+    (writeSettlement s g phase).memoryPhase = s.memoryPhase := by
+  unfold writeSettlement
+  split <;> rfl
+
+theorem interrupted_recovery_never_reattaches (s : State) (g token : Nat) (replace : Bool) :
+    (recover s g token replace).attaches = s.attaches := by
+  unfold recover
+  split <;> rfl
+
+theorem completed_fresh_start_is_ready (boot : Nat) :
+    (run initial [.provision boot, .onStart true, .attach 0,
+      .writeSettlement 0 .attached, .publishSettlement 0]).memoryPhase = .attached := by
+  simp [run, step, initial, onStart, attach, writeSettlement, publishSettlement,
+    owns, canAdopt, settled, admits]
+
+theorem second_start_on_same_boot_attaches_once (boot : Nat) :
+    (run initial [.provision boot, .onStart true, .attach 0,
+      .writeSettlement 0 .attached, .publishSettlement 0,
+      .onStart true]).attaches = 1 ∧
+    (run initial [.provision boot, .onStart true, .attach 0,
+      .writeSettlement 0 .attached, .publishSettlement 0,
+      .onStart true]).branch = .adopted := by
+  simp [run, step, initial, onStart, attach, writeSettlement, publishSettlement,
+    owns, canAdopt, adopt, settled, admits]
+
+end Devbox.StartGate

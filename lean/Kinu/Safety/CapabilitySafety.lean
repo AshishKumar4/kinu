@@ -1,6 +1,9 @@
 /-
   Kinu.Safety.CapabilitySafety
-  7 theorems, 0 sorry.
+  Constructor-shape model only: production has no Op/grantableOps taxonomy.
+  Shared command approval lives at packages/core/src/safety/approval-gate.ts#reviewCommand
+  and packages/core/src/safety/deferred-approval.ts#DeferredApprovalQueue.
+  These theorems do not prove approval queue semantics or transitive tool effects.
 -/
 
 import Kinu.Types
