@@ -752,6 +752,26 @@ function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }
 }
 
 describe('tool-failure attribution over a real turn', () => {
+  test('program recovery and propagated refusals retain binding attribution in the durable census', async () => {
+    await run('attrib-codemode', [
+      { tool: 'execute_tools', input: { code: 'const failure = await workspace.readFile("/absent-codemode-file"); if (failure.success === false) return "recovered"; throw new Error("expected failure");' } },
+      { tool: 'execute_tools', input: { code: 'return await tools.file({ action: "read", path: "/absent-codemode-file" });' } },
+      { tool: 'execute_tools', input: { code: 'return await tools.run({ runtime: "sandbox", command: "pwd" });' } },
+    ], ['workspace']);
+    const db = opened.at(-1);
+
+    if (db === undefined) throw new Error('the harness opened no store');
+    const rows = toolCallRows(db);
+    expect(rows.filter((row) => row.name === 'execute_tools').map((row) => row.outcome?.success)).toEqual([true, false, false]);
+    const census = censusToolFailures(rows);
+    const keys = Object.fromEntries(census.byKey);
+    expect(keys['file·missing']).toBe(1);
+    expect(keys['file·read·missing']).toBe(1);
+    expect(keys['run·unavailable']).toBe(1);
+    expect(census.failures).toHaveLength(3);
+    expect(census.failures.some((failure) => failure.tool === 'execute_tools')).toBe(false);
+  }, 60_000);
+
   test('every failure is attributed to its tool, action and reason, split three ways', async () => {
     // One episode covering all three classes, so the split is proven by
     // CONTRAST rather than by three runs that each show one bucket.
