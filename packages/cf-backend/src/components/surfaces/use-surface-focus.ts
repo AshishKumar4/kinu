@@ -10,7 +10,7 @@
 
 import { useCallback, useState } from "react";
 import type { SlateSummary } from "@kinu.run/core";
-import type { PinnedPreviewPort as PinnedPort } from "@/lib/preview-ports";
+import type { PinnedPreviewPort as PinnedPort } from "@kinu.run/core";
 import { SLATE_PREFIX } from "./presence";
 import type { SurfaceKind } from "./WorkSurface";
 

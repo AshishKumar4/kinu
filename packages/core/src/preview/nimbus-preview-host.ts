@@ -18,7 +18,7 @@
  * different workspace.
  */
 
-import { workspaceAddressRefusal } from '@kinu.run/core';
+import { workspaceAddressRefusal } from '../identity/naming';
 
 const PORT_RE = /^[0-9a-z]{1,4}$/;
 

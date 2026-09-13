@@ -65,7 +65,7 @@ import {
 } from "./auth/session";
 import {
   containPreviewResponse, hostOf, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
-} from "./lib/preview-origin";
+} from "@kinu.run/core";
 import { withAppSecurityHeaders } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
 import { ownerCaller } from "./user/workspace-capability";
@@ -486,7 +486,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //    port, capability-gated by that hostname. It is the ONLY thing served there: no
   //    SPA, no login, no OAuth callback, so nothing ever mints a session on
   //    those origins and hostile preview HTML has none to steal
-  //    (lib/preview-origin.ts).
+  //    (core preview/preview-origin.ts).
   if (isPreviewHostRequest(url, env)) {
     const nimbus = await handleNimbusPreviewHostRequest(request, env);
 

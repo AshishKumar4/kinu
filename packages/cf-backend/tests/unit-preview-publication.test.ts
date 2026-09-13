@@ -24,7 +24,7 @@ import {
   sandboxPreviewExposed,
   sandboxPreviewExposures,
   type SandboxPreviewExposures,
-} from '../src/lib/preview-exposures';
+} from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { KvStore } from '@kinu.run/agent-utils';
 import {

@@ -367,7 +367,7 @@ useful "when to use" guidance.
   only `winRate > 0.5` promotes (`core/src/scaffold/shadow.ts:628`, rule
   `:660`); a tie rolls back to current.
 - SSE resume validates `Last-Event-ID`.
-  `resumeIndexFromLastEventId` (`cf-backend/src/lib/orchestrator-wire.ts:59`)
+  `resumeIndexFromLastEventId` (`core/src/protocol/orchestrator-wire.ts:59`)
   accepts an integer at or above `-1`; every other value, including a blank
   header, replays from the start.
 - Credential keys are validated. `cf-backend/src/user/validate.ts:60`

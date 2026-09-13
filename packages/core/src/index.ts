@@ -2191,6 +2191,26 @@ export {
 } from './execution/terminal-lane';
 
 export {
+  type WorkspacePreviewHost, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
+} from './preview/nimbus-preview-host';
+
+export {
+  PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
+  isPreviewUrl, previewHostSuffix, previewSuffixMetaName, sandboxPreviewLabelOf,
+  type SandboxPreviewLabel,
+} from './preview/preview-origin';
+
+export {
+  reconcilePreviewPorts,
+  type ExecutorPortRefresh, type ExposedPortList, type PinnedPreviewPort, type PreviewPortState,
+} from './preview/preview-ports';
+
+export {
+  sandboxPreviewExposed, sandboxPreviewExposures,
+  type SandboxPreviewClaim, type SandboxPreviewExposures,
+} from './preview/preview-exposures';
+
+export {
   KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, json, kinuUserAgent,
   readBounded, readBoundedStream, reoriginateRequest, safeJson,
 } from './http/http';

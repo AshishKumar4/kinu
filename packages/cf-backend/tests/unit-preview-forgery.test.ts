@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { sandboxPreviewExposures } from '../src/lib/preview-exposures';
+import { sandboxPreviewExposures } from '@kinu.run/core';
 
 // Dynamic for the reason every cf-backend route suite loads the entry this way:
 // the entry's module graph reaches `cloudflare:email` and `cloudflare:workers`

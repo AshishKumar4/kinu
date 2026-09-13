@@ -165,7 +165,7 @@ export function resolveWorkspaceTitle(opts: {
  *
  * A DNS label holds 63 characters; the hosted preview label spends 32 of them on
  * the port, capability handle, token and their separators
- * (cf-backend `lib/nimbus-preview-host.ts`), so the address is the remaining 31.
+ * (`preview/nimbus-preview-host.ts`), so the address is the remaining 31.
  * Every address {@link workspaceSlug} mints fits (adjective ≤ 11, noun ≤ 8, 8 hex
  * digits, two hyphens = 29). A chosen one is refused at creation rather than
  * truncated: a truncated address would name a different workspace.

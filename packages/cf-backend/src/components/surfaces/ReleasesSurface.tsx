@@ -36,7 +36,7 @@ import type {
   ReleaseSource,
 } from "@kinu.run/core/protocol";
 import { deployTargetAsCommand } from "@kinu.run/core";
-import { isPreviewUrl } from "@/lib/preview-origin";
+import { isPreviewUrl } from "@kinu.run/core";
 import { releaseSubstrate, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
