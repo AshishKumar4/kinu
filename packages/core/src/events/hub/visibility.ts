@@ -28,6 +28,7 @@ import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
   type PayloadPolicy, type KinuEvent, type SubordinateReportHandoff,
 } from './types';
+import type { SubordinateInheritedContext } from '../../types/subordinates';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
@@ -363,9 +364,8 @@ function briefForVariant(event: KinuEvent): string {
       // budget, same as peer messages.
       const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
-      const inheritedContext = p.inherited_context?.kind === 'digest' ? `${p.inherited_context.text}\n\n` : '';
 
-      return `${inheritedContext}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
+      return `${inheritedContextBrief(p.inherited_context)}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }
 
     case 'subordinate_report': {
@@ -400,4 +400,12 @@ function briefForVariant(event: KinuEvent): string {
       return `${event.payload.method}(...)`;
     }
   }
+}
+
+
+/** The birth digest rides the assignment's head: a fork's inherited context
+ *  is a value the model can read, everything else (no context, a streamed
+ *  fork) carries no text. */
+function inheritedContextBrief(context: SubordinateInheritedContext | undefined): string {
+  return context?.kind === 'digest' ? `${context.text}\n\n` : '';
 }

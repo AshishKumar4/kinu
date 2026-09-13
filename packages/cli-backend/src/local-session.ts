@@ -2689,6 +2689,19 @@ export class LocalAgentSession implements BackendHost {
     return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
   }
 
+
+  /** A hired-for-context turn opens on an empty history but names the turn
+   *  whose conversation it inherits (`metadata.drainTurnId`): seed those rows
+   *  before the live prompt so the child reads its parent context in place. */
+  private seedDrainedTurnContext(item: QueueItem, lease: ActorTurnLease): void {
+    const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
+
+    if (this.actorSession.history.length === 0 && drainTurn.success) {
+      for (const inherited of subordinateTurnContext(this.eventLog, drainTurn.output)) {
+        this.actorSession.appendInput(lease, inheritedAsModelMessage(inherited));
+      }
+    }
+  }
   /** The turn itself: assemble it, stream it, finalize it. Everything here may
    *  throw; processTurn owns what that means. */
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
@@ -2844,13 +2857,7 @@ export class LocalAgentSession implements BackendHost {
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
 
-    const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
-
-    if (this.actorSession.history.length === 0 && drainTurn.success) {
-      for (const inherited of subordinateTurnContext(this.eventLog, drainTurn.output)) {
-        this.actorSession.appendInput(lease, inheritedAsModelMessage(inherited));
-      }
-    }
+    this.seedDrainedTurnContext(item, lease);
 
     this.actorSession.appendInput(lease, fileParts.length > 0
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }

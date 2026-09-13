@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-09-13",
-  "files": 2159,
-  "functions": 53819,
+  "files": 2196,
+  "functions": 54750,
   "ceiling": 125,
-  "line": 37,
+  "line": 36,
   "inventory": [
     {
       "key": "packages/cli/src/slash-commands.ts#executeSlashCommand",
@@ -22,28 +22,20 @@
       "complexity": 87
     },
     {
-      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
-      "complexity": 78
-    },
-    {
       "key": "scripts/bench-devbox-strategies.ts#measureArm",
       "complexity": 77
-    },
-    {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
-      "complexity": 72
     },
     {
       "key": "scripts/fixtures/fuse-probe/probe.ts#runDaemon",
       "complexity": 72
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useKeyboard",
-      "complexity": 71
-    },
-    {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
       "complexity": 69
+    },
+    {
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 67
     },
     {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
@@ -182,6 +174,10 @@
       "complexity": 38
     },
     {
+      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
+      "complexity": 38
+    },
+    {
       "key": "packages/core/src/strategy/swarm-resume.ts#harvestSwarm",
       "complexity": 38
     },
@@ -206,10 +202,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 37
-    },
-    {
       "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive",
       "complexity": 37
     },
@@ -224,6 +216,42 @@
     {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn>runOperationProfile",
+      "complexity": 36
+    },
+    {
+      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
+      "complexity": 36
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
+      "complexity": 36
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkPlans.tsx#WorkPlans",
+      "complexity": 36
+    },
+    {
+      "key": "packages/cli/src/tui/input-state.ts#reduceInput",
+      "complexity": 36
+    },
+    {
+      "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
+      "complexity": 36
+    },
+    {
+      "key": "packages/core/src/identity/archive.ts#readWorkspaceArchivePage",
+      "complexity": 36
+    },
+    {
+      "key": "packages/devbox/bench/measure-first/worker.ts#fetch",
+      "complexity": 36
+    },
+    {
+      "key": "scripts/bench-devbox-strategies.ts#executeDecisiveSegment",
+      "complexity": 36
     }
   ]
 }
