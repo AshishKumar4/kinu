@@ -30,10 +30,11 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import {
-  DiffLines, timeAgo, CodeBlock,
+  DiffLines, CodeBlock,
   changelogFactKey, changelogToolName, withToolDetails,
   type ChangelogEntryView, type CraftedToolDetail,
 } from "./shared";
+import { timeAgo } from "@/lib/format";
 
 export interface ChangelogView { entries: ChangelogEntryView[]; unseenCount: number; seenAt: number }
 

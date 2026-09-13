@@ -38,3 +38,25 @@ export function fmtUsd(n: number): string {
 export function fmtPct(rate: number | null, digits = 0): string {
 	return rate === null ? "—" : `${(rate * 100).toFixed(digits)}%`;
 }
+
+/**
+ * How long ago, in the one wording the app uses.
+ *
+ * There were two of these — the jobs card counted seconds, the changelog said
+ * "just now" and fell back to a date — and they render in the SAME feed,
+ * where one row reading "8s ago" beside another reading "just now" is two
+ * clocks, not one. Moved to `lib` when the home cards needed it: the surface
+ * `shared.tsx` it lived in pulls in the markdown renderer, which a roster row
+ * has no business loading.
+ */
+export function timeAgo(at: number): string {
+	const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
+
+	if (s < 60) return "just now";
+
+	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+
+	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+
+	return new Date(at).toLocaleDateString();
+}

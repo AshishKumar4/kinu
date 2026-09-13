@@ -16,11 +16,13 @@
 
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator";
-import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX, type RunEventType } from "@kinu.run/core";
+import { boundRunEventQuery, RUN_EVENT_LIMIT_DEFAULT, RUN_EVENT_LIMIT_MAX,
+  type RunEventType, type WorkspaceOverview } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
   decodeRunEventWire, resumeIndexFromLastEventId, type RunEventWire,
 } from './lib/orchestrator-wire';
+import { err, json } from "./lib/http";
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /**
@@ -281,5 +283,37 @@ function streamRunEvents(
       'x-accel-buffering': 'no',
     },
   });
+}
+
+/**
+ * `GET /api/workspaces/:name/overview` — the home card's read. Ownership is
+ * already proven where server.ts dispatches this (the same gate that fronts
+ * run events), so the handler only matches the path, asks the workspace, and
+ * formats the answer: a failed read is a 500, never a zeroed card.
+ */
+export async function handleWorkspaceOverviewRequest(
+  request: Request,
+  read: () => Promise<WorkspaceOverview>,
+): Promise<Response | null> {
+  const url = new URL(request.url);
+  const match = url.pathname.match(/^\/api\/workspaces\/([^/]+)\/overview$/);
+
+  if (match === null || request.method !== "GET") return null;
+
+  const workspace = match[1];
+
+  if (workspace === undefined) return null;
+
+  try {
+    return json(await read());
+  } catch (cause) {
+    diagnostics.failure("http.workspace_overview_failed", toKinuError({
+      doing: `answering a workspace overview request`,
+      cause,
+      otherwise: "unavailable",
+    }), { workspace });
+
+    return err(500, `Workspace overview failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+  }
 }
 

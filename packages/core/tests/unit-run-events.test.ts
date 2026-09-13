@@ -715,3 +715,44 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
     expect(setup().recorder.completedWorkTurns(null)).toBe(0);
   });
 });
+
+describe('RunEventRecorder.latestRunHeader', () => {
+  test('the newest real run leads, over many intervening events and the reserved aggregate', () => {
+    const { recorder } = setup();
+
+    recorder.emit('run-older', { type: 'run_start', agentId: 'a', userMessage: 'older task' });
+    recorder.emit('run-older', { type: 'run_end', reason: 'completed' });
+    recorder.emit('run-newest', { type: 'run_start', agentId: 'a', userMessage: 'newest task' });
+
+    // The header is a two-payload read: rows between the boundaries exist to
+    // be skipped, and skipping them is the whole cost claim.
+    for (let i = 0; i < 400; i++) {
+      recorder.emit('run-newest', { type: 'error', message: `noise ${i}` });
+    }
+
+    recorder.emit('run-newest', { type: 'run_end', reason: 'error' });
+    // Between-run work files under the reserved aggregate; written last so a
+    // newest-row read that forgot the exclusion would lead with it.
+    recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'judge' });
+
+    expect(recorder.latestRunHeader()).toEqual({ status: 'error', userMessage: 'newest task' });
+  });
+
+  test('an unsealed run reports no status rather than a guessed one', () => {
+    const { recorder } = setup();
+
+    recorder.emit('run-open', { type: 'run_start', agentId: 'a', userMessage: 'still going' });
+
+    expect(recorder.latestRunHeader()).toEqual({ status: null, userMessage: 'still going' });
+  });
+
+  test('an empty log has no header, and a run with no start has no task', () => {
+    const { recorder } = setup();
+
+    expect(recorder.latestRunHeader()).toBeNull();
+
+    recorder.emit('run-bare', { type: 'run_end', reason: 'completed' });
+
+    expect(recorder.latestRunHeader()).toEqual({ status: 'completed', userMessage: null });
+  });
+});
