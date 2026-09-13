@@ -2548,3 +2548,119 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
     });
   }, 240_000);
 });
+
+interface CreateProbe {
+  posts: number;
+  release: (() => void) | null;
+}
+
+declare global {
+  interface Window { __createProbe: CreateProbe }
+}
+
+describe('the home creation form, as a browser submits it', () => {
+  test('one gesture in flight means one create request, and a refused create frees a retry', async () => {
+    await withGallery(async ({ browser, origin }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'dark'); });
+      await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('#workspace-mission', { timeout: 20_000 });
+
+      // The gallery's fetch IS the HTTP boundary for this page — the stub
+      // returns a 404 for the create POST, so the probe wraps it to hold the
+      // response under explicit test control. Every other request falls
+      // through to the gallery's own handling untouched.
+      await page.evaluate(() => {
+        const inner = window.fetch;
+        const probe: CreateProbe = { posts: 0, release: null };
+
+        window.__createProbe = probe;
+        // The member the Bun fetch type requires, forwarded from the callable
+        // being wrapped — the pattern client-error/feedback-ux already use.
+        window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
+          if (init?.method === 'POST' && String(input).includes('/api/user/workspaces')) {
+            probe.posts += 1;
+
+            // First POST: refuse it on release. Every later one: the entry the
+            // registerWorkspace parse requires, so a retry exercises success.
+            const status = probe.posts === 1 ? 500 : 200;
+
+            const body = probe.posts === 1
+              ? { error: 'probe: create refused' }
+              : { name: 'probe-created', displayName: 'Probe created', createdAt: 1, lastVisited: 1, archivedAt: null };
+
+            return new Promise<Response>((resolve) => {
+              probe.release = () => resolve(new Response(
+                JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
+            });
+          }
+
+          return inner(input, init);
+        }, { preconnect: inner.preconnect });
+      });
+
+      await page.type('#workspace-mission', 'Own the checkout service.');
+      await page.click('button[type="submit"]');
+
+      // Held request arrived AND the pending paint landed — not a sleep.
+      await page.waitForFunction(() => {
+        const btn = [...document.querySelectorAll('button')]
+          .find((b) => b.textContent?.includes('Create workspace'));
+
+        const ta = document.querySelector('#workspace-mission');
+
+        return window.__createProbe.posts === 1
+          && btn instanceof HTMLButtonElement && btn.disabled
+          && ta instanceof HTMLTextAreaElement && ta.disabled
+          && btn.querySelector('svg') !== null;
+      }, { timeout: 10_000 });
+
+      // A second gesture while the first is held: pointer submit AND the
+      // keyboard path. Neither may queue another create.
+      await page.click('button[type="submit"]');
+      await page.evaluate(() => {
+        const mission = document.querySelector('#workspace-mission');
+
+        if (!(mission instanceof HTMLElement)) throw new Error('mission textarea absent');
+
+        mission.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }));
+      });
+      expect(await page.evaluate(() => window.__createProbe.posts)).toBe(1);
+
+      // Release into a refusal: the notice names it, the fields re-enable.
+      await page.evaluate(() => { window.__createProbe.release?.(); });
+      await page.waitForFunction(() => {
+        const btn = [...document.querySelectorAll('button')]
+          .find((b) => b.textContent?.includes('Create workspace'));
+
+        const ta = document.querySelector('#workspace-mission');
+
+        return document.querySelector('.p-notice-danger') !== null
+          && btn instanceof HTMLButtonElement && !btn.disabled
+          && ta instanceof HTMLTextAreaElement && !ta.disabled;
+      }, { timeout: 10_000 });
+
+      // The deliberate retry fires exactly one more request.
+      await page.click('button[type="submit"]');
+      await page.waitForFunction(
+        () => window.__createProbe.posts === 2 && window.__createProbe.release !== null,
+        { timeout: 10_000 });
+      await page.evaluate(() => { window.__createProbe.release?.(); });
+
+      // The retry's 200 resolves through the real create path: the entry the
+      // registry answered with lands in the roster the page reads
+      // (roster.upsert runs before the awaited navigate), and no error
+      // surface remains. The gallery mounts this page under a MemoryRouter,
+      // so navigation itself is unobservable — the roster row is the real
+      // product state the create had to produce.
+      await page.waitForFunction(
+        () => document.querySelector('.p-notice-danger') === null
+          && document.body.innerText.includes('Probe created'),
+        { timeout: 10_000 });
+      expect(await page.evaluate(() => window.__createProbe.posts)).toBe(2);
+      await page.close();
+    });
+  }, 60_000);
+});
