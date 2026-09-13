@@ -119,7 +119,7 @@ import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
-import { LogBlock } from "@/components/surfaces/ActivitySurface";
+import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
@@ -4763,7 +4763,7 @@ const ACTIVITY_LATEST = {
 } satisfies NonNullable<ActivitySnapshot["latest"]>;
 
 const ACTIVITY_CACHE_HIT = {
-  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, emaAlpha: 0.2,
+  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2,
 };
 
 /** Two labels, one nested inside the other and one already spent — the mission
@@ -4879,7 +4879,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   telemetry: {
     steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
     stepsWithoutUsage: 0,
-    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, emaAlpha: 0.2 },
+    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, p99: null, emaAlpha: 0.2 },
   },
   spend: {
     producers: [],
@@ -5948,6 +5948,7 @@ async function mount() {
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
+  else if (frame === "activitycache") node = <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];

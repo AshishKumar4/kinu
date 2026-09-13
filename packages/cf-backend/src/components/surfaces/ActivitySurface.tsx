@@ -41,7 +41,7 @@ import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
 import { fmtTokens, fmtUsd, fmtPct } from "@kinu.run/core";
-import type { ActivitySnapshot, Rpc } from "@kinu.run/core";
+import type { ActivitySnapshot, CacheHitStats, Rpc } from "@kinu.run/core";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
 import type {
   ActivityLogEntry, ContextComposition, ContextPlane, ProducerSpend, SpendSource, WorkspaceSpend,
@@ -90,7 +90,7 @@ export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
     <div className="flex flex-col gap-6 text-xs">
       <ContextBlock snap={snap} />
       <CostBlock snap={snap} />
-      <CacheBlock snap={snap} />
+      <CacheBlock cacheHit={snap.telemetry.cacheHit} />
       <LogBlock log={snap.log} />
     </div>
   );
@@ -746,20 +746,18 @@ function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
 const sourceList = (sources: readonly SpendSource[]): string =>
   sources.map((source) => SPEND_SOURCE_LABEL[source]).join(", ");
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, size = "normal" }: { label: string; value: string; size?: "normal" | "small" }) {
   return (
     <div>
       <dt className="p-meta p-text-3 uppercase tracking-wide">{label}</dt>
-      <dd><Num className="p-row-text p-text">{value}</Num></dd>
+      <dd><Num className={size === "small" ? "p-meta p-text-2" : "p-row-text p-text"}>{value}</Num></dd>
     </div>
   );
 }
 
 /* ── cache ──────────────────────────────────────────────────────── */
 
-function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
-  const { cacheHit } = snap.telemetry;
-
+export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
   return (
     <section>
       <BlockHeader
@@ -774,15 +772,19 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
         </Empty>
       ) : (
         <>
+          <dl className="mb-3">
+            <dt className="p-meta p-text-3 uppercase tracking-wide">EMA</dt>
+            <dd><Num className="text-[22px] leading-none p-text">{fmtPct(cacheHit.ema, 1)}</Num></dd>
+          </dl>
           <dl className="grid grid-cols-4 gap-x-3 gap-y-1">
             <Stat label="Last" value={fmtPct(cacheHit.last, 1)} />
-            <Stat label="EMA" value={fmtPct(cacheHit.ema, 1)} />
             <Stat label="Mean" value={fmtPct(cacheHit.mean, 1)} />
-            <Stat label="p95" value={fmtPct(cacheHit.p95, 1)} />
+            <Stat label="p95" value={fmtPct(cacheHit.p95, 1)} size="small" />
+            <Stat label="p99" value={fmtPct(cacheHit.p99, 1)} size="small" />
           </dl>
           <p className="p-meta p-text-3 mt-2">
             Cached input over total input, per step. Cached tokens are a subset of the billed input.
-            The EMA weights recent steps at α={cacheHit.emaAlpha}. The mean and p95 cover the
+            The EMA weights recent steps at α={cacheHit.emaAlpha}. The mean, p95 and p99 cover the
             {" "}{cacheHit.samples} retained step{cacheHit.samples === 1 ? "" : "s"}.
           </p>
         </>
