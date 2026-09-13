@@ -974,7 +974,17 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
       // and the delete it performs when a port capability is revoked — which
       // answers whether a row was there, as the platform's does.
       delete: async (key: string) => kv.delete(key),
-      deleteAll: async () => { kv.clear(); },
+      deleteAll: async () => {
+        // workerd's `storage.deleteAll()` empties BOTH halves — the KV pairs
+        // and every SQLite table. Clearing only the map would leave a
+        // "destroyed" object whose tables a test can still read.
+        const tables = db.prepare<{ name: string }, []>(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+        ).all();
+
+        for (const { name } of tables) db.exec(`DROP TABLE "${name}"`);
+        kv.clear();
+      },
       setAlarm: async () => {},
       getAlarm: async () => null,
       deleteAlarm: async () => {},
@@ -1231,6 +1241,21 @@ export function orchestratorHarness(
   harness.agent.harnessDisableSleepTimeCompute();
 
   return harness;
+}
+
+/**
+ * A HALF-BORN workspace object: named at the platform, dead before its schema.
+ *
+ * The state a creation that threw between `idFromName` and `onStart` leaves —
+ * the constructor ran (the SDK's own `cf_agents_schedules` and the capability
+ * tables exist) but `ensureSchema` never did, so `workspace_identity` is
+ * absent and every owner read against it throws. Deliberately nothing is
+ * claimed: there is no owner row to seed.
+ */
+export function halfBornOrchestratorHarness(
+  world?: HarnessActorWorld,
+): ActorHarness<HarnessOrchestratorAgent> {
+  return instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, undefined, world);
 }
 
 /**

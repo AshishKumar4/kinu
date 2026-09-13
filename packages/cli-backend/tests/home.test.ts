@@ -1,6 +1,7 @@
+import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, test, expect, afterEach } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { kinuHome } from '../src/home';
 import { createHostCheckpoints } from '../src/checkpoints';
@@ -34,21 +35,17 @@ describe('checkpoint store isolation', () => {
   // into the real home even under an isolated KINU_HOME. Any harness that
   // promises a throwaway home depends on this.
   test('checkpoints land under KINU_HOME, not the real home', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'kinu-home-iso-'));
+    const root = scratchDir('home-iso');
 
-    try {
-      process.env.KINU_HOME = join(root, 'home');
-      const work = join(root, 'project');
-      mkdirSync(work, { recursive: true });
-      writeFileSync(join(work, 'a.txt'), 'one');
+    process.env.KINU_HOME = join(root, 'home');
+    const work = join(root, 'project');
+    mkdirSync(work, { recursive: true });
+    writeFileSync(join(work, 'a.txt'), 'one');
 
-      const engine = createHostCheckpoints({ agent: 'iso-test' });
-      engine.beginTurn({ turnId: 't1', sessionId: 's1' });
-      expect(await engine.ensureCheckpoint(work)).toBeTruthy();
+    const engine = createHostCheckpoints({ agent: 'iso-test' });
+    engine.beginTurn({ turnId: 't1', sessionId: 's1' });
+    expect(await engine.ensureCheckpoint(work)).toBeTruthy();
 
-      expect(existsSync(join(root, 'home', 'checkpoints', 'iso-test'))).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(existsSync(join(root, 'home', 'checkpoints', 'iso-test'))).toBe(true);
   });
 });

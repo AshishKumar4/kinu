@@ -547,7 +547,7 @@ describe('Live Smoke — one real turn per backend', () => {
 
       // THE DURABLE WRITE: the user turn and the assistant answer, in the
       // workspace's own SQLite.
-      const messages = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
+      const messages = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM actor_messages').get()?.c ?? 0;
       console.log(`    cli durable: ${String(messages)} message row(s)`);
       expect(messages).toBeGreaterThanOrEqual(2);
       expect(await rt.storage.vfs.readFile('smoke.txt', { encoding: 'utf8' })).toBe('live smoke ok');

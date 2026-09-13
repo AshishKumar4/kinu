@@ -1,18 +1,19 @@
 // Two overlapping `explore` RPCs against one branch worker must each resolve
 // to their own result. Matching a reply to a waiter by method name alone lets
 // the first arriving reply settle every same-method waiter.
+import { scratchDir } from '../../test-utils/src/scratch';
 import { test, expect, afterAll } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+
 import { Database } from 'bun:sqlite';
 import { createBranchSpawner } from '../src/branch-process';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { initActorStateSchema } from '@kinu.run/core';
 
-const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-rpc-'));
+const dir = scratchDir('branch-rpc');
 
-const parentDbPath = `${dir}.db`;
+const parentDbPath = join(dir, 'parent.db');
 
 const parentDb = new Database(parentDbPath, { create: true });
 
@@ -22,8 +23,6 @@ initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
   parentDb.close();
-  rmSync(dir, { recursive: true, force: true });
-  rmSync(parentDbPath, { force: true });
 });
 
 const LANGUAGES: [string, ...string[]] = ['typescript'];

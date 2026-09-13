@@ -74,6 +74,7 @@ import {
 } from '../src/evolution/refinement-skill';
 import { createTestSql } from '@kinu.run/test-utils';
 import { createTestRuntime } from './helpers';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const EVAL_SIZE = 8;
 
@@ -121,6 +122,7 @@ function scriptedControl(rt: AgentRuntime, score: (candidate: string) => number)
   };
 
   return {
+    events: new RunEventRecorder(rt.storage.sql, rt.actor),
     rt,
     sql: rt.storage.sql,
     config,

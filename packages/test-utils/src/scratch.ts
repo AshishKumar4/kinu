@@ -117,25 +117,49 @@ const minted = new Set<string>();
  * directory survived with the same inode. Two homes leaked that way per run and
  * nothing reported it. So this checks, and a directory still standing after its
  * own removal is an error naming the one thing that causes it.
+ *
+ * Every root is attempted even when one fails — a refused `rmSync` or a
+ * surviving directory is collected, not thrown on the spot, so one bad root
+ * cannot shield the rest of the mint set. The failures come back in ONE
+ * `AggregateError` under `scratch not released`, each carrying its original
+ * cause, and only a root that is provably gone leaves ownership: the failed
+ * ones stay minted for an explicit later release.
  */
 export function releaseScratch(): number {
   let removed = 0;
-  const held: string[] = [];
+  const held: Error[] = [];
 
-  for (const dir of minted) {
-    rmSync(dir, { recursive: true, force: true });
+  // Every owned root is ATTEMPTED even when one fails, children before their
+  // parents (reverse mint order): a nested root minted inside another root is
+  // addressed first, so a surviving parent is not blamed for a child that
+  // already went, and one bad root never shields another.
+  for (const dir of [...minted].reverse()) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (cause) {
+      held.push(new Error(`${dir}: rmSync refused`, { cause }));
+      continue;
+    }
 
-    if (existsSync(dir)) held.push(dir);
-    else removed += 1;
+    if (existsSync(dir)) {
+      held.push(new Error(
+        `${dir} survived rmSync, which reports success when a live process is `
+        + 'still writing into the tree. Stop what the suite backgrounded '
+        + 'before the run ends.',
+      ));
+      continue;
+    }
+
+    // Only a root that is provably gone leaves ownership: a failed one stays
+    // minted, so an explicit later releaseScratch still attempts it.
+    minted.delete(dir);
+    removed += 1;
   }
 
-  minted.clear();
-
   if (held.length > 0) {
-    throw new Error(
-      `scratch not released: ${held.join(', ')} survived rmSync, which reports success when `
-      + 'a live process is still writing into the tree. Stop what the suite backgrounded '
-      + 'before the run ends.',
+    throw new AggregateError(
+      held,
+      `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release`,
     );
   }
 
@@ -148,6 +172,7 @@ export function releaseScratch(): number {
  * `label` names the suite or fixture, appears in the directory name, and is the
  * whole diagnostic: a leak that outlives the run is attributable to a file by
  * reading the temp directory, instead of being 5,489 identical numbers.
+ * `parent` lets repository-local fixture programs resolve their dependencies.
  *
  * Registration of the release is the PRELOAD's job (`scripts/test-preload.ts`),
  * and that is not a style choice — it is the only mechanism measured to run.
@@ -162,8 +187,8 @@ export function releaseScratch(): number {
  * KINU_HOME, so it stranded one per `bun test` invocation, 274 of them on
  * this box, and its 30-minute stale sweeper was that leak being papered over.
  */
-export function scratchDir(label: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `${SCRATCH_ROOT_PREFIX}${label}-`));
+export function scratchDir(label: string, parent = tmpdir()): string {
+  const dir = mkdtempSync(join(parent, `${SCRATCH_ROOT_PREFIX}${label}-`));
   minted.add(dir);
 
   return dir;

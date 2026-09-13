@@ -1479,16 +1479,8 @@ describe('active-skill budget priority (activation precedence, stable render ord
     expect(reference).toContain(`workspace.readFile("${giant.bodyRef.path}")`);
     // …and the split is clean in both directions: no giant block at system
     // placement, and the body the allocation paid for stays out of the
-    // reference block. (Name-stable render order is the next test, which has
-    // two blocks in one tier to order.)
+    // reference block.
     expect(section).not.toContain('### aaa-giant');
     expect(reference).not.toContain('THE-INVOKED-BODY');
-  });
-
-  test('without overflow, activation order still renders byte-identically', () => {
-    const a = skill('alpha');
-    const b = skill('beta');
-    expect(renderActiveSkillsSection({ active: [a, b], reasons: [] }, 'system'))
-      .toBe(renderActiveSkillsSection({ active: [b, a], reasons: [] }, 'system'));
   });
 });

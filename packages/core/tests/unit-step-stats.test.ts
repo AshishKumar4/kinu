@@ -3,21 +3,35 @@
 // unpriced, a field no step reported stays absent from the totals, and an empty
 // sample reports null rather than zero.
 import { describe, test, expect } from 'bun:test';
-import { cacheHitRate, summarizeSteps, type StepCost, type Usage } from '../src/index';
+import { summarizeSteps, type StepCost, type Usage } from '../src/index';
 
 /** A step whose provider reported `u`, priced at `usd` when given. */
 const step = (usage: Usage, usd?: number): StepCost =>
   (usd === undefined ? { usage } : { usage, usd });
 
-describe('cacheHitRate', () => {
+describe('the cache hit rate, through summarizeSteps', () => {
+  // The rate itself is private now — the distribution it feeds is the public
+  // surface, and one sample step pins every field of it: a rateable step is
+  // its own last/mean/p95/ema, an unrateable one leaves the whole
+  // distribution null rather than reading as a 0% miss.
+  const distribution = (usage: Usage) =>
+    summarizeSteps([step(usage)], { windowLimit: 50 }).cacheHit;
+
   test('is the cache-read share of input, which is a subset of it', () => {
-    expect(cacheHitRate({ input: 1000, cacheRead: 750 })).toBe(0.75);
-    expect(cacheHitRate({ input: 1000, cacheRead: 0 })).toBe(0);
-    expect(cacheHitRate({ input: 1000, cacheRead: 1000 })).toBe(1);
+    const share = distribution({ input: 1000, cacheRead: 750 });
+    expect(share.samples).toBe(1);
+    expect(share.last).toBe(0.75);
+    expect(share.mean).toBe(0.75);
+    expect(share.p95).toBe(0.75);
+    expect(share.ema).toBe(0.75);
+    expect(distribution({ input: 1000, cacheRead: 0 }).mean).toBe(0);
+    expect(distribution({ input: 1000, cacheRead: 1000 }).mean).toBe(1);
   });
 
   test('a step with no input has no hit rate — 0% would read as a cache miss', () => {
-    expect(cacheHitRate({ input: 0, cacheRead: 0 })).toBeNull();
+    expect(distribution({ input: 0, cacheRead: 0 })).toMatchObject({
+      samples: 0, last: null, mean: null, p95: null, ema: null,
+    });
   });
 
   test('an UNREPORTED cache read has no hit rate, where a reported zero has one', () => {
@@ -25,16 +39,22 @@ describe('cacheHitRate', () => {
     // prompt_tokens_details.cached_tokens: 0 (a real cold prompt, rate 0), while
     // a provider that mentions caching not at all has no rate to report — and
     // rendering that as 0% would claim a total miss on absent evidence.
-    expect(cacheHitRate({ input: 1000, cacheRead: 0 })).toBe(0);
-    expect(cacheHitRate({ input: 1000 })).toBeNull();
+    expect(distribution({ input: 1000, cacheRead: 0 }).mean).toBe(0);
+    expect(distribution({ input: 1000 })).toMatchObject({
+      samples: 0, last: null, mean: null, p95: null, ema: null,
+    });
   });
 
   test('an unreported input has no hit rate even when cacheRead is known', () => {
-    expect(cacheHitRate({ cacheRead: 500 })).toBeNull();
+    expect(distribution({ cacheRead: 500 })).toMatchObject({
+      samples: 0, last: null, mean: null, p95: null, ema: null,
+    });
   });
 
   test('a report of nothing has no hit rate', () => {
-    expect(cacheHitRate({})).toBeNull();
+    expect(distribution({})).toMatchObject({
+      samples: 0, last: null, mean: null, p95: null, ema: null,
+    });
   });
 });
 

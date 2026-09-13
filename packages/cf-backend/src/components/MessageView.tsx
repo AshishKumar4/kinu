@@ -21,9 +21,9 @@ import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
   ADVISOR_SEVERITY_LABEL,
-  describeToolCall, summarizeToolCall, toolCallEffect,
+  describeToolCall, summarizeToolCall,
 } from "@kinu.run/core";
-import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
+import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer, ToolCallEffect } from "@kinu.run/core";
 import * as v from "valibot";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
@@ -31,7 +31,7 @@ import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import {
-  groupMessageParts, turnResultFacts, formatTurnResult, splitCompletedTurn,
+  groupMessageParts,
   partOutput, partInput, partEffect, callFailed, parseProvisionError,
   type AnyToolPart,
 } from "@/components/tool-call-grouping";
@@ -100,20 +100,33 @@ function ThinkingRow() {
 
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const viewport = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!live) return;
+    setExpanded(false);
+
+    if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
+  }, [live, text]);
 
   return (
-    // The mock's thought: a dim block ruled off the column by a 2px dashed
-    // line, the first words inline, the affordance the word "expand" in gold.
-    <div className={`border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 p-row-text p-text-4`}>
-      <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
-        <span className={live ? "p-shimmer" : ""}>Thinking</span>
-        {!expanded && <span className={live ? "p-shimmer-text opacity-80" : "opacity-80"}> · {text.slice(0, 120)}</span>}
-        {text.length > 120 && (
-          <span className="ml-1.5 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>
-        )}
-      </button>
-      {expanded && (
-        <div className={live ? "mt-1 whitespace-pre-wrap p-shimmer-text" : "mt-1 whitespace-pre-wrap"}>{text}</div>
+    <div className="border-l-2 border-[var(--c-dash)] py-0.5 pl-3.5 p-row-text p-text-4">
+      {live ? (
+        <>
+          <span className="motion-safe:animate-[pulse_1.6s_ease-in-out_infinite] motion-reduce:animate-none">Thinking</span>
+          <div ref={viewport} data-reasoning-viewport className="mt-1 max-h-[4lh] overflow-y-auto scroll-auto whitespace-pre-wrap">{text}</div>
+        </>
+      ) : (
+        <>
+          <button onClick={() => setExpanded(!expanded)} className="group/reason w-full text-left cursor-pointer" aria-expanded={expanded}>
+            <span>Thinking</span>
+            {!expanded && <span className="opacity-80"> · {text.slice(0, 120)}</span>}
+            {text.length > 120 && (
+              <span className="ml-1.5 font-medium p-accent">{expanded ? "collapse" : "expand"}</span>
+            )}
+          </button>
+          {expanded && <div className="mt-1 whitespace-pre-wrap">{text}</div>}
+        </>
       )}
     </div>
   );
@@ -165,8 +178,9 @@ function toolIcon(toolName: string): ReactNode {
   return <DotsThreeCircleIcon size={15} />;
 }
 
-function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText, expanded, onToggleExpand }: {
+function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, errorText, expanded, onToggleExpand }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
+  effect: ToolCallEffect;
   /** The transport's own reason for a protocol-level failure (a crashed
    *  executor, a timeout) — distinct from `output`, which a tool that caught
    *  its own failure returns as an ordinary result. Never present together. */
@@ -211,8 +225,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText,
   const description = describeToolCall(toolName, input);
 
   const failed = isError || !!provisionErr;
-  const effect = toolCallEffect(toolName, input);
-  const prominent = effect === 'mutate' || isRunning || failed;
+  const prominent = effect === 'mutate' || isRunning;
 
   return (
     <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
@@ -224,7 +237,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText,
         data-tool-effect={effect}
         className={`group/tool grid w-full cursor-pointer items-center text-left transition-colors hover:bg-[var(--c-elevated)] ${prominent ? "grid-cols-[34px_minmax(0,1fr)_auto_auto] gap-3 px-3.5 py-3" : "grid-cols-[20px_minmax(0,1fr)_auto_auto] gap-2 px-3 py-2"}`}
       >
-        <span className={`flex items-center justify-center ${prominent ? `size-[34px] rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-accent" : failed ? "border-[var(--c-danger)] bg-[var(--c-danger-tint)] p-danger" : "p-border p-recessed p-text-3"}` : "size-5 p-text-4"}`}>
+        <span className={`flex items-center justify-center ${prominent ? `size-[34px] rounded-lg border ${isRunning ? "border-[var(--c-accent)] p-accent-subtle p-accent" : "p-border p-recessed p-text-3"}` : "size-5 p-text-4"}`}>
           {toolIcon(toolName)}
         </span>
         {prominent ? (
@@ -242,7 +255,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText,
             {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
           </span>
         )}
-        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${isRunning ? "p-accent-subtle p-accent" : failed ? "p-badge-danger" : "p-badge-success"}`}>
+        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${isRunning ? "p-accent-subtle p-accent" : failed ? "p-fill p-text-4" : "p-badge-success"}`}>
           {isRunning
             ? <><span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" />Running</>
             : failed
@@ -251,7 +264,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText,
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
-      {provisionErr && (
+      {expanded && provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
@@ -308,79 +321,30 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText,
   );
 }
 
-/**
- * A run of consecutive finished tool calls, as one row.
- *
- * A repair is rarely one call — it is read, read, edit, write, delegate, run
- * — and rendering each as its own row turns a turn into a wall of identical
- * chrome that buries the prose around it. The run collapses to a single line
- * carrying the tally, and opens to the same rows as before.
- *
- * Only FINISHED calls are folded in; a call still running keeps its own row
- * so the count never changes under the reader's eye while the agent works.
- */
-
-function ToolCallGroup({ parts, expandedCalls, onToggleCall, foldAll = false }: {
+function ToolCallGroup({ parts, expandedCalls, onToggleCall }: {
   parts: readonly AnyToolPart[];
-  /** toolCallIds the reader opened. A failed call reads open until the
-   *  reader closes it: the toggle removes the default, never the row. */
   expandedCalls: ReadonlySet<string>;
   onToggleCall: (toolCallId: string) => void;
-  /** A completed turn starts folded; a live one keeps showing short runs. */
-  foldAll?: boolean;
 }) {
   const [showAll, setShowAll] = useState(false);
   const failedCount = parts.filter(callFailed).length;
-  const mutationCount = parts.filter((part) => partEffect(part) === 'mutate').length;
-  // A failing call is never buried in a collapsed success group and never
-  // moves when the group opens: failed rows lead in both states.
-  const ordered = [...parts].sort((a, b) => Number(callFailed(b)) - Number(callFailed(a)));
-  const collapsedIds = new Set<string>();
 
-  if (!foldAll && parts.length <= 8) {
-    for (const part of ordered) collapsedIds.add(part.toolCallId);
-  } else {
-    // A call that put a running app on screen is the artifact of the turn —
-    // the reader scrolls back for that frame, not for the row above it. It is
-    // therefore never folded, and it does not spend the consequential budget:
-    // a preview is not a change, and a run that exposes two ports must not
-    // lose a failure to make room for them.
-    for (const part of ordered) if (callFailed(part)) collapsedIds.add(part.toolCallId);
+  const collapsed = parts.length <= 8 ? parts : parts.filter((part, index) =>
+    index === 0 || index === parts.length - 1 || expandedCalls.has(part.toolCallId));
 
-    for (const part of ordered) if (extractPreviewUrl(partOutput(part)) !== null) collapsedIds.add(part.toolCallId);
-    let budget = 6;
-
-    for (const part of ordered) {
-      if (budget === 0) break;
-
-      if (collapsedIds.has(part.toolCallId)) continue;
-
-      if (partEffect(part) === 'mutate') { collapsedIds.add(part.toolCallId); budget -= 1; }
-    }
-
-    const first = parts[0];
-    const last = parts.at(-1);
-
-    if (first !== undefined) collapsedIds.add(first.toolCallId);
-
-    if (last !== undefined) collapsedIds.add(last.toolCallId);
-  }
-
-  const collapsed = ordered.filter((part) => collapsedIds.has(part.toolCallId));
-  const shown = showAll ? ordered : collapsed;
+  const shown = showAll ? parts : collapsed;
   const hiddenCount = parts.length - collapsed.length;
 
   return (
-    <div data-tool-group data-tool-count={parts.length} data-tool-mutations={mutationCount} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
+    <div data-tool-group data-tool-count={parts.length} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
       <div className="flex flex-wrap items-center gap-2 border-b p-border p-sidebar px-3.5 py-2">
-        <LightningIcon size={13} className="p-accent" weight="fill" />
+        <LightningIcon size={13} className="p-text-4" weight="fill" />
         <span className="p-row-text font-semibold p-text-2">Agent activity</span>
-        <span className="p-annotation p-text-4">{parts.length} call{parts.length === 1 ? "" : "s"}</span>
-        {mutationCount > 0 && <span className="rounded-full p-accent-subtle px-2 py-0.5 p-t-status p-accent">{mutationCount} change{mutationCount === 1 ? "" : "s"}</span>}
-        {failedCount > 0 && <span className="ml-auto p-badge-danger px-2 py-0.5">{failedCount} failed</span>}
+        <span className="p-annotation p-text-4">· {parts.length} call{parts.length === 1 ? "" : "s"}</span>
+        {failedCount > 0 && <span className="ml-auto p-t-status p-text-4">{failedCount} failed</span>}
       </div>
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
-        {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} expanded={expandedCalls.has(part.toolCallId) !== callFailed(part)} onToggleExpand={() => onToggleCall(part.toolCallId)} />)}
+        {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} expanded={expandedCalls.has(part.toolCallId)} onToggleExpand={() => onToggleCall(part.toolCallId)} />)}
       </div>
       {hiddenCount > 0 && (
         <button
@@ -409,6 +373,7 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         toolName={getToolName(part)}
         input={input}
         output={output}
+        effect={partEffect(part)}
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
         isError={callFailed(part)}
         errorText={part.state === "output-error" ? part.errorText : undefined}
@@ -420,29 +385,6 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
           <PreviewFrame url={previewUrl} />
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * The compact result line that leads a completed turn: what RAN, from the
- * turn's own settled calls. Never a verdict on the work — "3 tool calls, 1
- * failed" says the invocations failed, not that the task did — and never a
- * check: no row the chat can read records a named passed check, so none is
- * shown rather than one inferred.
- */
-function TurnResultLine({ facts }: { facts: { calls: number; failed: number; crafted: string[] } }) {
-  const line = formatTurnResult(facts);
-
-  if (line === null) return null;
-
-  return (
-    <div data-turn-result className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border p-border bg-[var(--c-recessed)] px-3 py-2">
-      <CheckCircleIcon size={12} weight="fill" className={facts.failed > 0 ? "p-danger shrink-0" : "p-success shrink-0"} />
-      <span className="text-[12px] font-semibold p-text-2">{line}</span>
-      {facts.crafted.map((name) => (
-        <span key={name} data-crafted-use={name} className="text-[11px] p-accent">Used the {name} tool</span>
-      ))}
     </div>
   );
 }
@@ -775,11 +717,10 @@ export const MessageView = memo(function MessageView({
   const canFork = !isLive && !!onFork && !!message.id;
   // Expansion keyed by toolCallId on the message: a row that folds into a
   // group on the next stream update remounts, and row-local state would reset
-  // with it. A failed call reads open until the reader closes it — the toggle
-  // removes the default, never the row.
+  // with it.
   const { set: callToggles, toggle: toggleCall } = useToggledSet();
 
-  const callExpanded = (part: AnyToolPart) => callToggles.has(part.toolCallId) !== callFailed(part);
+  const callExpanded = (part: AnyToolPart) => callToggles.has(part.toolCallId);
 
   // Turns the backend enqueued on the agent's behalf are stored as `user`
   // messages so the model reads them as its input — but the operator did not
@@ -853,8 +794,6 @@ export const MessageView = memo(function MessageView({
   // anything: a steer at step 0 leaves the first segment empty, and hanging the
   // button off a segment that renders nothing takes it off the message.
   const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
-  // One prose-ish part as the chat draws it, shared by the live layout and
-  // the completed result-first layout so the two cannot drift apart.
 
   const renderContentPart = (part: UIMessage["parts"][number], key: string | number) => {
 
@@ -893,23 +832,8 @@ export const MessageView = memo(function MessageView({
       expanded={callExpanded(part)} onToggleExpand={() => toggleCall(part.toolCallId)} />
   );
 
-  // A completed segment's settled calls as the one activity group the result
-  // line summarizes. A lone call stays a row — one call is not a group.
-  const renderSettledActivity = (settled: AnyToolPart[]) => {
-    if (settled.length === 0) return null;
-    const first = settled[0];
-
-    if (settled.length >= 2 && first) {
-      return <ToolCallGroup key={first.toolCallId} parts={settled}
-        expandedCalls={callToggles} onToggleCall={toggleCall} foldAll />;
-    }
-
-    return settled.map(renderToolRow);
-  };
-
   return (
     <div className="space-y-1 animate-fade-in">
-      {!isLive && <TurnResultLine facts={turnResultFacts(message.parts)} />}
       {segments.map((segment, s) => (
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
@@ -924,19 +848,7 @@ export const MessageView = memo(function MessageView({
                   <GitBranchIcon size={12} />
                 </button>
               )}
-              {!isLive ? (() => {
-                // A completed turn reads result first, then prose, then the
-                // one collapsed activity group — the ledger before the words.
-                const split = splitCompletedTurn(segment.parts);
-
-                return (
-                  <>
-                    {split.content.map((part, i) => renderContentPart(part, `c${i}`))}
-                    {split.open.map(renderToolRow)}
-                    {renderSettledActivity(split.settled)}
-                  </>
-                );
-              })() : groupMessageParts(segment.parts).map((block, i) => {
+              {groupMessageParts(segment.parts).map((block, i) => {
                 if (block.kind === "tool-run") {
                   const first = block.parts[0];
 
@@ -945,38 +857,12 @@ export const MessageView = memo(function MessageView({
                 }
 
                 const part = block.part;
-                const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
-
-                if (part.type === "reasoning") {
-                  const t = part.text;
-
-                  return t ? <ReasoningBlock key={i} text={t} live={isTailPart} /> : null;
-                }
-
-                if (part.type === "file") {
-                  return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
-                }
-
-                if (part.type === "text") {
-                  const t = part.text;
-
-                  if (!t) return null;
-
-                  // `p-streaming` draws the caret inside the last block the markdown
-                  // emitted. As a sibling element it landed on a line of its own below
-                  // the paragraph, which is the misplacement that was reported.
-                  return (
-                    <div key={i} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
-                      <MarkdownContent content={t} />
-                    </div>
-                  );
-                }
 
                 if (isToolUIPart(part)) {
                   return renderToolRow(part);
                 }
 
-                return null;
+                return renderContentPart(part, i);
               })}
             </div>
           )}

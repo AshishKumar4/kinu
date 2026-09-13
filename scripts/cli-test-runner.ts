@@ -7,9 +7,9 @@
  * while keeping test state isolated from the user's real ~/.kinu.
  */
 
-import { existsSync, statSync, rmSync, mkdtempSync } from "fs";
+import { existsSync, statSync } from "fs";
 import { join } from "path";
-import { tmpdir } from "os";
+import { releaseScratch, scratchDir } from '../packages/test-utils/src/scratch';
 
 // Prevent the test runner from accidentally starting a real daemon.
 // createCommand → createCliAgent → ensureLocalDaemonRunning → startDaemon
@@ -25,7 +25,7 @@ process.env.KINU_AUTH = process.env.KINU_AUTH ?? "Bearer test";
 
 process.env.KINU_MODEL = process.env.KINU_MODEL ?? "@cf/deepseek-ai/deepseek-v4-pro-0813";
 
-const TEST_ROOT = mkdtempSync(join(tmpdir(), "kinu-cli-e2e-home-"));
+const TEST_ROOT = scratchDir("cli-e2e-home");
 
 process.env.KINU_HOME = TEST_ROOT;
 
@@ -35,7 +35,7 @@ const AGENT_NAME = `e2e-cli-${Date.now()}`;
 
 const IMPORT_NAME = `e2e-import-${Date.now()}`;
 
-const EXPORT_DIR = mkdtempSync(join(tmpdir(), "kinu-cli-e2e-"));
+const EXPORT_DIR = scratchDir("cli-e2e");
 
 let passCount = 0;
 
@@ -58,10 +58,7 @@ function errorMessage<Failure>(error: Failure): string {
 function cleanup() {
   // `force` already absorbs a missing path, so anything thrown here is a real cleanup failure
   // (permissions, a busy handle) that would otherwise strand temp state across runs.
-  rmSync(join(AGENT_HOME, AGENT_NAME), { recursive: true, force: true });
-  rmSync(join(AGENT_HOME, IMPORT_NAME), { recursive: true, force: true });
-  rmSync(TEST_ROOT, { recursive: true, force: true });
-  rmSync(EXPORT_DIR, { recursive: true, force: true });
+  releaseScratch();
 }
 
 // ── §1. Create ───────────────────────────────────────────────────

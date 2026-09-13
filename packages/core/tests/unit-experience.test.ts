@@ -43,6 +43,7 @@ import {
 } from '../src/index';
 import { stageImport } from '../src/experience/imports';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
+import { RunEventRecorder } from '../src/events/recorder';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -101,7 +102,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
   // Shaped exactly as `cf-backend/src/orchestrator.ts` creates it: `actor_id`
-  // leads the key because `messages` is keyed `(actor_id, id)`, so two actors'
+  // leads the key because `actor_messages` is keyed `(actor_id, id)`, so two actors'
   // turns really do present the same message id — and a bare `message_id`
   // primary key lets one actor's thumbs overwrite a sibling's through the
   // writer's ON CONFLICT. A fixture without the column would take the reader's
@@ -192,7 +193,7 @@ async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
   const pending = getPendingScaffold(ws.rt.storage.sql, ws.rt.actor);
 
   if (!pending) throw new Error('the proposal did not land as pending');
-  await applyPromotionDecision(ws.rt, pending, 'promote');
+  await applyPromotionDecision(ws.rt, pending, 'promote', new RunEventRecorder(ws.rt.storage.sql, ws.rt.actor));
 
   return proposed.version;
 }
@@ -792,7 +793,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
 
     if (!pending) throw new Error('the import did not land as a pending version');
     winShadowTrials(beta, pending.version);
-    const applied = await applyPromotionDecision(beta.rt, pending, 'promote');
+    const applied = await applyPromotionDecision(beta.rt, pending, 'promote', new RunEventRecorder(beta.rt.storage.sql, beta.rt.actor));
 
     expect(applied.action).toBe('promote');
     expect(await beta.rt.identity.scaffold.read()).toBe(scaffoldSrc('v1'));

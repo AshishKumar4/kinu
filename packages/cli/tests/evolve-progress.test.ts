@@ -9,14 +9,14 @@
  * wiring rather than the formatter's former export.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { rmSync } from 'node:fs';
+
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type {
   AgentRuntime, ConvergenceResult, MCTSConfig, MCTSProgressEvent, SessionWriter,
 } from '@kinu.run/core';
 import { createCliAgent } from '../src/agent-create';
-import { agentDir, AGENT_HOME, updateConfigFile } from '../src/config';
+import { AGENT_HOME, updateConfigFile } from '../src/config';
 import { evolveCommand } from '../src/commands/evolve';
 
 // Dummy provider config so requireLLMConfig succeeds offline — the stub
@@ -41,7 +41,6 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 const AGENT_NAME = `evolve-progress-${Date.now()}`;
 
 afterAll(() => {
-  rmSync(agentDir(AGENT_NAME), { recursive: true, force: true });
   updateConfigFile((config) => {
     if (config.agents) delete config.agents[AGENT_NAME];
   });

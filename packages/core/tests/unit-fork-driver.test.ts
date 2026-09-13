@@ -26,9 +26,9 @@ async function sourceWorkspace() {
 
   await writeSoul(vfs, sql, 'help with testing');
   // The cut is looked up in THIS actor's rows, so the seeded transcript names it.
-  void sql`INSERT INTO messages (actor_id, id, role, content, created_at)
+  void sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
-  void sql`INSERT INTO messages (actor_id, id, role, content, created_at)
+  void sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;
 
   return { db, sql, vfs, actor };
@@ -53,7 +53,7 @@ function recordingTransport(taken: readonly string[] = []) {
       // resolves the source's main actor itself (`forkTransferFrames`), and this
       // recording stand-in reads the chain the same way.
       const message = source.sql<{ created_at: number }>`
-        SELECT created_at FROM messages
+        SELECT created_at FROM actor_messages
         WHERE actor_id = ${openWorkspaceMainActor(source.sql).actorId}
           AND id = ${source.untilMessageId} LIMIT 1`[0];
 
@@ -188,7 +188,7 @@ describe('forkWorkspace', () => {
         async occupied() { return false; },
         async deliver(name, source) {
           delivered.push(name);
-          const row = source.sql<{ created_at: number }>`SELECT created_at FROM messages WHERE id = ${source.untilMessageId}`[0];
+          const row = source.sql<{ created_at: number }>`SELECT created_at FROM actor_messages WHERE id = ${source.untilMessageId}`[0];
 
           if (!row) throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
 

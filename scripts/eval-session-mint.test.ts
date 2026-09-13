@@ -1,6 +1,7 @@
+import { scratchDir } from '../packages/test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 
 /** A deployment that runs the device flow and approves it only for one secret. */
@@ -69,16 +70,14 @@ async function mint(env: Record<string, string>, home: string) {
 
 describe('the eval-session mint', () => {
   const stops: Array<() => void> = [];
-  const homes: string[] = [];
   afterEach(() => { for (const stop of stops.splice(0)) stop();
 
- for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true }); });
+  });
 
   test('approves the device flow as the eval identity and persists the bearer, mode 0600', async () => {
     const d = deployment('s3cret');
     stops.push(d.stop);
-    const home = mkdtempSync(join(tmpdir(), 'kinu-mint-'));
-    homes.push(home);
+    const home = scratchDir('mint');
     const run = await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 's3cret' }, home);
     expect(run.exitCode).toBe(0);
     const path = join(home, '.config/kinu/eval-session/config.json');
@@ -90,8 +89,7 @@ describe('the eval-session mint', () => {
   test('a wrong web identity is refused by the deployment and nothing is written', async () => {
     const d = deployment('s3cret');
     stops.push(d.stop);
-    const home = mkdtempSync(join(tmpdir(), 'kinu-mint-'));
-    homes.push(home);
+    const home = scratchDir('mint');
     const run = await mint({ KINU_EVAL_ORIGIN: d.origin, KINU_EVAL_WEB_IDENTITY: 'guess' }, home);
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toContain('refused the approval page (401)');
@@ -101,8 +99,7 @@ describe('the eval-session mint', () => {
   test('a persisted session for another deployment is never overwritten', async () => {
     const d = deployment('s3cret');
     stops.push(d.stop);
-    const home = mkdtempSync(join(tmpdir(), 'kinu-mint-'));
-    homes.push(home);
+    const home = scratchDir('mint');
     const path = join(home, '.config/kinu/eval-session/config.json');
     mkdirSync(join(home, '.config/kinu/eval-session'), { recursive: true });
     writeFileSync(path, JSON.stringify({ origin: 'http://127.0.0.1:9', accessToken: 'pta_other' }));
@@ -114,8 +111,7 @@ describe('the eval-session mint', () => {
   });
 
   test('an origin outside the allowlist is refused before any request', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-mint-'));
-    homes.push(home);
+    const home = scratchDir('mint');
     const run = await mint({ KINU_EVAL_ORIGIN: 'https://staging.kinu.run', KINU_EVAL_WEB_IDENTITY: 's3cret' }, home);
     expect(run.exitCode).toBe(1);
     expect(run.stderr).toContain('REFUSED');

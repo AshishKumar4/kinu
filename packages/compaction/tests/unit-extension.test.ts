@@ -651,6 +651,159 @@ describe('summaries', () => {
   });
 });
 
+describe('turn cancellation', () => {
+  const fatAssistantRun = (i: number): ModelMessage[] => [
+    user(`chapter ${i}?`),
+    assistant([{ type: 'text', text: `chapter ${i}: ${'prose '.repeat(1_200)}` }]),
+  ];
+
+  const fatUserExchange = (i: number): ModelMessage[] => [
+    user(`requirement ${i}: ${'detail '.repeat(1_000)}`),
+    assistant([{ type: 'text', text: `noted ${i}` }]),
+  ];
+
+  const assistantRunHistory = (): ModelMessage[] => {
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) messages.push(...fatAssistantRun(i));
+
+    return messages;
+  };
+
+  test('summary jobs carry their own invocation\'s signal, not a later transform\'s', async () => {
+    // Hold the FIRST transform's plan load until a second transform has run
+    // to completion on a different session: every summary call A makes after
+    // that must still carry A's signal. A single shared signal slot fails
+    // this by handing every late A call B's signal.
+    const ports = memoryPorts();
+    const loadGate = Promise.withResolvers<void>();
+    const innerLoad = ports.plans.load;
+    let loads = 0;
+    ports.plans.load = (sessionKey) => {
+      loads += 1;
+
+      return loads === 1 ? loadGate.promise.then(() => innerLoad(sessionKey)) : innerLoad(sessionKey);
+    };
+
+    const seen: Array<{ signal: AbortSignal | undefined }> = [];
+
+    const { transform } = rig({
+      ports,
+      summarize: async (_prompt, signal) => {
+        seen.push({ signal });
+
+        return validSummary(String(seen.length));
+      },
+    });
+
+    const first = new AbortController();
+    const second = new AbortController();
+
+    const firstTurn = transform(assistantRunHistory(), {
+      sessionKey: 'session-a',
+      abortSignal: first.signal,
+    });
+
+    await transform(assistantRunHistory(), { sessionKey: 'session-b', abortSignal: second.signal });
+    loadGate.resolve();
+    await firstTurn;
+
+    // B's calls landed first (A was still parked in the load gate), so the
+    // calls carrying A's signal prove the signal stayed with its invocation.
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen[0]?.signal).toBe(second.signal);
+    expect(seen.some((call) => call.signal === first.signal)).toBe(true);
+    expect(seen.every((call) => call.signal === first.signal || call.signal === second.signal)).toBe(true);
+  });
+
+  test('the prefix-summary upgrade forwards the invocation\'s signal too', async () => {
+    const seen: Array<{ signal: AbortSignal | undefined }> = [];
+
+    const { transform } = rig({
+      summarize: async (_prompt, signal) => {
+        seen.push({ signal });
+
+        return validSummary('upgrade');
+      },
+    });
+
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) messages.push(...fatUserExchange(i));
+
+    const controller = new AbortController();
+    await transform(messages, { abortSignal: controller.signal });
+
+    // The fat-user history reaches the last-resort handoff summary, which
+    // calls summarize directly rather than through the job scheduler.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.signal).toBe(controller.signal);
+  });
+
+  test('a turn cancelled during the prefix upgrade rejects instead of reporting a plan', async () => {
+    const controller = new AbortController();
+
+    const { transform, outcomes } = rig({
+      summarize: async (_prompt, signal) => {
+        controller.abort();
+        expect(signal?.aborted).toBe(true);
+
+        return validSummary('too late');
+      },
+    });
+
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) messages.push(...fatUserExchange(i));
+
+    // A resolved summary on a dead turn is still dead: no 'planned' outcome,
+    // and the transform settles as the standard abort, not a fallback plan.
+    await expect(transform(messages, { abortSignal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(outcomes).toHaveLength(0);
+  });
+
+  test('a turn cancelled mid-batch settles as the abort, not a degraded plan', async () => {
+    const controller = new AbortController();
+
+    const { transform, outcomes } = rig({
+      summarize: async () => {
+        controller.abort();
+
+        return validSummary('too late');
+      },
+    });
+
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) messages.push(...fatAssistantRun(i));
+
+    await expect(transform(messages, { abortSignal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(outcomes).toHaveLength(0);
+  });
+
+  test('a real provider failure keeps its deterministic fallback under a live signal', async () => {
+    const { transform, outcomes } = rig({
+      summarize: async (_prompt, signal) => {
+        expect(signal?.aborted ?? false).toBe(false);
+        throw new Error('provider 500');
+      },
+    });
+
+    const messages: ModelMessage[] = [];
+
+    for (let i = 0; i < 8; i++) messages.push(...fatUserExchange(i));
+
+    const result = await transform(messages, { abortSignal: new AbortController().signal });
+    expect(result).toBeDefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
+    expect(JSON.stringify(result)).toContain('[Context Summary]');
+  });
+});
+
 function isString<Value>(value: Value): value is Value & string {
   return v.is(v.string(), value);
 }

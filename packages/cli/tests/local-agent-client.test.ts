@@ -2,10 +2,11 @@
 // driven by the authentic createCLIRuntime and a fake streaming model (no
 // network LLM). Verifies the unified seam: event stream, turn results, JSONL
 // recording, history hydration, walk-back fork, and stop() reaching the abort.
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { existsSync } from 'node:fs';
+
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
@@ -20,12 +21,6 @@ import type { AgentClientEvent } from '../src/agent-client';
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
 };
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -97,8 +92,7 @@ function fakeResolver(model: LanguageModel): LocalModelResolver {
 }
 
 function setup(model: LanguageModel) {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-client-'));
-  tempDirs.push(home);
+  const home = scratchDir('client');
   const dbPath = join(home, 'agent.db');
   // The database IS `dbPath`: `createCLIRuntime` binds the actor by reading the
   // database's own filename back and refuses a runtime whose declared path is
@@ -106,7 +100,7 @@ function setup(model: LanguageModel) {
   // in-memory handle can satisfy. `create: true` is what puts the file there.
   const db = new Database(dbPath, { create: true });
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
@@ -144,7 +138,7 @@ function openPersistentClient(
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
@@ -200,8 +194,7 @@ describe('LocalAgentClient', () => {
   });
 
   test('the diagnostic recorder never chooses or disables the durable conversation', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-client-persistent-'));
-    tempDirs.push(home);
+    const home = scratchDir('client-persistent');
     const transcriptDir = join(home, 'sessions');
 
     const unrecorded = openPersistentClient(home, fakeModel('first answer'), {
@@ -232,7 +225,7 @@ describe('LocalAgentClient', () => {
     const db = new Database(join(home, 'agent.db'));
 
     const sessions = db.query<{ session_id: string }, []>(
-      'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
+      'SELECT DISTINCT session_id FROM actor_messages ORDER BY session_id',
     ).all();
 
     const conversation = db.query<{ value: string }, []>(

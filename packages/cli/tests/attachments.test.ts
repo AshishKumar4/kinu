@@ -1,10 +1,11 @@
 // Prompt-attachment resolution for the CLI chat surfaces: @path mentions
 // (plus quoted / ~-prefixed tokens) that stat to real files become data-URL
 // PromptFiles (images/PDFs) or path references (everything else).
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { writeFileSync, mkdirSync } from 'node:fs';
+
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/core';
 import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/cli-backend';
 import {
@@ -16,15 +17,8 @@ import {
  *  cheap to exceed on disk. The real backend caps are exercised separately. */
 const CAP = 64 * 1024;
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function makeDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-attach-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('attach');
 
   return dir;
 }

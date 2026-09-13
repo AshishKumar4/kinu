@@ -580,7 +580,7 @@
     "text",
     "updated_at"
   ],
-  "messages@packages/core/src/identity/schema.ts": [
+  "actor_messages@packages/core/src/identity/schema.ts": [
     "actor_id",
     "id",
     "session_id",
@@ -1000,12 +1000,6 @@
     "next_attempt_at",
     "claimed_at",
     "settled_at"
-  ],
-  "terminal_intents@packages/cli-backend/src/local-session.ts": [
-    "message_id",
-    "turn_id",
-    "roster_json",
-    "recorded_at"
   ],
   "tool_effect_claims@packages/core/src/tools/effect-claim.ts": [
     "actor_id",

@@ -336,7 +336,7 @@ export class RunEventRecorder {
   // Cached next-index per runId. Loaded lazily from the table on first emit.
   private nextIndex = new Map<string, number>();
   private listeners = new Set<RunEventListener>();
-  private readonly actorId: string;
+  readonly actorId: string;
 
   constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;

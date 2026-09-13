@@ -61,6 +61,7 @@ import {
 } from '../src/tools/effect-claim';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 
@@ -498,6 +499,94 @@ async function conform(script: (plane: Plane) => Promise<void>): Promise<Snapsho
     startup.close();
   }
 }
+
+test('a recorded terminal roster recovers through the same lifecycle on both transports', async () => {
+  const snap = await conform(async (plane) => {
+    plane.process().record(TRANSITION, roster(SEQUENCE));
+    expect(plane.runOrder()).toEqual([]);
+    plane.restart();
+    await plane.process().resumeAll();
+    await plane.process().resumeAll();
+  });
+
+  expect(snap.effects).toEqual([]);
+  expect(snap.runs).toEqual(RAN_ONCE);
+  expect(snap.outputs).toEqual(EVERY_OUTPUT);
+});
+
+test('recorded terminal rosters with colliding identities belong only to their actor', async () => {
+  const db = new Database(':memory:');
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+  const actors = createTestActors(sql, execRaw);
+  const child = actors.sibling('child');
+  const effects: string[] = [];
+  initTerminalEffectTable(execRaw);
+  initToolEffectClaimTable(execRaw);
+
+  const open = (actor: ActorHandle) => new TerminalTransitions({
+    sql, actor, now: () => 0, scheduleRetry: async () => {},
+    transaction: (body) => db.transaction(body)(),
+    effects: {
+      turn_record: terminalEffect({
+        input: EffectInputSchema,
+        run: ({ answer }) => {
+          effects.push(`${actor.actorId}:${answer}`);
+
+          return { status: 'completed' };
+        },
+      }),
+    },
+  });
+
+  const root = open(actors.main);
+  const subordinate = open(child);
+  root.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'root' } }]);
+  subordinate.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'child' } }]);
+  await open(actors.main).resumeAll();
+  expect(effects).toEqual([`${actors.main.actorId}:root`]);
+  expect(subordinate.incomplete()).toEqual([TRANSITION]);
+  await open(child).resumeAll();
+  await open(actors.main).resumeAll();
+  await open(child).resumeAll();
+  expect(effects).toEqual([`${actors.main.actorId}:root`, `${child.actorId}:child`]);
+  expect(root.incomplete()).toEqual([]);
+  expect(subordinate.incomplete()).toEqual([]);
+  db.close();
+});
+
+test('an unsupported recorded roster remains inspectable and owed after reopening', async () => {
+  await conform(async (plane) => {
+    plane.process().record(TRANSITION, roster([UNIMPLEMENTED]));
+    plane.restart();
+    await plane.process().resumeAll();
+    const sequence = plane.process().sequenceId(TRANSITION);
+    const owed = plane.process().ledger.owed(sequence);
+    expect(owed).toHaveLength(1);
+    expect(owed[0]).toMatchObject({ status: 'blocked', rawName: UNIMPLEMENTED, input: JSON.stringify({ answer: ANSWER }) });
+    plane.restart();
+    await plane.process().resumeAll();
+    expect(plane.process().ledger.owed(sequence)).toEqual(owed);
+    expect(plane.process().incomplete()).toEqual([TRANSITION]);
+  });
+});
+
+test('an unreadable recorded effect input is retained instead of dropping its obligation', async () => {
+  await conform(async (plane) => {
+    plane.process().record(TRANSITION, [{ name: 'takes', scope: 'answer', lane: 'inline', input: { answer: 42 } }]);
+    plane.restart();
+    await plane.process().resumeAll();
+    plane.advance(PAST_BACKOFF_MS);
+    plane.restart();
+    await plane.process().resumeAll();
+
+    const owed = plane.process().ledger.owed(plane.process().sequenceId(TRANSITION));
+    expect(owed).toHaveLength(1);
+    expect(owed[0]).toMatchObject({ rawName: 'takes', input: '{"answer":42}', attempts: 2 });
+    expect(plane.process().incomplete()).toEqual([TRANSITION]);
+    expect(plane.runOrder()).toEqual([]);
+  });
+});
 
 /** Effect keys, as the scenarios name them. */
 const K = (name: TerminalEffectName): string => terminalEffectKey(name, TRANSITION.messageId);

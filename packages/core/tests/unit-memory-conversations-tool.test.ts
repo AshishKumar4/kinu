@@ -19,7 +19,7 @@ function setup() {
 
   const insert = (conversationId: string, role: string, content: string): string => {
     const id = `m-${++row}`;
-    void testSql.sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void testSql.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
                 VALUES (${rt.actor.actorId}, ${id}, ${conversationId}, ${role}, ${content},
                         ${1_000_000 + row * 1000})`;
 

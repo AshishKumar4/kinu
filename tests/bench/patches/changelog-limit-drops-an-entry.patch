@@ -2,12 +2,13 @@ diff --git a/packages/core/src/evolution/changelog.ts b/packages/core/src/evolut
 index d02fa80cd..b76bc48c3 100644
 --- a/packages/core/src/evolution/changelog.ts
 +++ b/packages/core/src/evolution/changelog.ts
-@@ -587,7 +587,7 @@ export function buildChangelog(
-   if (outcomes) entries.push(outcomes);
-   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+@@ -595,8 +595,8 @@ export function buildChangelog(
+   const kept = opts.changesOnly === true
+     ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay')
+     : entries;
  
--  return entries.slice(0, limit);
-+  return entries.slice(0, limit - 1);
+-  return kept.slice(0, limit);
++  return kept.slice(0, limit - 1);
  }
  
  /** How deep the unseen window is read. Past this the badge stops counting, so

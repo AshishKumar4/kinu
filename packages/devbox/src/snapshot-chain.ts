@@ -194,10 +194,18 @@ export function archiveExcludeFile(patterns: readonly string[]): string {
   return lines.map(line => `${line}\n`).join('');
 }
 
-/** Rebase when the delta has outgrown the base by this factor. DERIVED, NOT
- *  MEASURED: a checkpoint uploads the WHOLE cumulative delta, so once it
- *  exceeds the base every checkpoint moves more bytes than a fresh base would
- *  cost. If a production measurement of delta growth disagrees, move this. */
+/** Rebase when the delta has outgrown the base by this factor. Once the
+ *  delta exceeds the base, every checkpoint moves more bytes than a fresh
+ *  base would cost.
+ *
+ *  MEASURED on the whole-delta publisher, cohort `C0-growth-7e4a7d9a-9ce15c72`
+ *  (2026-09-09, module at `7f27576ca`): one new 32 KiB file per generation
+ *  over 4/8/16/32/64 publications on a 2-file and a 1000-file tree fired this
+ *  ratio 22 times in 64, every third publication, identically in both trees,
+ *  holding per-publication upload to about one base and stored bytes to the
+ *  live tree size (`bench/measure-first/COST-2026-09-09-chain-publication.md`).
+ *  Under the chunked delta a checkpoint uploads changed blocks, not the whole
+ *  delta, and the ratio's firing rate there is unmeasured. */
 export const REBASE_DELTA_RATIO = 1;
 
 /** Should this checkpoint collapse the chain onto a fresh base? ONLY AT A
@@ -1206,7 +1214,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // The delta as the STORE describes it, because the layer is mounted from
     // the stored object. A delta the record names was probed and adopted by
     // `serve` a moment ago, so it is not asked for twice; an unreferenced but
-    // complete delta is adopted here (header, "Ordering under crash").
+    // complete delta is adopted here (header, "Ordering under crash"). A
+    // mounted negative may be cached or a stat error, never proof of absence.
     const storedDelta = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
     const haveDelta = storedDelta !== undefined;
 
@@ -1254,6 +1263,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // takes its lowers as parameters, and a mounted overlay then proves the
     // whole composition landed, which the `already-attached` return relies on.
     const deltaLayer = deltaLayerMountPoint(generation.base.id);
+    const lowerLayers = [lowerBase];
+    let sidecar: DeltaMaterializeOps | null = null;
 
     if (composing) {
       try {
@@ -1261,32 +1272,29 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       } catch (error) {
         await layerFailed('delta', { cause: error });
       }
-    }
 
-    // A CHUNKED delta is a sidecar, not a lower: its manifest is read off the
-    // mount and materialized INTO THE UPPER before the overlay lands, so the
-    // overlay stands on the base alone and the upper holds the cumulative
-    // changed set (no collapse on the next commit). THE MOUNT DECIDES which
-    // layout this is, not the record: a crash between the PUT and the record
-    // write can strand either layout under a record naming the other. A
-    // legacy full delta (no manifest) composes as a lower exactly as before.
-    let sidecar: DeltaMaterializeOps | null = null;
-    const manifest = composing ? await readSidecarManifest(deltaLayer, generation, layerFailed) : null;
+      // The mounted manifest decides the format, including a delta whose PUT
+      // outlived its record write. Chunked bytes materialize into the upper;
+      // a legacy image becomes the newest lower.
+      const manifest = await readSidecarManifest(deltaLayer, generation, layerFailed);
 
-    if (manifest !== null) {
-      sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
+      if (manifest === null) {
+        lowerLayers.unshift(deltaLayer);
+      } else {
+        sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
 
-      try {
-        await runOpsBatched('materializing the delta into the upper', sidecar.pre);
-      } catch (error) {
-        await layerFailed('delta', { cause: error });
+        try {
+          await runOpsBatched('materializing the delta into the upper', sidecar.pre);
+        } catch (error) {
+          await layerFailed('delta', { cause: error });
+        }
       }
     }
 
     // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
     // a legacy delta precedes the base: it holds the newer version of every
     // path it names, and the whiteouts that hide what the base still has.
-    await shell.overlayAttach(DEVBOX_WORKDIR, composing && sidecar === null ? [deltaLayer, lowerBase] : [lowerBase]);
+    await shell.overlayAttach(DEVBOX_WORKDIR, lowerLayers);
     await assertOverlayLanded(`chain ${generation.base.id}`);
 
     if (sidecar !== null) {

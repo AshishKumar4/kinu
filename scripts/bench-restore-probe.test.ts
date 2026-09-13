@@ -1,5 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../packages/test-utils/src/scratch';
+
 import { describe, expect, test } from 'bun:test';
 
 import {
@@ -179,16 +179,12 @@ describe('the restore poll', () => {
       },
     ];
 
-    const root = mkdtempSync(`${tmpdir()}/kinu-restore-probe-`);
+    const root = scratchDir("restore-probe");
 
-    try {
-      writeArmArtifact(root, 'probe-artifact', 'snapshot-chain', { restoreProbes: rows });
-      const read = readArmArtifact(root, 'probe-artifact', 'snapshot-chain');
-      expect(read.error).toBeNull();
-      expect(decodeRestoreProbeRows(read.artifact?.row.restoreProbes)).toEqual(rows);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    writeArmArtifact(root, 'probe-artifact', 'snapshot-chain', { restoreProbes: rows });
+    const read = readArmArtifact(root, 'probe-artifact', 'snapshot-chain');
+    expect(read.error).toBeNull();
+    expect(decodeRestoreProbeRows(read.artifact?.row.restoreProbes)).toEqual(rows);
   });
 });
 

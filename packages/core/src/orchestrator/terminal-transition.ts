@@ -28,7 +28,6 @@ import type { ActorHandle } from '../identity/actor-handle';
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS,
   TerminalEffectLedger,
-  type PendingRow,
   type TerminalEffectFault,
   type TerminalEffectTable,
   type OwedEffect,
@@ -192,6 +191,20 @@ export class TerminalTransitions {
     }
   }
 
+  /** Record the frozen roster and its claim together, before any effect runs.
+   * A local adapter includes this synchronous write in its answer transaction. */
+  record(transition: TerminalTransition | null, owed: readonly OwedEffect[]): TerminalDisposition {
+    const commit = this.deps.transaction ?? (<T>(body: () => T): T => body());
+
+    return commit(() => {
+      const disposition = this.begin(transition);
+
+      if (transition !== null && disposition === 'first') this.ledger.claim(this.sequenceId(transition), owed);
+
+      return disposition;
+    });
+  }
+
   /** Enter one sequence, or report that this process is already inside it.
    *  Released by {@link leave}, never in a `finally` around the effects: an
    *  interruption must leave the durable rows, not a cleared flag, as the
@@ -274,22 +287,7 @@ export class TerminalTransitions {
       return;
     }
 
-    // ONE COMMIT for the claim AND the roster it gates. Separately, a process
-    // that died between them left an indeterminate claim with no rows — and a
-    // recovery reads an empty roster as a finished turn, settles the claim, and
-    // every effect the response owed is gone with nothing on disk saying so.
-    // The `resumed` branch below deliberately does not re-declare, which is what
-    // makes that loss silent rather than merely unlucky.
-    const commit = this.deps.transaction ?? (<T>(body: () => T): T => body());
-    let claimed: PendingRow[] = [];
-
-    const disposition = commit(() => {
-      const decided = this.begin(transition);
-
-      if (decided === 'first') claimed = this.ledger.claim(this.sequenceId(transition), owed);
-
-      return decided;
-    });
+    const disposition = this.record(transition, owed);
 
     if (disposition === 'done') {
       this.leave(transition);
@@ -300,16 +298,10 @@ export class TerminalTransitions {
       return;
     }
 
-    if (disposition === 'resumed') {
-      hold(transition, async () => { await this.resume(transition); });
-
-      return;
-    }
-
     let run: TerminalSequenceRun;
 
     try {
-      run = await this.ledger.drive(this.sequenceId(transition), claimed);
+      run = await this.ledger.drive(this.sequenceId(transition));
     } catch (err) {
       // RELEASED, then RE-ARMED. `run` can reject while arming the first wake:
       // a live process holding the sequence is one every later sweep skips, and

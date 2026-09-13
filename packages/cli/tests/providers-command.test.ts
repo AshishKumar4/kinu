@@ -1,17 +1,12 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+
 import { delimiter, join, resolve } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 /** Behaviour test through the real `providersCommand`: a fake `claude` on PATH
  *  exercises the actual spawn + `claude auth status` probe (no stubbing of the
@@ -20,8 +15,7 @@ function runProviders(
   args: string[],
   opts: { claude?: 'ready' | 'logged-out'; home: string; env?: Record<string, string> },
 ) {
-  const binDir = mkdtempSync(join(tmpdir(), 'kinu-claude-bin-'));
-  tempDirs.push(binDir);
+  const binDir = scratchDir('claude-bin');
   // Controlled PATH excludes the user's real `claude` so "absent" is honest;
   // /usr/bin + /bin keep `bash`/`env` available for the fake binary's shebang.
   let path = ['/usr/bin', '/bin'].join(delimiter);
@@ -73,8 +67,7 @@ function runProviders(
 }
 
 function freshHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-providers-home-'));
-  tempDirs.push(home);
+  const home = scratchDir('providers-home');
 
   return home;
 }

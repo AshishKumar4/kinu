@@ -23,6 +23,7 @@ import {
 } from '../src/index';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const V0 = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -174,7 +175,7 @@ describe('promotion boundary — one current pointer, executed source follows it
       throw new Error('injected view-write failure');
     };
 
-    await expect(applyPromotionDecision(rt, pending, 'promote'))
+    await expect(applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor)))
       .rejects.toThrow('injected view-write failure');
 
     // Exactly one current pointer, and it names the promoted version.
@@ -201,7 +202,7 @@ describe('promotion boundary — one current pointer, executed source follows it
       throw new Error('injected view-write failure');
     };
 
-    await expect(applyPromotionDecision(rt, pending, 'rollback'))
+    await expect(applyPromotionDecision(rt, pending, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor)))
       .rejects.toThrow('injected view-write failure');
 
     expect((rt.storage.sql<{ status: string }>`
@@ -215,7 +216,7 @@ describe('promotion boundary — one current pointer, executed source follows it
   test('manual rollback flips the pointer first and refreshes the view', async () => {
     const { rt } = createTestRuntime();
     const pendingVersion = await seedAndPropose(rt);
-    const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
+    const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(promo.action).toBe('promote');
 
     const rb = await rollbackScaffold(rt, 0);
@@ -242,11 +243,11 @@ describe('promotion boundary — one current pointer, executed source follows it
       expect(mod.ok).toBe(true);
 
       if (i % 2 === 1) {
-        const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
+        const promo = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
         expect(promo.action).toBe('promote');
         expect(await reopen(rt).identity.scaffold.read()).toBe(code);
       } else {
-        const rb = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
+        const rb = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
         expect(rb.action).toBe('rollback');
       }
 

@@ -75,7 +75,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
   const token = options.token ?? TOKEN;
 
   const box: KinuSandbox = Object.create({
-    ensureReady: async () => {},
+    resolveReadiness: async () => ({ kind: 'restored' as const }),
     exposePort: async (port: number, opts: { hostname: string }) => {
       exposed.push(port);
 
@@ -159,7 +159,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
     // An SDK that changed its URL shape: the record could not name the token,
     // so the edge would refuse the link the agent is about to hand out.
     const box: KinuSandbox = Object.create({
-      ensureReady: async () => {},
+      resolveReadiness: async () => ({ kind: 'restored' as const }),
       exposePort: async () => ({ url: 'https://preview.elsewhere.example/8080', port: PORT }),
     });
 

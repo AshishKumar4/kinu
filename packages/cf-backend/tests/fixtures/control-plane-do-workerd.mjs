@@ -34,9 +34,9 @@
  * Run with `bun`, not `node`: it imports `scripts/jsonc.ts` so that the config
  * this asserts against is read by the same parser the deploy gates use.
  */
+import { releaseScratch, scratchDir } from '../../../test-utils/src/scratch';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import { build } from 'esbuild';
 import { Miniflare, NoOpLog } from 'miniflare';
@@ -150,7 +150,7 @@ assert.deepEqual(
 
 const SECRET = 'control-plane-workerd-fixture-root-secret';
 
-const persistencePath = mkdtempSync(join(tmpdir(), 'kinu-control-plane-'));
+const persistencePath = scratchDir('control-plane');
 
 /**
  * Everything the DURABLE OBJECT'S OWN ISOLATE wrote to `console`.
@@ -504,7 +504,7 @@ try {
   };
 } finally {
   await second.dispose();
-  rmSync(persistencePath, { recursive: true, force: true });
+  releaseScratch();
 }
 
 /* ── 7. What the object's own isolate reported ───────────────────────────── */

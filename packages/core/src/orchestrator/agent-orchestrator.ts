@@ -109,6 +109,8 @@ export interface AgentOrchestratorDeps {
   engine: Pick<
     EvolutionEngine,
     | 'enabled'
+    | 'recordsTurns'
+    | 'recoverInterruptedWork'
     | 'sessionWindow'
     | 'craftLedger'
     | 'recordRecovery'
@@ -264,6 +266,7 @@ export class AgentOrchestrator {
    *  one (Think auto-continue / recovery): its signals ride in again rather
    *  than being dropped as answered. */
   beginTurn<Metadata>(now: number, metadata?: Metadata, continuation = false): void {
+    this.deps.engine.recoverInterruptedWork();
     this.acc.reset(now);
     this.steering.reset();
     // Decided once, here, for the whole turn: a `--no-auto-evolve` run records
@@ -385,7 +388,7 @@ export class AgentOrchestrator {
     // is not the session the turn ran under: a turn produced with evolution on
     // was silently dropped by a host that had it off, and one produced under
     // `--no-auto-evolve` was written into a window it never earned.
-    if (!(opts?.enabled ?? this.turnEvolutionEnabled)) return;
+    if (!(opts?.enabled ?? (this.turnEvolutionEnabled && this.deps.engine.recordsTurns))) return;
     const scoped = this.scopeTurn(turn);
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
 
@@ -544,9 +547,11 @@ export class AgentOrchestrator {
    * single event-loop tick, exactly as the event drain takes its batch.
    */
   runDueSessionEvolution(): Promise<void> {
+    this.deps.engine.recoverInterruptedWork();
+
     if (this.sessionEvolution) return this.sessionEvolution;
 
-    const claimed = this.deps.engine.enabled && this.window.size() >= this.reflectionInterval
+    const claimed = this.deps.engine.recordsTurns && this.window.size() >= this.reflectionInterval
       ? this.window.claim()
       : null;
 

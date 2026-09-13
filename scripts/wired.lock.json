@@ -446,8 +446,6 @@
   "packages/core/src/tools/state-codemode.ts#STATE_TYPES (unreached-export)",
   "packages/core/src/tools/tool-call-summary.ts#clip (unreached-export)",
   "packages/core/src/tools/tool-call-summary.ts#describeCommand (unreached-export)",
-  "packages/core/src/types/backend-host.ts#ProgrammaticTurn.idempotencyKey (unsupplied-field)",
-  "packages/core/src/types/backend-host.ts#ProgrammaticTurn.metadata (unsupplied-field)",
   "packages/core/src/types/swarm.ts#SWARM_CARRIES (unreached-export)",
   "packages/core/src/types/swarm.ts#SWARM_SCORES (unreached-export)",
   "packages/core/src/types/swarm.ts#SWARM_UNITS (unreached-export)",

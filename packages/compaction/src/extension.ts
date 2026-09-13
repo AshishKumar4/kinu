@@ -110,13 +110,16 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   const engine = createEngine(kinuSpec, deps.ports);
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
-  let turnSignal: AbortSignal | undefined;
-
-  const summarizer: Summarizer = {
+  /** One summarizer per transformContext invocation: the signal is the turn's
+   *  own, never shared, so a cancelled turn cancels only its own calls and a
+   *  rethrown abort keeps "the caller left" from reading as a summary failure. */
+  const summarizerFor = (signal: AbortSignal | undefined): Summarizer => ({
     async complete(job) {
       try {
-        return await deps.summarize(job.prompt, turnSignal);
+        return await deps.summarize(job.prompt, signal);
       } catch (err) {
+        // A cancelled turn is not a failed summary; the caller's abort propagates.
+        if (signal?.aborted) throw err;
         deps.ports.logger.warn('Compaction summary call failed', {
           rangeStartMessageId: job.rangeStartMessageId,
           rangeEndMessageId: job.rangeEndMessageId,
@@ -126,9 +129,13 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         return null;
       }
     },
-  };
+  });
 
-  const runJobs = (sessionKey: string, jobs: BoundarySummaryJob[]): Promise<Record<string, string>> =>
+  const runJobs = (
+    sessionKey: string,
+    jobs: BoundarySummaryJob[],
+    summarizer: Summarizer,
+  ): Promise<Record<string, string>> =>
     summaryScheduler.summarize({
       sessionKey,
       jobs,
@@ -265,8 +272,10 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     let body: string;
 
     try {
-      body = await deps.summarize(prompt);
+      body = await deps.summarize(prompt, ctx.abortSignal);
     } catch (err) {
+      // A cancelled turn is not a failed summary; the caller's abort propagates.
+      if (ctx.abortSignal?.aborted) throw err;
       deps.ports.logger.warn('Compaction prefix-summary call failed; keeping deterministic summary', {
         error: renderThrownChain({ cause: err }),
       });
@@ -321,7 +330,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     name: 'compaction',
 
     async transformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
-      turnSignal = ctx.abortSignal;
+      ctx.abortSignal?.throwIfAborted();
 
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
       const messages = [...ctx.messages];
@@ -333,9 +342,14 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const prior = cached && cached.sessionId === ctx.sessionKey ? cached : null;
       let rollingSummaryAttempted = false;
 
+      const summarizer = summarizerFor(ctx.abortSignal);
+
       const summarize = async (jobs: BoundarySummaryJob[]): Promise<Record<string, string>> => {
         rollingSummaryAttempted ||= jobs.some((job) => job.key.startsWith('prefix-summary:'));
-        const summaries = await runJobs(ctx.sessionKey, jobs);
+        const summaries = await runJobs(ctx.sessionKey, jobs, summarizer);
+        // The engine swallows a thrown summary call into its deterministic
+        // fallback; an abort that landed mid-batch surfaces here instead.
+        ctx.abortSignal?.throwIfAborted();
 
         return summaries;
       };
@@ -358,6 +372,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
               summarize,
             });
 
+      ctx.abortSignal?.throwIfAborted();
+
       if (processed.outcome === 'unchanged') {
         const remaining = prior ? await deps.ports.plans.load(ctx.sessionKey) : null;
 
@@ -379,6 +395,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
               rollingSummaryAttempted,
             )) ?? processed)
           : processed;
+
+      ctx.abortSignal?.throwIfAborted();
 
       if (applied.outcome === 'planned') indexArchivedRange(ctx, turns, applied.plan);
 

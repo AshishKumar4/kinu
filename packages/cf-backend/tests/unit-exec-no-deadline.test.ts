@@ -79,7 +79,7 @@ function fakeBox(input: {
   };
 
   const box = {
-    ensureReady: async () => {},
+    resolveReadiness: async () => ({ kind: 'restored' as const }),
     exec: async (command: string, opts?: { timeout?: number }) => {
       const call: BoxCalls["exec"][number] = { command };
 
@@ -194,6 +194,43 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
     await box.handle.exec("ls", {});
 
     expect(box.calls.started[0]?.cwd).toBe("/workspace");
+  });
+});
+
+describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch", () => {
+  test("a box still restoring answers `unavailable` and the command never exists", async () => {
+    // The CF-side half of the readiness contract: `resolveReadiness` returns
+    // `pending` as DATA (the shape that survives the DO RPC), and the adapter
+    // converts it to the classified refusal BEFORE `run()` — so the reason
+    // reaches the caller as `error.code`, never as prose it would have to
+    // re-parse, and the operation is not attempted at all.
+    const reason = 'this devbox has no attached work directory: stale owner, retry armed. '
+      + 'A retry is already under way; operations are refused until it lands.';
+ 
+    const calls: BoxCalls = { exec: [], started: [], killed: [] };
+
+    const box: KinuSandbox = Object.create({
+      resolveReadiness: async () => ({ kind: 'pending' as const, reason }),
+      exec: async (command: string) => { calls.exec.push({ command }); },
+      startProcess: async (command: string) => { calls.started.push({ command }); },
+    });
+
+    const handle = adaptCloudflareSandbox(box, async () => {}, null);
+
+    await expect(handle.exec("bun test")).rejects.toMatchObject({
+      name: 'KinuError', code: 'unavailable', message: reason,
+    });
+    expect(calls).toEqual({ exec: [], started: [], killed: [] });
+
+    // A restored box admits the same call — the refusal is the pending kind,
+    // not a blanket gate failure.
+    const ready: KinuSandbox = Object.create({
+      resolveReadiness: async () => ({ kind: 'restored' as const }),
+      exec: async () => ({ stdout: 'ok', exitCode: 0 }),
+    });
+ 
+    await expect(adaptCloudflareSandbox(ready, async () => {}, null)
+      .exec("bun test", { timeout: 5_000 })).resolves.toMatchObject({ exitCode: 0 });
   });
 });
 

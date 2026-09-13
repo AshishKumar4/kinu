@@ -80,8 +80,12 @@ export default defineConfig({
     hookTimeout: 300_000,
     // Each file drives real model calls against one account. Running them
     // concurrently buys little and makes rate-limit failures look like
-    // behavioural findings.
+    // behavioural findings — that reasoning is about FILES racing each other,
+    // which is all this switch governs. Within a file the trajectory tier
+    // still runs its five cases concurrently (`test.concurrent`), each on its
+    // own workspace; `maxConcurrency` caps that burst at the corpus's width.
     fileParallelism: false,
+    maxConcurrency: 5,
     env: {
       VITEST_EVALS_REPLAY_MODE: 'off',
     },

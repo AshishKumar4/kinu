@@ -34,7 +34,7 @@ export const CACHE_HIT_EMA_ALPHA = 0.2;
  * `Usage` distinguishes absent from zero. Null also when `input` is 0: a step
  * with nothing to cache has no rate either.
  */
-export function cacheHitRate(usage: Usage): number | null {
+function cacheHitRate(usage: Usage): number | null {
   const { input, cacheRead } = usage;
 
   if (input === undefined || cacheRead === undefined || input <= 0) return null;

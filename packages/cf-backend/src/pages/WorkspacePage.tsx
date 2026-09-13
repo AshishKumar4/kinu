@@ -1189,7 +1189,7 @@ export default function WorkspacePage() {
       {altitude === "supervise" ? (
         <div className="flex-1 min-h-0">
           <ErrorBoundary label="Supervise">
-            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} />
+            <SupervisePage rpc={state.rpc} />
           </ErrorBoundary>
         </div>
       ) : (

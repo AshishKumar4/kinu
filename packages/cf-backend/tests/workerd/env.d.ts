@@ -21,7 +21,10 @@ import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
+import type { CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall, PendingCancelResult } from './two-turn-shapes';
+import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
@@ -45,6 +48,17 @@ interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
   unmediatedThenMediated(): Promise<{ unmediated: string; mediated: string; reused: string }>;
 }
+
+interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
+  signalProbe(): Promise<{ signalKind: string } | { threw: string }>;
+  calls(): Promise<CallRecord[]>;
+  exercise(): Promise<ExerciseResult>;
+  httpCalls(): Promise<HttpCall[]>;
+  httpReset(): Promise<void>;
+  cancelHttpPark(): Promise<PendingCancelResult>;
+  driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
+}
+
 
 declare global {
   namespace Cloudflare {
@@ -75,7 +89,13 @@ declare global {
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
+      TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
+  // A devbox's readiness refusal must serialise over Workers RPC as data,
+  // not as a thrown class name. The probe is a narrow DO exposing only the
+  // two halves of `RestoreReadiness` plus the normalization control —
+  // deliberately NOT a sandbox stub, so it says nothing about containers.
+  DEVBOX_NOT_READY_PROBE: DurableObjectNamespace<DevboxNotReadyProbeDO>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

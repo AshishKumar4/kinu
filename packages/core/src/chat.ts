@@ -565,7 +565,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             stepContent.push({
               type: 'tool-call', toolCallId: chunk.toolCallId, toolName: chunk.toolName, input: chunk.input,
             });
-            await extensions?.emitToolCall({ toolName: chunk.toolName, args });
+            await extensions?.emitToolCall({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args });
             yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
             break;
           }
@@ -581,7 +581,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             // display path bounds it at render.
             const rendered = renderToolResult(raw);
             const input = parseToolArgs(chunk.input);
-            await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: rendered, success: true });
+            await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, success: true });
             yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, success: true };
             break;
           }
@@ -593,7 +593,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             const outcome = failedToolOutcome({ cause: chunk.error });
             const error = describeProviderError({ cause: chunk.error });
             const input = parseToolArgs(chunk.input);
-            await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, ...outcome });
+            await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: error, ...outcome });
             yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error, ...outcome };
             break;
           }

@@ -63,7 +63,7 @@ import type {
   ToolCallContext as ThinkToolCallContext,
   ChatResponseResult,
   ChatRecoveryConfig,
-  StreamableResult,
+  StreamableResult, SaveMessagesOptions,
 } from "@cloudflare/think";
 import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
@@ -221,7 +221,7 @@ import {
   stepContextLimit,
   mergeProviderOptions, reasoningEffortOptions,
   uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
+  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, operatorMessageAdmitted,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -235,7 +235,7 @@ import {
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
   toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
-  type NimbusSandboxHandle,
+  type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime,
@@ -2391,11 +2391,6 @@ export abstract class ActorAgent extends Think<Env> {
    * therefore discarded every mid-turn edit at the turn boundary, silently. So
    * admission takes `startTurn`'s messages AS the turn's history and the
    * boundary adopts `endTurn`'s, on every path including failure and interrupt.
-   *
-   * `events` is null in this tree: the plane's recorder port is satisfied by
-   * `RunEventRecorder` the moment the `context_edit` run-event variant exists
-   * beside it, and until then null records nothing rather than claiming an
-   * emission nobody would receive.
    */
   private _contextPlane: ActorContextPlane | null = null;
   private get contextPlane(): ActorContextPlane {
@@ -2404,7 +2399,7 @@ export abstract class ActorAgent extends Think<Env> {
     // uninitialised bundle. Lazy also matches what the rest of this class does
     // with storage — a Durable Object must not touch SQL while its fields
     // initialise.
-    this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: null });
+    this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: this.stores.eventRecorder });
 
     return this._contextPlane;
   }
@@ -3319,6 +3314,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
+      events: this.eventRecorder,
       sql: this.boundSql,
       config: this.config,
       surface: (task, context, callScope) => ({
@@ -3541,7 +3537,7 @@ export abstract class ActorAgent extends Think<Env> {
       const armWake = this.durableWakeOwner();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
-        enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
+        enqueueTurn: async ({ text, metadata, idempotencyKey, yieldsToUserMessage }) => {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
             : null;
@@ -3577,13 +3573,49 @@ export abstract class ActorAgent extends Think<Env> {
             };
           }
 
+          // A `yieldsToUserMessage` turn is a move OFFERED to an agent nobody
+          // has spoken to (today: genesis, which carries no idempotency key and
+          // so never takes the durable submission path). The offer is decided
+          // INSIDE the turn's slot — `saveMessages`' `shouldApplyMessages`
+          // gate, the check Think runs after dequeuing the turn and before its
+          // messages are appended or the model is called — against the durable
+          // transcript. An operator row there is somebody already speaking:
+          // the offer is withdrawn unanswered, and that message's own queued
+          // turn is the first turn. Reading earlier would close nothing: the
+          // race is a message landing between the enqueue and the start.
+          //
+          // `shouldApplyMessages` rides under `SaveMessagesOptions` because the
+          // vendored runner honors it and the declared option type does not
+          // name it (the submission drain passes it the same way, think.js
+          // `_executeSubmission`).
+          let yielded = false;
+
+          const turnOptions: SaveMessagesOptions & { shouldApplyMessages?: () => boolean } | undefined
+            = yieldsToUserMessage === true ? {
+              shouldApplyMessages: () => {
+                if (yielded) return false;
+
+                if (!operatorMessageAdmitted(this.boundSql, this.actorHandle())) return true;
+
+                yielded = true;
+                diagnostics.event('genesis.yielded_to_message', {
+                  signal: v.is(v.string(), metadata?.kinuEvent) ? metadata.kinuEvent : 'unknown',
+                });
+                this.logActivity('genesis.yielded_to_message');
+
+                return false;
+              },
+            } : undefined;
+
           try {
             const result = await this.saveMessages(() => {
               this._activeDrainTurnId = drainTurnId;
               this._activeProgrammaticUserMessage = message;
 
               return [message];
-            });
+            }, turnOptions);
+
+            if (yielded) return { status: 'yielded' };
 
             return { status: result.status === 'completed' ? 'queued' : 'skipped' };
           } finally {
@@ -4711,6 +4743,17 @@ export abstract class ActorAgent extends Think<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         turnProfile: () => this._turnProfile,
         resolveProfile: () => this.routingProfile(),
+        contextPlane: {
+          actorId: this.actorHandle().actorId,
+          claims: () => this.stores.claims,
+          events: () => this.stores.eventRecorder,
+          children: childContextResolver({
+            host: { bindStores: (reference) => this.actorHost().bindStores(reference) },
+            directory: this.actorDirectoryStore(),
+            parent: this.actorHandle(),
+            events: (child) => child.stores.eventRecorder,
+          }),
+        },
         // MCTS rollouts. Both members or neither: `requireBranches` refuses
         // when the hook is absent, and an absent hook makes every rollout answer
         // "I cannot" on a kind this backend declares, with `hostBranch` sitting
@@ -5845,7 +5888,7 @@ export abstract class ActorAgent extends Think<Env> {
    * subclass hook), and that session read is what creates `assistant_messages`
    * — so on every activation whose Think booted, the table exists by the time
    * this runs. Every conversational reader in core answers from that table
-   * where it exists and falls to plain `messages` where it does not
+   * where it exists and falls to plain `actor_messages` where it does not
    * (`identity/conversation-store.ts` `hasPaneStore`): right for a local
    * workspace and for a harness that boots the actor half alone (no Think, no
    * `session`), and silently WRONG for a hosted workspace whose SDK has moved
@@ -6548,24 +6591,9 @@ export abstract class ActorAgent extends Think<Env> {
       },
     });
 
-    // Shadow-eval context parity + the evolved-scaffold task source (see the
-    // _lastTurnOpts field doc): the effective opts the streamText Think runs
-    // next will see — final system/messages/merged tools/model. Think only
-    // adds its tool-decision wrapping and, per step, the cache markers and the
-    // dynamic-context block — all inert for a replay.
-    const lastTurnOpts: Parameters<typeof streamText>[0] = {
-      model: cfg.model ?? ctx.model,
-      system: systemOverride,
-      messages: cfg.messages,
-      tools: { ...ctx.tools, ...cfg.tools },
-      activeTools: cfg.activeTools,
-    };
-
-    if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
     const runtime = this.rt;
     const mode = this.turnWorkMode();
     const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
-    this._lastTurnOpts = lastTurnOpts;
     this._turnProgram = { program, signal: ctx.signal };
     // THE DURABLE CLAIM, and this is the last statement before Think starts
     // inference — everything above it is preparation that has issued nothing.
@@ -6598,6 +6626,17 @@ export abstract class ActorAgent extends Think<Env> {
       workingRevision: admitted.workingRevision,
     });
     cfg.messages = [...admitted.messages];
+
+    const lastTurnOpts: Parameters<typeof streamText>[0] = {
+      model: cfg.model ?? ctx.model,
+      system: systemOverride,
+      messages: this.stores.claims.admittedFor(this._turnClaim).messages,
+      tools: { ...ctx.tools, ...cfg.tools },
+      activeTools: cfg.activeTools,
+    };
+
+    if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
+    this._lastTurnOpts = lastTurnOpts;
     // A tool call the SDK cannot parse is rewritten where a rewrite is settled
     // (case-only name drift, fenced or double-encoded arguments) and left to
     // the model's own retry otherwise — no inference behind the spend ledger.
@@ -6814,6 +6853,7 @@ export abstract class ActorAgent extends Think<Env> {
     // allow with the original input — the seam observes, it does not gate).
     await this.extensions.emitToolCall({
       toolName: ctx.toolName,
+      toolCallId: ctx.toolCallId,
       args: jsonObject(ctx.input),
     });
   }
@@ -6826,6 +6866,7 @@ export abstract class ActorAgent extends Think<Env> {
 
     const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
       toolName: ctx.toolName,
+      toolCallId: ctx.toolCallId,
       input,
       durationMs: ctx.durationMs,
       ...outcome,
@@ -6837,6 +6878,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.recordToolCall(recorded);
     await this.extensions.emitToolResult({
       toolName: ctx.toolName,
+      toolCallId: ctx.toolCallId,
       args: input,
       result: ctx.success ? renderToolResult(ctx.output) : renderThrownChain({ cause: ctx.error }),
       ...outcome,

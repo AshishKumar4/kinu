@@ -8,8 +8,8 @@
  * the direction only the directory walk can see and which the two enumerations
  * this census replaced never named.
  */
-import { describe, test, expect, afterAll } from 'bun:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, test, expect } from 'bun:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { scratchDir } from '@kinu.run/test-utils';
 import { stalePatches } from './bench-corpus';
@@ -19,12 +19,6 @@ import { stalePatches } from './bench-corpus';
 const PATCH_FILES = ['tests/bench/patches/pick-returns-largest.patch'];
 
 const WITH_ORPHAN = [...PATCH_FILES, 'tests/bench/patches/nobody-measures-me.patch'];
-
-const roots: string[] = [];
-
-afterAll(() => {
-  for (const root of roots) rmSync(root, { recursive: true, force: true });
-});
 
 const SOURCE = ['export function pick(items: number[]): number {',
   '  const sorted = [...items].sort((a, b) => a - b);',
@@ -52,7 +46,6 @@ interface FixtureOptions {
 
 function fixture(opts: FixtureOptions = {}): string {
   const root = scratchDir('bench-corpus-census');
-  roots.push(root);
   mkdirSync(join(root, 'tests', 'bench', 'patches'), { recursive: true });
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'pick.ts'), opts.source ?? SOURCE);

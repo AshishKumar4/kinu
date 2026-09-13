@@ -75,6 +75,7 @@ describe('openTurnRun / closeTurnRun', () => {
     acc.context.admit(41_000);
     acc.context.recordSpill({ producer: 'run', omitted: 160_000, referenced: true });
     acc.recordToolCall({
+      toolCallId: 'fixture-1',
       toolName: 'execute_tools',
       input: { code: `await workspace.readFile('/${SPILL_DIRS.toolOutput}/abc.log')` },
       success: true,
@@ -241,7 +242,7 @@ describe('snapshotCompletedTurn', () => {
   test('builds the graded turn from the accumulator; no reported usage means NO usage field', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now() - 1_000);
-    acc.recordToolCall({ toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
+    acc.recordToolCall({ toolCallId: 'fixture-2', toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
     acc.recordStep({});
 
     const turn = snapshotCompletedTurn(acc, {
@@ -259,7 +260,7 @@ describe('snapshotCompletedTurn', () => {
   test('a failed tool call flags the turn, and reported usage rides along', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
-    acc.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'exit 1' });
+    acc.recordToolCall({ toolCallId: 'fixture-3', toolName: 'run', success: false, reason: null, error: 'exit 1' });
     acc.recordStep({ usage: { input: 7, output: 3 } });
 
     const turn = snapshotCompletedTurn(acc, {
@@ -374,8 +375,8 @@ describe('creditedTurnId', () => {
   test('a failed tool call inside a turn that still answered does not void the credit', () => {
     const acc = new TurnAccumulator();
     acc.reset(0);
-    acc.recordToolCall({ toolName: 'run', input: {}, success: false, reason: null, error: 'exit 1' });
-    acc.recordToolCall({ toolName: 'run', input: {}, success: true, output: 'ok' });
+    acc.recordToolCall({ toolCallId: 'fixture-4', toolName: 'run', input: {}, success: false, reason: null, error: 'exit 1' });
+    acc.recordToolCall({ toolCallId: 'fixture-5', toolName: 'run', input: {}, success: true, output: 'ok' });
     expect(acc.hadError).toBe(true);
     expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'build' })).toBe('msg-1');
   });

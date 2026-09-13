@@ -75,7 +75,7 @@ async function source(opts: { files?: Array<{ path: string; content: string }> }
   ] as const;
 
   for (const [i, m] of chain.entries()) {
-    void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void src.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${m.parent}, ${m.role}, ${m.text}, ${1000 + i})`;
   }
 
@@ -261,7 +261,7 @@ describe('fork transfer receiver', () => {
 
     const rowsOf = (ws: TestWorkspace) => ({
       messages: ws.sql<{ id: string; parent_id: string | null; content: string }>`
-        SELECT id, parent_id, content FROM messages ORDER BY created_at, id`,
+        SELECT id, parent_id, content FROM actor_messages ORDER BY created_at, id`,
       tools: ws.sql<{ name: string }>`SELECT name FROM crafted_tools ORDER BY name`,
       chunks: ws.sql<{ id: string; text: string }>`SELECT id, text FROM memory_chunks ORDER BY id`,
       config: ws.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config ORDER BY key`,
@@ -283,7 +283,7 @@ describe('fork transfer receiver', () => {
     await drain(receiverFor(tgt), frames.slice(0, -1));
 
     // The rows ARE there — this is staging, not buffering.
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c).toBe(3);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`[0]!.c).toBe(3);
     expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
     // And none of it is a fork.
     expect(isFork(tgt)).toBe(false);
@@ -394,7 +394,7 @@ describe('fork transfer receiver', () => {
     await expect(receiver.accept(a[3]!)).rejects.toThrow(/belongs to transfer tx-a/);
 
     // The winner's cut, whole, with none of the loser's rows.
-    const landed = tgt.sql<{ id: string }>`SELECT id FROM messages WHERE role != 'system' ORDER BY created_at`;
+    const landed = tgt.sql<{ id: string }>`SELECT id FROM actor_messages WHERE role != 'system' ORDER BY created_at`;
     expect(landed.map((r) => r.id)).toEqual(['m1']);
     expect(readForkLineage(tgt.sql)!.sourceMessageId).toBe('m1');
   });
@@ -560,7 +560,7 @@ describe('fork transfer receiver', () => {
     const src = fresh();
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BIG'}, ${'big'}, ${1})`;
     const bigActor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'BIG', ownerUserId: '' }).createMain({ name: 'big' });
-    void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void src.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${bigActor.actorId}, ${'m1'}, ${'default'}, ${null}, ${'user'}, ${'only'}, ${1000})`;
     const tgt = fresh();
     const writer = new ForkTargetWriter(tgt.sql, tgt.vfs, { ...OWNER, targetAuthority: 'plain' });
@@ -978,7 +978,7 @@ describe('fork transfer receiver', () => {
     const megabyte = 'x'.repeat(1024 * 1024);
 
     for (let i = 0; i < 100; i += 1) {
-      void src.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      void src.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${bigActor.actorId}, ${`m${i}`}, ${'default'}, ${i === 0 ? null : `m${i - 1}`}, ${'user'},
                 ${megabyte}, ${1000 + i})`;
     }
@@ -1005,7 +1005,7 @@ describe('fork transfer receiver', () => {
     expect(frames).toBeGreaterThan(100);
     expect(peak).toBe(0);
     expect(receiver.stagingBytes).toBe(0);
-    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages WHERE role != 'system'`[0]!.c).toBe(100);
+    expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages WHERE role != 'system'`[0]!.c).toBe(100);
     expect(await tgt.vfs.readFile('memory/large.md', { encoding: 'utf8' })).toHaveLength(8 * 1024 * 1024);
   });
 

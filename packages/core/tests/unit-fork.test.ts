@@ -37,7 +37,7 @@ async function seedSource(
 
   for (const m of opts.messages) {
     const parent = m.parent_id !== undefined ? m.parent_id : previousId;
-    void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
     previousId = m.id;
   }
@@ -85,7 +85,7 @@ describe('forkWorkspaceStorage', () => {
     expect(result.messagesCopied).toBe(3);
 
     const targetMsgs = tgt.sql<{ id: string; parent_id: string | null; role: string; content: string }>`
-      SELECT id, parent_id, role, content FROM messages
+      SELECT id, parent_id, role, content FROM actor_messages
       WHERE role != 'system' ORDER BY created_at ASC
     `;
 
@@ -235,9 +235,9 @@ describe('forkWorkspaceStorage', () => {
     // re-keyed the inherited chain to it, so a continuation written under any
     // other actor would not be part of the tree B just received.
     const bActor = openWorkspaceMainActor(b.sql).actorId;
-    void b.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void b.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
           VALUES (${bActor}, ${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
-    void b.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void b.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
           VALUES (${bActor}, ${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
 
     // Fork B → C
@@ -245,7 +245,7 @@ describe('forkWorkspaceStorage', () => {
 
     // C inherits b4's ancestry: a1, a2, b3, b4 (its own marker excluded).
     const cMsgs = c.sql<{ id: string }>`
-      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC`;
+      SELECT id FROM actor_messages WHERE role != 'system' ORDER BY created_at ASC`;
 
     expect(cMsgs.map(m => m.id)).toEqual(['a1', 'a2', 'b3', 'b4']);
 
@@ -289,7 +289,7 @@ describe('forkWorkspaceStorage', () => {
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const ids = tgt.sql<{ id: string }>`
-      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
+      SELECT id FROM actor_messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
 
     expect(ids).toEqual(['m1', 'm2']);
   });
@@ -312,7 +312,7 @@ describe('forkWorkspaceStorage', () => {
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'left', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const ids = tgt.sql<{ id: string }>`
-      SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
+      SELECT id FROM actor_messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
 
     expect(ids).toEqual(['m1', 'left']);
   });
@@ -357,7 +357,7 @@ describe('forkWorkspaceStorage', () => {
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'beta', now: 5000 });
 
     const rows = tgt.sql<{ id: string; parent_id: string | null; role: string; created_at: number; content: string }>`
-      SELECT id, parent_id, role, created_at, content FROM messages ORDER BY created_at ASC, id ASC
+      SELECT id, parent_id, role, created_at, content FROM actor_messages ORDER BY created_at ASC, id ASC
     `;
 
     expect(rows.map((r) => r.role)).toEqual(['user', 'assistant', 'system']);
@@ -457,10 +457,10 @@ describe('forkWorkspaceStorage', () => {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     });
 
-    // The skip is a no-op: the cut lands whole in `messages`...
+    // The skip is a no-op: the cut lands whole in `actor_messages`...
     expect(result.messagesCopied).toBe(1);
     expect(tgt.sql<{ id: string }>`
-      SELECT id FROM messages WHERE role != 'system'`.map((r) => r.id)).toEqual(['m1']);
+      SELECT id FROM actor_messages WHERE role != 'system'`.map((r) => r.id)).toEqual(['m1']);
     // ...and no half-present pane store is left behind for a later read to trip on.
     expect(tgt.sql<{ c: number }>`
       SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'assistant_messages'`.map((row) => row.c)).toEqual([0]);
@@ -666,7 +666,7 @@ describe('fork snapshot payload', () => {
       SELECT id, content FROM assistant_messages WHERE role != 'system' ORDER BY rowid`;
 
     expect(landed.map((r) => r.id)).toEqual(rows.map((r) => r.id));
-    const plainLanded = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
+    const plainLanded = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`[0]!.c;
     expect(plainLanded).toBe(0);
 
     // The WORDS, read back the way the pane reads them. Ids, counts and a
@@ -738,7 +738,7 @@ describe('fork snapshot payload', () => {
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
 
     const landed = tgt.sql<{ content: string }>`
-      SELECT content FROM messages WHERE role != 'system' ORDER BY rowid`;
+      SELECT content FROM actor_messages WHERE role != 'system' ORDER BY rowid`;
 
     expect(landed.map((r) => r.content)).toEqual(['first', 'second']);
   });
@@ -787,7 +787,7 @@ describe('fork snapshot payload', () => {
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
 
     const rows = tgt.sql<{ id: string; content: string }>`
-      SELECT id, content FROM messages WHERE role != 'system' ORDER BY created_at`;
+      SELECT id, content FROM actor_messages WHERE role != 'system' ORDER BY created_at`;
 
     expect(rows.map((r) => r.id)).toEqual(snapshot.messages.map((m) => m.id));
     expect(rows[39]!.content).toBe(`39:${CHUNK}`);

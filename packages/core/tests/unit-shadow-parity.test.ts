@@ -22,6 +22,7 @@ import {
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createEvalExecutor, createTestRuntime } from './helpers';
+import { RunEventRecorder } from '../src/events/recorder';
 
 /** A pending scaffold that delegates to the default loop — the bootstrap
  *  pattern, and the shape most proposals build on. */
@@ -84,6 +85,7 @@ describe('shadow context parity', () => {
     const rt = await setup();
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       task: TASK,
       currentOutput: CONTEXT_AWARE_ANSWER, // the live answer, produced with full context
@@ -112,6 +114,7 @@ describe('shadow context parity', () => {
     const rt = await setup();
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       task: TASK,
       currentOutput: CONTEXT_AWARE_ANSWER,

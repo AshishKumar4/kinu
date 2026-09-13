@@ -15,6 +15,7 @@
 // phase) because a claim about exactly-once is a claim about WHERE the process
 // died, and the only way to test that is to choose the instant.
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
@@ -22,6 +23,7 @@ import {
   TerminalEffectInterrupt, ADVISOR_LANE_FIBER,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
+  listQueuedShadowTrials,
   type Shell, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
@@ -311,10 +313,44 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
  * process with SIGKILL at instants production code reaches, over a workspace on
  * disk, and then open that file here.
  */
+test('a managed context edit reaches the local request and retained trial together', async () => {
+  const { db, rt } = workspace();
+  await armShadowTrials(rt);
+  const requests: string[] = [];
+
+  const { model } = scriptedModel('answer', { onStream: async (prompt) => { requests.push(JSON.stringify(prompt)); } });
+  const session = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
+
+  try {
+    await session.send('use the OLD premise');
+    await session.settleBackgroundWork();
+    const document = v.parse(v.string(), await rt.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
+    await rt.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
+    await expect(rt.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    await session.send('follow-up input');
+    await session.settleBackgroundWork();
+    const trial = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1).find((row) => row.task === 'follow-up input');
+    const claim = rt.stores.claims.latestTurn();
+
+    if (trial === undefined || claim === null) throw new Error('the turn did not retain its claim and trial');
+    const admitted = rt.stores.claims.admittedContext(claim.turnId);
+
+    if (admitted === null) throw new Error('the claim has no admitted context');
+    expect(requests.at(-1)).toContain('NEW premise');
+    expect(requests.at(-1)).not.toContain('OLD premise');
+    expect(trial.context[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
+    expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
+    expect(trial.context).toEqual(admitted.messages);
+  } finally {
+    await session.end();
+    db.close();
+  }
+});
+
 describe('a killed CLI process is recovered by the next start', () => {
   /** Run the child to its kill point, and answer the marker it printed. */
   async function killAt(
-    dbPath: string, mode: 'before-claim' | 'inside-claim' | 'inside-title',
+    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title',
   ): Promise<string> {
     const child = Bun.spawn(
       ['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
@@ -327,17 +363,16 @@ describe('a killed CLI process is recovered by the next start', () => {
     return out.trim().split('\n').at(-1) ?? '';
   }
 
-  test('an answer whose transition was never claimed is replayed from its recorded roster', async () => {
-    const dbPath = scratchPath('terminal-death-before-claim', 'agent.db');
-    expect(await killAt(dbPath, 'before-claim')).toBe('KILLED before-claim');
+  test('answer and terminal roster survive a crash before settlement', async () => {
+    const dbPath = scratchPath('terminal-death-before-settle', 'agent.db');
+    expect(await killAt(dbPath, 'before-settle')).toBe('KILLED before-settle');
 
-    // The file, opened by a new process. The answer is on disk and NOTHING has
-    // claimed the transition, so the intent row beside the answer is the only
-    // carrier there is.
+    // The answer and the core ledger committed together, before any effect ran.
     const { db, rt } = openTerminalWorkspace(dbPath);
     expect(assistantRows(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(0);
-    expect(recordedIntents(rt)).toBe(1);
+    expect(terminalClaims(rt)).toBe(1);
+    expect(rosterRows(rt)).toBeGreaterThan(0);
 
     const { model, state } = scriptedModel('recovered');
     const events: SessionEvent[] = [];
@@ -347,9 +382,6 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(queuedTrials(rt)).toBe(1);
     expect(claimedTakes(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
-    // Consumed: the claim carries the sequence from here, and an intent nothing
-    // deletes is a turn every later start re-enters.
-    expect(recordedIntents(rt)).toBe(0);
     expect(stillOwed(rt)).toEqual([]);
     // ONE answer. A replay that re-persisted would leave two assistant rows and
     // read back as the agent having answered twice.
@@ -358,18 +390,13 @@ describe('a killed CLI process is recovered by the next start', () => {
     db.close();
   });
 
-  test('a death INSIDE the roster commit leaves nothing claimed, and the intent replays it', async () => {
+  test('a death inside the roster commit rolls back the answer and its terminal claim', async () => {
     const dbPath = scratchPath('terminal-death-inside-claim', 'agent.db');
     expect(await killAt(dbPath, 'inside-claim')).toBe('KILLED inside-claim');
 
     const { db, rt } = openTerminalWorkspace(dbPath);
-    // The cut landed between the outer claim and the first roster row. Both are
-    // in ONE commit, so neither survives: a claim that had committed alone would
-    // be read below as a sequence already under way, and the `resumed` branch
-    // does not re-declare — it would replay an EMPTY roster, settle the claim
-    // and drop every effect this response owed with nothing on disk saying so.
-    expect(assistantRows(rt)).toBe(1);
-    expect(recordedIntents(rt)).toBe(1);
+    // No published answer may survive without the effects it owes.
+    expect(assistantRows(rt)).toBe(0);
     expect(terminalClaims(rt)).toBe(0);
     expect(rosterRows(rt)).toBe(0);
 
@@ -377,14 +404,12 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart(rt, db, model, events);
 
-    // Claimed fresh from the recorded roster, and every effect runs once.
-    expect(completedTurns(rt)).toBe(1);
-    expect(queuedTrials(rt)).toBe(1);
-    expect(claimedTakes(rt)).toBe(1);
-    expect(state.titleCalls).toBe(1);
-    expect(recordedIntents(rt)).toBe(0);
+    expect(completedTurns(rt)).toBe(0);
+    expect(queuedTrials(rt)).toBe(0);
+    expect(claimedTakes(rt)).toBe(0);
+    expect(state.titleCalls).toBe(0);
     expect(stillOwed(rt)).toEqual([]);
-    expect(assistantRows(rt)).toBe(1);
+    expect(assistantRows(rt)).toBe(0);
     await next.end();
     db.close();
   });
@@ -683,10 +708,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 });
 
 const assistantRows = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM messages WHERE role = 'assistant'`[0]?.n ?? 0;
-
-const recordedIntents = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_intents`[0]?.n ?? 0;
+  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM actor_messages WHERE role = 'assistant'`[0]?.n ?? 0;
 
 const displayName = (rt: CLIRuntime) =>
   rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;

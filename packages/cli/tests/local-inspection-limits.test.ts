@@ -13,7 +13,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { Database } from 'bun:sqlite';
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { RUN_TIMELINE_MAX, initWorkspaceSchema } from '@kinu.run/core';
 import { makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import { createTestActorsOver } from '@kinu.run/test-utils';
@@ -30,8 +30,6 @@ const AGENT = 'probe';
 const AGENT_DIR = agentDir(AGENT);
 
 const DB_PATH = join(AGENT_DIR, 'agent.db');
-
-afterAll(() => rmSync(AGENT_DIR, { recursive: true, force: true }));
 
 /** Rebuild the agent's database with `rows` rows in each timeline spine and in
  *  the memory index, so a bound is observable as a row count.

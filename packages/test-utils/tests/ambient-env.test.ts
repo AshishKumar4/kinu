@@ -11,11 +11,12 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { resolve } from 'node:path';
+import { join, basename, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
   AMBIENT_CREDENTIAL_ENV, LIVE_MODEL_ENV, stripAmbientCredentials,
 } from '../src/ambient-env';
+import { SCRATCH_ROOT_PREFIX } from '../src/scratch';
 
 const repoRoot = resolve(import.meta.dir, '../../..');
 
@@ -26,8 +27,8 @@ function envAfterPreload(env: Record<string, string>) {
   const proc = Bun.spawnSync({
     cmd: [
       process.execPath, '-e',
-      "import './scripts/test-scratch-home.ts';"
-      + 'console.log(JSON.stringify(process.env));',
+      "import { release } from './scripts/test-scratch-home.ts';"
+      + 'console.log(JSON.stringify(process.env)); release();',
     ],
     cwd: repoRoot,
     env: { ...process.env, ...env },
@@ -92,15 +93,25 @@ describe('the rule', () => {
 });
 
 describe('the wiring', () => {
+  test.each(['', '/outside-test-home'])('the daemon inflight root ignores the inherited value %j', (inherited) => {
+    const env = envAfterPreload({ KINU_INFLIGHT_ROOT: inherited });
+    expect(env.KINU_INFLIGHT_ROOT).toBe(join(env.KINU_HOME, 'inflight'));
+    expect(env.KINU_INFLIGHT_ROOT).not.toBe(inherited);
+  });
+
   test('a test process started from a signed-in shell sees no credential', () => {
     // The whole point, proven by running the preload rather than by reading it.
     // Without the strip this returns the two values it was given.
     const env = envAfterPreload(SIGNED_IN_SHELL);
 
     for (const name of AMBIENT_CREDENTIAL_ENV) expect(env[name]).toBeUndefined();
-    // And the isolation it already had is still in place, so this case cannot
-    // pass by having broken the throwaway home instead.
-    expect(env.KINU_HOME).toMatch(/kinu-test-home-/);
+    // And the ownership it already had is still in place: the throwaway home
+    // is the `home` child of the process TMPDIR, and TMPDIR itself sits in the
+    // shared `kinu-scratch-` namespace the release owns — not any incidental
+    // prefix spelling.
+    expect(basename(env.KINU_HOME)).toBe('home');
+    expect(env.KINU_HOME).toBe(join(env.TMPDIR, 'home'));
+    expect(basename(env.TMPDIR)).toStartWith(SCRATCH_ROOT_PREFIX);
   });
 
   test('the eval tier keeps them, because it is the one that consented', () => {

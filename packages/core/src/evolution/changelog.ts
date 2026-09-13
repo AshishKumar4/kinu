@@ -18,7 +18,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive } from '../scaffold/archive';
-import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
+import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/shadow';
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
 import {
@@ -91,6 +91,11 @@ export interface BuildChangelogOptions {
   since?: number;
   /** Cap on returned entries (default 50). */
   limit?: number;
+  /** When true, the digest keeps only entries that ARE a self-change: the
+   *  'outcomes' and 'replay' rows are measurements a closed window leaves
+   *  behind. The exclusion runs BEFORE the limit is taken, so a page of fresh
+   *  bookkeeping cannot push an older real change off the end. */
+  changesOnly?: boolean;
   now?: number;
 }
 
@@ -587,7 +592,11 @@ export function buildChangelog(
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
-  return entries.slice(0, limit);
+  const kept = opts.changesOnly === true
+    ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay')
+    : entries;
+
+  return kept.slice(0, limit);
 }
 
 /** How deep the unseen window is read. Past this the badge stops counting, so
@@ -650,6 +659,7 @@ export function renderChangelogText(
 export interface ChangelogRevertContext {
   rt: AgentRuntime;
   facts: FactsStore;
+  events: ScaffoldDecisionEvents;
 }
 
 export interface ChangelogRevertResult {
@@ -658,7 +668,7 @@ export interface ChangelogRevertResult {
   error?: string;
 }
 
-async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise<ChangelogRevertResult> {
+async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: ScaffoldDecisionEvents): Promise<ChangelogRevertResult> {
   const sql = rt.storage.sql;
   const actor = rt.actor;
   actor.assertCurrent();
@@ -678,7 +688,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
       return { ok: false, error: `scaffold v${version} is no longer the pending under trial` };
     }
 
-    const result = await applyPromotionDecision(rt, pending, 'rollback');
+    const result = await applyPromotionDecision(rt, pending, 'rollback', events);
 
     return { ok: true, detail: `discarded pending v${version}; current stays v${result.newCurrentVersion}` };
   }
@@ -770,7 +780,7 @@ export async function executeChangelogRevert(
         return { ok: false, error: `invalid scaffold version: ${action.target}` };
       }
 
-      return revertScaffoldVersion(ctx.rt, version);
+      return revertScaffoldVersion(ctx.rt, version, ctx.events);
     }
 
     case 'prompt_section_rollback': {

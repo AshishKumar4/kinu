@@ -40,6 +40,7 @@ import { scoreInterval } from '../src/utils/stats';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { EvalInstance } from '../src/evolution/gepa/types';
 import { createTestRuntime } from '@kinu.run/test-utils';
+import { RunEventRecorder } from '../src/events/recorder';
 
 /** The section every case here evolves: static prose, no slots, so a candidate
  *  is free to be any string and the contract gate is exercised on purpose in
@@ -489,7 +490,7 @@ describe('the changelog reports it, and the operator can take it back', () => {
     expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)).toEqual({ [TARGET_ID]: SAME_SIZE });
 
     const reverted = await executeChangelogRevert(
-      { rt, facts },
+      { events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts },
       { type: 'prompt_section_rollback', target: `${TARGET_ID}:1` },
     );
 
@@ -509,7 +510,7 @@ describe('the changelog reports it, and the operator can take it back', () => {
     });
 
     const reverted = await executeChangelogRevert(
-      { rt, facts },
+      { events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts },
       { type: 'prompt_section_rollback', target: `${TARGET_ID}:1` },
     );
 

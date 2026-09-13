@@ -1,7 +1,8 @@
+import { scratchDir } from '../packages/test-utils/src/scratch';
 import { expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+
 import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+
 import { join } from 'node:path';
 import * as v from 'valibot';
 
@@ -321,9 +322,6 @@ test('writable process is watchdog-bounded while driver polling has no elapsed d
   expect(writableProbeCommand('omit-msync')).toContain('--mutation=omit-msync');
 });
 
-
-
-
 test('writable report parser preserves a non-zero proof result instead of calling it a crash', () => {
   const report = stage3({ directIoMmap: false, linearizable: false });
   expect(parseWritableMmapOutput({ stdout: `${JSON.stringify(report)}\n`, stderr: '', exitCode: 86 })).toEqual(report);
@@ -403,7 +401,7 @@ test('runtime bundle closes every repository-relative import', async () => {
 });
 
 test('artifact writes are immutable and plan names the openat2 and cleanup proof', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'fuse-probe-test-'));
+  const dir = scratchDir('fuse-probe-test');
 
   const artifact = {
     schemaVersion: 1 as const,
@@ -417,16 +415,14 @@ test('artifact writes are immutable and plan names the openat2 and cleanup proof
     stage1: stage1(), stage2: stage2(), stage3: stage3(),
   };
 
-  try {
-    const output = await persistFuseProbeArtifact(dir, artifact);
-    expect(output).toBe(fuseProbeArtifactPath(dir, 'unique'));
-    // The errno is the contract: link() emits no product message of its own,
-    // and its sentence is libc wording.
-    await expect(persistFuseProbeArtifact(dir, artifact)).rejects.toThrow(/EEXIST/);
-    expect(planText()).toContain('FUSE_PROBE_IMAGE=registry/name@sha256:<digest>');
-    expect(planText()).toContain('openat2 RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS');
-    expect(planText()).toContain('idempotent');
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  const output = await persistFuseProbeArtifact(dir, artifact);
+  expect(output).toBe(fuseProbeArtifactPath(dir, 'unique'));
+  // The errno is the contract: link() emits no product message of its own,
+  // and its sentence is libc wording.
+  await expect(persistFuseProbeArtifact(dir, artifact)).rejects.toThrow(/EEXIST/);
+  expect(planText()).toContain('FUSE_PROBE_IMAGE=registry/name@sha256:<digest>');
+  expect(planText()).toContain('openat2 RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS');
+  expect(planText()).toContain('idempotent');
 });
 
 // ── fixture DO lifecycle ─────────────────────────────────────────────────────
@@ -498,7 +494,6 @@ test('driver waits for authenticated propagation before container setup', () => 
   expect(DRIVER_SOURCE).toContain('did not return JSON: ${raw.text.slice(0, 300)}');
   expect(DRIVER_SOURCE).toContain("stderr ?? '').slice(-800)");
 });
-
 
 test('the pure token gate refuses an unset secret or any other header value', () => {
   expect(isAuthorized(undefined, 'right')).toBe(false);

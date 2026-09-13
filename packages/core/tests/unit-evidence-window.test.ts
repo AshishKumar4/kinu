@@ -20,6 +20,7 @@ import { initReplayTables, runReplayEval } from '../src/evolution/replay';
 import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
+import { RunEventRecorder } from '../src/events/recorder';
 
 /** A seed candidate carrying `source` — the only field these prompts read. */
 function candidate(source: string): GepaCandidate {
@@ -96,6 +97,7 @@ describe('the readers can see the end of a long turn', () => {
     };
 
     const result = await runAutoShadowEval({
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       task: trajectory(20_000, `ASK-${ending}`),
       currentOutput: trajectory(40_000, `CURRENT-${ending}`),
@@ -140,6 +142,7 @@ describe('the readers can see the end of a long turn', () => {
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
 
     const control: ScaffoldControl = {
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,
       config: {
