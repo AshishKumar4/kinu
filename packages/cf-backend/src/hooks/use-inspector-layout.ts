@@ -4,9 +4,10 @@
  * layout matching.
  *
  * User input is marked at its source — capture-phase listeners on the
- * separator for the keys the library handles (arrows, Home, End, Enter), for
- * pointer presses, and for double-click; the column's own affordances mark
- * themselves. A committed layout then classifies in one branch: an emission
+ * separator for the keys the library handles (arrows, Home, End, Enter)
+ * and for pointer presses; control actions (collapse, expand, toggle,
+ * reset) claim their target directly at call time and write unmarked.
+ * A committed layout then classifies in one branch: an emission
  * carrying an input mark is a gesture and persists; any other emission —
  * mount, a decision the hook itself issued, a ResizeObserver constraint —
  * is adopted into state without persisting. Nothing ever compares a
@@ -20,7 +21,6 @@ import {
   type Layout,
   type PanelImperativeHandle,
   type PanelProps,
-  type SeparatorProps,
 } from "react-resizable-panels";
 import { getProfile } from "@/lib/user-api";
 
@@ -79,12 +79,15 @@ export type InspectorPanelProps = Pick<
   PanelProps,
   "id" | "minSize" | "defaultSize" | "collapsible" | "collapsedSize" | "panelRef" | "className"
 >;
-/** The props the separator gets: `elementRef` is where the input listeners
- *  live, and `disableDoubleClick` keeps the library's own dblclick-to-default
- *  out of the way so `resetToDefault` is the one reset. The page layers its
- *  own Enter/dblclick affordances on top. */
 
-export type InspectorSeparatorProps = Pick<SeparatorProps, "elementRef" | "disableDoubleClick">;
+/** The props the separator gets: `elementRef` attaches the input listeners,
+ *  and `disableDoubleClick` keeps the library's own dblclick-to-default out
+ *  of the way so `resetToDefault` is the one reset. The page layers its own
+ *  Enter/dblclick affordances on top. */
+export interface InspectorSeparatorProps {
+  readonly elementRef: (element: HTMLDivElement | null) => void;
+  readonly disableDoubleClick: boolean;
+}
 
 export interface InspectorGroupProps {
   readonly defaultLayout: Layout | undefined;
@@ -214,11 +217,11 @@ export function useInspectorLayout(input: {
   const panelRef = usePanelRef();
 
   // ── Owned state ────────────────────────────────────────────────────────
-  // The input mark: set by a listener where the user's act begins (the
-  // separator's capture listeners, or an affordance about to write), consumed
-  // by the committed layout it produces. A press that produced nothing is
-  // cleared by the releasing event's zero-delay timeout, so it can never
-  // leak onto a later environment commit.
+  // The input mark: set only by a separator capture listener where the
+  // user's act begins — never by a control action, which already knows its
+  // target and claims it directly. A press that produced nothing is cleared
+  // by the releasing event's zero-delay timeout, so it can never leak onto
+  // a later environment commit.
   const inputRef = useRef<InspectorInput | null>(null);
   // The workspace the user has gestured on, and the workspace the one
   // automatic open already served — comparing the id is the per-workspace
@@ -427,17 +430,38 @@ export function useInspectorLayout(input: {
   // always there to read. Pointer clears on pointerup/pointercancel/
   // lostpointercapture; keys clear on a zero-delay timeout scheduled inside
   // the same keydown. The ref callback removes every listener it added —
-  // element and document both — when the separator unmounts, so a
-  // desktop↔mobile remount can never stack them.
+  // element and document both — and retires any pending clear when the
+  // separator unmounts, so a remount can never stack listeners or let a
+  // stale timer erase the new mount's mark.
   const separatorDetachRef = useRef<(() => void) | null>(null);
+  // The one scheduled clear in flight — a fresh press replaces it, and
+  // detach cancels it outright rather than letting it land on the next
+  // mount's mark.
+  const pendingClearRef = useRef<NodeJS.Timeout | null>(null);
 
   const separatorRef = useCallback((element: HTMLDivElement | null) => {
     separatorDetachRef.current?.();
     separatorDetachRef.current = null;
 
-    if (element === null) return;
+    if (pendingClearRef.current !== null) {
+      clearTimeout(pendingClearRef.current);
+      pendingClearRef.current = null;
+    }
 
-    const clear = () => { setTimeout(() => { inputRef.current = null; }, 0); };
+    if (element === null) {
+      inputRef.current = null;
+
+      return;
+    }
+
+    const clear = () => {
+      clearTimeout(pendingClearRef.current ?? undefined);
+
+      pendingClearRef.current = setTimeout(() => {
+        pendingClearRef.current = null;
+        inputRef.current = null;
+      }, 0);
+    };
 
     const onPointerDown = () => { inputRef.current = { kind: "pointer" }; };
 
@@ -449,9 +473,9 @@ export function useInspectorLayout(input: {
       inputRef.current = { kind: "key" };
       clear();
     };
+
     // No dblclick mark: the separator is disableDoubleClick, and the page's
     // own onDoubleClick drives `resetToDefault` — a control action.
-
     const ownerDocument = element.ownerDocument;
 
     element.addEventListener("pointerdown", onPointerDown, true);
