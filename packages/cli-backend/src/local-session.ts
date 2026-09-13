@@ -138,7 +138,7 @@ import { TierIdSchema,
   latestAlternateTakeSet,
   type ScaffoldRunOptions,
   bootstrapScaffold,
-  createScaffoldCallTool, createScaffoldHistory,
+  createScaffoldHistory,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId,
   type PendingBranch, type BranchStatusEvent,
@@ -148,7 +148,7 @@ import { TierIdSchema,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile,
+  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, runOperationProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, type WorkspaceTitleState,
@@ -724,7 +724,7 @@ export class LocalAgentSession implements BackendHost {
     // a workspace title before the first turn exists — and the log is keyed by
     // run, so those calls are filed under the reserved workspace run rather than
     // dropped. Dropping them is the dishonesty this row type exists to remove.
-    this.recordRunEvent(event, this.currentRunId ?? WORKSPACE_RUN_ID);
+    this.recordRunEvent(event, currentOperationProfile(this.rt.actor)?.runId ?? this.currentRunId ?? WORKSPACE_RUN_ID);
   };
 
   /**
@@ -735,7 +735,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private readonly modelOperations: ModelOperationSink = recordModelOperations(
     { emit: (runId, input): void => { this.recordRunEvent(input, runId); } },
-    () => this.currentRunId ?? WORKSPACE_RUN_ID,
+    () => currentOperationProfile(this.rt.actor)?.runId ?? this.currentRunId ?? WORKSPACE_RUN_ID,
   );
   private readonly triggerRegistry: TriggerRegistry;
   private readonly releases: ReleaseStore;
@@ -2576,7 +2576,7 @@ export class LocalAgentSession implements BackendHost {
     });
 
     try {
-      await runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease));
+      await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
     } catch (error) {
       const message = renderThrownChain({ cause: error });
       const interrupted = lease.signal.aborted;
@@ -2707,7 +2707,6 @@ export class LocalAgentSession implements BackendHost {
     });
 
     this.actorSession.bindProfile(lease, profile, profileInputs);
-    this.rt.setTurnProfile?.(profile);
     this.invalidateModelState();
     const model = this.ensureModelState();
     this.activateToolMode(this.actorSession.workMode);
@@ -4044,10 +4043,11 @@ export class LocalAgentSession implements BackendHost {
       config: this.config,
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
-        profile: () => this.routingProfile(),
+        profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
         bindModel: spec => this.modelResolver?.resolveModel(spec) ?? this.defaultModel('scaffold model lane'),
-        tools: this.tools,
-        callTool: this.makeScaffoldCallTool(this.tools, callScope),
+        modelContext: spec => this.modelCatalog.contextFor(spec),
+        tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID),
+        callScope,
         history: this.makeScaffoldHistory(),
         spend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
       }, task, context),
@@ -4195,28 +4195,6 @@ export class LocalAgentSession implements BackendHost {
     maxIterations?: number; evalSize?: number; maxMetricCalls?: number;
   }): Promise<GepaOptimizationResult> {
     return runScaffoldGepaOptimization(this.scaffoldControl, opts);
-  }
-
-  /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
-   *  scaffold-host).
-   *
-   *  `callScope` is the rollout's durable identity, and it fixes BOTH halves of
-   *  a tool-effect claim's key: the call ids become `<scope>#n` in dispatch
-   *  order, and the surface those calls run on claims under the scope instead of
-   *  under whatever turn is ambient. Either half alone leaves a replay claiming
-   *  different work than the run it is repeating, which is how an interrupted
-   *  queued trial sent the same mail twice. A rollout nothing re-drives (a live
-   *  preview, a GEPA candidate) passes none and keeps the turn's own surface.
-   *
-   *  Built ONCE per rollout and closed over: the identity has to be stable
-   *  across the whole rollout, not per call. */
-  private makeScaffoldCallTool(
-    turnTools: ToolSet, callScope?: string, signal?: AbortSignal,
-  ): NonNullable<ScaffoldRunOptions['callTool']> {
-    if (callScope === undefined) return createScaffoldCallTool(() => turnTools, undefined, signal);
-    const scoped = this.rolloutTools(callScope);
-
-    return createScaffoldCallTool(() => scoped, callScope, signal);
   }
 
   /** `host.history` — a read-only, budgeted page of the conversation the
@@ -4682,10 +4660,10 @@ export class LocalAgentSession implements BackendHost {
    *  cannot disagree about when a lane inherits the open turn; what is local is
    *  only where a fresh resolution comes from. Asked per call, never captured — a
    *  lane built at construction time must not pin the tier the account had then. */
-  private async routingProfile(): Promise<ResolvedTurnProfile> {
+  private async routingProfile(availableTools: readonly string[] = []): Promise<ResolvedTurnProfile> {
     return resolveRoutingProfile({
-      live: () => this.actorSession.profile,
-      resolve: () => this.profiles().resolvePreTurn(),
+      actor: this.rt.actor,
+      resolve: () => this.profiles().resolvePreTurn(availableTools),
     });
   }
 
@@ -5117,7 +5095,7 @@ export class LocalAgentSession implements BackendHost {
         mode,
         // A CLOSURE, because this toolset is rebuilt only on a model change while
         // the turn changes every turn.
-        () => this.currentTurnId ?? WORKSPACE_RUN_ID,
+        () => currentOperationProfile(this.rt.actor)?.turnId ?? this.currentTurnId ?? WORKSPACE_RUN_ID,
       ));
 
       this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
@@ -5200,7 +5178,7 @@ export class LocalAgentSession implements BackendHost {
    * part of what this rollout can replay.
    */
   private rolloutTools(callScope: string): ToolSet {
-    return buildActorTools(this.actorToolsetDeps(this.actorSession.workMode, () => callScope));
+    return buildActorTools(this.actorToolsetDeps(currentOperationProfile(this.rt.actor)?.profile.workMode ?? 'build', () => callScope));
   }
 
   private activateToolMode(mode: WorkMode): void {

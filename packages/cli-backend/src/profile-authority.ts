@@ -153,7 +153,7 @@ export interface LocalProfileAuthority {
    * work mode is the unnarrowed default, because a lane that runs between turns
    * runs under no turn's mode. A role that declares `plan` still narrows it.
    */
-  resolvePreTurn(): Promise<ResolvedTurnProfile>;
+  resolvePreTurn(availableTools?: readonly string[]): Promise<ResolvedTurnProfile>;
   /** Drop the cached provider listing: something this authority cannot observe
    *  changed (a credential added or revoked, a provider connected, a sign-in). */
   refreshListing(): void;
@@ -262,14 +262,14 @@ export function createLocalProfileAuthority(deps: {
     normalizeSpec,
     envelope,
     inputs,
-    async resolvePreTurn() {
+    async resolvePreTurn(availableTools = []) {
       const role = deps.config.getRoleSelection();
 
       return resolveAgentTurnProfile({
         ...(await inputs()),
         activeRoleId: role,
         workMode: 'build',
-        availableTools: [],
+        availableTools,
         activeSkills: [],
         explicitTier: deps.config.getAssignedTier() ?? undefined,
       });
