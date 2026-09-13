@@ -315,7 +315,7 @@ export function createResolver(
     });
 
     if (specifier.startsWith('.')) {
-      const base = collapsePath(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`);
+      const base = collapsePath(`${from.slice(0, from.lastIndexOf('/') + 1)}${specifier}`);
 
       // A relative path into node_modules is a DEPENDENCY reached through the
       // filesystem — @nimbus-sh/worker exports no subpath for its dist session
