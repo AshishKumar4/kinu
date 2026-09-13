@@ -5,6 +5,5 @@
   "divergent DEFAULT_SEARCH_LIMIT",
   "divergent HEAD_FRACTION",
   "divergent RETRY_BASE_MS",
-  "duplicated ESTIMATED_MEDIA_CHARS",
-  "duplicated WS_OPEN"
+  "duplicated ESTIMATED_MEDIA_CHARS"
 ]

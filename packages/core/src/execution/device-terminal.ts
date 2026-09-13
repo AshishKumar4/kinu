@@ -21,15 +21,14 @@
  * the per-(workspace, device) grant, and the owner's Sandbox switch. This
  * module moves bytes between two sockets that were already allowed to talk.
  */
-import {
-  DEVICE_PTY_CLOSE, DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
-} from '@kinu.run/core';
-import { diagnostics, tolerate } from '@kinu.run/core/obs';
+import { tolerate } from '../obs/expected-failure';
+import { diagnostics } from '../obs/log';
 import * as v from 'valibot';
 import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hub';
-
-/** WebSocket.OPEN is 1 across every implementation. */
-const WS_OPEN = 1;
+import { WS_OPEN } from './device-hub';
+import {
+  DEVICE_PTY_CLOSE, DEVICE_PTY_INPUT, DEVICE_PTY_MAX_AXIS, DEVICE_PTY_RESIZE,
+} from './device-tunnel';
 
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
 

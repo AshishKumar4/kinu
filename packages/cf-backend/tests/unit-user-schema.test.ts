@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { initUserTables } from '../src/user/schema';
+import { initUserTables } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
 function columns(db: Database, table: string): string[] {

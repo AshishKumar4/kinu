@@ -39,7 +39,7 @@ import type { OAuthProviderId } from './providers';
 import type { BrowserSessionIdentity, LiveBrowserSession, UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { readKvJson, writeKvJson, type KvStore } from '../lib/kv';
-import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
+import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
 import { classify, diagnostics, toKinuError, type KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';

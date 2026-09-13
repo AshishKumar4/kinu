@@ -41,7 +41,7 @@
  */
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
-import { PROFILE_CATALOG_CONFIG_KEY } from './schema';
+import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command';
@@ -49,7 +49,7 @@ import { listAvailableModels, listProviderCatalog } from './available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access';
 import { err, json, safeJson } from '../lib/http';
 import { retryTransientDO } from '../lib/do-rpc';
-import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from './workspace-capability';
+import { OwnerCapabilityUnavailableError, ownerCaller, type UserCaller } from '@kinu.run/core';
 import { isControlPlaneOperator } from '../control-plane/admin-caller';
 import * as v from 'valibot';
 

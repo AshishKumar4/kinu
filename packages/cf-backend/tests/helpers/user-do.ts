@@ -8,7 +8,7 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
-import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
+import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/user-do';
 import {
   DeviceConsentRegistry,

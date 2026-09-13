@@ -12,7 +12,7 @@ import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '@ki
 import type { AuthIdentity } from '../src/auth/session';
 import { routeFeedback, type FeedbackDeps } from '../src/feedback/submit';
 import { handleFeedbackRequest, type FeedbackEnv } from '../src/feedback/routes';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import type { FeedbackMarker } from '@kinu.run/core/analytics';
 import {
   FEEDBACK_ENDPOINT,

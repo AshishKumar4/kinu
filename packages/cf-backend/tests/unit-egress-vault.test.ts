@@ -9,7 +9,7 @@ import {
   initEgressVaultTables, listEgressSecrets, putEgressSecret,
   resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets,
   type EgressVaultDeps,
-} from '../src/user/egress-vault';
+} from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, sqlExec,

@@ -30,10 +30,9 @@
  * an unconfirmed stop is reported to the owner. That policy lives in UserDO,
  * which holds the sockets and the consent boundary.
  */
-import {
-  nextDeviceRequestId, type SqlExec,
-} from '@kinu.run/core';
 import * as v from 'valibot';
+import type { SqlExec } from '../types/primitives';
+import { nextDeviceRequestId } from './device-tunnel';
 
 /** A terminal cancellation answer: the kernel confirmed the daemon's owned
  *  process group died, or the daemon held no active control entry. Either way

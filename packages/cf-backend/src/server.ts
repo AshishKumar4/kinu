@@ -68,7 +68,7 @@ import {
 } from "./lib/preview-origin";
 import { withAppSecurityHeaders } from "./lib/security-headers";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do";
-import { ownerCaller } from "./user/workspace-capability";
+import { ownerCaller } from "@kinu.run/core";
 import { AUTH_TIME_HEADER, CLI_BEARER_HEADER, CLI_SCOPES_HEADER, SESSION_BEARER_HEADER, USER_ID_HEADER } from "./cli/rpc-gate";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";
 import { err } from "./lib/http";

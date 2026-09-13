@@ -45,7 +45,7 @@ import type { AuthIdentity } from '../auth/session';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
 import { err, json, safeJson } from '../lib/http';
-import { ownerCaller } from '../user/workspace-capability';
+import { ownerCaller } from '@kinu.run/core';
 import { MONITOR_SINGLETON, type MonitorDO } from '../monitor/monitor-do';
 import {
   actorDigest, adminCaller, adminDenialMessage, adminDenialStatus, authorizeAdmin,

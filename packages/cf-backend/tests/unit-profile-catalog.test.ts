@@ -16,7 +16,7 @@ import {
   type JsonValue,
   type RoleDefinition,
 } from '@kinu.run/core';
-import { CapabilityDeniedError } from '../src/user/workspace-capability';
+import { CapabilityDeniedError } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
 
 const MODEL = 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813';
