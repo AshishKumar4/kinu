@@ -54,3 +54,56 @@ export function hireConversation(request: ScriptedTurnOptions) {
     content: message.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
   }));
 }
+
+export const HIRE_FORK_FOLLOWUP_REQUEST = 'Send the next audit assignment.';
+
+export const HIRE_FORK_FOLLOWUP = 'Check the next release ledger.';
+
+export const HIRE_CHILD_CONTEXT = 'CHILD-ONLY-CONTEXT: the first audit is complete.';
+
+export function hireRetentionModel() {
+  const childRequests: ScriptedTurnOptions[] = [];
+
+  const model = scriptedTurnModel({ doGenerate: (options) => {
+    const users = hireConversation(options).filter((message) => message.role === 'user');
+    const followsUp = users.some((message) => message.content.includes(HIRE_FORK_FOLLOWUP));
+
+    const child = followsUp || users.some((message) => message.content === HIRE_FORK_MISSION
+      || message.content.includes(`task: ${HIRE_FORK_MISSION}`));
+
+    const called = (name: string, action: string) => options.prompt.some((message) => message.role === 'assistant'
+      && message.content.some((part) => part.type === 'tool-call' && part.toolName === name
+        && JSON.stringify(part.input).includes(`"action":"${action}"`)));
+
+    const parentFollowup = users.some((message) => message.content === HIRE_FORK_FOLLOWUP_REQUEST);
+    let call: { id: string; name: string; input: object } | undefined;
+
+    if (child) {
+      childRequests.push(options);
+
+      if (!followsUp && !called('memory', 'remember')) call = {
+        id: 'child-context', name: 'memory',
+        input: { action: 'remember', key: 'CHILD-ONLY-TOOL-CONTEXT', value: 'The first audit finding.' },
+      };
+    } else if (parentFollowup && !called('agents', 'msg')) {
+      call = { id: 'msg-reader', name: 'agents',
+        input: { action: 'msg', agent: 'forked-reader', message: HIRE_FORK_FOLLOWUP } };
+    } else if (!parentFollowup && users.some((message) => message.content === HIRE_FORK_REQUEST) && !called('agents', 'hire')) {
+      call = { id: 'hire-reader', name: 'agents', input: {
+        action: 'hire', role: 'researcher', agent: 'forked-reader',
+        mission: HIRE_FORK_MISSION, lifetime: 'durable', context: 'inherit',
+      } };
+    }
+
+    return {
+      content: call ? [{ type: 'tool-call', toolCallId: call.id, toolName: call.name, input: JSON.stringify(call.input) }]
+        : [{ type: 'text', text: child ? followsUp ? 'The next audit is complete.' : HIRE_CHILD_CONTEXT : HIRE_FORK_ACK }],
+      finishReason: { unified: call ? 'tool-calls' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } },
+      warnings: [],
+    };
+  } });
+
+  return { model, childRequests };
+}

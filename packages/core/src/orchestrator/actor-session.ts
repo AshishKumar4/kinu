@@ -182,6 +182,42 @@ export class ActorSession {
     }).revision;
   }
 
+  /** Working revisions own model context; the transcript is only a fallback
+   * for an actor that has never recorded one. Reading an existing revision
+   * must not write a hydration above a pending edit or re-anchor compaction. */
+  restoreWorkingHistory(fallback: () => readonly ModelMessage[]): void {
+    if (this.active !== null) throw new KinuError('denied', 'cannot hydrate an actor during a turn');
+    const working = this.options.claims.working.active();
+    const messages = working?.messages ?? fallback();
+    this.messages.splice(0, this.messages.length, ...messages);
+
+    // Merely opening an empty actor does not create a conversation revision.
+    // An explicitly authored empty revision, however, remains authoritative.
+    if (working === null && messages.length > 0) this.context.hydrate(this.messages);
+  }
+
+  /** Open a durable assignment against this actor's working revision. The
+   * lease's turn id is the delivery identity, not the actor's name: a re-drive
+   * keeps the admitted task once, even when two assignments have equal text.
+   * Birth context is used only before the conversation's first turn. */
+  openDelegatedTurn(lease: ActorTurnLease, input: {
+    readonly messages: readonly ModelMessage[];
+    readonly birthContext: readonly ModelMessage[];
+  }): void {
+    if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'a delegated input must belong to a preparing turn');
+    const claims = this.options.claims;
+    const working = claims.working.active();
+
+    if (working !== null) this.messages.splice(0, this.messages.length, ...working.messages);
+
+    // startTurn can have persisted the opening revision before admit wrote the
+    // claim. Both records identify the delivery; neither compares task text.
+    if (claims.read(lease.turnId) !== null || working?.turnId === lease.turnId) return;
+
+    if (working === null && this.messages.length === 0 && claims.latestTurn() === null) this.messages.push(...input.birthContext);
+    this.messages.push(...input.messages);
+  }
+
   appendInput(lease: ActorTurnLease, message: ModelMessage): void {
     if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'actor input must belong to a preparing turn');
     this.messages.push(message);
