@@ -20,7 +20,7 @@
 
 import * as v from 'valibot';
 import { assertMeasured } from './gate-ratchet';
-import { isManifest, readMatching, readRepositoryFile, readSources } from './sources';
+import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources } from './sources';
 import { literalText, parse, walk } from './syntax';
 import type { Parsed, SyntaxNode } from './syntax';
 
@@ -28,14 +28,40 @@ const root = new URL('..', import.meta.url).pathname;
 
 const GATE = 'client-graph';
 
-/** The three browser entries. `index.tsx` is the signed-in app, `landing.tsx`
- *  the public landing (served at `/` for a visitor with no session),
- *  `gallery.tsx` the signed-in component gallery. */
-const ENTRIES: readonly string[] = [
-  'packages/cf-backend/src/index.tsx',
-  'packages/cf-backend/src/landing.tsx',
-  'packages/cf-backend/src/gallery.tsx',
-];
+/** The browser entries, DERIVED from the html documents rather than listed:
+ *  `index.html` is the signed-in app, `landing.html` the public landing (served
+ *  at `/` for a visitor with no session), `gallery.html` the signed-in
+ *  component gallery — and a fourth page joins the walk by existing. */
+export async function clientEntries(documents: ReadonlyMap<string, string>): Promise<string[]> {
+  const entries: string[] = [];
+
+  for (const [file, text] of documents) {
+    const directory = file.slice(0, file.lastIndexOf('/') + 1);
+    const found: string[] = [];
+
+    const rewriter = new HTMLRewriter().on('script[type="module"]', {
+      element(element) {
+        const src = element.getAttribute('src');
+
+        if (src === null) throw new Error(`${GATE}: ${file} has an inline module the graph cannot resolve`);
+        const url = new URL(src, 'https://client.invalid/');
+
+        if (url.origin !== 'https://client.invalid') throw new Error(`${GATE}: ${file} has an external module the graph cannot resolve`);
+        found.push(`${directory}${url.pathname.slice(1)}`);
+      },
+    });
+
+    await rewriter.transform(new Response(text)).text();
+
+    if (found.length === 0) {
+      throw new Error(`${GATE}: ${file} declares no <script type="module"> — a page with no entry cannot be walked`);
+    }
+
+    entries.push(...found);
+  }
+
+  return entries.sort();
+}
 
 /** Specifiers no client-reachable module may load at runtime. */
 function isForbidden(specifier: string): boolean {
@@ -240,8 +266,10 @@ export interface Violation {
 
 /** Walk the client graph. Returns one violation per distinct forbidden edge,
  *  each carrying the entry-to-edge chain that loads it. */
-export function findViolations(sources: ReadonlyMap<string, string>): Violation[] {
-  for (const entry of ENTRIES) {
+export function findViolations(sources: ReadonlyMap<string, string>, entries: readonly string[]): Violation[] {
+  if (entries.length === 0) throw new Error(`${GATE}: no client entry — a gate that walks no entry cannot fail`);
+
+  for (const entry of entries) {
     if (!sources.has(entry)) {
       throw new Error(`${GATE}: client entry ${entry} is not in the corpus — a gate that scans no entry cannot fail`);
     }
@@ -284,7 +312,7 @@ export function findViolations(sources: ReadonlyMap<string, string>): Violation[
     }
   };
 
-  for (const entry of ENTRIES) {
+  for (const entry of entries) {
     seen.add(entry);
     visit(entry, []);
   }
@@ -314,13 +342,14 @@ export const BLIND_SPOTS: readonly string[] = [
 
 if (import.meta.main) {
   const sources = readSources();
-  const violations = findViolations(sources);
+  const entries = await clientEntries(readMatching(isClientDocument));
+  const violations = findViolations(sources, entries);
 
   // Zero violations is the PASSING state, so assertMeasured guards only the
   // denominators that must be non-empty for the walk to mean anything — an
   // empty universe or entry set would report a clean tree over nothing.
   const measured = assertMeasured(GATE, [
-    ['client entries walked', ENTRIES.length],
+    ['client entries walked', entries.length],
     ['product source files in the resolution universe', sources.size],
   ]);
 

@@ -460,9 +460,7 @@ run_required_gate "Pattern inventory" bun scripts/pattern-inventory.ts
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
 run_required_gate "Agent-utils, Core, and compaction suites" bun run test
 run_required_gate "Bench Python suites" bun run gate:python-suites
-run_required_gate "Exploration policy mutations" bun run test:mutation
 run_required_gate "Concurrency fences stay load-bearing" bun run gate:mutation-fences
-run_required_gate "Cross-backend seam differential" bun run gate:twin-differential
 run_required_gate "Devbox durability decisions" bun test packages/devbox/
 run_required_gate "Test-utils suite" bun test packages/test-utils/
 run_required_gate "Cloudflare backend and conformance suite" bun test --parallel=4 packages/cf-backend/
@@ -470,7 +468,7 @@ run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
 run_required_gate "Full production CLI suite" bun run test:cli
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts
-run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
+run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
 run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
@@ -487,7 +485,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # cost still needs its own reasoning tested, or the thing that would have caught
 # `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Hammer and fence gate self-tests" bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts
+run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts

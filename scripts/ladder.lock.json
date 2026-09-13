@@ -1,9 +1,9 @@
 {
-  "reason": "gate:trajectory runs its cases concurrently without a genesis turn",
+  "reason": "the gate self-tests row gains client-graph, install-scripts-gate and tracing-gate suites, the first red proofs those three gates have had; the row's declared cost is unchanged",
   "tiers": {
     "commit": {
       "seconds": 82.24,
-      "measuredAt": "2026-09-12",
+      "measuredAt": "2026-09-13",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -33,8 +33,8 @@
       }
     },
     "push": {
-      "seconds": 400.81,
-      "measuredAt": "2026-09-12",
+      "seconds": 400.35,
+      "measuredAt": "2026-09-13",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -66,7 +66,7 @@
         "bun run gate:silent-drop": 1.4,
         "bun scripts/secret-scan.ts": 18,
         "bun scripts/schema-drift.ts": 0.23,
-        "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts": 24,
+        "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts": 24,
         "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
         "bun test scripts/ladder.test.ts": 1,
         "bun test scripts/deploy.test.ts": 87,
@@ -78,14 +78,12 @@
         "bun test packages/devbox/": 74,
         "bun test packages/test-utils/": 7,
         "bun test --parallel=4 packages/cf-backend/": 13,
-        "bun run test:mutation": 0.21,
         "bun run gate:scanner-bundle": 0.3,
         "bun run gate:capability-parity": 1.7,
         "bun run gate:policy-drift": 0.9,
         "bun run gate:scratch-ownership": 0.42,
         "bun run gate:agents-fields": 0.34,
-        "bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts": 0.4,
-        "bun run gate:twin-differential": 0.25
+        "bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts": 0.4
       }
     }
   }

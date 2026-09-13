@@ -9,12 +9,12 @@
  * `bun pm untrusted` says five packages were blocked while saying nothing about
  * the four that ran.
  *
- * Nine dependencies declare a lifecycle script. Five are blocked. FOUR EXECUTE,
- * and they are the highest-risk shape there is: `esbuild/install.js` and
- * `workerd/install.js` both contain `fetch(`, `https.get`, `child_process` and
- * `execFileSync` — fetch a binary at install time and run it. `sharp` falls
- * through to a native compile. That happens on every `bun install`, including
- * CI and scripts/deploy.sh.
+ * Measured 2026-09-12: eight dependencies declare a lifecycle script, bun blocks
+ * five, THREE EXECUTE, and they are the highest-risk shape there is:
+ * `esbuild/install.js` and `workerd/install.js` both contain `fetch(`,
+ * `https.get`, `child_process` and `execFileSync` — fetch a binary at install
+ * time and run it. That happens on every `bun install`, including CI and
+ * scripts/deploy.sh. The gate prints the live counts on its green path.
  *
  * This gate makes the set a decision instead of a default. Adding a package to
  * ALLOWED_INSTALL_SCRIPTS is a deliberate edit with a stated reason; a new
@@ -55,7 +55,7 @@ export const ALLOWED_INSTALL_SCRIPTS = {
 function allowedReason(pkg: string): string | undefined {
   // Searched rather than indexed: the literal keeps its inferred key literals (so
   // a typo in the allowlist is a type error), and looking a runtime string up in
-  // it needs no assertion. Four entries.
+  // it needs no assertion.
   for (const [name, reason] of Object.entries(ALLOWED_INSTALL_SCRIPTS)) {
     if (name === pkg) return reason;
   }
@@ -175,18 +175,18 @@ export interface GateOutcome {
 export function judgeInstallScripts(
   modules: string = MODULES,
   root: string = REPO_ROOT,
-): GateOutcome {
-  const declared = declaredInstallScripts(modules);
-  const allowed = Object.keys(ALLOWED_INSTALL_SCRIPTS).sort();
-  const findings: GateFinding[] = [];
-
   // What bun BLOCKED, asked of bun rather than inferred from manifests. This is
   // the load-bearing call: bun's built-in allowlist is not in this repository, so
   // the only way to know which scripts EXECUTE is to subtract the blocked set
   // from the declared set. A gate that read manifests alone would report "no
   // trustedDependencies, therefore nothing runs" — which is exactly the wrong
-  // answer, and the one this file exists to retire.
-  const blocked = blockedByBun();
+  // answer, and the one this file exists to retire. A parameter so the self-test
+  // can hand it a synthetic tree's answer; the gate itself always asks bun.
+  blocked: ReadonlySet<string> = blockedByBun(root),
+): GateOutcome {
+  const declared = declaredInstallScripts(modules);
+  const allowed = Object.keys(ALLOWED_INSTALL_SCRIPTS).sort();
+  const findings: GateFinding[] = [];
   const ran = declared.filter((d) => !blocked.has(d.pkg));
 
   for (const entry of ran) {
