@@ -21,6 +21,7 @@ import {
   TriggerRegistry,
   delegationExhausted,
   SUBORDINATE_REPORT_STATUSES,
+  HeadCapture, runHeadInference,
   type HostedAgentRef,
   type LLMProviderConfig,
 } from '@kinu.run/core';
@@ -47,7 +48,7 @@ const DUMMY_LLM: LLMProviderConfig = {
   model: 'fake-model',
 };
 
-function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): LanguageModel {
+function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): TestLanguageModelV2 {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
 
   return new TestLanguageModelV2({
@@ -339,6 +340,7 @@ interface TestHost {
 interface TestHostExtras {
   wakeAt?: (at: number) => void;
   driverKind?: DriverKind;
+  advisor?: boolean;
 }
 
 function makeHost(
@@ -355,6 +357,8 @@ function makeHost(
     open: async (ref, db, dbPath) => {
       const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
+
+      if (extras.advisor === true) rt.actor.config.setAdvisorEnabled(true);
       runtimes.set(ref.name, rt);
       const hosted: LocalHostedAgent = { rt, openConfig, staticModel: model };
 
@@ -935,6 +939,53 @@ describe('LocalAgentHost', () => {
   }
 
   /** Both child lifetimes retain task evidence without joining the turn window. */
+  test('a subordinate turn gets advisor feedback while its evolution window stays empty', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const note = 'The probe failed but the reply claimed success. Check its exit status.';
+    const requests: string[] = [];
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doGenerate: async (options) => ({
+        content: [{ type: 'text', text: JSON.stringify(options.prompt).includes('You are reviewing one finished turn')
+          ? JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }) : '{}' }],
+        finishReason: 'stop', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 }, warnings: [],
+      }),
+      doStream: streamingModel('The probe succeeded.', (options) => { requests.push(JSON.stringify(options.prompt)); }).doStream,
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { advisor: true });
+    const ended = Promise.withResolvers<void>();
+    let turns = 0;
+    host.subscribe((agent, event) => {
+      if (agent === 'root' || event.type !== 'turn-end') return;
+      turns++;
+
+      if (turns === 2) ended.resolve();
+    });
+    const team = await host.team('root');
+    await team.spawn({ role: 'researcher', mission: 'Check the probe.', mode: 'build' });
+    const [child] = await team.list();
+
+    if (child === undefined) throw new Error('The subordinate was not rostered.');
+    await ended.promise;
+    await host.close();
+    const actorId = childActorId(dbPath, child.name);
+    expect(requests.some((prompt) => prompt.includes(note))).toBe(true);
+    expect(userMessages(dbPath, actorId).some((message) => message.includes(note))).toBe(true);
+    expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    const db = new Database(dbPath, { readonly: true });
+
+    try {
+      const notes = db.query<{ message: string }, [string]>(
+        "SELECT message FROM evolution_events WHERE actor_id = ? AND type = 'advisor_note'",
+      ).all(actorId);
+
+      expect(notes).toEqual([{ message: note }]);
+    } finally { db.close(); }
+  });
+
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     // One host per half: the fixture model reports on its FIRST turn only, so
     // each child needs a model of its own to make its failing report.
@@ -983,6 +1034,40 @@ describe('LocalAgentHost', () => {
     // reaches `recordTurn`: the hire's actor-scoped ledger stays empty.
     expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, outcomes: [], lessons: [] });
     expect(hireChild.reflections()).toBe(0);
+  });
+
+  test('a daemon-hosted swarm node keeps its advisor feedback on its own next turn', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+
+    const { host } = makeHost(state, streamingModel('The probe succeeded.'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { advisor: true });
+
+    const session = await host.acquire('root');
+    const seat = await session.hostNode({ nodeId: 'advised-node', rootId: 'swarm-run', depth: 1 });
+    const note = 'The probe exit status was not checked. Verify it before relying on the answer.';
+    seat.actor.runtime.advisorLlm = {
+      async *stream() { yield ''; },
+      complete: async () => JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }),
+    };
+    const requests: string[] = [];
+
+    const report = await runHeadInference({
+      id: 'advised-node', rootId: 'swarm-run', parentId: null, depth: 1,
+      task: 'Check the probe.', rationale: 'Check the probe.', mode: 'build', inheritedContext: [],
+      mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
+    }, {
+      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+      model: streamingModel('The probe succeeded.', (options) => { requests.push(JSON.stringify(options.prompt)); }),
+      tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
+    });
+
+    expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toContain(note);
+    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    await host.close();
   });
 
   /**

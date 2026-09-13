@@ -53,6 +53,7 @@ import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from 
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
+import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -885,6 +886,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       );
 
       let turnFailed = false;
+      const advice: ModelMessage[] = [];
 
       try {
         const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
@@ -949,6 +951,26 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         // A promoted loop's answer is its own final text: the builtin arm
         // accumulates prose per step, a scaffold reports one result.
         if (outcome.program?.kind === 'scaffold' && outcome.text.trim()) lastText = outcome.text;
+
+        if (!turnFailed && !outcome.interrupted && session.orchestrator.improvementLanesOpen('completed', input.mode)) {
+          const turn = snapshotCompletedTurn(session.orchestrator.acc, {
+            userMessage: input.task, assistantResponse: outcome.text,
+            turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
+          });
+
+          try {
+            await session.reviewTurn(session.advisorSnapshot(turn, Object.keys(deps.tools)), false, async (signal) => {
+              advice.push({ role: 'user', content: signal.text });
+
+              return 'queued';
+            });
+          } catch (cause) {
+            diagnostics.failure('advisor.lane_failed', toKinuError({
+              doing: 'reviewing the reporting actor turn', cause, otherwise: 'unavailable',
+            }), { actor: deps.actor.handle.name });
+          }
+        }
+
         // The claim closes under the outcome THIS turn reached, in the same
         // vocabulary the run ledger uses — never the host's silence read as
         // success. `interrupted` covers both the spawner's cancel and the
@@ -961,6 +983,12 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       // A run the spawner cancelled, or one past the deadline it was granted,
       // gets no further turn however much work it is still holding.
       if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
+
+      if (advice.length > 0) {
+        session.restoreHistory([...session.history, ...advice]);
+        continue;
+      }
+
       const resumed = await deps.resume?.();
 
       if (!resumed) break;

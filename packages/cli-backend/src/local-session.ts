@@ -100,7 +100,7 @@ import { TierIdSchema,
   normalizeUsage,
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot,
+  AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
   type JsonObject,
@@ -3296,15 +3296,7 @@ export class LocalAgentSession implements BackendHost {
     // severity floor is a config the owner can change between the turn and its
     // recovery, so a replay that re-derived them would grade this turn against
     // inputs it never had.
-    const advisor: AdvisorRecoverySnapshot = {
-      turn: scoped,
-      // The turn's OWN ToolSet keys: what it demonstrably had, not what this
-      // session can have. A capability the turn never carried must never be
-      // named at it.
-      reachable: [...input.reachableTools],
-      minSeverity: this.config.getAdvisorMinSeverity(),
-      recent: [...this.engine.recentAdvisorNotes()],
-    };
+    const advisor = this.actorSession.advisorSnapshot(scoped, input.reachableTools);
 
     // WHICH report this ending owes the parent, decided once, here. A task
     // child's terminal answer and a durable child's progress note are different
@@ -3913,7 +3905,7 @@ export class LocalAgentSession implements BackendHost {
    * not given a fabricated key.
    */
   private async reviewTurnInBackground(recorded: RecordedAdvisor): Promise<void> {
-    if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return;
+    if (this.rt.advisorLlm === undefined || !this.actorSession.advisorEnabled) return;
 
     if (advisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn)) return;
     const checkpointed = Promise.withResolvers<void>();
@@ -3981,6 +3973,12 @@ export class LocalAgentSession implements BackendHost {
    * Never throws: a reviewer that failed is a turn with no advice.
    */
   private async runAdvisorReview(recorded: RecordedAdvisor): Promise<void> {
+    if (this.rt.actor.parentActorId !== null) {
+      await this.actorSession.reviewTurn(recorded, recorded.gateOpen);
+
+      return;
+    }
+
     await reviewRecordedTurn({
       snapshot: recorded,
       llm: this.rt.advisorLlm,

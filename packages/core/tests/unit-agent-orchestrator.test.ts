@@ -58,6 +58,9 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     enabled: opts?.enabled ?? true,
     get recordsTurns() { return this.enabled; },
     recoverInterruptedWork: () => {},
+    recentAdvisorNotes: () => [],
+    recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
+    hasAdvisorNoteForTurn: () => false,
     sessionWindow: store,
     craftLedger: {
       names: () => crafted,
