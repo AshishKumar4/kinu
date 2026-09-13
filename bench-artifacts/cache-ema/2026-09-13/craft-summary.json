@@ -1,0 +1,82 @@
+{
+  "table": [
+    {
+      "runId": "run-gd060z52kok0g56w18daw",
+      "step": 3,
+      "input": 20443,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-gd060z52kok0g56w18daw",
+      "step": 5,
+      "input": 27799,
+      "cacheRead": 20096,
+      "share": 0.722903701571999
+    },
+    {
+      "runId": "run-gd060z52kok0g56w18daw",
+      "step": 7,
+      "input": 29761,
+      "cacheRead": 20096,
+      "share": 0.6752461274822754
+    },
+    {
+      "runId": "run-gd060z52kok0g56w18daw",
+      "step": 9,
+      "input": 32424,
+      "cacheRead": 0,
+      "share": 0
+    },
+    {
+      "runId": "run-gd060z52kok0g56w18daw",
+      "step": 12,
+      "input": 34251,
+      "cacheRead": 29760,
+      "share": 0.8688797407374967
+    },
+    {
+      "runId": "run-gd060z52kok0g56w18daw",
+      "step": 13,
+      "input": 34849,
+      "cacheRead": 20096,
+      "share": 0.5766593015581509
+    },
+    {
+      "runId": "run-ty5srrvrxaiw8fil6o9c9",
+      "step": 4,
+      "input": 35320,
+      "cacheRead": 1792,
+      "share": 0.0507361268403171
+    },
+    {
+      "runId": "run-ty5srrvrxaiw8fil6o9c9",
+      "step": 5,
+      "input": 35700,
+      "cacheRead": 0,
+      "share": 0
+    }
+  ],
+  "stats": {
+    "steps": 8,
+    "windowLimit": 200,
+    "tokens": {
+      "input": 250547,
+      "output": 13241,
+      "cacheRead": 91840,
+      "neurons": 27666.23617079854
+    },
+    "cacheHit": {
+      "samples": 8,
+      "last": 0,
+      "mean": 0.3618031247737799,
+      "p95": 0.8688797407374967,
+      "ema": 0.2530573601450702,
+      "emaAlpha": 0.2
+    },
+    "usd": 0.30432859999999995,
+    "pricedSteps": 8,
+    "unpricedSteps": 0,
+    "stepsWithoutUsage": 0
+  }
+}

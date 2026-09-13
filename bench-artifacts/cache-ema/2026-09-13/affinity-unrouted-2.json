@@ -1,0 +1,1 @@
+{"choices":[{"finish_reason":"stop","index":0,"logprobs":null,"message":{"content":"Tea needs hot water.","role":"assistant"}}],"created":1789317635,"id":"a9e0009dd9d2486a86ac4c70912a7284","model":"@cf/zai-org/glm-5.3","object":"chat.completion","usage":{"prompt_tokens":4037,"completion_tokens":8,"total_tokens":4045,"prompt_tokens_details":{"cached_tokens":0},"neurons":517}}
