@@ -5,7 +5,7 @@ import { formatContextWindow, CHANGE_KIND_GLYPH, TUI_COMPOSER_PLACEHOLDER, TUI_M
 import { takeEvidence } from '@kinu.run/core';
 import { filterCommands, type SlashCommandInfo } from '../slash-commands';
 import { filterModels, type AgentModelEntry } from '../model-catalog';
-import type { ProviderFailure } from '@kinu.run/core';
+import type { ProviderFailure, ShellApprovalRequest } from '@kinu.run/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import { clipText } from './format';
@@ -750,6 +750,35 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
 interface DeviceConnectOverlayProps {
   prompt: DeviceConnectPromptState;
   terminal: OverlayGeometry;
+}
+
+function shellApprovalDetails(request: ShellApprovalRequest): string {
+  return `${request.command}\nExecutor: ${request.executor}\n${request.review.hits.map((hit) => `${hit.rule}: ${hit.explanation}`).join('\n')}`;
+}
+
+export function shellApprovalCanApprove(request: ShellApprovalRequest, terminal: OverlayGeometry): boolean {
+  return deviceConsentCanApprove({ command: shellApprovalDetails(request) }, terminal);
+}
+
+export function ShellApprovalOverlay({ request, terminal }: { request: ShellApprovalRequest; terminal: OverlayGeometry }) {
+  const { colors } = useTuiTheme();
+  const keybindings = useKeybindingRegistry();
+  const details = shellApprovalDetails(request);
+  const layout = deviceConsentLayout({ command: details }, terminal);
+  const position = centeredPosition(terminal, layout.paletteWidth, layout.paletteHeight, 'center');
+
+  return (
+    <PaletteFrame title="Run this command?" width={layout.paletteWidth} height={layout.paletteHeight} left={position.left} top={position.top}>
+      <box style={{ width: '100%', height: layout.canApprove ? layout.commandRows : Math.max(1, layout.paletteHeight - 8) }}>
+        <text wrapMode="word"><span fg={colors.text.strong}>Command: {details}</span></text>
+      </box>
+      <PaletteLine text={layout.canApprove
+        ? `${keybindings.hint('consent.once')} approve once · ${keybindings.hint('consent.always')} remember grant · ${keybindings.hint('consent.deny')} deny`
+        : `Resize to inspect the full command · ${keybindings.hint('consent.deny')} deny`}
+        width={layout.innerWidth} color={layout.canApprove ? colors.intent.accentStrong : colors.intent.danger} />
+      <PaletteLine text="Remember grants these rules on this executor only." width={layout.innerWidth} color={colors.text.muted} />
+    </PaletteFrame>
+  );
 }
 
 function wrappedTextRows(text: string, width: number): number {

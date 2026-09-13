@@ -67,6 +67,8 @@ import {
   CommandPaletteOverlay,
   DeviceConnectOverlay,
   DeviceConsentOverlay,
+  ShellApprovalOverlay,
+  shellApprovalCanApprove,
   ModelPickerOverlay,
   PhaseLine,
   TakesOverlay,
@@ -76,6 +78,8 @@ import {
   WalkbackOverlay,
 } from './overlays';
 import { useDeviceConnectPrompt } from './use-device-connect';
+import { useShellApproval } from './use-shell-approval';
+import { composerHelp } from './help-view';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from './input-state';
@@ -210,6 +214,7 @@ function ChatScene({
   // The client can be swapped mid-session: a cloud walk-back fork returns a
   // sibling client pointed at the forked agent.
   const [client, setClient] = useState(initialClient);
+  const shellApproval = useShellApproval(client);
   const [messages, setMessages] = useState<DisplayMessage[]>(() => [welcomeMessage(client.agentName)]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -1041,6 +1046,12 @@ function ChatScene({
       try {
         const outcome = await executeSlashCommand(client, submitted);
 
+        if (submitted === '/help' && outcome.kind === 'text') {
+          addMessage({ role: 'system', content: `${outcome.text}\n\n${composerHelp(keybindings)}` });
+
+          return;
+        }
+
         if (clientGenerationRef.current !== generation) return;
 
         if (outcome.kind === 'queue') {
@@ -1435,7 +1446,7 @@ function ChatScene({
   }, []);
 
   const overlayOpen = Boolean(
-    activeSurface || navigationOpen || inputState.walkbackOpen || pendingConsent || deviceConnect.state,
+    activeSurface || navigationOpen || inputState.walkbackOpen || pendingConsent || shellApproval.pending || deviceConnect.state,
   );
 
 
@@ -1481,6 +1492,18 @@ function ChatScene({
   }, [rendererInstance]);
 
   useKeyboard((key) => {
+    if (shellApproval.pending) {
+      key.preventDefault();
+      const actionId = keyDispatcher.feed(key, ['consent']).actionId;
+      const canApprove = shellApprovalCanApprove(shellApproval.pending, { width: sceneWidth, height });
+
+      if (actionId === 'consent.once' && canApprove) shellApproval.decide('allow');
+      else if (actionId === 'consent.always' && canApprove) shellApproval.decide('allow_always');
+      else if (actionId === 'consent.deny') shellApproval.decide('deny');
+
+      return;
+    }
+
     if (deviceConnect.handleKey(key)) {
       key.preventDefault();
 
@@ -1666,13 +1689,14 @@ function ChatScene({
   });
 
   const onInputSubmit = useCallback(() => {
+    if (overlayOpen) return;
     const value = inputRef.current?.plainText ?? '';
 
     if (!value.trim()) return;
     setInputText('');
 
     return handleSubmit(value);
-  }, [handleSubmit, setInputText]);
+  }, [handleSubmit, overlayOpen, setInputText]);
 
   const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
     && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
@@ -1901,6 +1925,7 @@ function ChatScene({
       )}
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width: sceneWidth, height }} />}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
+      {shellApproval.pending && <ShellApprovalOverlay request={shellApproval.pending} terminal={{ width: sceneWidth, height }} />}
     </box>
     </TuiShell>
   );

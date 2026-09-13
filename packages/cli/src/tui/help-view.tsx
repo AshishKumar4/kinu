@@ -5,6 +5,19 @@
 import type { AgentClientStatus } from '../agent-client';
 import { renderStatusLines } from '../slash-commands';
 import { useTuiTheme } from './theme';
+import type { KeybindingRegistry, TuiActionId } from './actions';
+
+export function composerHelp(registry: KeybindingRegistry): string {
+  const actions: Array<readonly [TuiActionId, string]> = [
+    ['editor.submit', 'Send'],
+    ['editor.newline', 'New line'],
+    ['consent.once', 'Approval: allow once'],
+    ['consent.always', 'Approval: remember grant'],
+    ['consent.deny', 'Approval: deny'],
+  ];
+
+  return ['Keyboard', ...actions.map(([action, label]) => `  ${registry.bindingsFor(action).join(' / ')} — ${label}`)].join('\n');
+}
 
 export function StatusView({ status }: { status: AgentClientStatus }) {
   const { colors } = useTuiTheme();

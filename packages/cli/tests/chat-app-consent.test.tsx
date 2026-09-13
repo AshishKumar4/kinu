@@ -2,8 +2,73 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 
 import { cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
+import type { ShellApprovalRequest, ShellApprovalOutcome } from '@kinu.run/core';
 
 afterEach(cleanupChats);
+
+const shellRequest: ShellApprovalRequest = {
+  command: 'sudo whoami', executor: 'laptop',
+  review: { decision: 'gate', hits: [{ decision: 'gate', rule: 'sudo', explanation: 'Privilege escalation' }] },
+};
+
+describe('inline shell approval', () => {
+  const decisions: Array<readonly [string, ShellApprovalOutcome]> = [['o', 'allow'], ['a', 'allow_always'], ['n', 'deny']];
+
+  for (const [key, outcome] of decisions) {
+    test(`${key} answers ${outcome} without editing or sending the composer`, async () => {
+      const sent: unknown[] = [];
+
+      const agent = fakeClient({ name: 'shell', send: async (input) => {
+        sent.push(input);
+
+        return { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+      } });
+
+      const screen = await mountChat(agent.client);
+      await screen.mockInput.typeText('kept draft');
+      const answer = agent.requestShellApproval(shellRequest);
+      await screen.waitFor('shell approval', () => screen.frame().includes('Run this command?'));
+      expect(screen.frame()).toContain('sudo whoami');
+      expect(screen.frame()).toContain('Executor: laptop');
+      expect(screen.frame()).toContain('Privilege escalation');
+      await screen.mockInput.typeText('zzz');
+      screen.mockInput.pressKey('l', { ctrl: true });
+      await screen.renderOnce();
+      expect(screen.frame()).not.toContain('zzz');
+      expect(screen.frame()).not.toContain('Select model');
+      expect(sent).toEqual([]);
+      screen.mockInput.pressKey(key);
+      expect(await answer).toBe(outcome);
+      await screen.waitFor('approval closed', () => !screen.frame().includes('Run this command?'));
+      expect(screen.frame()).toContain('kept draft');
+    });
+  }
+
+  test('parallel requests retain separate answers and unmount releases the last', async () => {
+    const agent = fakeClient({ name: 'shell' });
+    const screen = await mountChat(agent.client);
+    const first = agent.requestShellApproval(shellRequest);
+    const second = agent.requestShellApproval({ ...shellRequest, command: 'sudo id' });
+    await screen.waitFor('first request', () => screen.frame().includes('sudo whoami'));
+    screen.mockInput.pressKey('o');
+    expect(await first).toBe('allow');
+    await screen.waitFor('second request', () => screen.frame().includes('sudo id'));
+    cleanupChats();
+    expect(await second).toBeNull();
+  });
+
+  test('an unseen command cannot receive a grant', async () => {
+    const agent = fakeClient({ name: 'shell' });
+    const screen = await mountChat(agent.client);
+    const answer = agent.requestShellApproval({ ...shellRequest, command: 'sudo '.repeat(400) });
+    await screen.waitFor('resize warning', () => screen.frame().includes('Resize to inspect'));
+    screen.mockInput.pressKey('a');
+    await screen.renderOnce();
+    expect(screen.frame()).toContain('Run this command?');
+    screen.mockInput.pressKey('n');
+    expect(await answer).toBe('deny');
+  });
+});
 
 describe('ChatApp consent ownership', () => {
   test('device consent owns every key until the decision closes it', async () => {
