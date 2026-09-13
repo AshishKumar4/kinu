@@ -1077,7 +1077,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
 
-      return rpcResult({ ...snapshot, memoryContent: `Memory ${revision}` }).json<T>();
+      return rpcResult({ ...snapshot, memoryContent: `Memory ${revision}`, activePlan: galleryAgentPlan }).json<T>();
     }
   }
 
@@ -1178,6 +1178,17 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
   }
 
+
+  // The reads the first-visit inspector policy is decided on, in the shape the
+  // page actually consumes them: a pending plan is what it opens for, and the
+  // stub's blanket `[]` answered `listSlates` in a shape `slates.map` crashed on.
+  if (method === "getWorkspaceSnapshot") {
+    const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
+
+    return rpcResult({ ...snapshot, activePlan: galleryAgentPlan }).json<T>();
+  }
+
+  if (method === "listSlates") return rpcResult({ slates: [], problems: [] }).json<T>();
 
   return AGENT_RPC.has(method)
     ? rpcResult(AGENT_RPC.get(method)).json<T>()
