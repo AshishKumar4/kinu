@@ -31,7 +31,8 @@
  */
 import { analyticsPlane, type AnalyticsEnv } from './writer';
 import { FEEDBACK_MARKERS_SCHEMA, type AnalyticsRow } from './schemas';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { toKinuError } from '../error';
+import { diagnostics } from '../log';
 
 /**
  * The first path segment of the route a report was filed from, mapped onto our

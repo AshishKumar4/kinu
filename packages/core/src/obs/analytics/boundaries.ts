@@ -37,7 +37,7 @@
  * of them. Recording which mechanism a boundary uses is what lets one gate check
  * both kinds without knowing them individually.
  */
-import type { LogEventName } from '@kinu.run/core/obs';
+import type { LogEventName } from '../log';
 
 /**
  * The five boundary families, pinned. A family is the QUESTION a query asks —

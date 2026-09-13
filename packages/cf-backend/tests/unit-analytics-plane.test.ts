@@ -29,23 +29,23 @@ import * as v from 'valibot';
 
 import {
   MAX_WRITES_PER_INVOCATION, assertQuantileLevel, assertWithinPlatformLimits,
-} from '../src/analytics/limits';
+} from '@kinu.run/core/analytics';
 import {
   AGENT_METRICS_SCHEMA, ANALYTICS_SCHEMAS, CONTROL_PLANE_OPS_SCHEMA, FEEDBACK_MARKERS_SCHEMA,
   blobColumn, doubleColumn, indexColumn, type AnalyticsSchema,
-} from '../src/analytics/schemas';
-import { analyticsDigest, assertPublishableNames } from '../src/analytics/privacy';
+} from '@kinu.run/core/analytics';
+import { analyticsDigest, assertPublishableNames } from '@kinu.run/core/analytics';
 import {
   analyticsPlane, openAnalyticsWindow,
   type AnalyticsEnv,
-} from '../src/analytics/writer';
+} from '@kinu.run/core/analytics';
 import {
   recordJobSettled, recordModelRow, recordReleaseTransition, recordToolRow,
   recordTtftRow, recordTurnRow,
-} from '../src/analytics/record';
-import { feedbackRouteFamily, writeFeedbackMarker } from '../src/analytics/feedback-marker';
-import { installAnalyticsDiagnostics } from '../src/analytics/install';
-import { controlPlaneMetricsQueries } from '../src/analytics/query';
+} from '@kinu.run/core/analytics';
+import { feedbackRouteFamily, writeFeedbackMarker } from '@kinu.run/core/analytics';
+import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { controlPlaneMetricsQueries } from '@kinu.run/core/analytics';
 import { reportAdminDenial, type AdminDenial } from '../src/control-plane/admin-caller';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 import { requireTier, type OwnerCapabilityEnv } from '../src/user/workspace-capability';

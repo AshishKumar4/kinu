@@ -72,7 +72,7 @@ import type { IncidentStage } from '@kinu.run/devbox';
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
 import { toKinuError } from '@kinu.run/core/obs';
 import type { ErrorCode } from '@kinu.run/core/obs';
-import type { RecoveryRowInput, RowOutcome } from './analytics/record';
+import type { RecoveryRowInput, RowOutcome } from '@kinu.run/core/analytics';
 import type {
   AgentSignal, JsonObject, JsonValue, RawSqlExec, SignalDeliverer, SignalOutcome,
   SqlExecutor,

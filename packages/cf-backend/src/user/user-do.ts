@@ -130,9 +130,9 @@ import {
 } from './egress-vault';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { resolveWorkspaceTitle } from '../lib/agent-naming';
-import { installAnalyticsDiagnostics } from '../analytics/install';
-import { recordReleaseTransition } from '../analytics/record';
-import { openAnalyticsWindow } from '../analytics/writer';
+import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
+import { recordReleaseTransition } from '@kinu.run/core/analytics';
+import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,

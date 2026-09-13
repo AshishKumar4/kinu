@@ -81,7 +81,7 @@ import {
   adminDenialMessage, adminDenialStatus, reportAdminDenial,
 } from "./control-plane/admin-caller";
 import { observeIdentity, observeWorkspaceUse } from "./control-plane/index-feed";
-import { installAnalyticsDiagnostics } from "./analytics/install";
+import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 
 // The ONE actor-bearing Durable Object class. Every logical actor in a
 // workspace — the main actor, a hired subordinate, an ask-by-role temporary, a

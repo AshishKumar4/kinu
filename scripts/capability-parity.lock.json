@@ -11,15 +11,6 @@
 
 
   "movable packages/cf-backend/src/agent-routing.ts",
-  "movable packages/cf-backend/src/analytics/boundaries.ts",
-  "movable packages/cf-backend/src/analytics/feedback-marker.ts",
-  "movable packages/cf-backend/src/analytics/install.ts",
-  "movable packages/cf-backend/src/analytics/limits.ts",
-  "movable packages/cf-backend/src/analytics/privacy.ts",
-  "movable packages/cf-backend/src/analytics/query.ts",
-  "movable packages/cf-backend/src/analytics/record.ts",
-  "movable packages/cf-backend/src/analytics/schemas.ts",
-  "movable packages/cf-backend/src/analytics/writer.ts",
   "movable packages/cf-backend/src/app-routes.ts",
   "movable packages/cf-backend/src/cli/access-token-store.ts",
   "movable packages/cf-backend/src/cli/bun-runtime.ts",

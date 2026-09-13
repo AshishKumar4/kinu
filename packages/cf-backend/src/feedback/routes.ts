@@ -12,7 +12,7 @@
 
 import type { AuthIdentity } from '../auth/session';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { writeFeedbackMarker } from '../analytics/feedback-marker';
+import { writeFeedbackMarker } from '@kinu.run/core/analytics';
 import { recordFeedback, type ControlPlaneEnv } from '../control-plane/feedback-ingest';
 import { retryTransientDO } from '../lib/do-rpc';
 import type { UserDO } from '../user/user-do';

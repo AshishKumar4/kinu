@@ -40,7 +40,7 @@ import {
 import {
   deliverIncidents, recordIncident, type IncidentRow, type IncidentStore,
 } from '@kinu.run/devbox/incidents';
-import type { RecoveryRowInput } from '../src/analytics/record';
+import type { RecoveryRowInput } from '@kinu.run/core/analytics';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** The record as the lifecycle module produces it: everything but the caller's

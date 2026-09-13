@@ -236,7 +236,7 @@ import {
   type ActorDynamicContextExtras,
   type ActorToolDeps,
 } from "./actor-agent";
-import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "./analytics/record";
+import { recordJobSettled, recordSandboxRecovery, type AgentKind } from "@kinu.run/core/analytics";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
   createAgentSelfProvider,
