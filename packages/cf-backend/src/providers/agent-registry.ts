@@ -25,7 +25,6 @@ import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai';
 import { createMyGatewayProvider } from './my-gateway';
 import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway';
-import { SCRIPTED_MODEL_ENV, createScriptedProvider } from './scripted';
 import type { CredentialSummary } from '../user/user-do';
 import type { UserCaller } from '../user/workspace-capability';
 import { retryTransientDO } from '../lib/do-rpc';
@@ -130,20 +129,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     appTitle: opts.appTitle,
   }));
   registry.register(createOpenAICompatProvider());
-  // The scripted echo provider exists only where a `wrangler dev` boot asked
-  // for it: absent the var the spec is refused at normalization like every
-  // unknown provider, so a deployment can never persist a `scripted/` model.
-
-  if (opts.env[SCRIPTED_MODEL_ENV] === '1') registry.register(createScriptedProvider());
   // models.dev id `cloudflare-workers-ai` aliases the bespoke workers-ai
   // provider (and its endpoint needs an account-id template anyway) — exclude
-  // it so workers-ai never grows a second resolution path. `scripted` is the
-  // same kind of claim in the other direction: the catalog's optimistic `get`
-  // would otherwise answer for it and turn "no test var set" into a turn that
-  // fails at request time instead of a refused spec.
-  registry.registerDynamic(createModelsDevCatalogSource({
-    exclude: ['cloudflare-workers-ai', 'scripted'],
-  }));
+  // it so workers-ai never grows a second resolution path.
+  registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
   const source = opts.userDO ?? null;
   const getAuth = createUserDOAuthResolver(source);

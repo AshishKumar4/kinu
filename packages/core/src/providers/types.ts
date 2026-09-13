@@ -136,12 +136,6 @@ export interface ProviderEnv {
   AI?: WorkersAIBinding;
   AI_GATEWAY_URL?: string;
   DEV_USER_EMAIL?: string;
-  /** '1' registers the scripted echo provider, the test-only model the
-   *  dev-server e2e tier sets on its own `wrangler dev` (see
-   *  cf-backend `src/providers/scripted.ts`). Never set on a deployment:
-   *  without it `scripted/<id>` is refused at normalization like any
-   *  unknown provider. */
-  KINU_SCRIPTED_MODEL?: string;
 }
 
 export interface ProviderDeps {
