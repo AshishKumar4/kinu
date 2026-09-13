@@ -610,6 +610,52 @@ export class RunEventRecorder {
   }
 
   /**
+   * The header of the newest run that is not the reserved aggregate — exactly
+   * what a card needs to say how the last run went, without folding a run's
+   * payloads for usage or detail it will never show.
+   *
+   * Two queries, two parsed payloads at most: the newest run id (excluding
+   * WORKSPACE_RUN_ID, the between-runs ledger that is not a run), then that
+   * run's latest `run_start` and `run_end` boundary each. `status` is the end
+   * row's `reason` — null when the run never sealed, which a reader may not
+   * round up to success — and `userMessage` is the start row's task text.
+   */
+  latestRunHeader(): { status: string | null; userMessage: string | null } | null {
+    this.actor.assertCurrent();
+
+    const latest = this.sql<{ run_id: string }>`
+      SELECT run_id FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id != ${WORKSPACE_RUN_ID}
+      ORDER BY rowid DESC LIMIT 1`;
+
+    const runId = latest[0]?.run_id;
+
+    if (runId === undefined) return null;
+
+    const boundaries = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${runId}
+        AND event_index IN (
+          SELECT MAX(event_index) FROM run_events
+          WHERE actor_id = ${this.actorId} AND run_id = ${runId}
+            AND type IN (${'run_start'}, ${'run_end'}) GROUP BY type)
+      ORDER BY event_index ASC`;
+
+    let status: string | null = null;
+    let userMessage: string | null = null;
+
+    for (const row of boundaries) {
+      const event = parseStoredRunEvent(row.payload);
+
+      if (event.type === 'run_start') userMessage = event.userMessage ?? null;
+
+      if (event.type === 'run_end') status = event.reason ?? null;
+    }
+
+    return { status, userMessage };
+  }
+
+  /**
    * Completed non-plan turns across ALL runs, strictly after an ISO boundary —
    * the auto-GEPA cadence's durable denominator.
    *

@@ -2040,6 +2040,10 @@ export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
+export { buildWorkspaceOverview, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+
+export type { WorkspaceOverview, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status';

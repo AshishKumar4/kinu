@@ -34,13 +34,13 @@ import { MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
 } from "@/components/head-chat";
-import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, timeAgo, CodeBlock } from "@/components/surfaces/shared";
+import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, CodeBlock } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@/components/swarm-tree-model";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import type { SeekCursor } from "@kinu.run/core";
-import { fmtTokens } from "@/lib/format";
+import { fmtTokens, timeAgo } from "@/lib/format";
 import type { ForkNode, Rpc } from "@/lib/protocol";
 
 

@@ -40,7 +40,8 @@ import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
-import { EmptyState, EMPTY_HINTS, formatScore, timeAgo } from "./shared";
+import { EmptyState, EMPTY_HINTS, formatScore } from "./shared";
+import { timeAgo } from "@/lib/format";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
   useExplorationCanvas, type ExplorationFrontier, type ForkParamRow,

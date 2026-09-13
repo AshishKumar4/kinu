@@ -16,7 +16,7 @@ import {
   WarningCircleIcon, ProhibitIcon, SpinnerGapIcon,
 } from "@phosphor-icons/react";
 import type { Rpc, BackgroundJob } from "@/lib/protocol";
-import { timeAgo } from "./shared";
+import { timeAgo } from "@/lib/format";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {

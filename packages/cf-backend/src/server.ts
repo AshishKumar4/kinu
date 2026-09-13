@@ -45,7 +45,7 @@ import {
 } from "./agent-routing";
 import { handlePcRequest } from "./pc-handler";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleRunEventsRequest } from "./run-events-routes";
+import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "./health-route";
 import { handleClientErrorRequest } from "./client-error/route";
@@ -204,19 +204,6 @@ function authError(request: Request, e: AuthError): Response {
     status: e.status,
     headers: { 'content-type': 'application/json' },
   });
-}
-
-/** Verify the caller owns the agent named in the URL via the shared
- *  registry-membership + claimOwner policy. Returns a denial response or
- *  null when access is granted. */
-async function ensureAgentOwnership(
-  env: Env,
-  identity: AuthIdentity,
-  agentName: string,
-): Promise<Response | null> {
-  const result = await claimOwnedWorkspace(env, identity.userId, agentName);
-
-  return result.ok ? null : err(result.status, result.error);
 }
 
 function extractAgentName(pathname: string): string | null {
@@ -692,9 +679,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // /sub/{class}/{name} segments. The closed-path rejection above keeps
     // UserDO and KinuSandbox worker-side-only, and now refuses the `sub`
     // segment outright: there is no facet class left for it to resolve.
-    const denial = await ensureAgentOwnership(env, identity, agentName);
+    const claim = await claimOwnedWorkspace(env, identity.userId, agentName);
 
-    if (denial) return denial;
+    if (!claim.ok) return err(claim.status, claim.error);
+
     // Now the path's workspace name is evidence: this account has been shown to
     // own it. Indexed here rather than at the auth gate, where a 403'd request
     // for a name the caller invented would still have written a row attributed
@@ -706,6 +694,16 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     const reqWithId = new Request(authenticatedRequest, {
       headers: appendIdentityHeaders(authenticatedRequest.headers, identity),
     });
+
+    // The home card's one read — the stub the gate already claimed, so the
+    // route never re-proves ownership.
+    const agent = claim.agent;
+
+    const overviewResp = await handleWorkspaceOverviewRequest(
+      reqWithId, () => agent.getWorkspaceOverview(),
+    );
+
+    if (overviewResp) return overviewResp;
 
     const runEventsResp = await handleRunEventsRequest(reqWithId, env);
 
