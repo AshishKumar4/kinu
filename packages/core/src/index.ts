@@ -1732,6 +1732,8 @@ export {
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
 
+export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from './evolution/scaffold-candidate';
+
 export {
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,
 } from './orchestrator/background-tools';

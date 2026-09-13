@@ -77,12 +77,12 @@ import {
   initActorClaimTables, programIdentityOf, ActorClaimStore,
   type ActorTurnClaim, type ClaimOutcome,
   createActorContextPlane, type ActorContextPlane,
-  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
+  createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   // Continual refinement — the lane's deps come from four seams this class
   // already owns; nothing about it is Cloudflare-shaped.
   advanceRefinementLane, refinementDebtRequest, type RefinementDeps,
-  effortFor, type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS,
+  type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS,
   advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn, ADVISOR_LANE_FIBER,
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   // canonical tool + prompt surface — single source of truth
@@ -207,9 +207,7 @@ import {
   ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
   assembleTurnMessages, measureCompactionTrigger,
-  // The tool-call pairing invariant — applied wherever messages reach the model
-  // WITHOUT going through assembleTurnMessages (the scaffold replay below).
-  settleUnpairedToolCalls,
+
   // AGENTS.md (agents.md standard) — cloud workspace discovery, and the trust
   // authority that decides whether discovered bytes earn system placement.
   collectWorkspaceAgentsMd, type AgentsMdSources,
@@ -382,10 +380,6 @@ function jsonObject<Input>(input: Input): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   return parsed.success ? parsed.output : {};
-}
-
-async function* projectDefaultInference<Chunk>(stream: AsyncIterable<Chunk>) {
-  for await (const chunk of stream) yield { value: projectJsonValue({ value: chunk }) };
 }
 
 /** The envelope a stored assistant message is read back through. The PARTS are
@@ -3317,60 +3311,15 @@ export abstract class ActorAgent extends Think<Env> {
       events: this.eventRecorder,
       sql: this.boundSql,
       config: this.config,
-      surface: (task, context, callScope) => ({
-        llmStream: this.makeScaffoldLLMStream(),
-        // The same tool dispatcher the production chat path uses, so a
-        // candidate runs with the real tool surface rather than the disabled
-        // tool-call fallback that penalizes any tool-using candidate.
-        //
-        // The SCOPE is what makes a re-driven rollout's external calls
-        // recognisable: a queued trial hands its row id down, so each invocation
-        // gets the same id on a replay and the generic tool-effect claim can
-        // refuse the second one. A preview or a GEPA rollout has no durable
-        // identity and passes none.
+      surface: (task, context, callScope) => createScaffoldCandidateSurface({
+        rt: this.rt,
+        profile: () => this.routingProfile(),
+        bindModel: spec => this.ownedModelServices.resolveModel(spec),
+        tools: this.getRawTools(),
         callTool: this.makeScaffoldCallTool(callScope),
         history: this.makeScaffoldHistory(),
-        // With a replay context this re-runs the trial turn's OWN conversation
-        // — the parity a delegating candidate needs to be judged on the
-        // scaffold delta rather than on a context handicap. Without one (a
-        // preview, a GEPA rollout) the task is all there is.
-        //
-        // The replay goes straight to streamText rather than through
-        // assembleTurnMessages, so the pairing invariant is applied here: a
-        // context captured from a turn that was interrupted between a tool call
-        // and its result would make streamText throw before the request left
-        // the isolate, failing the shadow trial for a reason that has nothing
-        // to do with the scaffold being judged. The CLI's replay reaches the
-        // invariant through runChat (cli-backend local-session.ts); this is the
-        // other half of that one path.
-        defaultInference: () => {
-          const spend = this.scaffoldSpend();
-          // Opened before the request, drained on finish. A raw `streamText` has
-          // no spend seam of its own, so without this the candidate's whole
-          // replay — the most expensive thing the scaffold plane runs — filed
-          // neither a cost nor an in-flight row, and a process that died here
-          // left nothing naming what was running.
-          const operation = beginModelOperation(spend, 'stream');
-
-          return projectDefaultInference(streamText({
-            model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
-            messages: context && context.length > 0
-              ? settleUnpairedToolCalls(context) ?? [...context]
-              : [{ role: 'user', content: task }],
-            tools: this.getRawTools(),
-            ...effortFor('scaffold_mutation'),
-            // `totalUsage`, not the last step's: this is a real multi-step loop
-            // and the last step alone would omit every step before it.
-            onFinish: (event) => {
-              const usage = normalizeUsage(event.totalUsage);
-              const modelId = event.response.modelId;
-              operation.completed({ usage, modelId });
-              spend.report({ source: 'scaffold', usage, modelId });
-            },
-            onError: (event) => { operation.failed({ cause: event.error }); },
-          }).toUIMessageStream());
-        },
-      }),
+        spend: this.scaffoldSpend(),
+      }, task, context),
       // The scaffold plane's own chat model. `scaffold` is a FIXED tier in
       // MODEL_ROUTE_POLICY, so a candidate is judged on the tier the account
       // assigned that work rather than on whatever the turn happened to run.
@@ -3429,15 +3378,16 @@ export abstract class ActorAgent extends Think<Env> {
    *  long as the live turn it may replace would (owner ruling, 2026-08-21), so
    *  comparisons between them measure the scaffold, not a handicap. */
   protected makeScaffoldLLMStream(signal?: AbortSignal): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({
-      model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
-      tools: () => this.getRawTools(),
+    return createScaffoldCandidateSurface({
+      rt: this.rt,
+      profile: () => this.routingProfile(),
+      bindModel: spec => this.ownedModelServices.resolveModel(spec),
+      tools: this.getRawTools(),
+      callTool: undefined,
+      history: undefined,
       signal,
-      streamOptions: effortFor('scaffold_mutation'),
-      // The bridge already opens an operation and reports `totalUsage` once the
-      // loop drains — it just needed a seam to report THROUGH.
       spend: this.scaffoldSpend(),
-    });
+    }, '').llmStream;
   }
 
   /**
@@ -5133,27 +5083,6 @@ export abstract class ActorAgent extends Think<Env> {
     if (factory === undefined) throw new Error(`execute_tools profile ${key} was not built`);
 
     return factory;
-  }
-
-  /**
-   * One producer's model SPEC, read synchronously from the turn's profile.
-   *
-   * The async {@link modelForSource} is the general path; this exists for the
-   * seams whose types are synchronous — the sandbox's `modelSpec` and the
-   * scaffold bridge's `model`. Both run inside a turn or in a trial detached
-   * from one, so the profile is present; the stored id is the same fallback
-   * `effectiveModelSpec` uses for a producer that somehow ran before any turn
-   * resolved, and it keeps a mis-timed call working rather than throwing.
-   *
-   * Still the route table, never `profile.tiers.<name>`: a hand-picked tier here
-   * would stop following MODEL_ROUTE_POLICY the moment the policy moved.
-   */
-  private modelSpecForSource(source: SpendSource): string | null {
-    const profile = this._turnProfile;
-
-    if (!profile) return this.getStoredModelId();
-
-    return resolveModelRoute(source, profile)?.model ?? this.getStoredModelId();
   }
 
   /** The spend seam every scaffold-plane producer files through — one object so
