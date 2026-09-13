@@ -1,0 +1,13 @@
+{
+  "runId": "b20260913113106",
+  "source": "a551b73f31da4faf606df25726ad74897f267098",
+  "status": "observation-canceled-before-readiness",
+  "reason": "The shared startup poll had no observation ceiling. After four readiness drives the box kept reporting running:true, restoration:unstarted, ready:false. The operator sent SIGTERM through the driver's registered teardown; neither changed-file cell reached publication or restore.",
+  "lastRunningUnreadyStateAt": 1789299401136,
+  "c3AttachMs": null,
+  "largeAttachMs": null,
+  "attachPayloadBytes": null,
+  "attachIndexPages": null,
+  "teardownManifest": "../../teardown/b20260913113106.json",
+  "tailProcessesStopped": true
+}

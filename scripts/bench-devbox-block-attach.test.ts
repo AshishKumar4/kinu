@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test';
-import { boundedAttachErrors, chunkedPublicationErrors, storageAttachMilliseconds } from './bench-devbox-block-attach';
+import { boundedAttachErrors, CELL_STARTUP_MS, chunkedPublicationErrors, storageAttachMilliseconds } from './bench-devbox-block-attach';
+
+test('startup observation is finite for the bounded storage cells', () => {
+  expect(CELL_STARTUP_MS).toBe(55000);
+});
 
 test('the attach clock subtracts admission and refuses absent or reversed phases', () => {
   expect(storageAttachMilliseconds({ containerStart: 800, attached: 3100 })).toBe(2300);

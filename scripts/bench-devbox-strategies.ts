@@ -5166,6 +5166,7 @@ export async function measureLiveC3(
   runId: string,
   preparation: TeardownReply | null,
   observe: (row: LiveC3Observation) => void = () => {},
+  startupBounds: StartupBounds = {},
 ): Promise<LiveC3Observation> {
   const round: LiveC3Observation['rounds'][number] = {
     round: 1, checkpoint: null, published: { transport: { puts: null, putUploadBytes: null } },
@@ -5209,7 +5210,7 @@ export async function measureLiveC3(
   try {
     if (row.identity === null) throw new Error('live C3 requires the deployed build identity');
     row.preparation.destroy = await destroyBox(fixture, box);
-    row.initial = await startupOperation(fixture, box, '/create', 'C3 empty baseline', ['empty'], { observations: initialObservations });
+    row.initial = await startupOperation(fixture, box, '/create', 'C3 empty baseline', ['empty'], { ...startupBounds, observations: initialObservations });
     row.prefix = row.initial.state.storePrefix ?? null;
 
     if (row.prefix === null) throw new Error('the C3 box did not report its store prefix');
@@ -5251,7 +5252,7 @@ export async function measureLiveC3(
 
     row.beforeDestroy = await boxState(fixture, box);
     row.destroyReceipt = await destroyBox(fixture, box);
-    row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { observations: restorationObservations });
+    row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { ...startupBounds, observations: restorationObservations });
     row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', C3_WORKLOAD.baselineBytes, row.errors, row.restoration.startedAt);
     row.blockReads = await readBlockAttachMetrics(fixture, box);
     observe(row);
