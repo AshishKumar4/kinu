@@ -1,7 +1,7 @@
 /-
   Kinu.Exploration.Archive — S5, the descriptor partition. 0 sorry.
 
-  Models `ExplorationRecord.descriptor` (`objective.ts:401-407`). Specified by
+  Models `ExplorationRecord.descriptor` (`packages/core/src/types/objective.ts#ExplorationRecord.descriptor`). Specified by
   docs/EXPLORATION.md — "The archive", "Presets" and "The Lean invariants".
 
   -- WHAT THIS ABSTRACTION KEEPS: the shape of the binning decision — whether one
@@ -94,7 +94,7 @@ theorem judged_descriptor_breaks_partition
     tool call that returned nothing) is exactly how you get. *Merge-back*'s rule
     applies: when a fact is missing, degrade toward less authority. There is no
     "the unnamed cell" to degrade into, which is why `descriptor` is NULL for NO
-    PARTITION and NULL is not a cell (`objective.ts:401-407`). -/
+    PARTITION and NULL is not a cell (`packages/core/src/types/objective.ts#ExplorationRecord.descriptor`). -/
 theorem partial_descriptor_breaks_partition
     (InCell : Candidate → Nat → Prop) (c : Candidate)
     (h : ∀ k : Nat, ¬ InCell c k) :

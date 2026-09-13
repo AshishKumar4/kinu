@@ -1,6 +1,9 @@
 /-
   Kinu.Evolution.Scaffold
-  Scaffold version monotonicity and rollback safety.
+  Abstract history lookup and append, corresponding to
+  packages/core/src/scaffold/rollback.ts#rollbackScaffold and
+  packages/core/src/scaffold/modify.ts#modifyScaffold.
+  The SQL/VFS write is not proved here; rollback can lower the active version.
   0 sorry.
 -/
 

@@ -2,11 +2,12 @@
   Kinu.Exploration.Settle — `settleOf` is a total function of exactly
   (score, advance). 0 sorry.
 
-  Models `settleOf` (`swarm.ts:230-235`). Specified by docs/EXPLORATION.md —
+  Models `settleOf` (`packages/core/src/strategy/swarm.ts#settleOf`). Specified by docs/EXPLORATION.md —
   "Settle is derived" and "Validity over the resolved configuration".
 
   -- WHAT THIS ABSTRACTION KEEPS: the axis value sets exactly as
-  `swarm.ts:19-74` declares them, and the derivation's four clauses.
+  `packages/core/src/types/swarm.ts#SWARM_UNITS` and its sibling axis constants
+  declare them, and the derivation's four clauses.
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
   TOTALITY IS DEFINITIONAL, and this file says so rather than dressing it as a
@@ -86,7 +87,7 @@ structure Config where
 
 /-! ## The derivation -/
 
-/-- `swarm.ts:230-235` and *Settle is derived*, on the two axes it reads. -/
+/-- `packages/core/src/strategy/swarm.ts#settleOf` and *Settle is derived*, on the two axes it reads. -/
 def settleOfAxes : Score → Advance → SettleKind
   | _, .archive => .archive
   | _, .pareto => .front

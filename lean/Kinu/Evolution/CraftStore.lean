@@ -1,5 +1,8 @@
 /-
-  Kinu.Evolution.CraftStore — 0 sorry.
+  Kinu.Evolution.CraftStore — abstract filtering and search bounds.
+  Source: packages/agent-utils/src/stores/craft.ts#CraftStore.
+  Production search is SQL-backed and retirement uses age/use eligibility;
+  neither is refined by these list operations.
 -/
 
 import Kinu.Types

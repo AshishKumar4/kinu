@@ -2,7 +2,8 @@
   Kinu.Exploration.Records — S2, monotone displacement over a cell's best,
   and the strictly weaker property the vector case admits instead. 0 sorry.
 
-  Models `ExplorationRecord` and `isBetter` (`objective.ts:369-442`). Specified by
+  Models `ExplorationRecord` (`packages/core/src/types/objective.ts#ExplorationRecord`)
+  and `isBetter` (`packages/core/src/strategy/objective.ts#isBetter`). Specified by
   docs/EXPLORATION.md — "The records store", "Validity over the resolved
   configuration" and "The Lean invariants".
 
@@ -11,7 +12,7 @@
 
   1. **S2 is FALSE for the overwrite reading of *The records store*'s "re-recording the
      same artifact updates it".** An update is a write. If the verifier is not
-     deterministic — `unit:'ms'` is an explicit example at `objective.ts:286` —
+     deterministic — `unit:'ms'` is an explicit example at `packages/core/src/types/objective.ts#ScalarObjective` —
      re-recording artifact A at 7ms over its recorded 3ms lowers `best(cell)` on a
      minimise objective. `overwrite_breaks_monotonicity` is that counterexample,
      machine-checked. S2 holds only if the update keeps the BETTER of the two
@@ -21,7 +22,7 @@
   2. **S2 does not type-check against the `Objective` union as it now stands.**
      S2 quantifies over `isBetter(candidate, incumbent, direction)` and one
      `direction`, but a `VectorObjective` carries one direction PER COMPONENT
-     (`objective.ts:322-324`) and settles to a FRONT, so `best(cell)` is not
+     (`packages/core/src/types/objective.ts#VectorObjective`) and settles to a FRONT, so `best(cell)` is not
      defined for it. The scalar results below therefore carry an explicit scalar
      hypothesis, and the vector case gets a genuinely weaker property in its own
      section, NOT a generalisation of S2.
@@ -55,7 +56,7 @@ open Kinu.Exploration
 /-! ## A cell of the records store -/
 
 /-- One member of a cell. Identity within a cell is `artifactDigest`
-    (`objective.ts:408-410`), and `value` is the RAW measured value, never the
+    (`packages/core/src/types/objective.ts#ExplorationRecord`), and `value` is the RAW measured value, never the
     normalised score. -/
 structure Row where
   digest : String
@@ -265,7 +266,7 @@ def overwriteRow (rs : List Row) (r : Row) : List Row :=
 
     Artifact `a` recorded at 3, re-measured at 7 on a minimise objective — which
     is not a hypothetical, it is what a wall-clock unit does on a second run
-    (`objective.ts:286` names `'ms'`). The store's best moves from 3 to 7 and S2
+    (`packages/core/src/types/objective.ts#ScalarObjective` names `'ms'`). The store's best moves from 3 to 7 and S2
     fails. This is why `insertRow` merges rather than overwrites, and keeping the
     better of the two measurements is *The records store*'s own rule rather than a
     modelling choice. -/
@@ -291,7 +292,7 @@ theorem merge_survives_the_same_input :
   load-bearing fact is that the evicted member is not the best — reverse the
   direction sign in eviction and the store evicts its own leader,
   which is exactly the "three call sites must move in lockstep" hazard
-  `objective.ts:376-380` names. -/
+  `packages/core/src/types/objective.ts#ObjectiveIdentity` names. -/
 
 theorem isBetter_flip (a b : Int) (d : Direction) :
     isBetter a b d.flip = isBetter b a d := by
@@ -496,7 +497,7 @@ theorem eviction_can_destroy_the_population :
 /-! ## The vector case — a strictly weaker property, not a generalisation
 
   Finding 2. A `VectorObjective` has one direction per component
-  (`objective.ts:322-324`) and `advance:'pareto'` settles to a front
+  (`packages/core/src/types/objective.ts#VectorObjective`) and `advance:'pareto'` settles to a front
   (`Settle.lean`), so there is no `best(cell)` to be monotone in. What replaces it
   must be stated exactly, and it is weaker in a specific way: the front may SHRINK
   — many members replaced by one that dominates them all — so no member is

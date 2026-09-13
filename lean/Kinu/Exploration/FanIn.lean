@@ -2,18 +2,18 @@
   Kinu.Exploration.FanIn — the fan-in order is a topological order of the edges
   the members declare, and a cycle refuses the whole path. 0 sorry.
 
-  Models `dependencyOrder` (`packages/core/src/strategy/merge-back.ts:467-512`) and
-  what `mergeBack` does with its two answers (`merge-back.ts:591-602`).
+  Models `dependencyOrder` (`packages/core/src/strategy/merge-back.ts#dependencyOrder`) and
+  what `mergeBack` does with its two answers (`packages/core/src/strategy/merge-back.ts#mergeBack`).
 
   -- WHY THE ALGORITHM IS MODELLED AND NOT ITS POSTCONDITION. The order is a
-  DERIVED value: `merge-back.ts:446-451` derives it from the edges the members
+  DERIVED value: `packages/core/src/strategy/merge-back.ts#dependencyOrder` derives it from the edges the members
   declare and never from settle order, because a settle order is a dependency
   order only where the tree's shape happens to BE the dependency graph's — which
   a fan-in breaks. So a model that asserted "the output is a topological order"
-  as a postcondition would assume the thing at issue. `sweeps` below is the
-  repeated sweep the source runs, bounded by the member count for the reason the
-  source gives — "the member count bounds the sweeps" — and every theorem is
-  about that definition.
+  as a postcondition would assume the thing at issue. `sweeps` below truncates
+  the repeated sweep at the member count. The source instead repeats until no
+  progress; equivalence requires the general adequacy argument listed below,
+  not merely the worst-case witness. Every theorem is about this definition.
 
   -- WHAT A TOPOLOGICAL ORDER IS HERE, and why it is stated as rule 1. `mergeBack`
   refuses a member whose declared dependency has not landed
@@ -31,16 +31,16 @@
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
 
-  1. DUPLICATE NODE IDS. `merge-back.ts:472` builds `edges` as a `Map` keyed by
+  1. DUPLICATE NODE IDS. `packages/core/src/strategy/merge-back.ts#dependencyOrder` builds `edges` as a `Map` keyed by
      `nodeId`, so two members sharing an id collapse to one entry; `edgesById` below
      keeps the FIRST rather than the last. The ids are nanoids minted per node
-     (`swarm-budget.ts:117`), so the case is unreachable, and where it is reachable
+     (`packages/core/src/strategy/swarm-budget.ts#SwarmBudget.arbitrate`), so the case is unreachable, and where it is reachable
      it is a defect upstream of ordering rather than an ordering question.
 
   2. THE CYCLE'S PATH. `cycleFrom` walks the stuck edges to render `n1 -> n2 -> n1`
      for the operator. Which nodes it prints is a message, not a decision — the
      decision is that it refuses — so the model carries the NAMED node and not the
-     rendered walk. Its termination argument (`merge-back.ts:518-521`) rests on every
+     rendered walk. Its termination argument (`packages/core/src/strategy/merge-back.ts#cycleFrom`) rests on every
      stuck member having an unplaced dependency, which is not proved here.
 
   3. THAT THE SWEEP BOUND IS ADEQUATE IN GENERAL. `the_sweep_bound_is_tight` shows the
@@ -65,30 +65,30 @@ open Kinu.Exploration
 /-! ## Members and the edges they declare -/
 
 /-- A member and the members it declares itself to depend on (`MergeMember.deps`,
-    `merge-back.ts:339`): a flat list of node ids, no weight and no label. -/
+    `packages/core/src/strategy/merge-back.ts#MergeMember`): a flat list of node ids, no weight and no label. -/
 structure Member where
   nodeId : String
   deps : List String
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- Is this dependency one of the members offered? `merge-back.ts:471`. -/
+/-- Is this dependency one of the members offered? `packages/core/src/strategy/merge-back.ts#dependencyOrder`. -/
 def offers (ms : List Member) (d : String) : Bool := ms.any (fun x => x.nodeId == d)
 
-/-- The edges that constrain the order (`merge-back.ts:472-475`). Two dependencies
+/-- The edges that constrain the order (`packages/core/src/strategy/merge-back.ts#dependencyOrder`). Two dependencies
     are deliberately NOT edges: one outside the offered set, because no order
     satisfies it and rule 1 is what reports it; and one this run already settled,
     because it is already met. -/
 def edgesOf (ms : List Member) (settled : List String) (m : Member) : List String :=
   m.deps.filter (fun d => offers ms d && !decide (d ∈ settled))
 
-/-- The edges keyed by node id, which is the shape `merge-back.ts:472`'s `Map` has.
+/-- The edges keyed by node id, which is the shape `packages/core/src/strategy/merge-back.ts#dependencyOrder`'s `Map` has.
     A member absent from the offered set constrains nothing. -/
 def edgesById (ms : List Member) (settled : List String) (n : String) : List String :=
   match ms.find? (fun x => x.nodeId == n) with
   | some m => edgesOf ms settled m
   | none => []
 
-/-- Every edge of `n` is already placed — `merge-back.ts:484`'s condition, negated. -/
+/-- Every edge of `n` is already placed — `packages/core/src/strategy/merge-back.ts#dependencyOrder`'s condition, negated. -/
 def readyAt (ms : List Member) (settled : List String) (acc : List String)
     (n : String) : Bool :=
   (edgesById ms settled n).all (fun d => decide (d ∈ acc))
@@ -97,7 +97,7 @@ def readyAt (ms : List Member) (settled : List String) (acc : List String)
 
   One pass in OFFERED order, placing every member whose edges are already placed and
   seeing within the same pass what the pass itself placed — a left fold over the
-  offered list, which is exactly `merge-back.ts:482-488`. -/
+  offered list, which is exactly `packages/core/src/strategy/merge-back.ts#dependencyOrder`. -/
 
 def placeStep (ms : List Member) (settled : List String)
     (acc : List String) (m : Member) : List String :=
@@ -108,7 +108,7 @@ def onePass (ms : List Member) (settled : List String) (placed : List String) : 
   ms.foldl (placeStep ms settled) placed
 
 /-- Sweeps repeated a bounded number of times. The bound is the member count, which
-    is the source's own argument (`merge-back.ts:479`): a sweep that places nothing
+    is the source's own argument (`packages/core/src/strategy/merge-back.ts#dependencyOrder`): a sweep that places nothing
     is a fixed point, and a sweep that places anything places at least one, so no
     more than one sweep per member can make progress. -/
 def sweeps (ms : List Member) (settled : List String) : Nat → List String → List String
@@ -119,14 +119,14 @@ def placedOf (ms : List Member) (settled : List String) : List String :=
   sweeps ms settled ms.length []
 
 /-- What the sweeps could not place. Non-empty exactly when there is a cycle
-    (`merge-back.ts:490-492`). -/
+    (`packages/core/src/strategy/merge-back.ts#dependencyOrder`). -/
 def unplaced (ms : List Member) (settled : List String) : List Member :=
   ms.filter (fun m => decide (m.nodeId ∉ placedOf ms settled))
 
 inductive Order where
   | ordered (nodeIds : List String)
   /-- Named from the FIRST unplaced member in offered order, so the refusal is the
-      same one every time for the same input (`merge-back.ts:491-492`). -/
+      same one every time for the same input (`packages/core/src/strategy/merge-back.ts#dependencyOrder`). -/
   | cycle (nodeId : String)
   deriving Repr, BEq, DecidableEq, Inhabited
 
@@ -135,7 +135,7 @@ def dependencyOrder (ms : List Member) (settled : List String) : Order :=
   | [] => .ordered (placedOf ms settled)
   | m :: _ => .cycle m.nodeId
 
-/-- **What `mergeBack` applies.** `merge-back.ts:594-602`: a cycle pushes the refusal
+/-- **What `mergeBack` applies.** `packages/core/src/strategy/merge-back.ts#mergeBack`: a cycle pushes the refusal
     and returns `settle(order.nodeId, [])` — the member loop is never entered, so not
     even an orderable prefix lands. -/
 def applied (ms : List Member) (settled : List String) : List String :=
@@ -374,7 +374,7 @@ theorem placedOf_unique (ms : List Member) (settled : List String) :
 /-! ## The cycle refuses the whole path -/
 
 /-- **A cycle applies nothing at all.** Not the orderable prefix, not the members
-    the sweeps did place: the empty list. `merge-back.ts:599-601` states the reason —
+    the sweeps did place: the empty list. `packages/core/src/strategy/merge-back.ts#mergeBack` states the reason —
     "a prefix landed out of a set whose remainder can never land is half a merge
     published" — and this is that sentence. -/
 theorem a_cycle_applies_nothing (ms : List Member) (settled : List String) (n : String)
@@ -385,7 +385,7 @@ theorem a_cycle_applies_nothing (ms : List Member) (settled : List String) (n : 
 
     A chain offered backwards is the worst case for sweep count: each sweep can only
     place the one member whose single dependency the previous sweep placed. Three
-    members in that shape need three sweeps, so `merge-back.ts:479`'s bound — the
+    members in that shape need three sweeps, so `packages/core/src/strategy/merge-back.ts#dependencyOrder`'s bound — the
     member count — is exactly right and an off-by-one below it would report a cycle
     for an acyclic set. Both halves are stated because only the pair says the bound is
     neither too small nor larger than it needs to be. -/

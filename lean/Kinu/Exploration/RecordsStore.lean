@@ -2,8 +2,8 @@
   Kinu.Exploration.RecordsStore — monotone best over every finite write
   sequence the shipped store admits. 0 sorry.
 
-  Models `recordExploration` (`packages/core/src/strategy/records.ts:403-467`) and
-  the seal it consults first (`admitsPublication`, `objective.ts:445-450`).
+  Models `recordExploration` (`packages/core/src/strategy/records.ts#recordExploration`) and
+  the seal it consults first (`admitsPublication`, `packages/core/src/strategy/objective.ts#admitsPublication`).
 
   -- WHY THIS IS A SECOND FILE AND NOT A SECTION OF `Records.lean`, and the
   -- disagreement is the whole point:
@@ -12,12 +12,12 @@
   policy, whose write MERGES a re-record to the better of the two values
   (`insertRow`). The store that shipped does neither. It has no capacity and no
   eviction, and its write is the OVERWRITE that `Records.overwrite_breaks_monotonicity`
-  refutes: `records.ts:436-447` sets `value = ${write.value}` unconditionally once
+  refutes: `packages/core/src/strategy/records.ts#recordExploration` sets `value = ${write.value}` unconditionally once
   admission passed. So the two models are about different objects and the shipped
   one is the weaker write.
 
   What makes the shipped store monotone anyway is that the overwrite is UNREACHABLE
-  for a lowering value: `records.ts:422-427` returns `{kind:'refused',
+  for a lowering value: `packages/core/src/strategy/records.ts#recordExploration` returns `{kind:'refused',
   cause:'not-better'}` before it. Monotonicity there is therefore not a rule the
   store enforces — it is a CONSEQUENCE of two rules that are each about something
   else, and this file's job is to show the consequence follows and that both
@@ -30,9 +30,9 @@
   rule under which the overwrite stays monotone, and it is strictly weaker than
   the shipped one: it admits a tie. `the_tie_rule_is_not_what_makes_it_monotone`
   and `lenient_best_never_falls` prove that pair. So the strictness of `isBetter`
-  at `records.ts:423` is NOT justified by monotonicity — relaxing `<` to `<=`
+  at `packages/core/src/strategy/records.ts#recordExploration` is NOT justified by monotonicity — relaxing `<` to `<=`
   there leaves every theorem in this file true. What the strictness is for is the
-  displacement count at `records.ts:460`, where a tie counted as a displacement
+  displacement count at `packages/core/src/strategy/records.ts#recordExploration`, where a tie counted as a displacement
   reports a movement that did not happen. A monotonicity test cannot catch that
   inversion, which is why the comparison needs a mutation test and not a proof.
 
@@ -43,12 +43,11 @@
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
 
-  1. CONCURRENCY, and the danger DOES live there. `runOf` is a sequential fold and
-     `recordExploration` is a read-modify-write across an `await`: the SELECT at
-     `records.ts:422` and the UPDATE at `records.ts:437` are two statements, so two
-     runs can both read the same incumbent and both pass the guard. Nothing here
-     rules that out and no strengthening of these theorems reaches it — it needs a
-     conditional write. `PR-PUBLISH-004` already records the same gap for the seal.
+  1. CONCURRENCY. `runOf` is sequential. The current `recordExploration`
+     performs its SELECT and UPDATE synchronously, with no intervening await,
+     so the old claim of an await race no longer describes that body. Lean does
+     not refine SQL execution or actor scheduling, and these theorems alone do
+     not establish atomicity against other connections or external writers.
 
   2. `Int` FOR A SQLite REAL. As in `Records.lean`: a spurious tie loses a write,
      it never manufactures one, so the discard is conservative.
@@ -71,16 +70,16 @@ open Kinu.Exploration.Records
 /-! ## The store and its verdict -/
 
 /-- Why the store refused. An inductive rather than a string, so that
-    `RecordVerdict`'s two causes (`records.ts:197`) are exhaustive here as they are
+    `RecordVerdict`'s two causes (`packages/core/src/strategy/records.ts#RecordVerdict`) are exhaustive here as they are
     there, and a third cause is a compile-time obligation. -/
 inductive Cause where
-  /-- `admitsPublication` refused (`records.ts:408-410`). -/
+  /-- `admitsPublication` refused (`packages/core/src/strategy/records.ts#recordExploration`). -/
   | sealed
-  /-- The same-digest incumbent is not beaten (`records.ts:423-427`). -/
+  /-- The same-digest incumbent is not beaten (`packages/core/src/strategy/records.ts#recordExploration`). -/
   | notBetter
   deriving Repr, BEq, DecidableEq, Inhabited
 
-/-- What the store answers a write with (`RecordVerdict`, `records.ts:190-198`).
+/-- What the store answers a write with (`RecordVerdict`, `packages/core/src/strategy/records.ts#RecordVerdict`).
     `displaced` is omitted: it is a counter over OTHER rows in the cell and no
     monotonicity claim reads it — see this file's header for why that omission is
     the finding rather than a simplification. -/
@@ -98,7 +97,7 @@ structure Store where
   deriving Repr, Inhabited
 
 /-- The rows the store's `SELECT ... WHERE record_key = ?` would find
-    (`records.ts:422`). A list rather than an `Option` so that nothing below rests
+    (`packages/core/src/strategy/records.ts#recordExploration`). A list rather than an `Option` so that nothing below rests
     on the primary key's uniqueness holding — the same choice `insertRow` makes,
     and `write_keeps_one_row_per_digest` earns it back. -/
 def sameDigest (rs : List Row) (dg : String) : List Row :=
@@ -114,8 +113,8 @@ def Admissible (d : Direction) (rs : List Row) (r : Row) : Bool :=
   notWorse d (some r.value) (best d (sameDigest rs r.digest))
 
 /-- The shipped verdict, in the order `recordExploration` checks: the seal first
-    (`records.ts:408`), then the same-digest incumbent under STRICT betterness
-    (`records.ts:423`). -/
+    (`packages/core/src/strategy/records.ts#recordExploration`), then the same-digest incumbent under STRICT betterness
+    (`packages/core/src/strategy/records.ts#recordExploration`). -/
 def verdict (d : Direction) (s : Store) (r : Row) : Outcome :=
   if Publication.admits s.pub .records then
     match best d (sameDigest s.rows r.digest) with
@@ -259,7 +258,7 @@ theorem best_never_falls_below_a_recorded_value (d : Direction) (s : Store)
 /-! ## Premise two: nothing is ever deleted
 
   `records.ts` contains no `DELETE` and the archive layer above it contains no
-  eviction path (`archive.ts:32-39`). That is the other half, and it is a
+  eviction path (`packages/core/src/strategy/archive.ts#admitToArchive`). That is the other half, and it is a
   SEPARATE fact: the guard alone does not give monotonicity to a store that
   removes rows. -/
 
@@ -297,7 +296,7 @@ theorem trace_deletes_no_digest (d : Direction) (s : Store) (as : List StoreActi
     exact ⟨z, by rw [runOf_cons]; exact hz, hzd.trans hyd⟩
 
 /-- The overwrite keeps the cell a map keyed by `artifactDigest`, as the DDL's
-    primary key makes it (`records.ts:77`). -/
+    primary key makes it (`packages/core/src/strategy/records.ts#EXPLORATION_RECORDS_DDL`). -/
 theorem write_keeps_one_row_per_digest (rs : List Row) (r : Row) :
     ∀ y ∈ (overwriteRow rs r).tail, y.digest ≠ r.digest := by
   intro y hy
@@ -350,7 +349,7 @@ theorem stepLenient_monotone (d : Direction) (rs : List Row) (r : Row) :
   · exact notWorse_refl d _
 
 /-- **The lenient store is monotone over every finite write sequence too.** So
-    every monotonicity theorem in this file survives relaxing `records.ts:423`
+    every monotonicity theorem in this file survives relaxing `packages/core/src/strategy/records.ts#recordExploration`
     from `<` to `<=`, and no monotonicity test can catch that inversion. -/
 theorem lenient_best_never_falls (d : Direction) (rs : List Row) (ws : List Row) :
     notWorse d (best d (runLenient d rs ws)) (best d rs) = true := by
@@ -362,7 +361,7 @@ theorem lenient_best_never_falls (d : Direction) (rs : List Row) (ws : List Row)
 
 /-- **And the two rules genuinely differ**, on the tie: the shipped store refuses
     it by name, the weakest monotone rule admits it. The strictness therefore
-    answers to `records.ts:460`'s displacement count, not to this invariant. -/
+    answers to `packages/core/src/strategy/records.ts#recordExploration`'s displacement count, not to this invariant. -/
 theorem the_tie_rule_is_not_what_makes_it_monotone :
     verdict .minimise { rows := [{ digest := "a", value := 3 }], pub := .open_ }
         { digest := "a", value := 3 } = .refused .notBetter

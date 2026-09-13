@@ -1,7 +1,12 @@
 /-
   Kinu.MCTS.StorageIsolation
   Proves that StorageIsolated is an invariant of the MCTS transition system.
-  All 7 transition cases proven. 0 sorry.
+  All seven abstract transition cases are proved. Source:
+  packages/core/src/mcts/engine.ts#runMCTS and
+  packages/core/src/strategy/node-workspace.ts#facetHomeProvisioner.
+  Storage-id separation is an assumed transition premise, not the uid/mode
+  boundary the current shared file plane enforces. Approval, activity writing
+  and head/swarm liveness moved into core without establishing that premise.
 -/
 
 import Kinu.Types

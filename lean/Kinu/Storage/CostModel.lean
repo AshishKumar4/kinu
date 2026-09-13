@@ -7,15 +7,18 @@
     n = total tree bytes / paths
     p = pending change since the last tick
     c = cumulative changed-set since the base
-    L = layer count, ≤ 2 on the shipped chain
+    layers = mounted image count, at most two
+    M = changed manifest records (including overrides and directory metadata)
+    baseBytes = full base bytes of changed chunked files
+    deltaBytes = carried whole files, chunk overrides, and zero writes
 
-  Counted: R2 class-A ops, class-B ops, bytes staged or uploaded, layers
-  mounted.
+  Counted: logical R2 class-A/class-B operations, bytes staged or materialized,
+  mounted images, and manifest records. Wire encoding remains separate.
 
   Lean proves the complexity class of the modelled algorithm. It does not
   prove wall-clock. The deployed bench owns constants.
 
-  -- WHAT THIS ABSTRACTION KEEPS: the four counters and the four size names.
+  -- WHAT THIS ABSTRACTION KEEPS: resource counters and workload-size parameters.
 
   -- WHAT IT DISCARDS, and whether the danger lives there:
 
@@ -43,12 +46,14 @@ structure Cost where
   classB : Nat
   bytes : Nat
   layersMounted : Nat
+  manifestRecords : Nat := 0
   deriving Repr, BEq, DecidableEq, Inhabited
 
 def Cost.add (x y : Cost) : Cost :=
   { classA := x.classA + y.classA
     classB := x.classB + y.classB
     bytes := x.bytes + y.bytes
-    layersMounted := x.layersMounted + y.layersMounted }
+    layersMounted := x.layersMounted + y.layersMounted
+    manifestRecords := x.manifestRecords + y.manifestRecords }
 
 end Kinu.Storage.CostModel

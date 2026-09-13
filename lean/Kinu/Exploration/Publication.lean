@@ -2,14 +2,15 @@
   Kinu.Exploration.Publication — S7, S6, S4 and S1. 0 sorry.
 
   Models `PublicationState`, `FloorRederivation` and `ExplorationRecord`
-  (`packages/core/src/types/objective.ts`), plus `PUBLICATION_SURFACES` /
-  `admitsPublication` / `CarrySuppression`. Specified by docs/EXPLORATION.md —
+  (`packages/core/src/types/objective.ts#PublicationState`, #FloorRederivation,
+  #ExplorationRecord, #PUBLICATION_SURFACES and #CarrySuppression), plus
+  `packages/core/src/strategy/objective.ts#admitsPublication`. Specified by docs/EXPLORATION.md —
   "The objective", "The closed verifier registry", "The publication seal",
   "Comparability" and "The Lean invariants".
 
   -- Why this file departs from the existing idiom, deliberately:
-  `mctsTransition` (`MCTS/StorageIsolation.lean:25-44`) and `evolTransition`
-  (`Evolution/Timescales.lean:15-48`) are relations `State → State → Action →
+  `mctsTransition` (`MCTS/StorageIsolation.lean (mctsTransition)`) and `evolTransition`
+  (`Evolution/Timescales.lean (evolTransition)`) are relations `State → State → Action →
   Prop` whose cases are HAND-ASSERTED postconditions, and `PR-MCTS-003`'s own
   `remainingEvidence` records that as a weakness. *The publication seal* asks for S7
   as a REACHABILITY claim, and reachability cannot be stated against hand-asserted
@@ -90,7 +91,7 @@ def Breach.wellFormed (b : Breach) : Bool :=
 
 /-! ## The seal's key
 
-  `floorDigest` (`objective.ts:823-834`) requires a record to say WHICH FLOOR it was
+  `floorDigest` (`packages/core/src/strategy/records.ts#floorDigestOf`) requires a record to say WHICH FLOOR it was
   published under — a digest over the whole `Floor` and not merely its value — and
   the identity *Comparability* defines EXCLUDES the floor, which is right for
   comparability. The two theorems below are why both decisions are needed together:
@@ -110,7 +111,7 @@ structure Identity where
 /-- Keyed on the identity ALONE — the wrong key. -/
 def identityKey (i : Identity) (_f : Floor) : Identity := i
 
-/-- Keyed on the identity and the floor's digest — what `objective.ts:823-834`
+/-- Keyed on the identity and the floor's digest — what `packages/core/src/strategy/records.ts#floorDigestOf`
     requires. -/
 def sealKey (dg : Floor → String) (i : Identity) (f : Floor) : Identity × String :=
   (i, dg f)
@@ -171,7 +172,7 @@ theorem sealKey_discriminates (dg : Floor → String)
   B1 reads MEASURED values only and ignores `unmeasurable` outcomes. That is
   correct and load-bearing rather than an oversight. A fabricated verifier
   returning `unmeasurable` for junk and one constant for everything parseable
-  produces a varying SCORE vector (`objective.ts:100` scores an `unmeasurable` at the
+  produces a varying SCORE vector (`packages/core/src/strategy/objective.ts#normalisedScore` scores an `unmeasurable` at the
   direction's worst) while its metric measures nothing. Reading scores instead of
   measurements would certify it. -/
 
@@ -183,7 +184,7 @@ structure Scored where
   deriving Repr, BEq, Inhabited
 
 /-- The distinct measured candidates, one entry per artifact. An `unmeasurable`
-    contributes none: it is a legitimate outcome (`objective.ts:102-106`), but it is
+    contributes none: it is a legitimate outcome (`packages/core/src/strategy/objective.ts#normalisedScore`), but it is
     not a measurement. -/
 def distinctMeasured : List Scored → List (String × Int)
   | [] => []
@@ -488,7 +489,7 @@ structure RunState where
   suppressed : Nat
   scored : List Scored
   nodes : List Node
-  /-- A `VerifierFault` took the run down (`objective.ts:232-243`). -/
+  /-- A `VerifierFault` took the run down (`packages/core/src/types/objective.ts#VerifierFault`). -/
   halted : Bool
   deriving Repr, Inhabited
 
@@ -532,7 +533,7 @@ def publishable (s : RunState) : Bool :=
 /-- One step of the run. Total, so every theorem below is about this definition.
 
     A halted run is a fixed point: a `VerifierFault` "fails the RUN"
-    (`objective.ts:232-243`), so nothing after it is scored, published or recorded. -/
+    (`packages/core/src/types/objective.ts#VerifierFault`), so nothing after it is scored, published or recorded. -/
 def stepOf (s : RunState) (a : RunAction) : RunState :=
   if s.halted then s else
     match a with
@@ -949,7 +950,7 @@ theorem suppressedCells_monotone (c : Cell) (cs : List Cell) :
 /-- **The two disclosed numbers are independent quantities.** Neither is derivable
     from the other: the first witness refuses two publications while damaging one
     cell, the second refuses one while damaging two. So a reader who has one number
-    has learned nothing about the other, which is why `objective.ts:492-512` keeps
+    has learned nothing about the other, which is why `packages/core/src/types/objective.ts#ExplorationRecord` keeps
     them as two — "the two numbers differ on purpose". -/
 theorem suppression_quantities_are_independent :
     ∃ (as₁ : List RunAction) (cs₁ : List Cell),
@@ -962,7 +963,7 @@ theorem suppression_quantities_are_independent :
 
 /-! ## S6 — crash is not zero
 
-  `VerifierFault` (`objective.ts:232-243`). The same absorbing-state machinery as S7
+  `VerifierFault` (`packages/core/src/types/objective.ts#VerifierFault`). The same absorbing-state machinery as S7
   on a different flag, and the discard is different: S7's gap is concurrency, S6's is
   that Lean cannot see a
   `catch` converting a throw into an `unmeasurable`. -/
