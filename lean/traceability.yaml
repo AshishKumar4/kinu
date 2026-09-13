@@ -838,7 +838,7 @@ requirements:
       - The re-verifier is a parameter, so a verifier that lies satisfies every theorem here and no gate ordering reaches it
       - Declared dependency edges (rule 1, dependency-unsettled) are not modelled in Rebase, so safety for a member depending on a skipped one is proved only for assumed-base dependence, not for named edges
   PR-DEVBOX-001:
-    statement: A chunked tick accounts for whole-file fallbacks or changed nonzero blocks plus manifest records, while attach reads changed manifest records and eagerly copies full changed-file bases plus delta payload.
+    statement: A chunked tick accounts for whole-file fallbacks or changed nonzero blocks plus records; v2 attach reads changed namespace records and no file payload.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Storage.SnapshotChain.layers_le_two
@@ -859,24 +859,21 @@ requirements:
       - Kinu.Storage.SnapshotChain.c3_is_strictly_cheaper_than_whole_file
       - Kinu.Storage.SnapshotChain.chain_attach_layer_setup
       - Kinu.Storage.SnapshotChain.chain_attach_reads_manifest
-      - Kinu.Storage.SnapshotChain.chain_attach_materializes_base_plus_delta
+      - Kinu.Storage.SnapshotChain.chain_attach_reads_no_payload
       - Kinu.Storage.SnapshotChain.chain_attach_independent_of_n
       - Kinu.Storage.SnapshotChain.chain_attach_independent_of_pending
       - Kinu.Storage.SnapshotChain.attach_without_delta_materializes_nothing
-      - Kinu.Storage.SnapshotChain.chunked_restore_copies_full_base
-      - Kinu.Storage.SnapshotChain.c3_attach_copies_the_whole_64mib_base
-      - Kinu.Storage.SnapshotChain.attach_materialization_has_no_constant_bound
       - Kinu.Storage.SnapshotChain.extract_attach_is_linear_in_n
       - Kinu.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
       - Kinu.Storage.SnapshotChain.first_base_upper_bound
       - Kinu.Storage.SnapshotChain.unchanged_tick_uploads_nothing
     tsRefs:
-      - packages/devbox/src/chunked-delta.ts#DELTA_BLOCK_BYTES
+      - packages/devbox/src/delta-index.ts#DELTA_BLOCK_BYTES
       - packages/devbox/src/chunked-delta.ts#DELTA_WHOLE_FILE_THRESHOLD
       - packages/devbox/src/chunked-delta.ts#DELTA_SPARSE_WHOLE_FRACTION
       - packages/devbox/src/chunked-delta.ts#planDeltaPublication
       - packages/devbox/src/chunked-delta.ts#buildDeltaStageOps
-      - packages/devbox/src/chunked-delta.ts#buildDeltaMaterializeOps
+      - packages/devbox/src/chunked-delta.ts#buildDeltaAttachOps
       - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
       - packages/devbox/bench/witness-files.ts#C3_WORKLOAD
       - packages/devbox/bench/witness-files.ts#C3_BYTES_BOUND
@@ -885,7 +882,7 @@ requirements:
       - C3's strict 196608 wire bound requires explicit record and encoding budgets; arbitrary paths and squashfs compression or framing are not proved here and remain bench obligations
       - The upper is compared against the base, not the last tick; unchanged cumulative dirty blocks can be republished and no pending-only complexity claim is made
       - Hosts that cannot stage a chunked package fall back to the whole upper, and the first base and extraction modes still process whole trees
-      - Attach M includes override and metadata records, while its base copy term can equal the entire tree for one tiny edit; constant mount count is not constant byte work
+      - V2 M counts files and H other namespace records; override pages are outside the attach manifest and inside the conditional wire framing allowance
       - R2 classB counts layer probes only, not demand-driven FUSE GETs; actual network traffic and elapsed time remain measured by the bench
   PR-DEVBOX-002:
     statement: Rebase compares stored delta and base bytes only at quiesce, ticks retain chunked publication, and generation retention covers the current generation plus one proven fallback and named orphans.
@@ -934,3 +931,29 @@ requirements:
       - The tick is modelled as one atomic pointer commit, so exact equality is a claim about that model and says nothing about an archive that was interrupted partway
       - The wall-clock width is checkpoint cadence plus one in-flight operation, a scheduling fact the counter models do not see
       - A write is one unit; the models bound lost writes, and bytes follow from the implementation's whole-file fingerprints and fixed-size chunks
+  PR-DEVBOX-004:
+    statement: V2 storage attach processes bounded namespace and layer metadata with zero file payload; balanced authenticated indexes resolve blocks logarithmically and compose size-clipped base, holes and chunks; readiness requires matching composed mounts and copy-up is file-local.
+    status: proved-in-abstract-model
+    theorems:
+      - Kinu.Storage.BlockLayer.attach_metadata_bound
+      - Kinu.Storage.BlockLayer.attach_payload_bytes
+      - Kinu.Storage.BlockLayer.median_children_half
+      - Kinu.Storage.BlockLayer.block_lookup_bound
+      - Kinu.Storage.BlockLayer.composed_read_correct
+      - Kinu.Storage.BlockLayer.hole_is_zero
+      - Kinu.Storage.BlockLayer.absent_override_reads_base
+      - Kinu.Storage.BlockLayer.ready_implies_all_composed_mounted
+      - Kinu.Storage.BlockLayer.copyup_is_file_local
+      - Kinu.Storage.BlockLayer.publication_accounting_unchanged
+      - Kinu.Storage.BlockLayer.c3_publication_stays_bounded
+    tsRefs:
+      - packages/devbox/src/delta-index.ts#buildDeltaIndex
+      - packages/devbox/src/delta-index.ts#lookupDeltaIndex
+      - packages/devbox/src/chunked-delta.ts#buildDeltaAttachOps
+      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
+    remainingEvidence:
+      - Metadata costs have explicit bounded-record premises; Rust uses byte-radix namespace tables with fanout at most 256 and platform-bounded path lengths
+      - The search theorem assumes the balanced rank shape produced by median paging; median_children_half proves both child sizes satisfy the halving premise
+      - Read correctness assumes ordered authentic records and correct base and chunk bytes; SHA-256 collision resistance and the Rust translation are tested assumptions, not axioms or kernel proofs
+      - The readiness state machine covers the composed mounts and captured runtime generation; kernel scheduling, external mount mutation, network latency and the 30-second wall-clock target remain runtime evidence
+      - Arbitrary service scans and writable opens can demand whole files before full lifecycle readiness; no bound on that demanded work or on unsynced mmap checkpointing is claimed
