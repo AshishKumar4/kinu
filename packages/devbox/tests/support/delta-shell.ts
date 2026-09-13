@@ -55,7 +55,7 @@ const OP = {
   mkdir: /^mkdir -p (.+)$/,
   split: new RegExp(String.raw`^split -b (\d+) -a 4 ${Q} ${Q} \|\| false$`),
   say: /^printf '([A-Z]+ \d+)\\n'$/,
-  sha256sum: new RegExp(String.raw`^sha256sum ${Q}\* 2>/dev/null \|\| false$`),
+  sha256sum: new RegExp(String.raw`^find ${Q} -type f -exec sha256sum \{\} \+ \|\| false$`),
   rmrf: new RegExp(String.raw`^rm -rf ${Q}$`),
   ifBase: new RegExp(String.raw`^if test -s ${Q}; then (.*); else printf 'BEMPTY (\d+)\\n'; fi$`),
   chown: new RegExp(String.raw`^chown (\d+):(\d+) ${Q}$`),

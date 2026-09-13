@@ -43,7 +43,15 @@ index names a file beside chunks within the same delta squashfs, not another rem
 bounded authenticated search pages ordered by block offset. Fetch/search O(log(k+1)) pages per block,
 never fetch the entire index on open. Entries retain o/src/d; src=hole means zero bytes, not lower
 fallthrough. Missing override means the same base range, zero-extended beyond base EOF; s clips the last
-block. Whole-file thresholds stay 64KiB and >50% zero blocks. V1 is refused by version; reset deployment,
+block. Whole-file thresholds stay 64KiB and >50% zero blocks. A mostly-zero file is
+a whole record inside the chunked delta's tree, not a legacy whole-upper
+publication. The bounded block-lower cell therefore uses a dense changed
+file. On 2026-09-13, `b20260913105359` attributed the sparse cell's legacy
+fallback to `block-hash-failed` (0 of 131072 hashes), not the zero-block rule.
+The shell expanded every split path into one `sha256sum` argument list;
+`delta-hash-argv.test.ts` reproduced `Argument list too long`. Hashing now
+uses `find -exec ... +` batches. Every format fallback is a named value on
+the published chain and its log event. V1 is refused by version; reset deployment,
 no dual reader. Publication must merge retained delta metadata with the upper; today's mounted-delta
 collapse cannot remain.
 

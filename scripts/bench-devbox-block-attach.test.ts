@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { boundedAttachErrors, storageAttachMilliseconds } from './bench-devbox-block-attach';
+import { boundedAttachErrors, chunkedPublicationErrors, storageAttachMilliseconds } from './bench-devbox-block-attach';
 
 test('the attach clock subtracts admission and refuses absent or reversed phases', () => {
   expect(storageAttachMilliseconds({ containerStart: 800, attached: 3100 })).toBe(2300);
@@ -14,4 +14,12 @@ test('zero-payload evidence must be observed and a red measurement stays red', (
   expect(boundedAttachErrors({ ...sample, blockReads: { ...sample.blockReads, payloadBytes: 1 } })).toContain('attach read a payload or override-index page');
   expect(boundedAttachErrors({ ...sample, blockReads: { ...sample.blockReads, indexPages: 1 } })).toContain('attach read a payload or override-index page');
   expect(boundedAttachErrors({ ...sample, phases: { containerStart: 0, attached: 30001 } })).toContain('storage attach exceeded 30 seconds: 30001 ms');
+});
+
+test('a cell expecting chunked names a format fallback instead of accepting a whole upper', () => {
+  expect(chunkedPublicationErrors({ deltaFormat: 'chunked' })).toEqual([]);
+  expect(chunkedPublicationErrors({ deltaFallback: { reason: 'block-hash-failed', detail: '0/131072 blocks' } }))
+    .toEqual(['expected deltaFormat:chunked; block-hash-failed: 0/131072 blocks']);
+  expect(chunkedPublicationErrors({})).toEqual(['expected deltaFormat:chunked; fallback reason unobserved']);
+  expect(chunkedPublicationErrors(null)).toEqual(['expected deltaFormat:chunked; fallback reason unobserved']);
 });
