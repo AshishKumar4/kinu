@@ -1,0 +1,7 @@
+{"event":"devbox.checkpoint.published","chainId":"48fe7e19-90d5-4f11-b281-b766ef84f4a0"}
+{"event":"devbox.checkpoint.reseat.enter","chainId":"48fe7e19-90d5-4f11-b281-b766ef84f4a0","cwd":"/var/tmp/devbox","at":1789310404357}
+{"event":"devbox.checkpoint.reseat.exit","chainId":"48fe7e19-90d5-4f11-b281-b766ef84f4a0","ms":1736}
+{"event":"devbox.checkpoint.delta.base","chainId":"48fe7e19-90d5-4f11-b281-b766ef84f4a0","deltaId":"18f7fe29-9d68-4d86-be12-87141dcf1125","carried":1,"fileBases":1,"absentBases":0}
+{"event":"devbox.checkpoint.delta.hashes","chainId":"48fe7e19-90d5-4f11-b281-b766ef84f4a0","deltaId":"18f7fe29-9d68-4d86-be12-87141dcf1125","file":0,"upperBlocks":4096,"baseBlocks":4096,"matchingBlocks":4092}
+{"event":"devbox.checkpoint.published","chainId":"48fe7e19-90d5-4f11-b281-b766ef84f4a0","deltaId":"18f7fe29-9d68-4d86-be12-87141dcf1125","deltaFormat":"chunked"}
+{"event":"devbox.attach.composition","token":"48fe7e19-90d5-4f11-b281-b766ef84f4a0:18f7fe29-9d68-4d86-be12-87141dcf1125:6b4c0f9b-04aa-43dd-82d5-0d2f5511e3d9","blockType":"fuse","blockSourceMatches":true,"storeMounted":true,"baseSourceMatches":true,"baseType":"fuse.squashfuse","deltaSourceMatches":true,"deltaType":"fuse.squashfuse"}

@@ -1387,6 +1387,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   async devboxStartup(): Promise<void> {
+    // The SDK may already have buffered a row that the completed hook deleted.
+    // That stale callback cannot reopen the hook around an active caller.
+    if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
     await this.#startContainer();
 
     if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
