@@ -233,8 +233,8 @@ export interface ArchiveExportOptions {
    *  is still emitted whole — pages are bounded, rows are never split. */
   maxBytes?: number;
   now?: number;
-  /** Authoritative workspace files when they do not live in `sql`. */
-  files?: ArchiveFileSource;
+  /** Authoritative files outside `sql`; null declares a SQL-only workspace. */
+  files?: ArchiveFileSource | null;
 }
 
 interface ArchiveHeader {
@@ -732,7 +732,8 @@ export interface ArchiveRestoreOptions {
  * Rebuild a workspace's SQLite state from an archive, into an EMPTY database.
  * Streams: base tables are created as their records arrive, rows are inserted
  * as they arrive, and the objects that depend on the rows (FTS indexes, other
- * indexes, triggers, views) are applied at the end — so a large archive never
+ * indexes, triggers, views) are applied after SQL rows and before opening the
+ * destination filesystem — so its initializer sees the restored schema and a large archive never
  * has to be held in memory, and an FTS index is rebuilt against complete
  * content rather than maintained row by row.
  */
@@ -750,6 +751,18 @@ export async function restoreWorkspaceArchive(
   let files = 0;
   let fileTarget: ArchiveFileTarget | null = null;
   let insert: { table: string; columns: string[]; statement: string } | null = null;
+
+  const finishSql = (): void => {
+    const pending = deferred.splice(0);
+
+    for (const record of pending) sql.exec(record.sql);
+
+    for (const record of pending) {
+      if (record.derived) {
+        sql.exec(`INSERT INTO ${quoteIdent(record.name)} (${quoteIdent(record.name)}) VALUES ('rebuild')`);
+      }
+    }
+  };
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -775,6 +788,10 @@ export async function restoreWorkspaceArchive(
     }
 
     if (end) throw new Error('This archive has records after its end marker.');
+
+    if (fileRecords > 0 && (record.t === 'schema' || record.t === 'row')) {
+      throw new Error('This archive has SQL records after its workspace files.');
+    }
 
     switch (record.t) {
       case 'header':
@@ -807,6 +824,7 @@ export async function restoreWorkspaceArchive(
 
       case 'directory': {
         const path = archivePath(record.path);
+        finishSql();
         fileTarget ??= opts.files?.() ?? null;
 
         if (!fileTarget) throw new Error('This archive contains workspace files, but no filesystem target was provided.');
@@ -817,6 +835,7 @@ export async function restoreWorkspaceArchive(
 
       case 'file': {
         const path = archivePath(record.path);
+        finishSql();
         fileTarget ??= opts.files?.() ?? null;
 
         if (!fileTarget) throw new Error('This archive contains workspace files, but no filesystem target was provided.');
@@ -859,15 +878,7 @@ export async function restoreWorkspaceArchive(
     throw new Error(`This archive is damaged: it declares ${end.actors} actors but restored ${restoredActors}.`);
   }
 
-  for (const record of deferred) sql.exec(record.sql);
-
-  // External-content FTS indexes carry no rows of their own; they are derived
-  // from the content tables, which are now populated.
-  for (const record of deferred) {
-    if (record.derived) {
-      sql.exec(`INSERT INTO ${quoteIdent(record.name)} (${quoteIdent(record.name)}) VALUES ('rebuild')`);
-    }
-  }
+  finishSql();
 
   normalizeImportedPaneRows(sql);
 
