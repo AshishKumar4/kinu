@@ -36,7 +36,7 @@
  *      reclaiming cannot disagree with minting about what is ours.
  */
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -146,6 +146,7 @@ export function releaseScratch(): number {
         `${dir} survived rmSync, which reports success when a live process is `
         + 'still writing into the tree. Stop what the suite backgrounded '
         + 'before the run ends.',
+        { cause: { leftovers: readdirSync(dir, { recursive: true }) } },
       ));
       continue;
     }
@@ -157,9 +158,16 @@ export function releaseScratch(): number {
   }
 
   if (held.length > 0) {
+    // bun's reporter prints the AggregateError's message but drops each held
+    // error's cause; the leftovers are written to a file the run log can name.
+    writeFileSync(
+      join(tmpdir(), 'kinu-scratch-held.json'),
+      JSON.stringify(held.map((e) => ({ message: e.message, cause: e.cause })), null, 2),
+    );
+
     throw new AggregateError(
       held,
-      `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release`,
+      `scratch not released: ${held.length} owned root(s) failed removal and stay owned for a later release (leftovers in ${join(tmpdir(), 'kinu-scratch-held.json')})`,
     );
   }
 
