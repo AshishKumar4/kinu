@@ -258,8 +258,13 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
 
 describe('inherited context is windowed at READ time, exactly once (C4)', () => {
   test('plain text and SDK text parts inherit the same conversation bytes', () => {
+    // The literal is the contract: an all-text part array serializes to the
+    // plain string, so both backends hand a head the same bytes.
+    const inherited: SerializedMessage[] = [{ id: 'ctx-0', role: 'user', content: 'Keep cents exact.', createdAt: 0 }];
+
+    expect(inheritedContextFromHistory([{ role: 'user', content: 'Keep cents exact.' }])).toEqual(inherited);
     expect(inheritedContextFromHistory([{ role: 'user', content: [{ type: 'text', text: 'Keep cents exact.' }] }]))
-      .toEqual(inheritedContextFromHistory([{ role: 'user', content: 'Keep cents exact.' }]));
+      .toEqual(inherited);
   });
   const cap = EVIDENCE_BUDGETS.inheritedMessage;
   // A stored assistant body is allowed to run to storedAssistantResponse
