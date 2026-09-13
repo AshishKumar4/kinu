@@ -37,7 +37,7 @@ async function addedAgent(seed: {
     displayName: seed.displayName,
     nameOrigin: seed.nameOrigin,
     mission: seed.mission ?? WORKSPACE_MISSION,
-    roleId: seed.roleId ?? 'general',
+    roleId: seed.roleId ?? 'task',
   });
 
   // The roster LINK row: hiring binds stores and runtime, but the roster is

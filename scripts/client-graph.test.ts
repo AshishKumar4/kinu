@@ -63,6 +63,25 @@ describe('client-graph — red in every direction it claims', () => {
     expect(() => findViolations(sources, [ENTRY])).toThrow('resolves to no parsed source');
   });
 
+  test('Markdown text is an asset, but the attribute cannot hide executable or forbidden edges', () => {
+    expect(findViolations(new Map([
+      [ENTRY, 'import text from "./prompt.md" with { type: "text" }; export const app = text;'],
+    ]), [ENTRY])).toEqual([]);
+
+    expect(() => findViolations(new Map([
+      [ENTRY, 'import text from "./prompt.md"; export const app = text;'],
+    ]), [ENTRY])).toThrow('resolves to no parsed source');
+
+    expect(findViolations(new Map([
+      [ENTRY, 'import text from "./code" with { type: "text" }; export const app = text;'],
+      ['packages/cf-backend/src/code.ts', 'import "bun:sqlite"; export default "not data";'],
+    ]), [ENTRY]).map((violation) => violation.specifier)).toEqual(['bun:sqlite']);
+
+    expect(findViolations(new Map([
+      [ENTRY, 'import text from "@agent-core/core/prompt.md" with { type: "text" }; export const app = text;'],
+    ]), [ENTRY]).map((violation) => violation.specifier)).toEqual(['@agent-core/core/prompt.md']);
+  });
+
   test('an entry outside the corpus is fatal, and so is an empty entry set', () => {
     expect(() => findViolations(new Map(), [ENTRY])).toThrow('is not in the corpus');
     expect(() => findViolations(new Map([[ENTRY, 'export const app = 1;']]), [])).toThrow('no client entry');

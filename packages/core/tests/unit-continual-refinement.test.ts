@@ -160,7 +160,7 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
           status: 'completed',
           agent: 'refiner-1',
           lifetime: 'task',
-          role: 'general',
+          role: 'task',
           answer: answerOf(request),
           transcript: 'kept',
           elapsed_ms: 1,
@@ -209,7 +209,7 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
         const answer = answers[mine]!;
 
         const outcome: TemporaryRunOutcome = {
-          status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'general',
+          status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'task',
           answer: proposalText(answer), transcript: 'kept', elapsed_ms: 1,
         };
 
@@ -1090,7 +1090,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
         runs += 1;
 
         return {
-          status: 'completed', agent: 'refiner', lifetime: 'task', role: 'general',
+          status: 'completed', agent: 'refiner', lifetime: 'task', role: 'task',
           answer: proposalText(FACT_PROPOSAL),
           transcript: 'kept', elapsed_ms: 1,
         };
@@ -1141,7 +1141,7 @@ describe('the stage machine — restart, retry, and no duplicate work', () => {
         runs += 1;
 
         return {
-          status: 'completed', agent: 'refiner', lifetime: 'task', role: 'general',
+          status: 'completed', agent: 'refiner', lifetime: 'task', role: 'task',
           answer: proposalText(runs === 1 ? FACT_PROPOSAL : {
             ...FACT_PROPOSAL,
             edits: [{ ...FACT_EDIT, key: 'user.something_else' }],
@@ -1361,7 +1361,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
         if (asks === 1) throw new Error('the refiner host went away');
 
         return {
-          status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'general',
+          status: 'completed', agent: 'refiner-1', lifetime: 'task', role: 'task',
           answer: proposalText(EVERY_OWNER_PROPOSAL), transcript: 'kept', elapsed_ms: 1,
         };
       },

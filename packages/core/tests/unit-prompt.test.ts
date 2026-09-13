@@ -1292,9 +1292,9 @@ describe('buildSystemPromptSync', () => {
     expect(compilePromptSurface({
       workMode: 'plan',
       roleSection: {
-        id: 'implementer',
-        label: 'Implementer',
-        instructions: BUILTIN_ROLE_DEFINITIONS.implementer.instructions,
+        id: 'task',
+        label: 'Task',
+        instructions: BUILTIN_ROLE_DEFINITIONS.task.instructions,
       },
     }).workMode).toBe('plan');
   });

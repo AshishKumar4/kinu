@@ -12,6 +12,7 @@ import { definePromptSection, templateContract } from '../../../src/prompting/te
 
 const verification = definePromptSection(
   'fixture/verification',
+  '{{shellNote}}{{#if hasShell}}{{/if}}',
   '## Verification\n- always{{#if hasShell}}\n- {{shellNote}}{{/if}}',
 );
 

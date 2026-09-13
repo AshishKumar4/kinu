@@ -116,7 +116,7 @@ export function fixtureProfile() {
   return {
     profile: resolveTurnProfile({
       ...FIXTURE_AUTHORITY,
-      roleId: 'general',
+      roleId: 'task',
       workMode: 'build',
       availableTools: [],
       activeSkills: [],

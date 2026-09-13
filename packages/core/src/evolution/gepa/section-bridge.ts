@@ -48,7 +48,8 @@ import type {
 } from './types';
 
 /**
- * The prompt sections GEPA may target: all nine, and nothing else.
+ * The prompt sections GEPA may target: the eleven base sections and seven
+ * root-only lead rule families, each under the same mutation-size ceiling.
  *
  * Every one is prose the model reads and the builder emits as one block, which
  * is what makes it scorable end to end. The per-line fragments

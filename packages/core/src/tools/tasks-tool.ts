@@ -188,7 +188,7 @@ export function createTasksDispatcher(
         const envelope = roleAuthority?.();
 
         if (!isValidRoleId(args.role)) {
-          throw new KinuError('bad_input', 'tasks.mode requires `role` — a kebab-case role id like general or researcher');
+          throw new KinuError('bad_input', 'tasks.mode requires `role` — a kebab-case role id like task or researcher');
         }
 
         if (!envelope) {

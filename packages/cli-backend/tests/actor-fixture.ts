@@ -128,7 +128,7 @@ export function headSeatFactory(
         return {
           profile: resolveAgentTurnProfile({
             ...inputs,
-            activeRoleId: 'general',
+            activeRoleId: 'task',
             workMode: probe.workMode,
             availableTools: [...probe.availableTools],
             activeSkills: [],
@@ -254,7 +254,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     profile: async (probe) => ({
       profile: resolveAgentTurnProfile({
         ...inputs,
-        activeRoleId: 'general',
+        activeRoleId: 'task',
         workMode: probe.workMode,
         availableTools: [...probe.availableTools],
         activeSkills: [],

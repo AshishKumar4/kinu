@@ -30,11 +30,11 @@ const SCOUT: RoleDefinition = {
 
 const BUILTINS: Readonly<Record<BuiltinRoleId, RoleDefinition>> = BUILTIN_ROLE_DEFINITIONS;
 
-/** The six ids the product ships, spelled here rather than read from the
+/** The five ids the product ships, spelled here rather than read from the
  *  constant under test: comparing the shipped definitions against their own
  *  id list can only ever agree, so a role renamed in both places would pass. */
 const BUILTIN_IDS = [
-  'general', 'researcher', 'planner', 'implementer', 'auditor', 'designer',
+  'task', 'researcher', 'planner', 'auditor', 'designer',
 ] as const satisfies readonly BuiltinRoleId[];
 
 const VALID_CATALOG = {
@@ -128,7 +128,7 @@ describe('catalog validation', () => {
       ...VALID_CATALOG,
       roles: {
         a: { ...base, spawns: '*' },
-        b: { ...base, spawns: ['a', 'general'] },
+        b: { ...base, spawns: ['a', 'task'] },
       },
     })).not.toThrow();
     expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { b: { ...base, spawns: ['NOPE'] } } }))
@@ -192,17 +192,16 @@ describe('the digest', () => {
 });
 
 describe('built-in defaults', () => {
-  test('six roles, exactly the declared ids', () => {
+  test('five roles, exactly the declared ids', () => {
     expect(Object.keys(BUILTIN_ROLE_DEFINITIONS).sort()).toEqual([...BUILTIN_IDS].sort());
-    expect(BUILTIN_IDS).toHaveLength(6);
+    expect(BUILTIN_IDS).toHaveLength(5);
   });
 
   test('each ships the contracted tier and preset', () => {
     const expected = {
-      general: ['default', 'ideate'],
+      task: ['default', 'ideate'],
       researcher: ['fast', 'research'],
       planner: ['deep', 'ideate'],
-      implementer: ['default', 'optimise'],
       auditor: ['deep', 'audit'],
       designer: ['default', 'ideate'],
     } satisfies Record<BuiltinRoleId, readonly [TierId, NamedSwarmPreset]>;
@@ -241,7 +240,7 @@ describe('built-in defaults', () => {
 
 describe('labels', () => {
   test('derive from the id when absent', () => {
-    expect(deriveRoleLabel('general')).toBe('General');
+    expect(deriveRoleLabel('task')).toBe('Task');
     expect(deriveRoleLabel('release-captain')).toBe('Release Captain');
   });
 });

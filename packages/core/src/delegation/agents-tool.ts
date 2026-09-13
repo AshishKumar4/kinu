@@ -212,7 +212,7 @@ export interface TeamToolDeps {
    *
    *  EVERY FIELD IS OPTIONAL, because an owner adding a second agent to a
    *  workspace has usually decided nothing about it yet. Omitted, `role` is
-   *  the catalog's `general` and `mission` is the CREATING ACTOR'S OWN
+   *  the catalog's `task` and `mission` is the CREATING ACTOR'S OWN
    *  mission — the workspace's purpose, which is what a further agent in it
    *  is for. A caller that supplies nothing to name the agent by gets a blank
    *  display name and `auto` origin, which is what lets the shared

@@ -79,7 +79,7 @@ function analystProfile() {
       catalog,
     },
     provider: { revision: 'bench', availableModels: [ANALYST_SPEC] },
-    roleId: 'general',
+    roleId: 'task',
     workMode: 'build',
     availableTools: [],
     activeSkills: [],

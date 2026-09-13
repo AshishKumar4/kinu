@@ -275,7 +275,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
 
   test('a role switch persists for the next prompt', async () => {
     const { tasks, rt, config } = roleSetup();
-    expect(config.getRoleSelection()).toBe('general');
+    expect(config.getRoleSelection()).toBe('task');
     expect(await tasks({ action: 'mode', role: 'researcher' })).toEqual({ role: 'researcher'});
     expect(config.getRoleSelection()).toBe('researcher');
 
@@ -286,7 +286,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
 
   test('mode with no role reads the current role', async () => {
     const { tasks } = roleSetup();
-    expect(await tasks({ action: 'mode' })).toEqual({ role: 'general' });
+    expect(await tasks({ action: 'mode' })).toEqual({ role: 'task' });
     await tasks({ action: 'mode', role: 'auditor' });
     expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
   });
@@ -299,17 +299,18 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     expect(await tasks({ action: 'mode' })).toEqual({ role: 'auditor' });
   });
 
-  test('switching to implementer during a Plan turn does not lift the Plan bar', async () => {
+  test('switching to task during a Plan turn does not lift the Plan bar', async () => {
     const { tasks, rt } = roleSetup();
-    expect(await tasks({ action: 'mode', role: 'implementer' })).toEqual({ role: 'implementer'});
+    await tasks({ action: 'mode', role: 'researcher' });
+    expect(await tasks({ action: 'mode', role: 'task' })).toEqual({ role: 'task'});
 
     const plan = buildSystemPromptSync(rt, {
       workMode: 'plan',
       planSubmissionAvailable: true,
-      roleSection: roleSection('implementer'),
+      roleSection: roleSection('task'),
     });
 
-    expect(plan).toContain('Role: Implementer');
+    expect(plan).toContain('Role: Task');
     expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
     expect(plan).toMatch(/do not begin implementation/i);
     expect(Object.keys(buildBuiltinTools({ rt }))).not.toContain('submit_plan');

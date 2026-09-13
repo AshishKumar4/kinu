@@ -39,7 +39,7 @@ export function ProfileCatalogSettings() {
   const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
   const [menu, setMenu] = useState<ModelMenu>(EMPTY_MENU);
-  const [selectedRole, setSelectedRole] = useState<RoleId>('general');
+  const [selectedRole, setSelectedRole] = useState<RoleId>('task');
   const [newRoleId, setNewRoleId] = useState('');
   const [newTierId, setNewTierId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -147,7 +147,7 @@ export function ProfileCatalogSettings() {
     delete next[selectedRole];
     setDraft({ ...draft, roles: next });
 
-    if (!(selectedRole in BUILTIN_ROLE_DEFINITIONS)) setSelectedRole('general');
+    if (!(selectedRole in BUILTIN_ROLE_DEFINITIONS)) setSelectedRole('task');
   };
 
   const setTier = (id: TierId, model: string) => {

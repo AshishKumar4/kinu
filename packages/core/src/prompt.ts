@@ -51,12 +51,21 @@ import {
   VERIFICATION_SECTION,
   WORKSPACE_EXECUTOR_LINE,
   WORKSPACE_INSTRUCTIONS_SECTION,
+  LEAD_RESPONSIBILITY,
+  LEAD_BRIEF,
+  LEAD_PARALLEL,
+  LEAD_REVIEW,
+  LEAD_INTERRUPTION,
+  LEAD_DELIVERY,
+  LEAD_DIRECT_EDIT,
   sectionRenderer,
+  promptFamilyDelta,
   type PromptSectionOverrides,
   type RenderSection,
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
+import { CRAFTED_TOOL_NAMESPACE } from './tools/sandbox-contract';
 
 export type { TurnProvenance, WorkMode } from './types/turn';
 
@@ -137,8 +146,7 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
   const family = surface.model.family;
 
   return render(OPERATING_GUIDANCE, {
-    kimi: family === 'kimi',
-    gpt: family === 'gpt',
+    familyDelta: promptFamilyDelta(OPERATING_GUIDANCE.id, family),
     planMode: surface.workMode === 'plan',
     planSubmission: surface.planSubmissionAvailable,
   });
@@ -285,7 +293,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
   if (hasTool(tools, 'execute_tools')) {
-    parts.push(render(CODE_EXECUTION_SECTION, {}));
+    parts.push(render(CODE_EXECUTION_SECTION, { craftedNamespace: CRAFTED_TOOL_NAMESPACE }));
   }
 
   if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
@@ -408,11 +416,12 @@ export function unverifiedInstructionsMessage(ctx: UnverifiedInstructions): Mode
  * string synchronously and the runtime's sql executor is synchronous.
  */
 export function buildSystemPromptSync(
-  _rt: AgentRuntime,
+  rt: AgentRuntime,
   opts: SystemPromptOptions = {},
 ): string {
   const surface = compilePromptSurface(opts);
   const render = sectionRenderer(opts.sectionOverrides);
+  const lead = rt.actor.parentActorId === null && surface.agentsActions.includes('hire');
 
   return [
     // Identity, then the hard rules, then the doctrine that bounds every tool
@@ -435,6 +444,15 @@ export function buildSystemPromptSync(
     renderExecutorSection(surface, render),
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
+    ...(lead ? [
+      render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),
+      render(LEAD_PARALLEL, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_REVIEW, {}),
+      render(LEAD_INTERRUPTION, {}),
+      render(LEAD_DELIVERY, {}),
+      render(LEAD_DIRECT_EDIT, {}),
+    ] : []),
     // System placement carries ONLY what the owner approved by digest, plus the
     // built-in skills. Everything else this workspace happens to contain rides
     // the unapproved-instructions block in the messages array

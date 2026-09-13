@@ -732,7 +732,7 @@ describe('craft failure attribution — the same marker in both substrates', () 
 
 describe('the declared ids no adapter spells by hand', () => {
   test('the default role is a declared constant', () => {
-    expect(DEFAULT_ROLE_ID).toBe('general');
+    expect(DEFAULT_ROLE_ID).toBe('task');
   });
 
   test('the deps-gated set is derived from the tool id, not a loose string', () => {

@@ -16,7 +16,7 @@ describe('role, tier, and agent hubs', () => {
           label: 'Checkout',
           kind: 'main',
           status: 'idle',
-          roleId: 'general',
+          roleId: 'task',
           tierId: 'default',
           workspace: 'checkout',
         },
@@ -35,7 +35,7 @@ describe('role, tier, and agent hubs', () => {
           label: 'Jarvis',
           kind: 'main',
           status: 'idle',
-          roleId: 'general',
+          roleId: 'task',
           tierId: 'default',
           workspace: 'jarvis',
         },
@@ -47,7 +47,7 @@ describe('role, tier, and agent hubs', () => {
           digest: 'profile-digest',
           catalog: {
             roles: {
-              general: {
+              task: {
                 description: 'General work',
                 instructions: 'Work directly.',
                 tier: 'default',
@@ -67,8 +67,8 @@ describe('role, tier, and agent hubs', () => {
             },
           },
         },
-        activeRoleId: 'general',
-        allowedRoleIds: ['general', 'auditor'],
+        activeRoleId: 'task',
+        allowedRoleIds: ['task', 'auditor'],
       },
     };
 

@@ -84,6 +84,14 @@ function runtimeEdges(parsed: Parsed): Edge[] {
 
     if (raw.type === 'ImportDeclaration') {
       if (raw.importKind === 'type') return;
+
+      // Markdown imported as text is data in Bun, esbuild and the Vite
+      // prompt-text transform, not an executable edge through its contents.
+      // An attribute on JavaScript or on a forbidden package is no exemption.
+      if (!isForbidden(raw.source.value) && raw.source.value.endsWith('.md')
+        && raw.attributes.some((attribute) => (attribute.key.type === 'Identifier'
+          ? attribute.key.name : attribute.key.value) === 'type' && attribute.value.value === 'text')) return;
+
       edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start) });
 
       return;

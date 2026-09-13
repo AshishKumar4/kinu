@@ -96,7 +96,7 @@ function titleProfile() {
       revision: 'rev-1',
       availableModels: ['fake-chat/m1', FAST_MODEL, 'fake-deep/m1'],
     },
-    roleId: 'general',
+    roleId: 'task',
     workMode: 'build',
     availableTools: [],
     activeSkills: [],

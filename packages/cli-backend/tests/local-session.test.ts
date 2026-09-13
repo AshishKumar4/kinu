@@ -5177,7 +5177,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   const plan = inWorkMode('plan', () => session.send('Inspect without changes.'));
   await entered.promise;
   const build = session.send('Now implement the change.');
-  await session.setRole('general');
+  await session.setRole('task');
   release.resolve();
   await plan;
   await build;
