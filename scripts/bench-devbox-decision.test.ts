@@ -11,6 +11,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,6 +37,7 @@ import {
   parseOptions,
   readArmArtifact,
   readBoxFile,
+  readOnlyLayerProbeCommand,
   barrierAckLoss,
   type BarrierAcknowledgement,
   type FileObservation,
@@ -222,6 +224,20 @@ const OLD_CUT: ChainCutFacts = {
 };
 
 describe('cut observation completeness', () => {
+  test.each([0, 1])('the read-only probe preserves status %s without ending the persistent session', (status) => {
+    const shell = spawnSync('sh', ['-c', `
+touch() { if [ ${status} -ne 0 ]; then printf '%s\\n' 'touch: Read-only file system' >&2; fi; return ${status}; }
+rm() { return 0; }
+${readOnlyLayerProbeCommand('/var/tmp/devbox/lower-base')}
+probe_status=$?
+printf '\\nprobe_status=%s session=alive\\n' "$probe_status"
+`], { encoding: 'utf8' });
+
+    expect(shell.status).toBe(0);
+    expect(shell.stdout.includes('Read-only file system')).toBe(status !== 0);
+    expect(shell.stdout).toContain(`probe_status=${status} session=alive`);
+  });
+
   test('immutable cuts refuse changed bytes or delta identities under an unchanged record revision', () => {
     expect(judgeChainCut({ ...OLD_CUT, postDeltaEtag: 'rewritten', cutMarkerPresent: true }).verdict).toBe('mixed');
     expect(judgeChainCut({ ...OLD_CUT, postDeltaId: 'delta-after', cutMarkerPresent: true }).verdict).toBe('mixed');
