@@ -24,9 +24,9 @@
 <tspan x="68" dy="0">Choose the work relationship</tspan>
 </text>
 <text x="68" y="229" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">hire: a durable teammate</tspan>
-<tspan x="68" dy="30">ask(role): temporary assigned work</tspan>
-<tspan x="68" dy="30">ask/send/reply: message an existing actor</tspan>
+<tspan x="68" dy="0">hire: durable or task-lifetime actor</tspan>
+<tspan x="68" dy="30">msg: message an existing actor</tspan>
+<tspan x="68" dy="30">list: read roster; dismiss: archive a hire</tspan>
 </text>
 </g>
 <g>
