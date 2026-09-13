@@ -87,7 +87,9 @@ test('native MCP protocol failures reject while namespace responses retain their
     await expect(failed).rejects.not.toHaveProperty('execution');
     seedMcpAnswer(protocolFailure);
     const namespace = nativeToolFunctions({ mcp_github_read_issue: native });
-    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual(protocolFailure);
+    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual({
+      success: false, reason: null, error: expect.stringContaining('remote execution failed'),
+    });
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
     await expect(invoke({})).rejects.toThrow('not in the allowed_tools list');
   } finally { user.close(); resetRecordedMcp(); }

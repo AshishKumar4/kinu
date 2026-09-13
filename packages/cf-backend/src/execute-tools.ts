@@ -29,6 +29,7 @@ import {
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
+  withCodemodeProgram, craftedFailureFunctions,
 } from "@kinu.run/core";
 import {
   KinuSandboxExecutor, renderToolsPrelude,
@@ -177,13 +178,16 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
             // rows. createCodeTool froze the native fns when the tool was built;
             // they are the finished set's, which is what this tool exists for.
             execute: (code, resolved) => {
+              const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
+              const failures = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute]));
+
               const live = Array.isArray(resolved)
                 ? resolved.map((provider) => provider.name === CRAFTED_TOOL_NAMESPACE
                   ? {
                     name: provider.name,
-                    fns: provider.fns,
+                    fns: { ...provider.fns, ...failures },
                     prelude: renderToolsPrelude(
-                      selectInjectableCraftedTools(rt.craftStore, sql),
+                      crafted,
                       { workspace: options.workspace },
                     ),
                   }
@@ -207,7 +211,9 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
 
-          return execute(input, context);
+          return withCodemodeProgram(async () => v.parse(v.object({
+            result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
+          }), await execute(input, context)));
         },
       });
     },

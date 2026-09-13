@@ -582,7 +582,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
-  renderToolsDeclaration, nativeToolFunctions,
+  renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
@@ -774,7 +774,7 @@ export {
   type ToolCallEffect,
 } from './tools/tool-call-summary';
 
-export { ToolOutcomeSchema, failedToolOutcome, type ToolOutcome } from './tools/outcome';
+export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
 export { repairToolCall } from './tools/repair-tool-call';
 

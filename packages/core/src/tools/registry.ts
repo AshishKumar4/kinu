@@ -785,7 +785,7 @@ export const BUILTIN_TOOL_SPECS = {
     doctrine:
       'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `run` with runtime "workspace". '
       + 'A separate container or machine keeps its commands behind its own runtime; when live, its files also sit in the workspace plane at /pc or /sandbox.',
-    result: 'Returns whatever the program returns, plus everything it logged with console.*, or the error it threw.',
+    result: 'Returns whatever the program returns, plus everything it logged with console.*, or the error it threw. Binding failures resolve to { success: false, reason, error, execution? }, with the same reason as the native tool. Inspect success === false to recover; returning that refusal propagates it on the tool error channel. Inner failures remain in the call census even when the program recovers.',
     example: "execute_tools({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
   },
   run: {

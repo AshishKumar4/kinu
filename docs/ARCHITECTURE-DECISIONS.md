@@ -71,9 +71,18 @@ store per call, and code defines new ones through `workspace.createTool`.
 `cli-backend/src/execute-tools-factory.ts`; pinned by `unit-tool-reach`,
 `unit-agents-codemode`, `unit-crafted-codemode-schema`.
 
-M2. Failures inside code do not use the native channel. A host rejection is
-thrown into the program; a classified refusal is returned as a value. The
-native path uses `ToolOutcome`. Reviewed 2026-09-13. Open: O2.
+M2. Binding failures resolve to `{ success: false, reason, error, execution? }`,
+using the native `ToolOutcome` discriminant and reason vocabulary. Successful
+payloads are unchanged. Both backends use the core dispatcher: host rejections
+and returned refusals take the same value channel. A program that recovers
+returns normally; returning or throwing its refusal propagates through the SDK
+error channel. Inner failures survive recovery in `ToolOutcome.failures` and
+the census attributes them to their binding, not `execute_tools`. Malformed
+programs still throw, with the native-name correction. Decided 2026-09-13,
+commit `fix(codemode): one failure shape inside a program and on the tool channel`.
+Measured: `unit-sandbox-errors` rejected the host-disconnect regression before
+the fix; the scoped codemode suites and harness-wiring's durable-census case
+pass after it. O2 closed.
 
 M3. A slate is an authored Worker with mediated bindings, not the agent's
 codemode. Its vocabulary is declared per slate in `package.json` (namespace,
@@ -103,6 +112,5 @@ role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`.
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching.
-O2. One failure channel for code and native tool calls.
 O3. Slate bindings drawn from the agent's codemode registry, gated by the
 caller's reach, so a live app can call what the agent can call.

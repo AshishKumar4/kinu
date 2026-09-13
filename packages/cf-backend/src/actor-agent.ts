@@ -232,7 +232,7 @@ import {
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, renderToolResult, successfulToolOutcome,
   toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle, childContextResolver,
@@ -6792,7 +6792,7 @@ export abstract class ActorAgent extends Think<Env> {
     // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
     // accumulator records it + fires the activity log + run-event sinks.
     const input = jsonObject(ctx.input);
-    const outcome = ctx.success ? { success: true } satisfies ToolOutcome : failedToolOutcome({ cause: ctx.error });
+    const outcome = ctx.success ? successfulToolOutcome(ctx.toolName, ctx.output) : failedToolOutcome({ cause: ctx.error });
 
     const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
       toolName: ctx.toolName,

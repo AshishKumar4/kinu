@@ -120,7 +120,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
     expect(prelude).toContain(`await import("./${KINU_NODE_MODULE_NAME}")`);
     expect(prelude).toContain("const require = __kinu.createRequire(");
     expect(prelude).toContain('workspace: "hardy-stone-a905df14"');
-    expect(prelude).toContain('"double": __kinu.defineCrafted("double", async () => (\nasync (n) => n * 2\n))');
+    expect(prelude).toContain('"double": __kinu.defineCrafted("double", async () => (\nasync (n) => n * 2\n), tools["double"])');
     expect(prelude).toContain("Object.assign(tools, {");
   });
 
@@ -137,7 +137,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
     );
 
     expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
-    expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", async () => (\nasync () => 2\n))');
+    expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", async () => (\nasync () => 2\n), tools["fine"])');
     // The definitions block parses as JavaScript on its own.
     const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
     expect(() => new Function("tools", "__kinu", block)).not.toThrow();
@@ -154,7 +154,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
       { workspace: "w" },
     );
 
-    expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n))');
+    expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n), tools["waiter"])');
     const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
     expect(() => new Function("tools", "__kinu", block)).not.toThrow();
   });
