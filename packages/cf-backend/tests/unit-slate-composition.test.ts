@@ -331,7 +331,7 @@ test('native tool bindings use the caller file plane and lose reach immediately 
   await files.writeFile('/home/user/slate-note.txt', 'root note');
 
   const child = await hostedSubordinateHarness(parent, {
-    name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'general', mission: 'Read',
+    name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'task', mission: 'Read',
   });
 
   const caller = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'native-reader');
@@ -351,7 +351,7 @@ test('native tool bindings use the caller file plane and lose reach immediately 
   child.actor.stores.config.setRoleSelection('scribe');
   expect(await call()).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
   expect(await memory(caller, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: true, value: 'child fact' } });
-  child.actor.stores.config.setRoleSelection('general');
+  child.actor.stores.config.setRoleSelection('task');
   expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
 });
 
@@ -368,7 +368,7 @@ test('a slate cannot bind the agent, delegate through a tool alias, or widen a p
   await bind({ kind: 'agent' });
   expect(await call('hire')).toMatchObject({ ok: false, reason: 'bad_input' });
   await bind({ kind: 'tool', name: 'agents' });
-  expect(await call('call', [{ action: 'hire', role: 'general', mission: 'should not run' }])).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
+  expect(await call('call', [{ action: 'hire', role: 'task', mission: 'should not run' }])).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
 
   for (const namespace of ['agent', 'agents']) {
     await bind({ kind: 'namespace', namespace });
