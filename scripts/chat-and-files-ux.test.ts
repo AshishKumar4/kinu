@@ -2624,7 +2624,6 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluate(() => {
         document.querySelector<HTMLElement>('[data-separator]')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
       });
-      await Bun.sleep(400);
 
       // A real drag follows: pointerdown marks the input, the release
       // commit persists the width the user's hand chose. The inspector is
@@ -2637,7 +2636,12 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.mouse.down();
       await page.mouse.move(x + 60, y, { steps: 4 });
       await page.mouse.up();
-      await Bun.sleep(300);
+
+      // The release commit and its persist are synchronous in the same
+      // dispatch: the width lands at 280 and the store holds it.
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) === 280, { timeout: 10_000 });
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -2678,7 +2682,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // Narrowing re-commits a smaller constrained layout: no input mark,
       // so the preferred 2000 stays stored and no new choice is written.
       await page.setViewport({ width: 1100, height: 900 });
-      await Bun.sleep(600);
+      await page.waitForFunction((prev: number) => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) < prev, { timeout: 10_000 }, before);
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -2702,17 +2708,15 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.evaluateOnNewDocument(() => {
         // Every listener the page registers is counted by target+type; the
         // same accounting on remove keeps a live tally.
-        interface LiveWindow extends Window { __liveListeners?: Map<string, number> }
-
-        const w: LiveWindow = window;
+        const w: Window & { __liveListeners?: Map<string, number> } = window;
         w.__liveListeners = new Map();
 
         const tally = (target: EventTarget, type: string, delta: number) => {
-          // SAFETY: the separator div carries `data-separator` (the library
-          // sets it); `dataset` presence on a DOM element is the check, and
+          // The separator div carries `data-separator` (the library sets it);
+          // `instanceof HTMLElement` narrows it without a cast, and
           // `instanceof Document` covers the ownerDocument listeners. Any
           // other target matches neither and is skipped.
-          if ('dataset' in target) {
+          if (target instanceof HTMLElement && target.dataset['separator'] !== undefined) {
             const key = `sep:${type}`;
             w.__liveListeners!.set(key, (w.__liveListeners!.get(key) ?? 0) + delta);
 
@@ -2747,7 +2751,6 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-separator]', { timeout: 20_000 });
-      await Bun.sleep(500);
 
       const readTally = () => {
         const w: Window & { __liveListeners?: Map<string, number> } = window;
@@ -2759,12 +2762,13 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       // Two full remounts: each swap unmounts the separator element, which
       // must detach every listener the hook attached — element and document.
+      // The remount states themselves are the wait: the separator is absent
+      // on mobile, present on desktop.
       for (let i = 0; i < 2; i++) {
-        await page.setViewport({ width: 800, height: 900 });
-        await Bun.sleep(600);
+        await page.setViewport({ width: 600, height: 900 });
+        await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
         await page.setViewport({ width: 1440, height: 900 });
         await page.waitForSelector('[data-separator]', { timeout: 10_000 });
-        await Bun.sleep(600);
       }
 
       const after = await page.evaluate(readTally);
