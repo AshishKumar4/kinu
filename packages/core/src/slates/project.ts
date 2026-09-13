@@ -12,6 +12,10 @@ const Binding = v.variant('kind', [
   v.strictObject({ kind: v.literal('rpc'), methods: v.pipe(v.array(v.picklist(SLATE_READ_MODELS)), v.minLength(1)) }),
   v.strictObject({ kind: v.literal('mcp'), server: Name, tools: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('app'), id: Name }),
+  v.strictObject({ kind: v.literal('tool'), name: Name }),
+  v.strictObject({ kind: v.literal('memory'), members: v.optional(v.array(Name)) }),
+  v.strictObject({ kind: v.literal('tasks'), members: v.optional(v.array(Name)) }),
+  v.strictObject({ kind: v.literal('web'), members: v.optional(v.array(Name)) }),
 ]);
 
 const SlateMetadata = v.strictObject({

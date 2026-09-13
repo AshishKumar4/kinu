@@ -16,6 +16,7 @@ import type { ProfileCatalogEnvelope } from '../types/profile';
 import { decodeJsonValue } from '../utils/json';
 import { createTasksDispatcher } from './tasks-tool';
 import { branchableToolCall } from './outcome';
+import { KinuError } from '../obs';
 
 const TitlesSchema = v.array(v.string());
 
@@ -65,7 +66,7 @@ export function createTasksCodemodeProvider(
           const parent = v.safeParse(ParentSchema, args[1]);
 
           if (!titles.success || !parent.success) {
-            return { error: 'tasks.add requires string titles and an optional string parent' };
+            throw new KinuError('bad_input', 'tasks.add requires string titles and an optional string parent');
           }
 
           return decodeJsonValue({

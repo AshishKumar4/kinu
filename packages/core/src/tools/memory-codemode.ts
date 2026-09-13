@@ -13,6 +13,7 @@ import { decodeJsonValue, type JsonValue } from '../utils/json';
 import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool';
 import { TOOL_REACH } from './registry';
 import { branchableToolCall } from './outcome';
+import { KinuError } from '../obs';
 
 const SessionOptionsSchema = v.object({
   query: v.optional(v.string()),
@@ -67,7 +68,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
       case 'conversations': {
         const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
 
-        if (!options.success) return { error: 'memory.conversations: invalid options' };
+        if (!options.success) throw new KinuError('bad_input', 'memory.conversations: invalid options');
 
         return decodeMemoryResult({ pending: run({ action: 'conversations', ...options.output }) });
       }
@@ -75,7 +76,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
       case 'remember': {
         const confidence = v.safeParse(ConfidenceSchema, args[2]);
 
-        if (!confidence.success) return { error: 'memory.remember: confidence must be a number' };
+        if (!confidence.success) throw new KinuError('bad_input', 'memory.remember: confidence must be a number');
 
         return decodeMemoryResult({
           pending: run({
@@ -92,7 +93,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
       case 'forget':
         return decodeMemoryResult({ pending: run({ action: 'forget', key: String(args[0] ?? '') }) });
       default:
-        return { error: `unknown memory action '${action}'` };
+        throw new KinuError('bad_input', `unknown memory action '${action}'`);
     }
   });
 

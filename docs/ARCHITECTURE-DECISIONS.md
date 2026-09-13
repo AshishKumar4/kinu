@@ -79,19 +79,25 @@ returns normally; returning or throwing its refusal propagates through the SDK
 error channel. Inner failures survive recovery in `ToolOutcome.failures` and
 the census attributes them to their binding, not `execute_tools`. Malformed
 programs still throw, with the native-name correction. Decided 2026-09-13,
-commit `fix(codemode): one failure shape inside a program and on the tool channel`.
+commit `526f618d7`.
 Measured: `unit-sandbox-errors` rejected the host-disconnect regression before
 the fix; the scoped codemode suites and harness-wiring's durable-census case
 pass after it. O2 closed.
 
-M3. A slate is an authored Worker with mediated bindings, not the agent's
-codemode. Its vocabulary is declared per slate in `package.json` (namespace,
-rpc, mcp, app) and every route resolves as the calling actor with the caller's
-gates. A slate cannot reach `tools.*`, crafted tools, memory, tasks, web, or
-the agent. Reviewed 2026-09-13 against `slates/project.ts`,
-`slates/bindings.ts`, `cf-backend/src/slates/host.ts`; pinned by
-`unit-slate-composition.test.ts`. The owner's intent is that the bindings the
-agent builds on also power live apps; that is not true today. Open: O3.
+M3. A slate declares its bindings in `package.json`. In addition to namespace,
+rpc, mcp and app, `{kind:'tool',name}` exposes `env.NAME.call(input)` for a
+native or crafted tool; memory, tasks and web expose their codemode projection
+members. The host uses the same core dispatcher and CF codemode factory,
+re-reading crafted source and caller reach for each call. Tool and projection
+failures use M2's value shape. Role reach, Plan permissions, egress and approval
+gates are the caller's; a slate cannot add authority. RPC read models remain
+root-only. Neither agent nor agents is exposed, including through a crafted
+tool's sandbox: live apps must not hire or steer their caller.
+Decided 2026-09-13, commit `feat(slates): a slate binds what its caller can call`.
+Measured by `unit-slate-composition` (immediate scribe-role revocation, actor
+memory, root-only RPC and the shared approval ladder), `unit-slate-project`,
+and workerd's `plan-code` (a declared crafted binding runs live source with no
+delegation globals). O3 closed.
 
 ## Delegation
 
@@ -112,5 +118,3 @@ role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`.
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching.
-O3. Slate bindings drawn from the agent's codemode registry, gated by the
-caller's reach, so a live app can call what the agent can call.

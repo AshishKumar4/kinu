@@ -240,6 +240,8 @@ export class SlateHost {
       // Neither producer declares the internal namespace refusal vocabulary.
       case 'mcp':
       case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
+      case 'tool':
+      case 'codemode': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
       case 'app': return this.call(caller, route.id, route.method, [...route.args], route.chain);
     }

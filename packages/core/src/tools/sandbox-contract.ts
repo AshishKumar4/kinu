@@ -31,7 +31,7 @@ import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } fr
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission } from '../execution/work-mode';
 import { branchableToolCall, bindProgramCall } from './outcome';
-import { TOOL_REACH } from './registry';
+import { TOOL_REACH, type ToolSurfaceNarrowing } from './registry';
 import { KinuError } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
@@ -244,6 +244,33 @@ export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]):
   }
 
   return functions;
+}
+
+/** Slates inherit caller reach, but an app may neither delegate nor steer the actor. */
+export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowing {
+  const allowsNamespace = (name: string) => name !== 'agent' && name !== 'agents' && caller.allowsNamespace(name);
+
+  return {
+    allowsTool: (name) => name !== 'agents' && name !== 'agent' && name !== 'execute_tools' && caller.allowsTool(name),
+    allowsNamespace,
+    narrowProviders: (providers) => providers.filter((provider) => allowsNamespace(provider.name)),
+  };
+}
+
+/** Names and implementations are resolved together; a held slate binding is not a grant. */
+export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
+  const call = codemodeFunction(namespace, member, async () => {
+    const provider = providers.find((candidate) => candidate.name === namespace);
+
+    if (provider === undefined) throw new KinuError('denied', `${namespace} is not within this actor's reach right now`);
+    const entry = Object.hasOwn(provider.tools, member) ? provider.tools[member] : undefined;
+
+    if (entry === undefined) throw new KinuError('missing', `${namespace} has no member ${member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+
+    return entry.execute(...args);
+  });
+
+  return call(...args);
 }
 
 export type { JsonValue };

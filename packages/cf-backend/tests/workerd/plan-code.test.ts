@@ -1,6 +1,15 @@
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 
+it('a declared slate tool binding runs live crafted source through the codemode registry without delegation', async () => {
+  const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName('crafted-binding'));
+  expect(JSON.parse(await root.craftedSlate())).toEqual({
+    first: { ok: true, value: { answer: 42, agent: 'undefined', agents: 'undefined' } },
+    second: { ok: true, value: 63 },
+    planned: { ok: true, value: 63 },
+  });
+});
+
 it('hosted Plan analysis reads files and keeps research state without writes or raw network', async () => {
   const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName('plan-analysis'));
 
