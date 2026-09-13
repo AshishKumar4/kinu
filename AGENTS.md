@@ -11,6 +11,7 @@ Self-evolving agent framework: MCTS exploration, mutable scaffolding, durable sk
 - A defect the owner finds by hand gets a `tests/first-run/` row proved red against the deployed build before its fix ships; `gate:first-run` runs on every deploy against the product.
 - A fixture that can no longer fail is worse than red; restoring its red direction is part of the same change. Retire a corpus entry only after showing no live code holds its property.
 - A verification claim names the tree, the command, and the revision. A subagent's summary is a claim to check.
+- A gate that pins platform behaviour (what the runtime, an SDK, or a service does) cites a dated measurement on that platform in its header. A comment in our own source is not a measurement. A gate built on an unmeasured premise enforces the regression it was meant to prevent; `scripts/do-init-gate.ts` did exactly that from 2026-09-10 to 2026-09-13.
 - Locks keyed by path (`schema-genesis`, `wired`, `complexity`, `pattern-inventory`) are re-keyed on the path half only when a file moves; values stay byte-identical.
 - `gate:core-layering`: `packages/core` is platform (`obs utils types identity vfs execution events memory safety slates providers config credentials checkpoints`, plus root files by name), tools (`tools craft web`), harness (everything else). Imports point down or sideways, never up; the lock shrinks only.
 - `gate:client-graph`: no path from a client entry reaches `@agent-core/core` or `bun:sqlite`.
@@ -50,6 +51,11 @@ Default is solo + sidekick (if available). Delegation beyond that must beat the 
 - `no-ai-slop` standard, ASD-STE100, Zinsser order (simplicity, brevity, clarity, humanity); the reader wins over the letter of STE. Owner's first-person voice for user-facing prose. No AI-edited disclaimer line here (two generators write docs and print none).
 - A doc states what was measured with number and date, or says it is unmeasured. One name per referent: a swarm's agent is a swarm node, never a "search node" (`search_nodes` is a table). Verify symbols, paths, and counts against source before a doc lands; no prose-shape or doc-claim gates.
 - Code reviews load `thermo-nuclear-code-quality-review`; name it in reviewer briefs.
+
+## Decision logs
+- A subsystem with a decision log (`docs/DEVBOX-DECISIONS.md`) is entered by reading it. The log holds decisions and the measurement that settled each, one entry per decision, dated, with the commit; not activity, not reports. A decision without a measurement is written as a hypothesis.
+- A change that reverses a logged decision names the entry it reverses and re-runs that entry's measurement under both shapes before it lands. A reversal that skips the control is how `bde0047cb` undid a working in-hook restore on a wrong premise and cost four days.
+- A commit body is not where a decision lives; it is where the change is explained. The log entry is the durable record, and the body cites it.
 
 ## Packages
 `core` (interfaces, MCTS, evolution, scaffold, craft) · `cf-backend` (Think DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, VFS types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
