@@ -43,6 +43,8 @@ export {
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
 
+export { ChatHistoryEntrySchema } from './types/chat';
+
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
