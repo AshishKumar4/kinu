@@ -102,6 +102,8 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
+  LAST_INTERACTION_KEY,
+  QUIET_SINCE_KEY,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
 } from './lifecycle';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -167,10 +169,6 @@ export interface IncidentReasonRow {
 /** Durable keys. One namespace, so a host's own keys cannot collide with these
  *  and a reader can tell at a glance which rows belong to the box machinery. */
 const STORAGE_KEY = 'devbox:storage-state';
-
-const LAST_INTERACTION_KEY = 'devbox:last-interaction';
-
-const QUIET_SINCE_KEY = 'devbox:quiet-since';
 
 const PROC_SPEC_PREFIX = 'devbox:proc:';
 

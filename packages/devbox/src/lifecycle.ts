@@ -112,6 +112,14 @@ export const DEFAULT_DEVBOX_POLICY: DevboxPolicy = {
   requestJoinMs: 5_000,
 };
 
+/** Durable keys the lease is read through. One namespace, so a host's own
+ *  keys cannot collide with these and a reader can tell at a glance which
+ *  rows belong to the box machinery. The names live beside the policy that
+ *  decides them: they are the contract, not one module's internals. */
+export const LAST_INTERACTION_KEY = 'devbox:last-interaction';
+
+export const QUIET_SINCE_KEY = 'devbox:quiet-since';
+
 // ── the container-start budget ──────────────────────────────────────────────
 
 /** What abandoned container-start work rejected with, if it ever settled.
