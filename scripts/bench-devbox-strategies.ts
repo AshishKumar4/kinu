@@ -2873,6 +2873,147 @@ async function runPhase(
 }
 
 /**
+ * One decisive segment, from its workload invocation to the priced tick.
+ *
+ * The lifecycle is one operation: run the segment, wait out the minimum
+ * checkpoint interval rather than measuring the rate limiter, tick with an op
+ * window flushed around it, and price the committed tick — a segment that
+ * errors, or whose tick never commits, records its error on the observation
+ * and returns without a row. The caller keeps the `record?.settled` boundary
+ * and the continuity probes.
+ *
+ * Answers the segment's priced row plus the tree size its workload reported
+ * (null when the run never produced one) — the caller holds the maximum
+ * across repetitions, since a later repetition re-runs the same segments over
+ * the tree the previous one left.
+ */
+async function executeDecisiveSegment(
+  fixture: Fixture,
+  box: string,
+  arm: string,
+  spec: (typeof DECISIVE_WORKLOADS)[number],
+  seed: number,
+  repetition: number,
+  segment: number,
+  observation: DecisiveSegmentObservation,
+  notes: string[],
+): Promise<{ tick: TickRecord | null; treeBytes: number | null }> {
+  const root = `/workspace/decisive-${spec.id}`;
+
+  const command = `bun ${HARNESS}/decisive.ts --root ${root} --workload ${spec.workload} `
+    + `--seed ${seed} --segment ${segment} ${spec.args}`;
+
+  const reply = await execInBox(fixture, box, command);
+  observation.command = reply;
+  const start = (reply.stdout ?? '').indexOf('{');
+
+  if (reply.ok !== true || reply.exitCode !== 0 || start === -1) {
+    observation.error = `${spec.id} segment ${segment}: unobserved execution: ${reply.error ?? reply.stderr ?? 'no successful JSON reply'}`;
+    notes.push(observation.error);
+
+    return { tick: null, treeBytes: null };
+  }
+
+  const run = parseDecisiveRun((reply.stdout ?? '').slice(start), `${arm}/${spec.id}#${segment}`);
+
+  if (run.error !== undefined) {
+    observation.error = `${spec.id} segment ${segment}: ${run.error}`;
+    notes.push(observation.error);
+
+    return { tick: null, treeBytes: null };
+  }
+
+  const segmentName = run.segments?.[0]?.name;
+  observation.segmentName = segmentName ?? null;
+
+  if (segmentName === undefined) {
+    observation.error = 'the workload returned no segment';
+
+    return { tick: null, treeBytes: run.treeBytes ?? null };
+  }
+
+  // RESPECT THE MINIMUM CHECKPOINT INTERVAL, rather than measuring it.
+  //
+  // MEASURED: ticking immediately produced five consecutive
+  // `skipped (within the minimum checkpoint interval)` outcomes on one arm, so
+  // the whole workload recorded no work at all. The guard is correct product
+  // behaviour; a driver that trips it is measuring the rate limiter.
+  await delay(MIN_CHECKPOINT_INTERVAL_MS);
+
+  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+  const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  observation.accounting.before = before;
+  const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
+  observation.checkpoint = cp;
+
+  // UNCOMMITTED TICKS PRICE NOTHING. A failed or skipped tick pushed as a
+  // row would sum its wall time into the decision's numerator — a chain arm
+  // erroring every tick summed a negative one — so the failure is a note and
+  // the row is absent, which G9 counts as one repetition fewer rather than
+  // as a silent success. The note carries the box's own reason, as the
+  // ladder rows do: run 20260905193714 recorded forty failed ticks as
+  // `(failed)` and nothing else, so the arm's deciding cell had no cause.
+  if (cp.ok !== true || cp.outcome?.kind !== 'committed') {
+    observation.error = cp.error ?? checkpointOutcomeWords(cp);
+    notes.push(
+      `${spec.id} tick ${segmentName} did not commit `
+      + `(${cp.error ?? checkpointOutcomeWords(cp)}); it prices nothing`,
+    );
+
+    return { tick: null, treeBytes: run.treeBytes ?? null };
+  }
+
+  if (cp.ms === undefined || !Number.isFinite(cp.ms) || cp.ms < 0) {
+    observation.error = 'the committed checkpoint has no valid wall time';
+    notes.push(`${spec.id} tick ${segmentName} committed without a measured duration; its wall time is unpriced`);
+
+    return { tick: null, treeBytes: run.treeBytes ?? null };
+  }
+
+  await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+  const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+  observation.accounting.after = after;
+  const bill = pricedOpWindow(before, after);
+
+  if (bill === null || bill.classA === undefined || bill.classB === undefined || bill.classFree === undefined) {
+    observation.error = 'the checkpoint accounting window was unobserved or inconsistent';
+    notes.push(observation.error);
+
+    return { tick: null, treeBytes: run.treeBytes ?? null };
+  }
+
+  // HELD versus MOVED are different quantities and the report keeps them apart.
+  // `bytes` is the cumulative durable total; `movedBytes` is what this tick
+  // actually uploaded. Absent `movedBytes` stays absent rather than becoming 0.
+  const bytes = cp.outcome?.bytes;
+  const moved = cp.outcome?.movedBytes;
+
+  const tick: TickRecord = {
+    arm,
+    workload: spec.id,
+    repetition,
+    segment: segmentName,
+    wallMs: cp.ms,
+    classA: bill.classA,
+    classB: bill.classB,
+    classFree: bill.classFree,
+    // NOT `?? 0`: a failed tick may have landed blobs before throwing, and
+    // answers `null`, which is a different fact from a skip's honest zero.
+    bytesPut: moved ?? null,
+    heldBytes: bytes ?? null,
+    movedReported: moved !== undefined,
+    // Kept for the report's own arithmetic check.
+    unitsMoved: moved ?? null,
+    unitLabel: 'delta bytes',
+    outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
+  };
+
+  observation.priced = true;
+
+  return { tick, treeBytes: run.treeBytes ?? null };
+}
+
+/**
  * Run one decisive workload and price every checkpoint it triggers.
  *
  * The measurement that matters is the TICK, not the workload: the workload only
@@ -2935,108 +3076,13 @@ export async function runDecisive(
     try {
       observation.before = await observeContinuity(fixture, box, `${spec.id}/${repetition}/${segment}: before`);
 
-      const command = `bun ${HARNESS}/decisive.ts --root ${root} --workload ${spec.workload} `
-        + `--seed ${seed} --segment ${segment} ${spec.args}`;
+      const run = await executeDecisiveSegment(
+        fixture, box, arm, spec, seed, repetition, segment, observation, notes,
+      );
 
-      const reply = await execInBox(fixture, box, command);
-      observation.command = reply;
-      const start = (reply.stdout ?? '').indexOf('{');
+      if (run.treeBytes !== null && run.treeBytes > treeBytes) treeBytes = run.treeBytes;
 
-      if (reply.ok !== true || reply.exitCode !== 0 || start === -1) {
-        observation.error = `${spec.id} segment ${segment}: unobserved execution: ${reply.error ?? reply.stderr ?? 'no successful JSON reply'}`;
-        notes.push(observation.error);
-        continue;
-      }
-
-      const run = parseDecisiveRun((reply.stdout ?? '').slice(start), `${arm}/${spec.id}#${segment}`);
-
-      if (run.error !== undefined) {
-        observation.error = `${spec.id} segment ${segment}: ${run.error}`;
-        notes.push(observation.error);
-        continue;
-      }
-
-      if (run.treeBytes !== undefined && run.treeBytes > treeBytes) treeBytes = run.treeBytes;
-      const segmentName = run.segments?.[0]?.name;
-      observation.segmentName = segmentName ?? null;
-
-      if (segmentName === undefined) {
-        observation.error = 'the workload returned no segment';
-        continue;
-      }
-
-      // RESPECT THE MINIMUM CHECKPOINT INTERVAL, rather than measuring it.
-      //
-      // MEASURED: ticking immediately produced five consecutive
-      // `skipped (within the minimum checkpoint interval)` outcomes on one arm, so
-      // the whole workload recorded no work at all. The guard is correct product
-      // behaviour; a driver that trips it is measuring the rate limiter.
-      await delay(MIN_CHECKPOINT_INTERVAL_MS);
-
-      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-      const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-      observation.accounting.before = before;
-      const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
-      observation.checkpoint = cp;
-
-      // UNCOMMITTED TICKS PRICE NOTHING. A failed or skipped tick pushed as a
-      // row would sum its wall time into the decision's numerator — a chain arm
-      // erroring every tick summed a negative one — so the failure is a note and
-      // the row is absent, which G9 counts as one repetition fewer rather than
-      // as a silent success. The note carries the box's own reason, as the
-      // ladder rows do: run 20260905193714 recorded forty failed ticks as
-      // `(failed)` and nothing else, so the arm's deciding cell had no cause.
-      if (cp.ok !== true || cp.outcome?.kind !== 'committed') {
-        observation.error = cp.error ?? checkpointOutcomeWords(cp);
-        notes.push(
-          `${spec.id} tick ${segmentName} did not commit `
-          + `(${cp.error ?? checkpointOutcomeWords(cp)}); it prices nothing`,
-        );
-        continue;
-      }
-
-      if (cp.ms === undefined || !Number.isFinite(cp.ms) || cp.ms < 0) {
-        observation.error = 'the committed checkpoint has no valid wall time';
-        notes.push(`${spec.id} tick ${segmentName} committed without a measured duration; its wall time is unpriced`);
-        continue;
-      }
-
-      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-      const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-      observation.accounting.after = after;
-      const bill = pricedOpWindow(before, after);
-
-      if (bill === null || bill.classA === undefined || bill.classB === undefined || bill.classFree === undefined) {
-        observation.error = 'the checkpoint accounting window was unobserved or inconsistent';
-        notes.push(observation.error);
-        continue;
-      }
-
-      // HELD versus MOVED are different quantities and the report keeps them apart.
-      // `bytes` is the cumulative durable total; `movedBytes` is what this tick
-      // actually uploaded. Absent `movedBytes` stays absent rather than becoming 0.
-      const bytes = cp.outcome?.bytes;
-      const moved = cp.outcome?.movedBytes;
-      ticks.push({
-        arm,
-        workload: spec.id,
-        repetition,
-        segment: segmentName,
-        wallMs: cp.ms,
-        classA: bill.classA,
-        classB: bill.classB,
-        classFree: bill.classFree,
-        // NOT `?? 0`: a failed tick may have landed blobs before throwing, and
-        // answers `null`, which is a different fact from a skip's honest zero.
-        bytesPut: moved ?? null,
-        heldBytes: bytes ?? null,
-        movedReported: moved !== undefined,
-        // Kept for the report's own arithmetic check.
-        unitsMoved: moved ?? null,
-        unitLabel: 'delta bytes',
-        outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
-      });
-      observation.priced = true;
+      if (run.tick !== null) ticks.push(run.tick);
     } catch (error) {
       observation.error = describeThrown({ cause: error });
       throw error;
@@ -3160,6 +3206,99 @@ export interface ControlWitnessFacts {
   };
 }
 
+/** The chunked-absorption witness: the marker committed into a delta reads
+ *  back through the merged view AND sits inside the published upper — the
+ *  chunked manifest was absorbed rather than copied to the store as one whole
+ *  object. A cell that produced no facts proves nothing and answers
+ *  unobserved. */
+function chunkedAbsorptionWitness(name: string, cell: ChunkedAbsorptionFacts | undefined): WitnessCheck {
+  if (cell === undefined) return absentCell(name);
+
+  const manifest = cell.manifestRead?.ok === true && cell.manifestRead.exitCode === 0
+    && cell.manifest !== null && v.safeParse(DeltaManifestSchema, cell.manifest).success
+    && cell.manifest.files.some((file) => file.p === cell.markerPath);
+
+  const merged = cell.markerInMerged?.path === `${DEVBOX_WORK_DIR}/${cell.markerPath}`
+    && witnessMatches(cell.markerInMerged, cell.markerDigest) === true;
+
+  const upper = cell.markerInUpper?.path === `${CHAIN_UPPER_DIR}/${cell.markerPath}`
+    && witnessMatches(cell.markerInUpper, cell.markerDigest) === true;
+
+  const observed = manifest && merged && upper && cell.sidecarMounted === false
+    && cell.mounts?.ok === true && cell.mounts.exitCode === 0
+    && cell.before !== null && cell.after === cell.before && cell.afterNamesDelta === true
+    && cell.nextCheckpoint?.ok === true && cell.nextCheckpoint.outcome?.kind === 'committed';
+
+  return {
+    name, observed,
+    detail: `chunked manifest ${manifest ? 'confirmed' : 'unobserved'}; marker merged=${merged} upper=${upper}; `
+      + `sidecar mounted=${String(cell.sidecarMounted)}; next checkpoint=${cell.nextCheckpoint?.outcome?.kind ?? 'unobserved'}; `
+      + `generation ${cell.before ?? 'unobserved'} to ${cell.after ?? 'unobserved'}`,
+  };
+}
+
+/** The delta-layer-collapse witness: the wake served the delta through a
+ *  mounted lower layer (not a copy into the fresh upper) and the next
+ *  checkpoint collapsed onto a fresh generation naming no delta. */
+function deltaLayerCollapseWitness(
+  name: string,
+  cell: NonNullable<ControlWitnessFacts['deltaLayerCollapse']> | undefined,
+): WitnessCheck {
+  if (cell === undefined) return absentCell(name);
+
+  // SERVED, NOT COPIED. The delta's bytes reach the merged view through a
+  // layer of their own, so the marker committed into that delta is
+  // readable at the work directory and absent from the writable layer the
+  // attach just emptied. A copy — the behaviour this witness used to
+  // preregister — puts the same marker in the upper and mounts no layer.
+  const served = cell.deltaBytes > 0
+    && cell.deltaLayerMounted
+    && cell.markerInMergedView
+    && !cell.markerInUpper;
+
+  // AND THE SERVE IS WHAT FORCES THE COLLAPSE: a fresh generation id, and
+  // a record that names no delta. Same id, or a delta still named, is an
+  // ordinary append — which is what a copied delta produces.
+  const collapsed = cell.collapsedChainId.length > 0
+    && cell.collapsedChainId !== cell.chainId
+    && !cell.collapsedNamesDelta;
+
+  return {
+    name,
+    observed: served && collapsed,
+    detail: `delta ${cell.deltaBytes}B, `
+      + `${cell.deltaLayerMounted ? 'mounted as a lower layer' : 'NOT mounted as a layer'}; `
+      + `the merged view ${cell.markerInMergedView ? 'holds' : 'does NOT hold'} the marker and `
+      + `the fresh upper ${cell.markerInUpper ? 'HOLDS it, so the attach copied the delta' : 'does not, so the delta is served'}`
+      + ` (attach: ${cell.attachDetail || '(none)'}); the next checkpoint `
+      + `${collapsed
+        ? `collapsed onto fresh base ${cell.collapsedChainId} naming no delta`
+        : `did NOT collapse: the record names generation ${cell.collapsedChainId || '(none)'}`
+          + ` ${cell.collapsedNamesDelta ? 'and still names a delta' : 'and no delta'}`}`,
+  };
+}
+
+/** The mutable-delta witness: one store key was rewritten in place — a
+ *  non-empty etag before and after, and the two etags differ. */
+function mutableDeltaWitness(
+  name: string,
+  cell: NonNullable<ControlWitnessFacts['mutableDelta']> | undefined,
+): WitnessCheck {
+  if (cell === undefined) return absentCell(name);
+
+  const rewritten = cell.etagBefore.length > 0
+    && cell.etagAfter.length > 0
+    && cell.etagBefore !== cell.etagAfter;
+
+  return {
+    name,
+    observed: cell.key.length > 0 && rewritten,
+    detail: `${cell.key}: ${cell.bytesBefore}B etag ${cell.etagBefore || '(none)'} then `
+      + `${cell.bytesAfter}B etag ${cell.etagAfter || '(none)'} — one key, `
+      + `${rewritten ? 'rewritten in place' : 'NOT rewritten'}`,
+  };
+}
+
 /**
  * Turn the cells' raw facts into this arm's witness verdicts.
  *
@@ -3177,88 +3316,14 @@ export function controlWitnessChecks(
 
   return names.map((name): WitnessCheck => {
     switch (name) {
-      case 'chunked-absorption': {
-        const cell = facts.chunkedAbsorption;
+      case 'chunked-absorption':
+        return chunkedAbsorptionWitness(name, facts.chunkedAbsorption);
 
-        if (cell === undefined) return absentCell(name);
+      case 'delta-layer-collapse':
+        return deltaLayerCollapseWitness(name, facts.deltaLayerCollapse);
 
-        const manifest = cell.manifestRead?.ok === true && cell.manifestRead.exitCode === 0
-          && cell.manifest !== null && v.safeParse(DeltaManifestSchema, cell.manifest).success
-          && cell.manifest.files.some((file) => file.p === cell.markerPath);
-
-        const merged = cell.markerInMerged?.path === `${DEVBOX_WORK_DIR}/${cell.markerPath}`
-          && witnessMatches(cell.markerInMerged, cell.markerDigest) === true;
-
-        const upper = cell.markerInUpper?.path === `${CHAIN_UPPER_DIR}/${cell.markerPath}`
-          && witnessMatches(cell.markerInUpper, cell.markerDigest) === true;
-
-        const observed = manifest && merged && upper && cell.sidecarMounted === false
-          && cell.mounts?.ok === true && cell.mounts.exitCode === 0
-          && cell.before !== null && cell.after === cell.before && cell.afterNamesDelta === true
-          && cell.nextCheckpoint?.ok === true && cell.nextCheckpoint.outcome?.kind === 'committed';
-
-        return {
-          name, observed,
-          detail: `chunked manifest ${manifest ? 'confirmed' : 'unobserved'}; marker merged=${merged} upper=${upper}; `
-            + `sidecar mounted=${String(cell.sidecarMounted)}; next checkpoint=${cell.nextCheckpoint?.outcome?.kind ?? 'unobserved'}; `
-            + `generation ${cell.before ?? 'unobserved'} to ${cell.after ?? 'unobserved'}`,
-        };
-      }
-
-      case 'delta-layer-collapse': {
-        const cell = facts.deltaLayerCollapse;
-
-        if (cell === undefined) return absentCell(name);
-
-        // SERVED, NOT COPIED. The delta's bytes reach the merged view through a
-        // layer of their own, so the marker committed into that delta is
-        // readable at the work directory and absent from the writable layer the
-        // attach just emptied. A copy — the behaviour this witness used to
-        // preregister — puts the same marker in the upper and mounts no layer.
-        const served = cell.deltaBytes > 0
-          && cell.deltaLayerMounted
-          && cell.markerInMergedView
-          && !cell.markerInUpper;
-
-        // AND THE SERVE IS WHAT FORCES THE COLLAPSE: a fresh generation id, and
-        // a record that names no delta. Same id, or a delta still named, is an
-        // ordinary append — which is what a copied delta produces.
-        const collapsed = cell.collapsedChainId.length > 0
-          && cell.collapsedChainId !== cell.chainId
-          && !cell.collapsedNamesDelta;
-
-        return {
-          name,
-          observed: served && collapsed,
-          detail: `delta ${cell.deltaBytes}B, `
-            + `${cell.deltaLayerMounted ? 'mounted as a lower layer' : 'NOT mounted as a layer'}; `
-            + `the merged view ${cell.markerInMergedView ? 'holds' : 'does NOT hold'} the marker and `
-            + `the fresh upper ${cell.markerInUpper ? 'HOLDS it, so the attach copied the delta' : 'does not, so the delta is served'}`
-            + ` (attach: ${cell.attachDetail || '(none)'}); the next checkpoint `
-            + `${collapsed
-              ? `collapsed onto fresh base ${cell.collapsedChainId} naming no delta`
-              : `did NOT collapse: the record names generation ${cell.collapsedChainId || '(none)'}`
-                + ` ${cell.collapsedNamesDelta ? 'and still names a delta' : 'and no delta'}`}`,
-        };
-      }
-
-      case 'mutable-delta': {
-        const cell = facts.mutableDelta;
-
-        if (cell === undefined) return absentCell(name);
-
-        const rewritten = cell.etagBefore.length > 0
-          && cell.etagAfter.length > 0
-          && cell.etagBefore !== cell.etagAfter;
-
-        return {
-          name,
-          observed: cell.key.length > 0 && rewritten,
-          detail: `${cell.key}: ${cell.bytesBefore}B etag ${cell.etagBefore || '(none)'} then `
-            + `${cell.bytesAfter}B etag ${cell.etagAfter || '(none)'} — one key, `
-            + `${rewritten ? 'rewritten in place' : 'NOT rewritten'}`,
-        };
-      }
+      case 'mutable-delta':
+        return mutableDeltaWitness(name, facts.mutableDelta);
 
       default:
         return absentCell(name);
@@ -3627,6 +3692,60 @@ async function fireCutVictim(
   }
 }
 
+
+/**
+ * The read-only probe, as one observation: read the live mounts, find the
+ * layer the wake is serving (a delta layer wins over the base lower, and only
+ * the first delta mount counts), and prove the surface refuses writes.
+ *
+ * THE READ-ONLY PROBE. The served layers are squashfs mounts, read-only by
+ * filesystem design, so a write must fail EROFS. The probe writes nothing
+ * on refusal and removes its file when a write unexpectedly succeeds —
+ * which is the finding, refusing the run.
+ *
+ * Answers null when no served layer is mounted — there is no read-only
+ * surface to prove — and otherwise the surface probed and whether it refused
+ * the write. A probe the box never ran is a refusal verdict of null, never
+ * true: `evidence.readOnlyProbe` keeps the raw reply either way.
+ */
+async function probeReadOnlyLayer(
+  fixture: Fixture,
+  box: string,
+  evidence: CutEvidence,
+): Promise<{ surface: string; refusedWrites: boolean | null } | null> {
+  const mountsNow = await execInBox(fixture, box, 'cat /proc/mounts');
+  evidence.mounts = mountsNow;
+  let layerPoint: string | null = null;
+
+  for (const raw of (mountsNow.ok === true && mountsNow.exitCode === 0 ? mountsNow.stdout ?? '' : '').split('\n')) {
+    const at = raw.trim().split(' ')[1] ?? '';
+
+    if (at.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)) {
+      layerPoint = at;
+      break;
+    }
+
+    if (at === CHAIN_LOWER_BASE_DIR) layerPoint = at;
+  }
+
+  if (layerPoint === null) return null;
+
+  const probe = await execInBox(
+    fixture,
+    box,
+    `touch '${layerPoint}/.faultcut-ro-probe' 2>&1; code=$?; rm -f '${layerPoint}/.faultcut-ro-probe' 2>/dev/null; exit $code`,
+  );
+
+  evidence.readOnlyProbe = probe;
+
+  return {
+    surface: layerPoint,
+    refusedWrites: probe.exitCode === undefined || probe.error !== undefined
+      ? null
+      : judgeReadOnlyRefusal(probe.exitCode, `${probe.stderr ?? ''}\n${probe.stdout ?? ''}`),
+  };
+}
+
 /**
  * The snapshot-chain reader checks: the record the cut left, the archives it
  * names in both directions, the served word, the cut marker, and the
@@ -3708,48 +3827,15 @@ async function readChainCutCell(
     ? null
     : (!baseExists ? 1 : 0) + (deltaRow?.present === true && deltaExists === false ? 1 : 0);
 
-  // THE READ-ONLY PROBE. The served layers are squashfs mounts, read-only by
-  // filesystem design, so a write must fail EROFS. The probe writes nothing
-  // on refusal and removes its file when a write unexpectedly succeeds —
-  // which is the finding, refusing the run.
-  let readOnlySurface: string | null = null;
-  let readOnlyRefusedWrites: boolean | null = null;
-  const mountsNow = await execInBox(fixture, box, 'cat /proc/mounts');
-  evidence.mounts = mountsNow;
-  let layerPoint: string | null = null;
-
-  for (const raw of (mountsNow.ok === true && mountsNow.exitCode === 0 ? mountsNow.stdout ?? '' : '').split('\n')) {
-    const at = raw.trim().split(' ')[1] ?? '';
-
-    if (at.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)) {
-      layerPoint = at;
-      break;
-    }
-
-    if (at === CHAIN_LOWER_BASE_DIR) layerPoint = at;
-  }
-
-  if (layerPoint !== null) {
-    readOnlySurface = layerPoint;
-
-    const probe = await execInBox(
-      fixture,
-      box,
-      `touch '${layerPoint}/.faultcut-ro-probe' 2>&1; code=$?; rm -f '${layerPoint}/.faultcut-ro-probe' 2>/dev/null; exit $code`,
-    );
-
-    evidence.readOnlyProbe = probe;
-
-    readOnlyRefusedWrites = probe.exitCode === undefined || probe.error !== undefined
-      ? null
-      : judgeReadOnlyRefusal(probe.exitCode, `${probe.stderr ?? ''}\n${probe.stdout ?? ''}`);
-  }
+  const readOnly = await probeReadOnlyLayer(fixture, box, evidence);
+  const readOnlySurface = readOnly === null ? null : readOnly.surface;
+  const readOnlyRefusedWrites = readOnly === null ? null : readOnly.refusedWrites;
 
   for (const witness of evidence.acknowledgement?.witnesses ?? []) {
     evidence.baselineAfter.push(await readBoxFile(fixture, box, witness.path));
   }
 
-  evidence.facts = { ...facts, observersComplete: layerPoint !== null && readOnlyRefusedWrites !== null };
+  evidence.facts = { ...facts, observersComplete: readOnly !== null && readOnly.refusedWrites !== null };
   const judgment = judgeChainCut(evidence.facts);
   const ackLoss = barrierAckLoss(evidence.acknowledgement, evidence.baselineAfter);
   const healNote = await healBox(fixture, box);
@@ -4210,6 +4296,41 @@ export async function runWorkloadPhases(
     + `${metricRows(result, DECIDING_METRIC).length} time(s) over phase(s) `
     + `${decidingPhases.length === 0 ? '(none)' : decidingPhases.join(', ')}`,
   );
+}
+
+/**
+ * THE WITNESS CELLS, after the tally and before the teardown.
+ *
+ * An arm with preregistered defects is here to prove the instrument can still
+ * SEE them; G2 refuses a run whose arm produced none of the ones it promised.
+ * The cells write their own files and take their own checkpoints, so they run
+ * past the measured window on purpose: an arm whose count included its witness
+ * cells would report operations the comparison is not about.
+ *
+ * DERIVED from the preregistration, never a second copy of its membership: a
+ * strategy whose witness list is empty runs no cells.
+ */
+async function runWitnessCellsPhase(
+  fixture: Fixture,
+  box: string,
+  strategy: Strategy,
+  result: ArmResult,
+  notes: string[],
+): Promise<void> {
+  if (PREREGISTERED_WITNESSES[strategy].length > 0) {
+    log('witness cells');
+    const witnessed = await runControlWitnessCells(fixture, box);
+    result.witnessFacts = witnessed.facts;
+    result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts, result.witnessProfile);
+    notes.push(...witnessed.notes);
+    const unobserved = result.witnessChecks.filter((witness) => !witness.observed);
+
+    if (unobserved.length > 0) {
+      notes.push(
+        `WITNESS DRIFT: ${unobserved.map((witness) => `${witness.name} (${witness.detail})`).join('; ')}`,
+      );
+    }
+  }
 }
 
 /**
@@ -4929,30 +5050,7 @@ async function measureArm(
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
 
   // THE WITNESS CELLS, after the tally and before the teardown.
-  //
-  // An arm with preregistered defects is here to prove the instrument can still
-  // SEE them; G2 refuses a run whose arm produced none of the ones it promised.
-  // The cells write their own files and take their own checkpoints, so they run
-  // past the measured window on purpose: an arm whose count included its witness
-  // cells would report operations the comparison is not about.
-  //
-  // DERIVED from the preregistration, never a second copy of its membership: a
-  // strategy whose witness list is empty runs no cells.
-  if (PREREGISTERED_WITNESSES[strategy].length > 0) {
-    log('witness cells');
-    const witnessed = await runControlWitnessCells(fixture, box);
-    result.witnessFacts = witnessed.facts;
-    result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts, result.witnessProfile);
-    notes.push(...witnessed.notes);
-    const unobserved = result.witnessChecks.filter((witness) => !witness.observed);
-
-    if (unobserved.length > 0) {
-      notes.push(
-        `WITNESS DRIFT: ${unobserved.map((witness) => `${witness.name} (${witness.detail})`).join('; ')}`,
-      );
-    }
-  }
-
+  await runWitnessCellsPhase(fixture, box, strategy, result, notes);
   settle('the witness cells');
 
   // THE FAULT-CUT PHASE, after the witness cells and before the teardown —
@@ -4976,25 +5074,43 @@ async function measureArm(
   // measurement failure, and the arm still returns what it measured.
   await releaseArm(fixture, box, result, notes);
 
-  if (options.decisive) {
-    const preparation = result.teardown;
-    result.c3 = await measureLiveC3(fixture, box, `${FIXTURE_BASE}-${options.runId}`, preparation, (row) => {
-      result.c3 = row;
-      settle('the live C3 evidence');
-    });
-    result.teardown = null;
-    await releaseArm(fixture, box, result, notes);
-    result.c3.cleanup = result.teardown;
-    const c3 = evaluateLiveC3(result.c3);
-    result.c3.correctness = c3.correctness;
-    process.stdout.write(`${JSON.stringify(result.c3)}\n${JSON.stringify({ event: 'matched.chain.complete', case: result.c3.case, runId: result.c3.runId, correctness: c3.correctness })}\n`);
-
-    if (!c3.admitted) notes.push(`live C3 refused: ${c3.errors.join('; ')}`);
-  }
+  await runLiveC3Phase(fixture, box, options, result, notes, settle);
 
   settle('the arm finished');
 
   return result;
+}
+
+/**
+ * THE LIVE C3 PHASE, after the arm's first release. The measured lifecycle is
+ * torn down, then the box is prepared again for the isolated one-file C3
+ * measurement; its cleanup replaces the teardown row and the verdict's refusal
+ * is a note, never an arm failure. A run without `options.decisive` never
+ * reaches it.
+ */
+async function runLiveC3Phase(
+  fixture: Fixture,
+  box: string,
+  options: Options,
+  result: ArmResult,
+  notes: string[],
+  settle: (what: string) => void,
+): Promise<void> {
+  if (!options.decisive) return;
+
+  const preparation = result.teardown;
+  result.c3 = await measureLiveC3(fixture, box, `${FIXTURE_BASE}-${options.runId}`, preparation, (row) => {
+    result.c3 = row;
+    settle('the live C3 evidence');
+  });
+  result.teardown = null;
+  await releaseArm(fixture, box, result, notes);
+  result.c3.cleanup = result.teardown;
+  const c3 = evaluateLiveC3(result.c3);
+  result.c3.correctness = c3.correctness;
+  process.stdout.write(`${JSON.stringify(result.c3)}\n${JSON.stringify({ event: 'matched.chain.complete', case: result.c3.case, runId: result.c3.runId, correctness: c3.correctness })}\n`);
+
+  if (!c3.admitted) notes.push(`live C3 refused: ${c3.errors.join('; ')}`);
 }
 
 /**
@@ -6536,6 +6652,18 @@ export interface ChainCutFacts {
   readonly observersComplete?: boolean;
 }
 
+/** Whether the cut left every observation the verdict needs: the record's
+ *  presence, both revs, the marker, the base object, the observers' own
+ *  completeness, and every etag a delta the record names requires. A missing
+ *  one is `unjudged`, never a guess in either direction. */
+function cutObservationsMissing(facts: ChainCutFacts): boolean {
+  return facts.recordPresent === null || facts.observersComplete === false
+    || facts.unexpectedDelta === null || facts.cutMarkerPresent === null || facts.baseExists === null
+    || facts.preRev === null || facts.postRev === null
+    || (facts.preHasDelta && facts.preDeltaEtag === null)
+    || (facts.postHasDelta && (facts.postDeltaEtag === null || facts.deltaExists === null));
+}
+
 /**
  * Judge a chain cut. The record is append-only-forward (`rev` monotonic), the
  * delta object is replaced atomically, and the cut wake serves a fresh upper —
@@ -6547,11 +6675,7 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
     return { verdict: 'mixed', rollback: null, phantom: true, detail: 'the recovered box has no chain record' };
   }
 
-  if (facts.recordPresent === null || facts.observersComplete === false
-    || facts.unexpectedDelta === null || facts.cutMarkerPresent === null || facts.baseExists === null
-    || facts.preRev === null || facts.postRev === null
-    || (facts.preHasDelta && facts.preDeltaEtag === null)
-    || (facts.postHasDelta && (facts.postDeltaEtag === null || facts.deltaExists === null))) {
+  if (cutObservationsMissing(facts)) {
     return {
       verdict: 'unjudged', rollback: null, phantom: null,
       detail: 'required marker, archive or record observations are missing',

@@ -5,7 +5,7 @@ import {
   type CheckpointReply, type ExecReply, type FileObservation,
   type StateReply, type StartupCompletion, type StartupObservation, type DestroyReply, type TeardownReply,
 } from './observation-schema';
-import { PublicationWindowSchema, publicationTotals, type PublicationWindow } from './publication-meter';
+import { PublicationWindowSchema, publicationTotals, type PublicationTotals, type PublicationWindow } from './publication-meter';
 import { C3_BYTES_BOUND, C3_OVERWRITE_SHA256, C3_WORKLOAD } from './witness-files';
 
 export interface C3Identity {
@@ -84,13 +84,17 @@ export interface C3Verdict {
   admitted: boolean; correctness: LiveC3Observation['correctness']; objectsPut: number | null; bytesPut: number | null; errors: string[];
 }
 
-export function evaluateLiveC3(input: LiveC3Observation): C3Verdict {
-  const parsed = v.safeParse(LiveC3ObservationSchema, input);
+/** The observation after its schema contract holds. The judges below read the
+ *  parsed row, so a field the schema narrowed keeps its narrow type. */
+type C3Row = v.InferOutput<typeof LiveC3ObservationSchema>;
 
-  if (!parsed.success) return { admitted: false, correctness: 'unmeasured', objectsPut: null, bytesPut: null, errors: ['the live C3 observation does not satisfy its evidence contract'] };
-  const row = parsed.output;
-  const errors = [...row.errors];
-  const round = row.rounds[0];
+type C3RoundRow = C3Row['rounds'][number];
+
+/** The build/workload evidence group: the run proved it measured the intended
+ *  workload — a build identity, a baseline that started from an empty box,
+ *  both writers observed, and its one committed overwrite checkpoint. */
+function workloadEvidenceErrors(row: C3Row, round: C3RoundRow | undefined): string[] {
+  const errors: string[] = [];
 
   if (row.identity === null) errors.push('live C3 has no build identity');
 
@@ -103,9 +107,21 @@ export function evaluateLiveC3(input: LiveC3Observation): C3Verdict {
   if (row.overwriteCommand?.ok !== true || row.overwriteCommand.exitCode !== 0) errors.push('the overwrite writer was unobserved');
 
   if (row.rounds.length !== 1 || round?.round !== 1 || round.checkpoint?.ok !== true || round.checkpoint.outcome?.kind !== 'committed') errors.push('C3 requires its one committed overwrite checkpoint');
-  const window = round?.accounting.window ?? null;
-  const totals = publicationTotals(window);
-  errors.push(...totals.errors);
+
+  return errors;
+}
+
+/** The publication accounting group: the PUT window belongs to this run and
+ *  box, its attempt log reconciles with the independent operation bracket, the
+ *  reported transport totals match the raw window, and the run put exactly one
+ *  object strictly under the byte bound. */
+function publicationEvidenceErrors(
+  row: C3Row,
+  round: C3RoundRow | undefined,
+  window: PublicationWindow | null,
+  totals: PublicationTotals,
+): string[] {
+  const errors: string[] = [];
 
   if (window?.prefix !== row.prefix || !window?.token.startsWith(`${row.runId}-C3-`)) errors.push('the PUT window does not belong to this run and box');
   const before = round?.accounting.beforeOps?.calls;
@@ -124,25 +140,57 @@ export function evaluateLiveC3(input: LiveC3Observation): C3Verdict {
 
   if (totals.bytesPut === null || totals.bytesPut >= C3_BYTES_BOUND) errors.push(`C3 publication bytes must be observed and strictly below ${C3_BYTES_BOUND}`);
 
+  return errors;
+}
+
+/** The cold-generation proof: the box was destroyed and the wake attached a
+ *  genuinely different boot — a new non-empty bootId, a layered attach that is
+ *  not the upper already holding the delta, a running restored state, and a
+ *  probe that landed no earlier than the restore and answered ok. */
+function coldRestoreProven(row: C3Row): boolean {
   const oldBoot = row.beforeDestroy?.state?.bootId;
   const restored = row.restoration;
   const newBoot = restored?.state.state?.bootId;
   const probe = row.restoreProbe;
 
-  const cold = row.destroyReceipt?.ok === true && row.destroyReceipt.destroyed === true
+  return row.destroyReceipt?.ok === true && row.destroyReceipt.destroyed === true
     && oldBoot !== undefined && oldBoot !== '' && newBoot !== undefined && newBoot !== '' && newBoot !== oldBoot
     && restored?.attach.kind === 'attached' && !restored.attach.detail.includes('already in this upper')
     && restored.state.state?.running === true && restored.state.state.restoration === 'attached'
     && probe !== null && probe.wallMs !== null && probe.probeAt !== null && probe.probeAt >= restored.startedAt && probe.outcome === 'ok';
+}
 
-  if (!cold) errors.push('the post-overwrite restore was not proven genuinely cold');
-  const file = row.file;
-  let correctness: LiveC3Observation['correctness'] = 'unmeasured';
-
+/** The file correctness group: on a proven-cold restore the workload file must
+ *  read back at its own path as a file of the baseline size carrying the
+ *  overwrite's exact digest. Anything short of that read is `unmeasured`,
+ *  never `failed` — a failure requires the read to have happened. */
+function coldFileCorrectness(cold: boolean, file: FileObservation | null): LiveC3Observation['correctness'] {
   if (cold && file?.reply?.ok === true && file.reply.exitCode === 0 && file.error === null && file.evidence !== null) {
-    correctness = file.path === `/workspace/${C3_WORKLOAD.path}` && file.evidence.kind === 'file'
+    return file.path === `/workspace/${C3_WORKLOAD.path}` && file.evidence.kind === 'file'
       && file.evidence.size === C3_WORKLOAD.baselineBytes && file.evidence.sha256 === C3_OVERWRITE_SHA256 ? 'passed' : 'failed';
   }
+
+  return 'unmeasured';
+}
+
+export function evaluateLiveC3(input: LiveC3Observation): C3Verdict {
+  const parsed = v.safeParse(LiveC3ObservationSchema, input);
+
+  if (!parsed.success) return { admitted: false, correctness: 'unmeasured', objectsPut: null, bytesPut: null, errors: ['the live C3 observation does not satisfy its evidence contract'] };
+  const row = parsed.output;
+  const errors = [...row.errors];
+  const round = row.rounds[0];
+
+  errors.push(...workloadEvidenceErrors(row, round));
+  const window = round?.accounting.window ?? null;
+  const totals = publicationTotals(window);
+  errors.push(...totals.errors);
+  errors.push(...publicationEvidenceErrors(row, round, window, totals));
+
+  const cold = coldRestoreProven(row);
+
+  if (!cold) errors.push('the post-overwrite restore was not proven genuinely cold');
+  const correctness = coldFileCorrectness(cold, row.file);
 
   if (correctness !== 'passed') errors.push(`C3 cold file correctness is ${correctness}`);
 
