@@ -661,7 +661,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
     expect(await file.execute()).toEqual({ ok: true });
     expect(seen).toEqual([{ action: 'read', path: 'a' }, {}]);
     const refused = await file.execute('a');
-    expect(refused).toEqual({ error: expect.stringContaining('tools.file(input): input must be one JSON object') });
+    expect(refused).toEqual({ success: false, reason: 'bad_input', error: 'tools.file(input): input must be one JSON object, the same shape the native `file` tool takes' });
     expect(seen).toHaveLength(2);
   });
 
