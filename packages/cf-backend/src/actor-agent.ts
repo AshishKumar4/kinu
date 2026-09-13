@@ -4226,12 +4226,7 @@ export abstract class ActorAgent extends Think<Env> {
        * ACTOR's storage key rather than on the raw node id the search minted.
        */
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
-      // No `runtimeForNodeWorkspace`, and that absence is the honest one: the
-      // seam exists for a backend that provisions a home but cannot
-      // re-credential its own primitives. Here `runtimeFor` already built the
-      // node actor's runtime over this very home, so `seat.actor.runtime` IS
-      // the home-credentialed runtime and a second builder would rebuild what
-      // the host already bound.
+      runtimeForNodeWorkspace: null,
       // An IN-ISOLATE node runs beside this actor's socket, so its transient
       // frames need no wire at all. A HOSTED node's facet publishes over the RPC
       // it already holds, and agents-tool leaves this unread in that case.

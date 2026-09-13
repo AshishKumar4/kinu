@@ -68,7 +68,7 @@ import { TierIdSchema,
   type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
-  type HeadJournal, reconcileInterruptedForks,
+  type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
@@ -789,6 +789,12 @@ export class LocalAgentSession implements BackendHost {
   /** The head journal this session's controller writes to — also the live fork
    *  roster the per-step dynamic context reads. */
   private readonly headJournal: HeadJournal;
+  private readonly headActivity: AnnounceHeadActivity = (headId) => {
+    this.broadcast({ type: 'head_activity', headId });
+  };
+  private readonly publishHeadStream: PublishHeadStream = (frame) => {
+    this.broadcast({ type: 'head_stream', ...frame });
+  };
 
   /** Durable per-session compaction state (plan snapshot + the measured
    *  prompt-token trigger signal) in agent.db, and the default compaction
@@ -911,7 +917,7 @@ export class LocalAgentSession implements BackendHost {
     const stores = this.stores;
     this.jobs = stores.jobs;
     this.taskList = stores.taskList;
-    this.headJournal = stores.headJournal;
+    this.headJournal = new LiveHeadJournal(this.rt.storage.sql, this.rt.actor, this.headActivity);
     this.mctsSearchStore = stores.mctsSearchStore;
     this.config = stores.config;
     this.sessionId = canonicalConversationId(this.config);
@@ -1478,7 +1484,7 @@ export class LocalAgentSession implements BackendHost {
 
   // ── BackendHost ────────────────────────────────────────────────────
 
-  broadcast(event: BroadcastEvent): void {
+  broadcast<Event extends BroadcastEvent>(event: Event): void {
     this.emit({ type: 'broadcast', event });
   }
 
@@ -4459,6 +4465,8 @@ export class LocalAgentSession implements BackendHost {
       // child, so this has to be a factory: a shared actor would give every
       // node of that wave one claim ledger, one loop pointer and one row set.
       hostNode: (node) => this.hostNode(node),
+      announceHeadActivity: () => this.headActivity,
+      reportNodeDelta: () => this.publishHeadStream,
       model: this.cachedModel ?? this.defaultModel("an agents swarm"),
       originContext: () => Object.freeze(structuredClone([...this.actorSession.history])),
       // Same catalog session that answers the context window and prices the
@@ -4972,6 +4980,7 @@ export class LocalAgentSession implements BackendHost {
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
       journal: () => this.headJournal,
+      publishHeadStream: this.publishHeadStream,
       hostHead: (input, writes) => this.hostHead(input, writes),
     };
 

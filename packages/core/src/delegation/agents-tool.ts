@@ -429,12 +429,12 @@ export interface AgentsSwarmDeps {
    *
    * Paired with {@link provisionNodeHome} and useless without it: a home is
    * uid/gid/mode on real inodes, and the shell and file plane the node's loop
-   * uses have to act as that uid or the boundary holds on neither. Absent is a
-   * backend that provisions but cannot re-credential its own primitives, and
-   * then the loop runs as the origin — see
-   * {@link NodeAgentDeps.runtimeForWorkspace}.
+   * uses have to act as that uid or the boundary holds on neither. null declares
+   * that the hosted seat already supplies the credentialed runtime, as on CF.
+   * Without a builder the loop keeps that seat's runtime, never the caller's —
+   * see {@link NodeAgentDeps.runtimeForWorkspace}.
    */
-  runtimeForNodeWorkspace?: () => (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
+  runtimeForNodeWorkspace?: (() => (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>) | null;
   /**
    * Where a node's transient output frames go while a step is still being
    * produced — the backend's own broadcast channel, resolved per call for the
@@ -457,12 +457,8 @@ export interface AgentsSwarmDeps {
    * A factory for {@link costModel}'s reason. Absent is a backend with nothing
    * watching, and then the journal writes in silence.
    *
-   * WIRED ON CF ONLY, beside {@link reportNodeDelta}, which is cf-only for the
-   * same reason and is recorded in `scripts/capability-parity.lock.json` next to
-   * this one: head liveness is a channel a surface has to CONSUME, and only the
-   * browser client reads `head_activity`. The CLI has no reader, so wiring it
-   * there would fan a channel out to nobody — a dead broadcast is the defect
-   * `unit-broadcast-wiring.test.ts` exists to refuse, not parity.
+   * Both backends publish this channel: the browser consumes it for live panes,
+   * and the CLI's structured event stream carries it to watching clients.
    */
   announceHeadActivity?: () => AnnounceHeadActivity;
   /**

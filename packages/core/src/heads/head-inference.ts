@@ -566,15 +566,9 @@ export interface HeadInferenceDeps {
    * consumer that concatenates holds exactly what the model emitted. A transport
    * that crosses an isolate boundary must therefore not await it.
    *
-   * WIRED ON THE CLOUD BACKEND ONLY, and that is a property of the consumer
-   * rather than a dropped wire. The frame's wire discriminant is `head_stream`,
-   * validated at `cf-backend/src/hooks/use-kinu.ts:339` and painted under the
-   * last durable step at `components/NodeTranscript.tsx:266`; no CLI or core
-   * reader names it, and the local head's liveness is the `head_journal` rows
-   * {@link reportStep} writes, which BOTH backends wire. Wiring a local sink
-   * would add a producer with no consumer. `AgentsSwarmDeps.reportNodeDelta` and
-   * `announceHeadActivity` are the same asymmetry, accepted for the same reason
-   * before this contract existed.
+   * Both backends publish `head_stream`: browser panes paint it, and the CLI's
+   * structured event stream forwards the same frames without mixing them into
+   * the root actor's text deltas.
    *
    * Omitted where nothing is watching. Absence costs nothing: no reader ever
    * reads a frame back, so the branch is exactly as legible either way once its

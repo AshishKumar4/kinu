@@ -24,6 +24,7 @@ import {
   type WebSearchProvider, type CodemodeProvider,
   type HeadSplitRequest, type HeadSplitResult,
   type HeadMergeModelBinder, type ResolvedTurnProfile,
+  type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type DynamicContext, type HostedActor, type ProfileAuthorityInputs, type WorkMode, type WriteObserver,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal,
@@ -100,6 +101,8 @@ export interface CLIHeadRuntimeDeps {
    *  direct write where the cf backend has to cross a facet boundary for it.
    *  Read per head, for the same reason the governor is. */
   journal: () => HeadJournal;
+  /** Transient output, forwarded with the emitting head's identity. */
+  publishHeadStream?: PublishHeadStream;
   /** Where the MERGE synthesis reports what it cost.
    *
    *  Only the merge. A head's OWN inference is aggregated from `head_journal`
@@ -262,6 +265,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       // Each finished step into the session's journal as it lands — the only
       // thing that can say what a head is doing before it reports.
       reportStep: (seq, step) => journal.appendStep(input.id, seq, step),
+      reportDelta: (kind, delta) => deps.publishHeadStream?.({ headId: input.id, kind, delta }),
     };
 
     if (mission) inferenceOptions.mission = mission;
