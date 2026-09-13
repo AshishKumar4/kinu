@@ -14,11 +14,15 @@ import { evaluateLiveC3, type BlockAttachMetrics, type LiveC3Observation } from 
 import type { RestorePhaseStamps } from '../packages/devbox/src/durability/contracts';
 import type { StartupState } from '../packages/devbox/bench/observation-schema';
 import { containerAppIds, delay, deleteContainerApps, publishTeardown, runTeardownOnce, runWrangler } from './fixtures/r2-bench/deploy-substrate';
-import { replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
+import { createManifest, replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
 const LARGE_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** Observation ceiling only. A refused fixture is torn down; no runtime
+ * timeout is extended and no retry shares the abandoned container. */
+export const CELL_STARTUP_MS = 55_000;
 
 export function chunkedPublicationErrors(chain: StartupState['chain']): string[] {
   if (chain?.deltaFormat === 'chunked') return [];
@@ -55,6 +59,7 @@ export function boundedAttachErrors(sample: AttachSample): string[] {
 }
 
 interface LargeObservation {
+  box: string;
   bytes: number;
   representation: string;
   initial: StartupCompletion | null;
@@ -73,7 +78,7 @@ async function measureLarge(fixture: Fixture, box: string, observe: (row: LargeO
   const sparseControl = process.argv.includes('--sparse-control');
   const name = `2GiB ${sparseControl ? 'sparse' : 'dense'}`;
 
-  const row: LargeObservation = { bytes: LARGE_BYTES, representation: sparseControl ? 'mostly-zero whole record in chunked delta/tree' : 'random dense changed file in block-lower',
+  const row: LargeObservation = { box, bytes: LARGE_BYTES, representation: sparseControl ? 'mostly-zero whole record in chunked delta/tree' : 'random dense changed file in block-lower',
     initial: null, restoration: null, restoreProbe: null, blockReads: null, baseline: null, checkpoint: null, fileProbe: null, expectedFile: null, publication: null, errors: [] };
 
   const probe = `
@@ -109,7 +114,7 @@ try {
   };
 
   try {
-    row.initial = await startupOperation(fixture, box, '/create', `${name} baseline`, ['empty']);
+    row.initial = await startupOperation(fixture, box, '/create', `${name} baseline`, ['empty'], { deadlineMs: CELL_STARTUP_MS });
     await command(`mkdir -p /workspace/vol && ${sparseControl ? `truncate -s ${LARGE_BYTES} /workspace/vol/large.bin` : 'dd if=/dev/urandom of=/workspace/vol/large.bin bs=4M count=512 conv=fsync status=none'}`);
     row.baseline = await checkpointOperation(fixture, box, 'quiesce', `${name} base`);
 
@@ -126,7 +131,7 @@ try {
     const destroyed = await destroyBox(fixture, box);
 
     if (destroyed.ok !== true || destroyed.destroyed !== true) throw new Error('large-file container destruction was not proved');
-    row.restoration = await startupOperation(fixture, box, '/wake', `${name} cold restore`, ['attached']);
+    row.restoration = await startupOperation(fixture, box, '/wake', `${name} cold restore`, ['attached'], { deadlineMs: CELL_STARTUP_MS });
     const boot = row.restoration.state.state?.bootId;
 
     if (boot === undefined || boot === before.state?.bootId) throw new Error('large-file restore was not genuinely cold');
@@ -164,6 +169,17 @@ async function run(): Promise<number> {
 
   if (names === undefined) throw new Error('no snapshot-chain fixture');
   const box = boxName(runId, 'snapshot-chain');
+  const largeBox = `${box}-large`;
+  const boxes = lifecycleOnly ? [box] : [box, largeBox];
+
+  if (!lifecycleOnly) {
+    const kinds = ['do-state', 'alarm', 'mount'] as const;
+    resources.manifest.entries.push(...createManifest(runId,
+      kinds.map(kind => ({ kind, name: largeBox, detail: 'independent large-file cell' })),
+    ).entries);
+    writeManifest(REPO, resources.manifest);
+  }
+
   const residue = r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId, secretAccessKey });
   const errors: string[] = [];
   const cleanup: string[] = [];
@@ -183,7 +199,7 @@ async function run(): Promise<number> {
   const wrangle = (args: readonly string[], options: { allowFailure?: boolean } = {}): string => runWrangler(REPO, args, options);
   const deletion = (absent: boolean, name: string): DeleteOutcome => absent ? { ok: true } : { ok: false, error: `${name} is still present` };
   publishTeardown(async () => {
-    if (live !== null) cleanup.push(...await teardownLiveArms(live.fixture, [box]));
+    if (live !== null) cleanup.push(...await teardownLiveArms(live.fixture, boxes));
     const probes = cleanupObservationProbes({ wrangler: wrangle, residue });
 
     const replay = await replayTeardown(REPO, resources.manifest, async (entry) => {
@@ -258,7 +274,7 @@ async function run(): Promise<number> {
     if (lifecycleOnly) {
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await destroyBox(fixture, box);
-        const initial = await startupOperation(fixture, box, '/create', 'lifecycle empty baseline', ['empty']);
+        const initial = await startupOperation(fixture, box, '/create', 'lifecycle empty baseline', ['empty'], { deadlineMs: CELL_STARTUP_MS });
         const exec = await execInBox(fixture, box, 'mkdir -p /tmp/devbox-first-exec-witness');
         lifecycle.push({ initial, exec });
         save();
@@ -268,13 +284,13 @@ async function run(): Promise<number> {
         await destroyBox(fixture, box);
       }
     } else {
-      c3 = await measureLiveC3(fixture, box, runId, null, row => { c3 = row; save(); });
+      c3 = await measureLiveC3(fixture, box, runId, null, row => { c3 = row; save(); }, { deadlineMs: CELL_STARTUP_MS });
       errors.push(...evaluateLiveC3(c3).errors, ...boundedAttachErrors({ phases: c3.restoreProbe?.phases, blockReads: c3.blockReads }));
       errors.push(...chunkedPublicationErrors(c3.beforeDestroy?.state?.chain));
       const firstCleanup = await teardownLiveArms(fixture, [box]);
 
-      if (firstCleanup.length > 0) throw new Error(firstCleanup.join('; '));
-      large = await measureLarge(fixture, box, row => { large = row; save(); });
+      errors.push(...firstCleanup);
+      large = await measureLarge(fixture, largeBox, row => { large = row; save(); });
       errors.push(...large.errors);
     }
   } catch (cause) {
