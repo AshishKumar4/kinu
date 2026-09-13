@@ -50,6 +50,20 @@ import {
   describeThrown, publishTeardown, runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 import * as v from 'valibot';
+import {
+  ExecReplySchema, CheckpointReplySchema, FileEvidenceSchema,
+  StateReplySchema, KickReplySchema, DestroyReplySchema, TeardownReplySchema,
+  type ExecReply, type CheckpointReply, type FileObservation,
+  type AttachOutcome, type StateReply, type KickReply, type StartupPoll, type StartupCompletion,
+  type StartupObservation, type DestroyReply, type TeardownReply,
+} from '../packages/devbox/bench/observation-schema';
+
+export type { ExecReply, CheckpointReply, FileObservation, StateReply, StartupPoll, StartupCompletion, StartupObservation } from '../packages/devbox/bench/observation-schema';
+
+import { DELTA_MANIFEST_NAME, DeltaManifestSchema, type DeltaManifest } from '../packages/devbox/src/chunked-delta';
+import { evaluateLiveC3, type C3Identity, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
+import { PublicationWindowSchema, publicationTotals } from '../packages/devbox/bench/publication-meter';
+import { C3_BYTES_BOUND, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
 import { parseArgs } from 'node:util';
 import { AwsClient } from 'aws4fetch';
 import { summarize, type Summary } from './fixtures/r2-bench/stats';
@@ -68,7 +82,7 @@ import {
   RestorePhaseStampsSchema, type RestorePhaseStamps, type RestoreWork,
 } from '@kinu.run/devbox/durability/contracts';
 import {
-  PublicationCutSchema, publicationWasCut, rendezvousPublicationCut,
+  PublicationCutSchema, publicationWasCut, rendezvousPublicationCut, type PublicationCut,
 } from '../packages/devbox/bench/publication-cut';
 import type { MeasuredCell, StageId } from './fixtures/storage-matrix/protocol';
 import {
@@ -104,74 +118,7 @@ interface ChainGeneration {
   readonly rev: number | null;
 }
 
-interface AttachOutcome { kind: string; detail: string }
 
-interface StartupState {
-  /** The box's own name for where its restoration stands. FIVE values, because
-   *  two used to be conflated: `restoring` is an attempt IN FLIGHT (which
-   *  `unstarted` used to be reported as, for its whole duration), and `repair`
-   *  is attached-but-degraded (which `attached` used to be reported as). A
-   *  driver that cannot tell those apart cannot attribute a ceiling. */
-  restoration?: 'unstarted' | 'restoring' | 'attached' | 'repair' | 'unattached';
-  /** Is the container up? A stopped container has NOTHING in flight for a
-   * later poll to observe: `/state` re-arms a startup row and deliberately
-   * never drives the restoration inline, while every real operation drives it
-   * through `ensureReady()`. Declared because the driver reads it — an absent
-   * field proves nothing and is treated as such. */
-  running?: boolean;
-  unready?: string;
-  lastAttach?: AttachOutcome;
-  /** The container generation that supplied this attach. The warm `/create`
-   * probe must report the SAME id as the preceding wake; an `attached` kind
-   * alone could describe a fresh restore that silently changed generations. */
-  bootId?: string;
-  chain?: {
-    base?: { id?: string };
-    delta?: unknown;
-    mode?: string;
-    rev?: number;
-  } | null;
-  /** What the box has already RECORDED about itself while a poll was calling
-   *  it pending. A startup that keeps refusing admission files one of these per
-   *  attempt, so a wait that ends with a non-zero count was never a wait: it was
-   *  a box saying so in the one channel a driver can read. Measured on probe
-   *  `wakeprobe09010650`, where a snapshot-chain box sat `running` and
-   *  `unstarted` for its whole 300 s ceiling holding two undelivered
-   *  incidents. */
-  incidents?: { total?: number; undelivered?: number };
-}
-
-export interface StateReply {
-  error?: string;
-  extractionAllowed?: boolean;
-  storePrefix?: string;
-  state?: StartupState;
-}
-
-const StateReplySchema: v.GenericSchema<StateReply> = v.looseObject({
-  error: v.optional(v.string()),
-  extractionAllowed: v.optional(v.boolean()),
-  storePrefix: v.optional(v.string()),
-  state: v.optional(v.looseObject({
-    restoration: v.optional(
-      v.picklist(['unstarted', 'restoring', 'attached', 'repair', 'unattached']),
-    ),
-    running: v.optional(v.boolean()),
-    unready: v.optional(v.string()),
-    lastAttach: v.optional(v.looseObject({ kind: v.string(), detail: v.string() })),
-    bootId: v.optional(v.string()),
-    chain: v.optional(v.nullable(v.looseObject({
-      base: v.optional(v.looseObject({ id: v.optional(v.string()) })),
-      delta: v.optional(v.unknown()),
-      mode: v.optional(v.string()),
-      rev: v.optional(v.number()),
-    }))),
-    incidents: v.optional(v.looseObject({
-      total: v.optional(v.number()),
-      undelivered: v.optional(v.number()),
-    })),
-  })),
-});
 
 export type StartupPollVerdict =
   | { readonly kind: 'pending' }
@@ -186,24 +133,24 @@ export type StartupPollVerdict =
   | { readonly kind: 'repair'; readonly attach: AttachOutcome; readonly incomplete: string }
   | { readonly kind: 'failed'; readonly reason: string };
 
-/** The durable attach record belongs to a restoration only after that
- * restoration declares itself attached. This rejects the previous generation's
- * record while a fresh generation is still waiting for its scheduled callback.
- *
- * `pending` CLAIMS something is in flight, and there is exactly one reading
- * where that claim is false: a stopped container whose restoration is
- * `unstarted`. Nothing is running, nothing has started, and a `/state` poll
- * only re-arms a row it cannot execute — so every later reply is the same one,
- * which is the hour the startup redrive test records. That reading is
- * classified `stopped` so the driver can take it to the readiness boundary a
- * real operation goes through. A reply that does not report `running` proves
- * nothing about the container and stays `pending`. */
+/** A settled attach is current only while the container is observed running.
+ * A stopped container re-enters real readiness even if an attach record remains.
+ * Missing running evidence stays pending; terminal refusals are never re-driven. */
 export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
   const state = reply.state;
 
   if (state?.restoration === 'unattached') {
     return { kind: 'failed', reason: state.unready ?? 'the startup refused without a reason' };
   }
+
+  if (state?.running === false) {
+    return {
+      kind: 'stopped',
+      detail: state.unready ?? 'the container is stopped and no current restoration is running',
+    };
+  }
+
+  if (state?.running !== true) return { kind: 'pending' };
 
   if (state?.restoration === 'attached' && state.lastAttach !== undefined) {
     return { kind: 'attached', attach: state.lastAttach };
@@ -214,13 +161,6 @@ export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
       kind: 'repair',
       attach: state.lastAttach,
       incomplete: state.unready ?? 'the box named no incompleteness',
-    };
-  }
-
-  if (state?.running === false && state.restoration === 'unstarted') {
-    return {
-      kind: 'stopped',
-      detail: state.unready ?? 'the container is stopped and no restoration has started for it',
     };
   }
 
@@ -255,6 +195,11 @@ export function describeStartupState(reply: StateReply): string {
 
 async function chainGeneration(fixture: Fixture, box: string): Promise<ChainGeneration> {
   const reply = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
+
+  return chainGenerationFromState(reply);
+}
+
+function chainGenerationFromState(reply: StateReply): ChainGeneration {
   const chain = reply.state?.chain ?? null;
 
   return {
@@ -1191,7 +1136,7 @@ export function r2CleanupKeyRefusal(input: {
 /** One deployed arm's addressable fixture: where it answers and what it
  *  accepts. Exported because the deployed lifecycle suite drives the same
  *  routes through these seams rather than opening a second HTTP client. */
-export interface Fixture { origin: string; token: string }
+export interface Fixture { origin: string; token: string; identity?: C3Identity }
 
 /** Every field the driver ever sends. The fixture parses the same closed set at
  *  its edge, so a key nobody declares here cannot reach a route. */
@@ -1370,17 +1315,6 @@ const AckReplySchema: v.GenericSchema<AckReply> = v.looseObject({
   error: v.optional(v.string()),
 });
 
-export interface ExecReply { ok?: boolean; exitCode?: number; stdout?: string; stderr?: string; ms?: number; error?: string }
-
-const ExecReplySchema: v.GenericSchema<ExecReply> = v.looseObject({
-  ok: v.optional(v.boolean()),
-  exitCode: v.optional(v.number()),
-  stdout: v.optional(v.string()),
-  stderr: v.optional(v.string()),
-  ms: v.optional(v.number()),
-  error: v.optional(v.string()),
-});
-
 /** One command inside the box, through the fixture's own `/exec` route.
  *
  *  `timeoutMs` is per attempt and defaults to the shared transport deadline. A
@@ -1392,6 +1326,83 @@ export async function execInBox(
   fixture: Fixture, box: string, command: string, timeoutMs?: number,
 ): Promise<ExecReply> {
   return await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command }, timeoutMs);
+}
+
+export interface BarrierWitness {
+  readonly path: string;
+  readonly expectedDigest: string;
+  readonly expectedSize: number;
+}
+
+export interface BarrierAcknowledgement {
+  readonly witnesses: readonly BarrierWitness[];
+  readonly checkpoint: CheckpointReply | null;
+}
+
+export function barrierAckLoss(
+  acknowledgement: BarrierAcknowledgement | null,
+  observations: readonly FileObservation[],
+): number | null {
+  if (acknowledgement?.checkpoint?.ok !== true
+    || acknowledgement.checkpoint.outcome?.kind !== 'committed'
+    || acknowledgement.witnesses.length === 0) return null;
+  const paths = new Set<string>();
+  let lost = 0;
+
+  for (const witness of acknowledgement.witnesses) {
+    if (paths.has(witness.path)) return null;
+    paths.add(witness.path);
+    const reads = observations.filter((row) => row.path === witness.path);
+
+    if (reads.length !== 1) return null;
+    const observed = reads[0];
+
+    if (observed === undefined || observed.error !== null || observed.evidence === null
+      || observed.reply?.ok !== true || observed.reply.exitCode !== 0) return null;
+    const evidence = observed.evidence;
+
+    if (evidence.kind === 'missing' || evidence.sha256 !== witness.expectedDigest
+      || evidence.size !== witness.expectedSize) lost++;
+  }
+
+  return lost;
+}
+
+function witnessMatches(observation: FileObservation, expectedDigest: string): boolean | null {
+  const evidence = observation.evidence;
+
+  if (evidence === null || observation.error !== null || observation.reply?.ok !== true || observation.reply.exitCode !== 0) return null;
+
+  return evidence.kind === 'file' && evidence.sha256 === expectedDigest;
+}
+
+export async function readBoxFile(fixture: Fixture, box: string, path: string, harness = HARNESS): Promise<FileObservation> {
+  const observation = { path, reply: null, evidence: null, error: null };
+  let reply: ExecReply;
+
+  try {
+    reply = await execInBox(fixture, box, `bun ${harness}/witness-files.ts read '${path.replaceAll("'", "'\\''")}'`);
+  } catch (error) {
+    return { ...observation, error: describeThrown({ cause: error }) };
+  }
+
+  if (reply.ok !== true || reply.exitCode !== 0 || reply.stdout === undefined) {
+    return { ...observation, reply, error: reply.error ?? reply.stderr ?? 'the file observer did not complete' };
+  }
+
+  let decoded: unknown;
+
+  try {
+    decoded = JSON.parse(reply.stdout);
+  } catch (error) {
+    return { ...observation, reply, error: `file observer returned invalid JSON: ${describeThrown({ cause: error })}` };
+  }
+
+  const parsed = v.safeParse(FileEvidenceSchema, decoded);
+
+  return parsed.success
+    ? { path, reply, evidence: parsed.output, error: null }
+    : { ...observation, reply, error: `file observer returned invalid evidence: ${issueText(parsed.issues)}` };
 }
 
 /** One file into the box, through the fixture's own `/write` route. Re-callable
@@ -1618,6 +1629,46 @@ const IncidentReasonsReplySchema = v.looseObject({
   incidents: v.optional(v.array(IncidentReasonRowSchema)),
 });
 
+export interface ContinuityObservation {
+  readonly label: string;
+  readonly at: number;
+  state: StateReply | null;
+  incidents: v.InferOutput<typeof IncidentReasonsReplySchema> | null;
+  errors: string[];
+}
+
+export interface DecisiveSegmentObservation {
+  readonly workload: string;
+  readonly repetition: number;
+  readonly segment: number;
+  before: ContinuityObservation | null;
+  after: ContinuityObservation | null;
+  command: ExecReply | null;
+  checkpoint: CheckpointReply | null;
+  accounting: { before: OpTally | null; after: OpTally | null };
+  segmentName: string | null;
+  priced: boolean;
+  error: string | null;
+}
+
+async function observeContinuity(fixture: Fixture, box: string, label: string): Promise<ContinuityObservation> {
+  const row: ContinuityObservation = { label, at: Date.now(), state: null, incidents: null, errors: [] };
+
+  try {
+    row.state = await boxState(fixture, box);
+  } catch (error) {
+    row.errors.push(`state: ${describeThrown({ cause: error })}`);
+  }
+
+  try {
+    row.incidents = await call(fixture, 'GET', `/incidents?box=${box}`, IncidentReasonsReplySchema);
+  } catch (error) {
+    row.errors.push(`incidents: ${describeThrown({ cause: error })}`);
+  }
+
+  return row;
+}
+
 /** One mountpoint's row in `/proc/mounts`, whose fields are
  *  `device mountpoint fstype options dump pass`. Naming that layout once is
  *  what keeps a caller from indexing field 2 and calling it a filesystem. */
@@ -1785,34 +1836,43 @@ async function postBoundedHttps(
 }
 
 
-/** A startup kick arms durable work and returns before the attach finishes. */
-interface KickReply { ok?: boolean; ms?: number; error?: string }
 
-const KickReplySchema: v.GenericSchema<KickReply> = v.looseObject({
-  ok: v.optional(v.boolean()),
-  ms: v.optional(v.number()),
-  error: v.optional(v.string()),
-});
 
 const STARTUP_POLL_INTERVAL_MS = 250;
 
-export interface StartupPoll {
-  readonly attach: AttachOutcome;
-  readonly state: StateReply;
-  /** How many times this poll had to drive the readiness boundary itself. It
-   *  travels with the measurement because a startup the DRIVER completed is not
-   *  the same quantity as one the fixture's own schedule completed, and a
-   *  number nobody can attribute is worse than an absent one. */
-  readonly redrives: number;
+
+
+export interface StartupRecord {
+  readonly operation: string;
+  readonly path: string;
+  completion: StartupCompletion | null;
+  failure: ContinuityObservation | null;
+  error: string | null;
+  observations: StartupObservation[];
 }
 
-export interface StartupCompletion extends StartupPoll {
-  readonly ms: number;
-  /** When the driver kicked this startup, on the driver's clock. The restore
-   *  probe is judged against it: a row opened before this instant belongs to
-   *  an earlier restore, and a startup that adopted the instance it held ran
-   *  no restore of its own. */
-  readonly startedAt: number;
+
+
+async function observeStartupReply<Reply extends KickReply | StateReply | ExecReply>(
+  observations: StartupObservation[] | undefined,
+  event: StartupObservation['event'],
+  run: () => Promise<Reply>,
+): Promise<Reply> {
+  if (observations === undefined) return await run();
+  const row: StartupObservation = { event, startedAt: Date.now(), finishedAt: null, reply: null, error: null };
+  observations.push(row);
+
+  try {
+    const reply = await run();
+    row.reply = reply;
+
+    return reply;
+  } catch (error) {
+    row.error = describeThrown({ cause: error });
+    throw error;
+  } finally {
+    row.finishedAt = Date.now();
+  }
 }
 
 /**
@@ -1872,12 +1932,13 @@ async function driveReadiness(
   box: string,
   operation: string,
   timeoutMs?: number,
+  observations?: StartupObservation[],
 ): Promise<ReadinessDrive> {
   let driven: ExecReply;
 
   try {
     driven = await retryTransient(`${operation} readiness drive`, async () =>
-      await execInBox(fixture, box, READINESS_DRIVE_COMMAND, timeoutMs),
+      await observeStartupReply(observations, 'drive', async () => await execInBox(fixture, box, READINESS_DRIVE_COMMAND, timeoutMs)),
     );
   } catch (error) {
     return { kind: 'unanswered', detail: describeThrown({ cause: error }) };
@@ -1947,7 +2008,7 @@ export async function pollForAttach(
     let reply: StateReply;
 
     try {
-      reply = await boxState(fixture, box);
+      reply = await observeStartupReply(bounds.observations, 'state', async () => await boxState(fixture, box));
     } catch (error) {
       log(`${operation}: state poll retrying: ${describeThrown({ cause: error })}`);
       await delay(STARTUP_POLL_INTERVAL_MS);
@@ -1981,7 +2042,7 @@ export async function pollForAttach(
         since,
         settled: (async (): Promise<void> => {
           try {
-            const drive = await driveReadiness(fixture, box, operation, remaining);
+            const drive = await driveReadiness(fixture, box, operation, remaining, bounds.observations);
 
             if (drive.kind === 'refused') refusal = drive.detail;
             else if (drive.kind === 'unanswered') {
@@ -2012,6 +2073,7 @@ export async function pollForAttach(
  *  failure. Absent means unbounded — see `pollForAttach`. */
 export interface StartupBounds {
   readonly deadlineMs?: number;
+  readonly observations?: StartupObservation[];
 }
 
 /** Kick one startup and wait for THIS generation's attach, measured end to end
@@ -2037,7 +2099,8 @@ export async function startupOperation(
     let transient: string;
 
     try {
-      const kicked = await call(fixture, 'POST', `${path}?box=${box}`, KickReplySchema, {});
+      const kicked = await observeStartupReply(bounds.observations, 'kick', async () =>
+        await call(fixture, 'POST', `${path}?box=${box}`, KickReplySchema, {}));
 
       if (kicked.ok === true) break;
       const detail = kicked.error ?? 'the startup kick did not confirm';
@@ -2071,13 +2134,6 @@ export async function startupOperation(
 /** What one settled checkpoint reports. Its wire form is the poll reply below:
  *  the fixture answers a checkpoint's outcome by token, never inside the
  *  request that asked for it. */
-export interface CheckpointReply {
-  ok?: boolean;
-  outcome?: { kind: string; reason?: string; bytes?: number; movedBytes?: number };
-  ms?: number;
-  error?: string;
-}
-
 /** The outcome one checkpoint settled as, kind first and the box's reason
  *  beside it: `committed`, `skipped (work directory is unchanged)`, `failed
  *  (A generation cannot retire a pack it adds)`. One spelling for the ladder
@@ -2091,6 +2147,18 @@ export function checkpointOutcomeWords(cp: CheckpointReply): string {
 }
 
 export interface StopReply { ok?: boolean; ms?: number; error?: string }
+
+
+
+export async function destroyBox(fixture: Fixture, box: string): Promise<DestroyReply> {
+  const reply = await call(fixture, 'POST', `/destroy?box=${box}`, DestroyReplySchema);
+
+  if (reply.ok !== true || reply.destroyed !== true) {
+    throw new Error(`container destruction was not confirmed: ${JSON.stringify(reply)}`);
+  }
+
+  return reply;
+}
 
 // ── the async operation protocol ────────────────────────────────────────────
 //
@@ -2128,35 +2196,15 @@ const OperationArmedReplySchema: v.GenericSchema<OperationArmedReply> = v.looseO
 
 /** One poll of an armed operation. `state` is the whole protocol; `outcome` and
  *  `ms` are the fixture's own, so a poll cadence never enters a measurement. */
-interface OperationPollReply extends CheckpointReply {
+export interface OperationPollReply extends CheckpointReply {
   state?: string;
   token?: string;
 }
 
 const OperationPollReplySchema: v.GenericSchema<OperationPollReply> = v.looseObject({
-  ok: v.optional(v.boolean()),
+  ...CheckpointReplySchema.entries,
   state: v.optional(v.string()),
   token: v.optional(v.string()),
-  outcome: v.optional(v.looseObject({
-    kind: v.string(),
-    // Bytes THIS tick moved, reported by the strategy rather than derived.
-    //
-    // The alternative was differencing consecutive `bytes` readings, and that is
-    // invalid by construction: `bytes` is durable bytes HELD, so a fold or rebase
-    // supersedes a generation and held bytes legitimately FALL while the tick
-    // moved a large archive. Two ticks in the verdict run went negative for
-    // exactly that reason, and a retracted amplification claim came from reading
-    // the cumulative field as a per-tick one.
-    //
-    // `undefined` is a truthful "not measurable here" and NOT zero: a store that uploads
-    // when the last handle closes, so no bytes attribute to a sync. Zero would
-    // read as "moved nothing", which is a different claim.
-    movedBytes: v.optional(v.number()),
-    reason: v.optional(v.string()),
-    bytes: v.optional(v.number()),
-  })),
-  ms: v.optional(v.number()),
-  error: v.optional(v.string()),
 });
 
 /**
@@ -2378,25 +2426,7 @@ function requireConfirmedStop(stopped: StopReply, failure: string): void {
   throw new Error(`${failure}: ${stopped.error ?? 'stop did not confirm'}`);
 }
 
-/** What `/teardown` discarded and purged. The report prints this row whole and
- *  the artifact keeps it, so nothing here is read by name. */
-interface TeardownReply {
-  ok?: boolean;
-  discarded?: boolean;
-  purged?: number;
-  emptyBucketGuaranteed?: boolean;
-  ms?: number;
-  error?: string;
-}
 
-const TeardownReplySchema: v.GenericSchema<TeardownReply> = v.looseObject({
-  ok: v.optional(v.boolean()),
-  discarded: v.optional(v.boolean()),
-  purged: v.optional(v.number()),
-  emptyBucketGuaranteed: v.optional(v.boolean()),
-  ms: v.optional(v.number()),
-  error: v.optional(v.string()),
-});
 
 export type TeardownPurgePayload = Readonly<Pick<DriverRequest, 'purge' | 'prefix' | 'whole'>>;
 
@@ -2689,10 +2719,15 @@ export interface ArmResult {
    *  Optional so artifacts written before 2026-09-10 still read; absent
    *  reads as unmeasured, never as zero. */
   restoreProbes?: RestoreProbeRow[];
+  workloadStates?: ContinuityObservation[];
+  startups?: StartupRecord[];
   phases: ProbeRun[];
   /** Per-checkpoint rows from the decisive experiment, with their R2 operation
    *  classes. */
   decisiveTicks: TickRecord[];
+  decisiveRequested?: boolean;
+  decisiveSegments?: DecisiveSegmentObservation[];
+  c3?: LiveC3Observation;
   /**
    * Quiesces this arm took before the decisive window: the ladder's quiesces,
    * which precede the window and change the base the decisive ticks are
@@ -2723,6 +2758,8 @@ export interface ArmResult {
    * quietly.
    */
   witnessChecks: WitnessCheck[];
+  witnessFacts?: ControlWitnessFacts;
+  witnessProfile?: WitnessProfile;
   /** What this arm's fault-cut cell observed, or null when the cell never ran:
    *  the arm died before it, or never attached its wake, with the reason in
    *  `notes`. The run-level publication block is built from these, one per
@@ -2751,6 +2788,18 @@ async function installHarness(fixture: Fixture, box: string): Promise<void> {
       fixture, box, `${HARNESS}/${file}`,
       readFileSync(join(REPO_ROOT, 'scripts/fixtures/r2-bench', file), 'utf8'),
     );
+  }
+
+  await installWitnessHarness(fixture, box, HARNESS);
+}
+
+async function installWitnessHarness(fixture: Fixture, box: string, directory: string): Promise<void> {
+  const made = await execInBox(fixture, box, `mkdir -p '${directory}'`);
+
+  if (made.ok !== true || made.exitCode !== 0) throw new Error(`the witness directory was not created: ${made.error ?? made.stderr ?? 'no result'}`);
+
+  for (const file of ['witness-files.ts', 'seeded.ts']) {
+    await writeFileInBox(fixture, box, `${directory}/${file}`, readFileSync(join(BENCH_DIR, file), 'utf8'));
   }
 }
 
@@ -2846,9 +2895,11 @@ export async function runDecisive(
   /** Which repetition of this cell is running, counting from one. Stamped on
    *  every tick, so the artifact keeps the per-repetition rows apart. */
   repetition: number,
-): Promise<{ ticks: TickRecord[]; treeBytes: number; notes: string[] }> {
+  record?: { segments: DecisiveSegmentObservation[]; settled: () => void },
+): Promise<{ ticks: TickRecord[]; treeBytes: number; notes: string[]; segments: DecisiveSegmentObservation[] }> {
   const notes: string[] = [];
   const ticks: TickRecord[] = [];
+  const segments: DecisiveSegmentObservation[] = [];
   const root = `/workspace/decisive-${spec.id}`;
 
   // The excludes arm differs ONLY by the policy file, so the pair isolates the
@@ -2872,91 +2923,130 @@ export async function runDecisive(
   let treeBytes = -1;
 
   for (let segment = 0; segment <= SEGMENTS_PER_WORKLOAD; segment++) {
-    const command = `bun ${HARNESS}/decisive.ts --root ${root} --workload ${spec.workload} `
-      + `--seed ${seed} --segment ${segment} ${spec.args}`;
+    const observation: DecisiveSegmentObservation = {
+      workload: spec.id, repetition, segment, before: null, after: null,
+      command: null, checkpoint: null, accounting: { before: null, after: null },
+      segmentName: null, priced: false, error: null,
+    };
 
-    const reply = await execInBox(fixture, box, command);
-    const start = (reply.stdout ?? '').indexOf('{');
+    segments.push(observation);
+    record?.segments.push(observation);
 
-    if (start === -1) {
-      notes.push(`${spec.id} segment ${segment}: no JSON: ${(reply.error ?? reply.stderr ?? '').slice(0, 200)}`);
-      continue;
+    try {
+      observation.before = await observeContinuity(fixture, box, `${spec.id}/${repetition}/${segment}: before`);
+
+      const command = `bun ${HARNESS}/decisive.ts --root ${root} --workload ${spec.workload} `
+        + `--seed ${seed} --segment ${segment} ${spec.args}`;
+
+      const reply = await execInBox(fixture, box, command);
+      observation.command = reply;
+      const start = (reply.stdout ?? '').indexOf('{');
+
+      if (reply.ok !== true || reply.exitCode !== 0 || start === -1) {
+        observation.error = `${spec.id} segment ${segment}: unobserved execution: ${reply.error ?? reply.stderr ?? 'no successful JSON reply'}`;
+        notes.push(observation.error);
+        continue;
+      }
+
+      const run = parseDecisiveRun((reply.stdout ?? '').slice(start), `${arm}/${spec.id}#${segment}`);
+
+      if (run.error !== undefined) {
+        observation.error = `${spec.id} segment ${segment}: ${run.error}`;
+        notes.push(observation.error);
+        continue;
+      }
+
+      if (run.treeBytes !== undefined && run.treeBytes > treeBytes) treeBytes = run.treeBytes;
+      const segmentName = run.segments?.[0]?.name;
+      observation.segmentName = segmentName ?? null;
+
+      if (segmentName === undefined) {
+        observation.error = 'the workload returned no segment';
+        continue;
+      }
+
+      // RESPECT THE MINIMUM CHECKPOINT INTERVAL, rather than measuring it.
+      //
+      // MEASURED: ticking immediately produced five consecutive
+      // `skipped (within the minimum checkpoint interval)` outcomes on one arm, so
+      // the whole workload recorded no work at all. The guard is correct product
+      // behaviour; a driver that trips it is measuring the rate limiter.
+      await delay(MIN_CHECKPOINT_INTERVAL_MS);
+
+      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+      const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+      observation.accounting.before = before;
+      const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
+      observation.checkpoint = cp;
+
+      // UNCOMMITTED TICKS PRICE NOTHING. A failed or skipped tick pushed as a
+      // row would sum its wall time into the decision's numerator — a chain arm
+      // erroring every tick summed a negative one — so the failure is a note and
+      // the row is absent, which G9 counts as one repetition fewer rather than
+      // as a silent success. The note carries the box's own reason, as the
+      // ladder rows do: run 20260905193714 recorded forty failed ticks as
+      // `(failed)` and nothing else, so the arm's deciding cell had no cause.
+      if (cp.ok !== true || cp.outcome?.kind !== 'committed') {
+        observation.error = cp.error ?? checkpointOutcomeWords(cp);
+        notes.push(
+          `${spec.id} tick ${segmentName} did not commit `
+          + `(${cp.error ?? checkpointOutcomeWords(cp)}); it prices nothing`,
+        );
+        continue;
+      }
+
+      if (cp.ms === undefined || !Number.isFinite(cp.ms) || cp.ms < 0) {
+        observation.error = 'the committed checkpoint has no valid wall time';
+        notes.push(`${spec.id} tick ${segmentName} committed without a measured duration; its wall time is unpriced`);
+        continue;
+      }
+
+      await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
+      const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+      observation.accounting.after = after;
+      const bill = pricedOpWindow(before, after);
+
+      if (bill === null || bill.classA === undefined || bill.classB === undefined || bill.classFree === undefined) {
+        observation.error = 'the checkpoint accounting window was unobserved or inconsistent';
+        notes.push(observation.error);
+        continue;
+      }
+
+      // HELD versus MOVED are different quantities and the report keeps them apart.
+      // `bytes` is the cumulative durable total; `movedBytes` is what this tick
+      // actually uploaded. Absent `movedBytes` stays absent rather than becoming 0.
+      const bytes = cp.outcome?.bytes;
+      const moved = cp.outcome?.movedBytes;
+      ticks.push({
+        arm,
+        workload: spec.id,
+        repetition,
+        segment: segmentName,
+        wallMs: cp.ms,
+        classA: bill.classA,
+        classB: bill.classB,
+        classFree: bill.classFree,
+        // NOT `?? 0`: a failed tick may have landed blobs before throwing, and
+        // answers `null`, which is a different fact from a skip's honest zero.
+        bytesPut: moved ?? null,
+        heldBytes: bytes ?? null,
+        movedReported: moved !== undefined,
+        // Kept for the report's own arithmetic check.
+        unitsMoved: moved ?? null,
+        unitLabel: 'delta bytes',
+        outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
+      });
+      observation.priced = true;
+    } catch (error) {
+      observation.error = describeThrown({ cause: error });
+      throw error;
+    } finally {
+      observation.after = await observeContinuity(fixture, box, `${spec.id}/${repetition}/${segment}: after`);
+      record?.settled();
     }
-
-    const run = parseDecisiveRun((reply.stdout ?? '').slice(start), `${arm}/${spec.id}#${segment}`);
-
-    if (run.error !== undefined) {
-      notes.push(`${spec.id} segment ${segment}: ${run.error}`);
-      continue;
-    }
-
-    if (run.treeBytes !== undefined && run.treeBytes > treeBytes) treeBytes = run.treeBytes;
-    const segmentName = run.segments?.[0]?.name;
-
-    if (segmentName === undefined) continue;
-
-    // RESPECT THE MINIMUM CHECKPOINT INTERVAL, rather than measuring it.
-    //
-    // MEASURED: ticking immediately produced five consecutive
-    // `skipped (within the minimum checkpoint interval)` outcomes on one arm, so
-    // the whole workload recorded no work at all. The guard is correct product
-    // behaviour; a driver that trips it is measuring the rate limiter.
-    await delay(MIN_CHECKPOINT_INTERVAL_MS);
-
-    await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-    const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-    const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
-
-    // UNCOMMITTED TICKS PRICE NOTHING. A failed or skipped tick pushed as a
-    // row would sum its wall time into the decision's numerator — a chain arm
-    // erroring every tick summed a negative one — so the failure is a note and
-    // the row is absent, which G9 counts as one repetition fewer rather than
-    // as a silent success. The note carries the box's own reason, as the
-    // ladder rows do: run 20260905193714 recorded forty failed ticks as
-    // `(failed)` and nothing else, so the arm's deciding cell had no cause.
-    if (cp.ok !== true || cp.outcome?.kind !== 'committed') {
-      notes.push(
-        `${spec.id} tick ${segmentName} did not commit `
-        + `(${cp.error ?? checkpointOutcomeWords(cp)}); it prices nothing`,
-      );
-      continue;
-    }
-
-    if (cp.ms === undefined) {
-      notes.push(`${spec.id} tick ${segmentName} committed without a measured duration; its wall time is unpriced`);
-      continue;
-    }
-
-    await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
-    const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
-
-    // HELD versus MOVED are different quantities and the report keeps them apart.
-    // `bytes` is the cumulative durable total; `movedBytes` is what this tick
-    // actually uploaded. Absent `movedBytes` stays absent rather than becoming 0.
-    const bytes = cp.outcome?.bytes;
-    const moved = cp.outcome?.movedBytes;
-    ticks.push({
-      arm,
-      workload: spec.id,
-      repetition,
-      segment: segmentName,
-      wallMs: cp.ms,
-      classA: (after.classA ?? 0) - (before.classA ?? 0),
-      classB: (after.classB ?? 0) - (before.classB ?? 0),
-      classFree: (after.classFree ?? 0) - (before.classFree ?? 0),
-      // NOT `?? 0`: a failed tick may have landed blobs before throwing, and
-      // answers `null`, which is a different fact from a skip's honest zero.
-      bytesPut: moved ?? null,
-      heldBytes: bytes ?? null,
-      movedReported: moved !== undefined,
-      // Kept for the report's own arithmetic check.
-      unitsMoved: moved ?? null,
-      unitLabel: 'delta bytes',
-      outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
-    });
   }
 
-  return { ticks, treeBytes, notes };
+  return { ticks, treeBytes, notes, segments };
 }
 
 // ── the preregistered witness cells ─────────────────────────────────────────
@@ -2982,61 +3072,48 @@ export async function runDecisive(
 // count is a measured column: cells inside the measured window would inflate
 // this arm's count with operations the measurement is not about.
 
-/** One preregistered witness cell's result. `observed` is the DEFECT showing
- *  up where it was predicted — the arm is REQUIRED to produce it — never a
- *  test passing. */
+/** One preregistered behavior and the observation that established it. */
 export interface WitnessCheck {
   readonly name: string;
   readonly observed: boolean;
   readonly detail: string;
 }
 
-/**
- * The red witnesses each arm must produce, preregistered before the run.
- *
- * Every name is a defect its own strategy's header states in prose:
- *
- *   `mutable-delta` — "a single DELTA object that each checkpoint replaces
- *     atomically": the durable archive is a mutable object rewritten in place,
- *     not an immutable generation.
- *   `delta-layer-collapse` — a wake with a delta SERVES that delta as a lower
- *     layer, so the cumulative changed set is spread across two layers and the
- *     next checkpoint pays for a full merged archive to get back to a shape
- *     whose upper is its changed set. Both halves are stated by
- *     `packages/devbox/src/snapshot-chain.ts` and read from it rather than from
- *     memory: the attach empties the upper and mounts the delta at
- *     `deltaLayerMountPoint(<generation>)` under `lowerDeltaRoot`
- *     (`/var/tmp/devbox/lower-delta/<generation>`), newest lower first
- *     ("THE DELTA IS A LAYER, NOT A COPY", `attachChainOnce`); and `checkpoint`
- *     reads that mount back through `deltaLayerServed` and passes `layered` as
- *     `commitChain`'s `rebasing`, which mints a fresh generation id and records
- *     `delta: undefined` ("COLLAPSE RATHER THAN APPEND while a delta is served
- *     as a layer").
- *
- * A witness is a MEASURED DEFECT, never an eligibility filter. An arm carrying
- * one of these defects still competes and can still win: the defect is named
- * beside its numbers and the reader weighs it. What the preregistration buys
- * is drift detection — a predicted defect that stops reproducing means the
- * instrument, the arm, or the prediction changed, and the run is refused until
- * somebody says which.
- *
- * WHY `delta-layer-collapse` REPLACED `cumulative-delta-seed`, and why the
- * witness was re-pointed rather than retired. The old name preregistered the
- * SEEDING COPY — "after an attach that had a delta, the delta's contents are
- * copied into the fresh upper" — and the wake fix deleted that copy: no live
- * path in `snapshot-chain.ts` writes a delta's bytes into the upper any more,
- * and the only thing that can leave a delta IN an upper is the upper the
- * publication itself archived (`held`, proven by the seed stamp), which is a
- * survival rather than a copy. Run 20260902154130 measured the consequence:
- * delta 244,723,712 B present, the marker NOT in the fresh upper, a seed stamp
- * naming the generation — the reading a SERVED delta produces, recorded as
- * witness drift and refusing the run under G2. The surviving code still holds a
- * defect worth naming, so the witness names that one: serve-not-copy, and the
- * collapse the serve forces.
- */
+/** The normal run requires chunked absorption and observes the mutable delta.
+ * Full-upper and stuck-sidecar collapse remain explicit layered-profile tests.
+ * The profile is fixed before the run, never selected from its observations. */
 const PREREGISTERED_WITNESSES = {
-  'snapshot-chain': ['mutable-delta', 'delta-layer-collapse'],
+  'snapshot-chain': ['mutable-delta', 'chunked-absorption'],
 } as const satisfies Record<Strategy, readonly string[]>;
+
+export type WitnessProfile = 'chunked' | 'layered';
+
+const LAYERED_WITNESSES = ['mutable-delta', 'delta-layer-collapse'] as const;
+
+export interface ChunkedAbsorptionFacts {
+  readonly markerPath: string;
+  readonly markerDigest: string;
+  readonly manifest: DeltaManifest | null;
+  readonly manifestRead: ExecReply | null;
+  readonly markerInMerged: FileObservation | null;
+  readonly markerInUpper: FileObservation | null;
+  readonly sidecarMounted: boolean | null;
+  readonly mounts: ExecReply | null;
+  readonly before: string | null;
+  readonly after: string | null;
+  readonly afterNamesDelta: boolean | null;
+  readonly nextCheckpoint: CheckpointReply | null;
+  readonly wake: StartupCompletion | null;
+  readonly seedCheckpoint?: CheckpointReply;
+  readonly beforeState?: StateReply;
+  readonly afterState?: StateReply;
+  readonly deltaHead?: HeadReply;
+  readonly destroyReceipt?: DestroyReply;
+  readonly startupObservations?: readonly StartupObservation[];
+  readonly errors?: readonly string[];
+}
+
+type ChunkedAbsorptionSample = { -readonly [Key in keyof ChunkedAbsorptionFacts]: ChunkedAbsorptionFacts[Key] };
 
 /**
  * What the cells OBSERVED, as raw facts, one group per witness.
@@ -3047,6 +3124,7 @@ const PREREGISTERED_WITNESSES = {
  * holding the measurement.
  */
 export interface ControlWitnessFacts {
+  readonly chunkedAbsorption?: ChunkedAbsorptionFacts;
   readonly deltaLayerCollapse?: {
     /** The generation the wake had to serve. */
     readonly chainId: string;
@@ -3093,9 +3171,40 @@ export interface ControlWitnessFacts {
 export function controlWitnessChecks(
   strategy: Strategy,
   facts: ControlWitnessFacts,
+  profile: WitnessProfile = 'chunked',
 ): WitnessCheck[] {
-  return PREREGISTERED_WITNESSES[strategy].map((name): WitnessCheck => {
+  const names = profile === 'chunked' ? PREREGISTERED_WITNESSES[strategy] : LAYERED_WITNESSES;
+
+  return names.map((name): WitnessCheck => {
     switch (name) {
+      case 'chunked-absorption': {
+        const cell = facts.chunkedAbsorption;
+
+        if (cell === undefined) return absentCell(name);
+
+        const manifest = cell.manifestRead?.ok === true && cell.manifestRead.exitCode === 0
+          && cell.manifest !== null && v.safeParse(DeltaManifestSchema, cell.manifest).success
+          && cell.manifest.files.some((file) => file.p === cell.markerPath);
+
+        const merged = cell.markerInMerged?.path === `${DEVBOX_WORK_DIR}/${cell.markerPath}`
+          && witnessMatches(cell.markerInMerged, cell.markerDigest) === true;
+
+        const upper = cell.markerInUpper?.path === `${CHAIN_UPPER_DIR}/${cell.markerPath}`
+          && witnessMatches(cell.markerInUpper, cell.markerDigest) === true;
+
+        const observed = manifest && merged && upper && cell.sidecarMounted === false
+          && cell.mounts?.ok === true && cell.mounts.exitCode === 0
+          && cell.before !== null && cell.after === cell.before && cell.afterNamesDelta === true
+          && cell.nextCheckpoint?.ok === true && cell.nextCheckpoint.outcome?.kind === 'committed';
+
+        return {
+          name, observed,
+          detail: `chunked manifest ${manifest ? 'confirmed' : 'unobserved'}; marker merged=${merged} upper=${upper}; `
+            + `sidecar mounted=${String(cell.sidecarMounted)}; next checkpoint=${cell.nextCheckpoint?.outcome?.kind ?? 'unobserved'}; `
+            + `generation ${cell.before ?? 'unobserved'} to ${cell.after ?? 'unobserved'}`,
+        };
+      }
+
       case 'delta-layer-collapse': {
         const cell = facts.deltaLayerCollapse;
 
@@ -3312,22 +3421,21 @@ async function runControlWitnessCells(
       bytesAfter: after.bytes,
     };
   });
-  // THE WAKE THIS CELL NEEDS IS ITS OWN.
-  //
-  // The claim is about a wake WITH A DELTA, and the arm's own recycle cannot
-  // witness it: that wake ran before the workload phases, and by the time the
-  // cells run the record has moved on several generations. So the cell commits
-  // a marker INTO a delta, recycles the box, and reads both halves back.
-  //
-  // THE MEASURED TREES GO FIRST, which is what keeps the cell cheap AND keeps
-  // its premise true. Every number this arm produced is already settled to its
-  // own artifact. Dropping the trees leaves a delta of whiteouts plus one
-  // marker, so the stop's own quiesce cannot rebase — `shouldRebase` asks
-  // `delta > base` — and the collapse below archives a merged view of
-  // kilobytes instead of the gigabyte the decisive workloads leave.
-  await cell('delta-layer-collapse', async () => {
-    const marker = `delta-layer-${crypto.randomUUID()}`;
-    const markerFile = 'witness-delta-layer.txt';
+  // Priced workloads are finished. Publish a small marker delta, then destroy
+  // the container without another quiesce before observing chunked absorption.
+  await cell('chunked-absorption', async () => {
+    const marker = `chunked-absorption-${crypto.randomUUID()}`;
+    const markerFile = 'witness-chunked-absorption.txt';
+    const errors: string[] = [];
+
+    const sample: ChunkedAbsorptionSample = {
+      markerPath: markerFile, markerDigest: createHash('sha256').update(marker).digest('hex'),
+      manifest: null, manifestRead: null, markerInMerged: null, markerInUpper: null,
+      sidecarMounted: null, mounts: null, before: null, after: null, afterNamesDelta: null,
+      nextCheckpoint: null, wake: null, errors,
+    };
+
+    facts.chunkedAbsorption = sample;
     const harness = basename(HARNESS);
     await execInBox(
       fixture,
@@ -3337,12 +3445,12 @@ async function runControlWitnessCells(
     );
     await delay(MIN_CHECKPOINT_INTERVAL_MS);
 
-    // A TICK, NOT A QUIESCE: a quiesce over the delta the decisive window
-    // left would rebase, and the wake would then have a bare base to attach
-    // and nothing to serve as a layer.
+    // A tick preserves the base; this cell needs a delta sidecar to restore.
     const seeded = await checkpointOperation(
-      fixture, box, 'tick', 'delta-layer-collapse marker commit',
+      fixture, box, 'tick', 'chunked-absorption marker commit',
     );
+
+    sample.seedCheckpoint = seeded;
 
     if (seeded.outcome?.kind !== 'committed') {
       throw new Error(
@@ -3351,52 +3459,52 @@ async function runControlWitnessCells(
       );
     }
 
-    const stopped = await stopOperation(fixture, box, 'delta-layer-collapse stop');
-    requireConfirmedStop(stopped, 'the box did not stop');
+    sample.beforeState = await boxState(fixture, box);
+    const chainId = sample.beforeState.state?.chain?.base?.id;
 
-    const woke = await startupOperation(
-      fixture, box, '/wake', 'delta-layer-collapse wake', ['attached'],
-    );
+    if (chainId === undefined || !/^[a-zA-Z0-9-]+$/.test(chainId)) throw new Error('the committed chain id is missing or invalid');
+    sample.before = chainId;
+    sample.deltaHead = await headKey(`${sample.beforeState.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
+    const manifestPoint = `${dirname(CHAIN_UPPER_DIR)}/witness-manifest`;
+    sample.manifestRead = await execInBox(fixture, box,
+      `mkdir -p '${manifestPoint}' && squashfuse '${CHAIN_STORE_MOUNT_DIR}/${chainId}/delta.sqsh' '${manifestPoint}' && cat '${manifestPoint}/${DELTA_MANIFEST_NAME}'`);
 
-    // THE SERVED GENERATION IS THE ONE THE RECORD NAMES AFTER THE WAKE, never
-    // the one named before it: an attach that fell back to its retained
-    // fallback serves a different generation, and reading the pre-stop id
-    // would describe a generation nothing is mounted from.
-    const served = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-    const chainId = served.state?.chain?.base?.id ?? '';
+    if (sample.manifestRead.ok === true && sample.manifestRead.exitCode === 0 && sample.manifestRead.stdout !== undefined) {
+      try {
+        const manifest = v.safeParse(DeltaManifestSchema, JSON.parse(sample.manifestRead.stdout));
 
-    if (chainId.length === 0) throw new Error('/state reported no chain generation after the wake');
-    const delta = await headKey(`${served.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
-    const mounts = await execInBox(fixture, box, 'cat /proc/mounts');
+        if (manifest.success) sample.manifest = manifest.output;
+        else errors.push(`chunked manifest: ${issueText(manifest.issues)}`);
+      } catch (error) {
+        errors.push(`chunked manifest: ${describeThrown({ cause: error })}`);
+      }
+    } else {
+      errors.push(sample.manifestRead.error ?? sample.manifestRead.stderr ?? 'the manifest observer did not complete');
+    }
 
-    const inMergedView = await execInBox(
-      fixture, box, `test -f ${DEVBOX_WORK_DIR}/${markerFile} && echo yes || echo no`,
-    );
+    sample.destroyReceipt = await destroyBox(fixture, box);
+    const startupObservations: StartupObservation[] = [];
+    sample.startupObservations = startupObservations;
+    sample.wake = await startupOperation(fixture, box, '/wake', 'chunked-absorption wake', ['attached'], { observations: startupObservations });
+    sample.mounts = await execInBox(fixture, box, 'cat /proc/mounts');
 
-    const inUpper = await execInBox(
-      fixture, box, `test -f ${CHAIN_UPPER_DIR}/${markerFile} && echo yes || echo no`,
-    );
+    if (sample.mounts.ok === true && sample.mounts.exitCode === 0 && sample.mounts.stdout !== undefined) {
+      sample.sidecarMounted = mountAt(sample.mounts.stdout, `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null;
+    }
 
-    // THE NEXT CHECKPOINT, with something to say: a box that woke and wrote
-    // nothing is skipped with `nothing has been written since the attach`, so
-    // the collapse would never be reached.
+    sample.markerInMerged = await readBoxFile(fixture, box, `${DEVBOX_WORK_DIR}/${markerFile}`);
+    sample.markerInUpper = await readBoxFile(fixture, box, `${CHAIN_UPPER_DIR}/${markerFile}`);
+
+    // A new write makes the next publication observable rather than a no-op.
     await execInBox(
       fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-collapse.txt && sync`,
     );
     await delay(MIN_CHECKPOINT_INTERVAL_MS);
-    await checkpointOperation(fixture, box, 'tick', 'delta-layer-collapse next checkpoint');
-    const collapsed = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
-    const collapsedChain = collapsed.state?.chain;
-    facts.deltaLayerCollapse = {
-      chainId,
-      deltaBytes: delta.exists === true ? delta.size ?? 0 : 0,
-      attachDetail: woke.attach.detail,
-      deltaLayerMounted: mountAt(mounts.stdout ?? '', `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`) !== null,
-      markerInMergedView: (inMergedView.stdout ?? '').trim() === 'yes',
-      markerInUpper: (inUpper.stdout ?? '').trim() === 'yes',
-      collapsedChainId: collapsedChain?.base?.id ?? '',
-      collapsedNamesDelta: collapsedChain?.delta !== undefined && collapsedChain?.delta !== null,
-    };
+    sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
+    sample.afterState = await boxState(fixture, box);
+    const next = sample.afterState.state?.chain;
+    sample.after = next?.base?.id ?? null;
+    sample.afterNamesDelta = next === undefined || next === null ? null : next.delta !== undefined && next.delta !== null;
   });
 
   return { facts, notes };
@@ -3443,11 +3551,8 @@ async function readBoxMarker(
   fixture: Fixture,
   box: string,
   name: string,
-  expected: string,
-): Promise<boolean> {
-  const read = await execInBox(fixture, box, `cat /workspace/${name} 2>/dev/null || echo MISSING`);
-
-  return (read.stdout ?? '').trim() === expected;
+): Promise<FileObservation> {
+  return await readBoxFile(fixture, box, `/workspace/${name}`);
 }
 
 /** The publication the cut fires at: a marker proving the commit started, and
@@ -3464,10 +3569,13 @@ async function fireCutVictim(
   fixture: Fixture,
   box: string,
   victim: CutVictim,
+  evidence: CutEvidence,
 ): Promise<{ victimEnd: string } | { missedReason: string }> {
   await execInBox(fixture, box, `printf %s ${victim.content} > /workspace/${victim.marker} && sync`);
 
-  if ((await readBoxMarker(fixture, box, victim.marker, victim.content)) !== true) {
+  evidence.markerBefore = await readBoxMarker(fixture, box, victim.marker);
+
+  if (witnessMatches(evidence.markerBefore, createHash('sha256').update(victim.content).digest('hex')) !== true) {
     throw new Error('the fault-cut marker did not land: the box is not serving its workspace');
   }
 
@@ -3492,6 +3600,8 @@ async function fireCutVictim(
       wait: async () => await delay(500),
     });
 
+    evidence.receipt = receipt;
+
     if (!publicationWasCut(receipt, armed.op)) {
       return { missedReason: `NOT-CUT: ${JSON.stringify(receipt)}` };
     }
@@ -3501,6 +3611,7 @@ async function fireCutVictim(
     for (let waited = 0; waited < 120 && outcome === null; waited += 1) {
       await delay(500);
       const poll = await pollOperation();
+      evidence.victimOperation = poll;
 
       if (poll.state === 'done' || poll.state === 'failed') outcome = poll;
       else if (poll.state !== 'pending') {
@@ -3535,14 +3646,18 @@ async function readChainCutCell(
     readonly pre: ChainGeneration | null;
     readonly preDeltaEtag: string | null;
   },
+  evidence: CutEvidence,
 ): Promise<FaultCutObservation> {
   const {
     prefix, marker: cutMarker, content: cutContent, victimEnd,
     kind: cutKind, detail: cutDetail, pre: chainPre, preDeltaEtag: chainPreDeltaEtag,
   } = cut;
 
-  const gen = await chainGeneration(fixture, box);
-  const recordPresent = gen.baseId !== null && gen.baseId.length > 0;
+  evidence.postState = await boxState(fixture, box);
+  const gen = chainGenerationFromState(evidence.postState);
+
+  const recordPresent = evidence.postState.state === undefined || evidence.postState.error !== undefined
+    ? null : gen.baseId !== null && gen.baseId.length > 0;
 
   const rows = recordPresent && gen.baseId !== null
     ? chainArchiveExpectations(gen.baseId, gen.hasDelta, prefix)
@@ -3550,33 +3665,29 @@ async function readChainCutCell(
 
   const baseRow = rows[0];
   const deltaRow = rows[1];
-  let baseExists = false;
+  let baseExists: boolean | null = null;
   let deltaExists: boolean | null = null;
-  let unexpectedDelta = false;
+  let unexpectedDelta: boolean | null = false;
+  let postDeltaEtag: string | null = null;
 
   if (baseRow !== undefined) {
-    const head = await headObject(fixture, box, baseRow.key);
-    baseExists = head.exists === true && (head.size ?? 0) > 0;
+    const head = await readCutHead(fixture, box, baseRow.key, evidence);
+    baseExists = headPresence(head);
   }
 
   if (deltaRow !== undefined) {
-    const head = await headObject(fixture, box, deltaRow.key);
-    const exists = head.exists === true && (head.size ?? 0) > 0;
-    deltaExists = exists;
+    const head = await readCutHead(fixture, box, deltaRow.key, evidence);
+    const exists = headPresence(head);
+    deltaExists = deltaRow.present ? exists : null;
+    unexpectedDelta = deltaRow.present ? false : exists;
 
-    if (!deltaRow.present && exists) unexpectedDelta = true;
+    if (deltaRow.present && head?.error === undefined) postDeltaEtag = head?.etag || null;
   }
 
-  let postDeltaEtag: string | null = null;
+  evidence.markerAfter = await readBoxMarker(fixture, box, cutMarker);
+  const markerPresent = witnessMatches(evidence.markerAfter, createHash('sha256').update(cutContent).digest('hex'));
 
-  if (deltaRow !== undefined && deltaRow.present) {
-    const head = await headObject(fixture, box, deltaRow.key);
-    postDeltaEtag = head.etag === undefined || head.etag.length === 0 ? null : head.etag;
-  }
-
-  const markerPresent = await readBoxMarker(fixture, box, cutMarker, cutContent);
-
-  const judgment = judgeChainCut({
+  const facts: ChainCutFacts = {
     recordPresent,
     preBaseId: chainPre?.baseId ?? null,
     preHasDelta: chainPre?.hasDelta ?? false,
@@ -3590,9 +3701,10 @@ async function readChainCutCell(
     cutMarkerPresent: markerPresent,
     baseExists,
     deltaExists,
-  });
+    unexpectedDelta,
+  };
 
-  const absentReferences = !recordPresent
+  const absentReferences = recordPresent !== true || baseExists === null || (gen.hasDelta && deltaExists === null)
     ? null
     : (!baseExists ? 1 : 0) + (deltaRow?.present === true && deltaExists === false ? 1 : 0);
 
@@ -3603,9 +3715,10 @@ async function readChainCutCell(
   let readOnlySurface: string | null = null;
   let readOnlyRefusedWrites: boolean | null = null;
   const mountsNow = await execInBox(fixture, box, 'cat /proc/mounts');
+  evidence.mounts = mountsNow;
   let layerPoint: string | null = null;
 
-  for (const raw of (mountsNow.stdout ?? '').split('\n')) {
+  for (const raw of (mountsNow.ok === true && mountsNow.exitCode === 0 ? mountsNow.stdout ?? '' : '').split('\n')) {
     const at = raw.trim().split(' ')[1] ?? '';
 
     if (at.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)) {
@@ -3625,11 +3738,20 @@ async function readChainCutCell(
       `touch '${layerPoint}/.faultcut-ro-probe' 2>&1; code=$?; rm -f '${layerPoint}/.faultcut-ro-probe' 2>/dev/null; exit $code`,
     );
 
-    readOnlyRefusedWrites = probe.exitCode === undefined
+    evidence.readOnlyProbe = probe;
+
+    readOnlyRefusedWrites = probe.exitCode === undefined || probe.error !== undefined
       ? null
-      : judgeReadOnlyRefusal(probe.exitCode, probe.stderr ?? '');
+      : judgeReadOnlyRefusal(probe.exitCode, `${probe.stderr ?? ''}\n${probe.stdout ?? ''}`);
   }
 
+  for (const witness of evidence.acknowledgement?.witnesses ?? []) {
+    evidence.baselineAfter.push(await readBoxFile(fixture, box, witness.path));
+  }
+
+  evidence.facts = { ...facts, observersComplete: layerPoint !== null && readOnlyRefusedWrites !== null };
+  const judgment = judgeChainCut(evidence.facts);
+  const ackLoss = barrierAckLoss(evidence.acknowledgement, evidence.baselineAfter);
   const healNote = await healBox(fixture, box);
 
   return {
@@ -3637,11 +3759,35 @@ async function readChainCutCell(
     verdict: cutKind !== 'attached' && cutKind !== 'already-attached' ? 'mixed' : judgment.verdict,
     absentReferences,
     rollbackOrPhantomRoot: combineRollbackPhantom(judgment.rollback, judgment.phantom),
-    barrierAckLoss: null,
+    barrierAckLoss: ackLoss,
     readOnlySurface,
     readOnlyRefusedWrites,
     detail: `victim ${victimEnd}; ${judgment.detail}${unexpectedDelta ? '; store holds a delta the record does not name' : ''}${healNote === '' ? '' : `; ${healNote}`}`,
+    evidence,
   };
+}
+
+export function headPresence(head: HeadReply | null): boolean | null {
+  if (head === null || head.error !== undefined || head.exists === undefined) return null;
+
+  if (!head.exists) return false;
+
+  if (head.size === undefined || !Number.isSafeInteger(head.size) || head.size < 0) return null;
+
+  return head.size > 0;
+}
+
+async function readCutHead(fixture: Fixture, box: string, key: string, evidence: CutEvidence): Promise<HeadReply | null> {
+  try {
+    const reply = await headObject(fixture, box, key);
+    evidence.heads.push({ key, reply, error: reply.error ?? null });
+
+    return reply;
+  } catch (error) {
+    evidence.heads.push({ key, reply: null, error: describeThrown({ cause: error }) });
+
+    return null;
+  }
 }
 
 /**
@@ -3661,15 +3807,43 @@ async function readChainCutCell(
 async function runFaultCutCell(
   fixture: Fixture,
   box: string,
+  evidence: CutEvidence,
 ): Promise<FaultCutObservation> {
   const tag = crypto.randomUUID().slice(0, 8);
   const cutMarker = `faultcut-cut-${tag}.txt`;
   const cutContent = `faultcut-cut-${tag}`;
   const victim = `faultcut-victim-${tag}.bin`;
+  const acknowledgedContent = `acknowledged-before-cut-${crypto.randomUUID()}`;
+  const acknowledgedPath = `/workspace/faultcut-ack-${tag}.txt`;
+
+  const witness: BarrierWitness = {
+    path: acknowledgedPath,
+    expectedDigest: createHash('sha256').update(acknowledgedContent).digest('hex'),
+    expectedSize: Buffer.byteLength(acknowledgedContent),
+  };
+
+  evidence.acknowledgement = { witnesses: [witness], checkpoint: null };
+  await writeFileInBox(fixture, box, acknowledgedPath, acknowledgedContent);
+  const baselineRead = await readBoxFile(fixture, box, acknowledgedPath);
+  evidence.baselineBefore.push(baselineRead);
+
+  if (witnessMatches(baselineRead, witness.expectedDigest) !== true) {
+    throw new Error(`the baseline witness was not observed: ${baselineRead.error ?? 'bytes differ'}`);
+  }
+
+  const acknowledged = await checkpointOperation(fixture, box, 'quiesce', 'fault-cut acknowledged baseline');
+  evidence.acknowledgement = { witnesses: [witness], checkpoint: acknowledged };
+
+  if (acknowledged.ok !== true || acknowledged.outcome?.kind !== 'committed') {
+    throw new Error(`the baseline was not acknowledged: ${checkpointOutcomeWords(acknowledged)}`);
+  }
+
   const state0 = await boxState(fixture, box);
+  evidence.preState = state0;
   const prefix = state0.storePrefix ?? '';
   // PRE-CUT BASELINE.
-  const chainPre = await chainGeneration(fixture, box);
+  const chainPre = chainGenerationFromState(state0);
+  evidence.pre = chainPre;
   let chainPreDeltaEtag: string | null = null;
 
   if (chainPre.hasDelta && chainPre.baseId !== null) {
@@ -3677,15 +3851,16 @@ async function runFaultCutCell(
     const preDelta = preRows[1];
 
     if (preDelta !== undefined) {
-      const head = await headObject(fixture, box, preDelta.key);
-      chainPreDeltaEtag = head.etag === undefined || head.etag.length === 0 ? null : head.etag;
+      const head = await readCutHead(fixture, box, preDelta.key, evidence);
+      evidence.preDeltaHead = head;
+      chainPreDeltaEtag = head?.error === undefined ? head?.etag || null : null;
     }
   }
 
   // THE VICTIM, FIRED AND CUT. Marker, file, arming, polls, kill and outcome
   // live in `fireCutVictim`; a cut that never met its publication comes back
   // as a miss, recorded here as an incomplete cell — never a fast pass.
-  const fired = await fireCutVictim(fixture, box, { marker: cutMarker, content: cutContent, file: victim });
+  const fired = await fireCutVictim(fixture, box, { marker: cutMarker, content: cutContent, file: victim }, evidence);
 
   if ('missedReason' in fired) {
     return {
@@ -3697,12 +3872,17 @@ async function runFaultCutCell(
       readOnlySurface: null,
       readOnlyRefusedWrites: null,
       detail: fired.missedReason,
+      evidence,
     };
   }
 
   // THE WAKE AFTER THE CUT. Every kind is admitted: an empty wake is the
   // finding, not a step failure, and the judges below read it as one.
-  const cut = await startupOperation(fixture, box, '/wake', 'fault-cut wake', ['attached', 'already-attached', 'empty']);
+  const cut = await startupOperation(fixture, box, '/wake', 'fault-cut wake', ['attached', 'already-attached', 'empty'], {
+    observations: evidence.wakeObservations,
+  });
+
+  evidence.wake = cut;
   const cutDetail = cut.attach.detail;
   const cutKind = cut.attach.kind;
 
@@ -3715,7 +3895,7 @@ async function runFaultCutCell(
     detail: cutDetail,
     pre: chainPre,
     preDeltaEtag: chainPreDeltaEtag,
-  });
+  }, evidence);
 }
 
 /** One change, one tick, and the delta object's identity afterwards. Two of
@@ -3982,6 +4162,9 @@ export async function runWorkloadPhases(
    *  that throws records its reason and leaves the row absent, which G9 then
    *  counts as one repetition fewer rather than as a silent success. */
   const measurePhase = async (phase: string, what: string): Promise<void> => {
+    const states = result.workloadStates ??= [];
+    states.push(await observeContinuity(fixture, box, `${what}: before`));
+
     try {
       result.phases.push(await runPhase(fixture, box, `/workspace/ab-${strategy}`, phase, run.seed, run.budgetMs));
     } catch (error) {
@@ -3989,6 +4172,8 @@ export async function runWorkloadPhases(
       log(`phase ${what} failed: ${reason.slice(0, 160)}`);
       notes.push(`phase ${what} did not complete: ${reason.slice(0, 240)}`);
     }
+
+    states.push(await observeContinuity(fixture, box, `${what}: after`));
 
     // FLUSH AT THE PHASE BOUNDARY, not a settle-and-hope.
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
@@ -4044,13 +4229,15 @@ async function runFaultCutPhase(
 ): Promise<{ cut: FaultCutObservation | null; notes: string[] }> {
   if (arm.verifyPassed && arm.wakeKind === 'attached') {
     log('fault-cut cell');
+    const evidence = newCutEvidence();
 
     try {
-      const cut = await runFaultCutCell(fixture, box);
+      const cut = await runFaultCutCell(fixture, box, evidence);
 
       return { cut, notes: [`fault-cut: ${cut.detail}`] };
     } catch (error) {
       const reason = describeThrown({ cause: error }).slice(0, 240);
+      evidence.errors.push(reason);
 
       return {
         cut: {
@@ -4062,6 +4249,7 @@ async function runFaultCutPhase(
           readOnlySurface: null,
           readOnlyRefusedWrites: null,
           detail: `the cut cell threw before judging: ${reason}`,
+          evidence,
         },
         notes: [`fault-cut cell did not complete: ${reason}`],
       };
@@ -4312,6 +4500,8 @@ async function measureArm(
   let box = boxBase;
   const notes: string[] = [];
   const result = unmeasuredArm(strategy, box, notes);
+  result.witnessProfile = 'chunked';
+  result.decisiveRequested = options.decisive;
   observe(result);
   noteLiveBox(box);
 
@@ -4343,7 +4533,18 @@ async function measureArm(
     operation: string,
     allowedKinds: readonly string[],
   ): Promise<StartupCompletion> => {
-    const completed = await startupOperation(fixture, box, path, operation, allowedKinds);
+    const record: StartupRecord = { path, operation, completion: null, failure: null, error: null, observations: [] };
+    (result.startups ??= []).push(record);
+    let completed: StartupCompletion;
+
+    try {
+      completed = await startupOperation(fixture, box, path, operation, allowedKinds, { observations: record.observations });
+      record.completion = completed;
+    } catch (error) {
+      record.error = describeThrown({ cause: error });
+      record.failure = await observeContinuity(fixture, box, `${operation}: refused`);
+      throw error;
+    }
 
     if (completed.redrives > 0) {
       notes.push(
@@ -4479,8 +4680,16 @@ async function measureArm(
   result.wakeDetail = woke.attach.detail;
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
-  // The restore wall time of the post-ladder wake at the full ladder size.
+  // Preserve this restore's row before the independent warm observation.
   await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes, woke.startedAt);
+
+  if (!options.verifyOnly) {
+    const warm = await startup('/create', 'warm attach', admittedAttachKinds('warm attach'));
+    result.attachWarmMs = warm.ms;
+    result.attachWarmKind = warm.attach.kind;
+    result.attachWarmBootId = warm.state.state?.bootId ?? null;
+  }
+
   recordFinalComplexityRestore(result, ladderBytes, complexityScope);
   settle('the wake');
   verify(
@@ -4690,7 +4899,12 @@ async function measureArm(
           // the harness with it. Reinstall through the box before each workload;
           // this is also the attach/replay probe for the replacement generation.
           await installHarness(fixture, box);
-          const run = await runDecisive(fixture, box, strategy, spec, options.seed, repetition);
+
+          const run = await runDecisive(fixture, box, strategy, spec, options.seed, repetition, {
+            segments: result.decisiveSegments ??= [],
+            settled: () => settle('a decisive segment'),
+          });
+
           result.decisiveTicks.push(...run.ticks);
           // THE LARGEST TREE ANY REPETITION MEASURED. The workload is resumable
           // by segment, so a later repetition re-runs the same segments over the
@@ -4710,13 +4924,6 @@ async function measureArm(
   }
 
 
-  // Warm attach: a second kick observes the already attached generation.
-  const warm = await startup('/create', 'warm attach', admittedAttachKinds('warm attach'));
-  result.attachWarmMs = warm.ms;
-  result.attachWarmKind = warm.attach.kind;
-  result.attachWarmBootId = warm.state.state?.bootId ?? null;
-  settle('the warm attach');
-
   log('ops accounting and teardown');
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   result.ops = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
@@ -4734,7 +4941,8 @@ async function measureArm(
   if (PREREGISTERED_WITNESSES[strategy].length > 0) {
     log('witness cells');
     const witnessed = await runControlWitnessCells(fixture, box);
-    result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
+    result.witnessFacts = witnessed.facts;
+    result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts, result.witnessProfile);
     notes.push(...witnessed.notes);
     const unobserved = result.witnessChecks.filter((witness) => !witness.observed);
 
@@ -4767,6 +4975,23 @@ async function measureArm(
   // CLEANUP, through the shared release: a cleanup failure is not a
   // measurement failure, and the arm still returns what it measured.
   await releaseArm(fixture, box, result, notes);
+
+  if (options.decisive) {
+    const preparation = result.teardown;
+    result.c3 = await measureLiveC3(fixture, box, `${FIXTURE_BASE}-${options.runId}`, preparation, (row) => {
+      result.c3 = row;
+      settle('the live C3 evidence');
+    });
+    result.teardown = null;
+    await releaseArm(fixture, box, result, notes);
+    result.c3.cleanup = result.teardown;
+    const c3 = evaluateLiveC3(result.c3);
+    result.c3.correctness = c3.correctness;
+    process.stdout.write(`${JSON.stringify(result.c3)}\n${JSON.stringify({ event: 'matched.chain.complete', case: result.c3.case, runId: result.c3.runId, correctness: c3.correctness })}\n`);
+
+    if (!c3.admitted) notes.push(`live C3 refused: ${c3.errors.join('; ')}`);
+  }
+
   settle('the arm finished');
 
   return result;
@@ -4794,7 +5019,7 @@ async function runDestroyColdPhase(
   settle: (what: string) => void,
 ): Promise<void> {
   try {
-    await call(fixture, 'POST', `/destroy?box=${box}`, AckReplySchema);
+    await destroyBox(fixture, box);
     const rewokeCold = await startup('/wake', 'destroy-cold restore', admittedAttachKinds('wake'));
     const knownSizes = Object.values(result.treeBytes).filter((n) => Number.isSafeInteger(n));
     const coldTreeBytes = knownSizes.length > 0 ? Math.max(...knownSizes) : null;
@@ -4812,6 +5037,119 @@ async function runDestroyColdPhase(
     });
     settle('a refused destroy-cold restore');
   }
+}
+
+const PublicationWindowReplySchema = v.looseObject({
+  ok: v.optional(v.boolean()), error: v.optional(v.string()), window: v.optional(PublicationWindowSchema),
+});
+
+export async function measureLiveC3(
+  fixture: Fixture,
+  box: string,
+  runId: string,
+  preparation: TeardownReply | null,
+  observe: (row: LiveC3Observation) => void = () => {},
+): Promise<LiveC3Observation> {
+  const round: LiveC3Observation['rounds'][number] = {
+    round: 1, checkpoint: null, published: { transport: { puts: null, putUploadBytes: null } },
+    accounting: { beforeOps: null, afterOps: null, window: null },
+  };
+
+  const initialObservations: StartupObservation[] = [];
+  const restorationObservations: StartupObservation[] = [];
+
+  const row: LiveC3Observation = {
+    event: 'matched.chain.C3.observations', case: 'snapshot-chain/C3', runId, box,
+    identity: fixture.identity ?? null, workload: C3_WORKLOAD, prefix: null, preparation: { cleanup: preparation, destroy: null },
+    initial: null, initialObservations, baselineCommand: null, baselineCheckpoint: null,
+    overwriteCommand: null, rounds: [round], beforeDestroy: null, destroyReceipt: null,
+    restoration: null, restorationObservations, restoreProbe: null, file: null,
+    correctness: 'unmeasured', errors: [], cleanup: null,
+  };
+
+  const harness = `/tmp/kinu-c3-${createHash('sha256').update(runId).digest('hex').slice(0, 16)}`;
+  const token = `${runId}-C3-${crypto.randomUUID()}`;
+  let windowAttempted = false;
+  let windowClosed = false;
+
+  const closeWindow = async (): Promise<void> => {
+    try {
+      const closed = await call(fixture, 'POST', `/publication-window/close?box=${box}&token=${encodeURIComponent(token)}`, PublicationWindowReplySchema);
+
+      if (closed.ok !== true || closed.window?.token !== token || closed.window.closedAt === null) {
+        throw new Error(`the C3 PUT window did not close: ${closed.error ?? 'no matching receipt'}`);
+      }
+
+      round.accounting.window = closed.window;
+      windowClosed = true;
+    } catch (error) {
+      row.errors.push(`publication window: ${describeThrown({ cause: error })}`);
+    }
+  };
+
+  observe(row);
+
+  try {
+    if (row.identity === null) throw new Error('live C3 requires the deployed build identity');
+    row.preparation.destroy = await destroyBox(fixture, box);
+    row.initial = await startupOperation(fixture, box, '/create', 'C3 empty baseline', ['empty'], { observations: initialObservations });
+    row.prefix = row.initial.state.storePrefix ?? null;
+
+    if (row.prefix === null) throw new Error('the C3 box did not report its store prefix');
+    await installWitnessHarness(fixture, box, harness);
+    row.baselineCommand = await execInBox(fixture, box, `bun ${harness}/witness-files.ts baseline /workspace`);
+
+    if (row.baselineCommand.ok !== true || row.baselineCommand.exitCode !== 0) throw new Error('the C3 baseline writer did not complete');
+    row.baselineCheckpoint = await checkpointOperation(fixture, box, 'quiesce', 'C3 baseline');
+
+    if (row.baselineCheckpoint.ok !== true || row.baselineCheckpoint.outcome?.kind !== 'committed') throw new Error('the C3 baseline checkpoint did not commit');
+    observe(row);
+
+    row.overwriteCommand = await execInBox(fixture, box, `bun ${harness}/witness-files.ts overwrite /workspace`);
+
+    if (row.overwriteCommand.ok !== true || row.overwriteCommand.exitCode !== 0) throw new Error('the C3 overwrite writer did not complete');
+    round.accounting.beforeOps = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+    windowAttempted = true;
+    const opened = await call(fixture, 'POST', `/publication-window/open?box=${box}&token=${encodeURIComponent(token)}`, PublicationWindowReplySchema);
+    round.accounting.window = opened.window ?? null;
+
+    if (opened.ok !== true || opened.window?.token !== token || opened.window.prefix !== row.prefix || opened.window.closedAt !== null) {
+      throw new Error(`the C3 PUT window did not open: ${opened.error ?? 'no matching receipt'}`);
+    }
+
+    try {
+      round.checkpoint = await checkpointOperation(fixture, box, 'quiesce', 'C3 overwrite');
+    } catch (error) {
+      row.errors.push(`overwrite checkpoint: ${describeThrown({ cause: error })}`);
+    }
+
+    await closeWindow();
+    round.accounting.afterOps = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
+    const totals = publicationTotals(round.accounting.window);
+    round.published.transport = { puts: totals.objectsPut, putUploadBytes: totals.bytesPut };
+    observe(row);
+
+    if (round.checkpoint?.ok !== true || round.checkpoint.outcome?.kind !== 'committed') throw new Error('the C3 overwrite checkpoint did not commit');
+
+    row.beforeDestroy = await boxState(fixture, box);
+    row.destroyReceipt = await destroyBox(fixture, box);
+    row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { observations: restorationObservations });
+    row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', C3_WORKLOAD.baselineBytes, row.errors, row.restoration.startedAt);
+    observe(row);
+    // Observer code is outside the one-file workload, and installed only after the cold clock ends.
+    await installWitnessHarness(fixture, box, harness);
+    row.file = await readBoxFile(fixture, box, `/workspace/${C3_WORKLOAD.path}`, harness);
+  } catch (error) {
+    row.errors.push(describeThrown({ cause: error }));
+  } finally {
+    if (windowAttempted && !windowClosed) await closeWindow();
+    const totals = publicationTotals(round.accounting.window);
+    round.published.transport = { puts: totals.objectsPut, putUploadBytes: totals.bytesPut };
+    row.correctness = evaluateLiveC3(row).correctness;
+    observe(row);
+  }
+
+  return row;
 }
 
 /** How long a release is given after an arm already failed. Short on purpose:
@@ -5208,6 +5546,9 @@ export interface RunMeta {
   'deciding repetitions': string;
   'frozen controls provenance'?: string;
   'publication rendezvous'?: string;
+  'publication accounting'?: string;
+  'witness profile'?: string;
+  'live C3'?: string;
   INCOMPLETE?: string;
 }
 
@@ -5776,6 +6117,27 @@ export function diffOpTallies(before: OpTally | null, after: OpTally | null): Op
   return { calls, total, bytes };
 }
 
+function pricedOpWindow(before: OpTally, after: OpTally): OpTally | null {
+  const window = diffOpTallies(before, after);
+
+  if (window === null || before.classA === undefined || before.classB === undefined || before.classFree === undefined
+    || after.classA === undefined || after.classB === undefined || after.classFree === undefined) return null;
+
+  const classes = diffCounts(
+    { classA: before.classA, classB: before.classB, classFree: before.classFree },
+    { classA: after.classA, classB: after.classB, classFree: after.classFree },
+  );
+
+  if (classes === null) return null;
+  const classA = classes.classA ?? 0;
+  const classB = classes.classB ?? 0;
+  const classFree = classes.classFree ?? 0;
+
+  if (classA + classB + classFree !== window.total) return null;
+
+  return { ...window, classA, classB, classFree };
+}
+
 /** The per-name growth between two cumulative counters, or null when either
  *  side holds a non-integer or the window runs backwards. */
 function diffCounts(start: Record<string, number>, end: Record<string, number>): Record<string, number> | null {
@@ -6096,6 +6458,37 @@ export interface FaultCutObservation {
   readonly readOnlySurface: string | null;
   readonly readOnlyRefusedWrites: boolean | null;
   readonly detail: string;
+  readonly evidence?: CutEvidence;
+}
+
+export interface CutEvidence {
+  acknowledgement: BarrierAcknowledgement | null;
+  baselineBefore: FileObservation[];
+  baselineAfter: FileObservation[];
+  preState: StateReply | null;
+  postState: StateReply | null;
+  pre: ChainGeneration | null;
+  preDeltaHead: HeadReply | null;
+  heads: Array<{ key: string; reply: HeadReply | null; error: string | null }>;
+  markerBefore: FileObservation | null;
+  markerAfter: FileObservation | null;
+  receipt: PublicationCut | null;
+  victimOperation: OperationPollReply | null;
+  wake: StartupCompletion | null;
+  wakeObservations: StartupObservation[];
+  facts: ChainCutFacts | null;
+  mounts: ExecReply | null;
+  readOnlyProbe: ExecReply | null;
+  errors: string[];
+}
+
+function newCutEvidence(): CutEvidence {
+  return {
+    acknowledgement: null, baselineBefore: [], baselineAfter: [],
+    preState: null, postState: null, pre: null, preDeltaHead: null, heads: [],
+    markerBefore: null, markerAfter: null, receipt: null, victimOperation: null,
+    wake: null, wakeObservations: [], facts: null, mounts: null, readOnlyProbe: null, errors: [],
+  };
 }
 
 /** What one judge concluded, before aggregation. */
@@ -6124,7 +6517,7 @@ export function chainServedWord(detail: string): string | null {
 }
 
 export interface ChainCutFacts {
-  readonly recordPresent: boolean;
+  readonly recordPresent: boolean | null;
   readonly preBaseId: string | null;
   readonly preHasDelta: boolean;
   readonly preRev: number | null;
@@ -6134,10 +6527,12 @@ export interface ChainCutFacts {
   readonly postRev: number | null;
   readonly postDeltaEtag: string | null;
   readonly servedWord: string | null;
-  readonly cutMarkerPresent: boolean;
-  readonly baseExists: boolean;
+  readonly cutMarkerPresent: boolean | null;
+  readonly baseExists: boolean | null;
   /** Null when the post-cut record names no delta. */
   readonly deltaExists: boolean | null;
+  readonly unexpectedDelta?: boolean | null;
+  readonly observersComplete?: boolean;
 }
 
 /**
@@ -6147,6 +6542,21 @@ export interface ChainCutFacts {
  * names, and a moved record serving the marker over existing archives is new.
  */
 export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
+  if (facts.recordPresent === false) {
+    return { verdict: 'mixed', rollback: null, phantom: true, detail: 'the recovered box has no chain record' };
+  }
+
+  if (facts.recordPresent === null || facts.observersComplete === false
+    || facts.unexpectedDelta === null || facts.cutMarkerPresent === null || facts.baseExists === null
+    || facts.preRev === null || facts.postRev === null
+    || (facts.preHasDelta && facts.preDeltaEtag === null)
+    || (facts.postHasDelta && (facts.postDeltaEtag === null || facts.deltaExists === null))) {
+    return {
+      verdict: 'unjudged', rollback: null, phantom: null,
+      detail: 'required marker, archive or record observations are missing',
+    };
+  }
+
   const phantom = !facts.recordPresent;
   const rollback = facts.preRev !== null && facts.postRev !== null ? facts.postRev < facts.preRev : null;
 
@@ -6165,6 +6575,9 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
   } else if (!servedKnown) {
     verdict = 'unjudged';
     note = `the cut wake answered in words this cell does not judge ("${facts.servedWord ?? 'no detail'}")`;
+  } else if (!facts.baseExists || (facts.postHasDelta && facts.deltaExists === false)) {
+    verdict = 'mixed';
+    note = 'a named archive is missing or empty';
   } else if (!changed && facts.cutMarkerPresent) {
     verdict = 'mixed';
     note = 'the cut marker is served but the record never moved: bytes no commit names';
@@ -6657,6 +7070,40 @@ function armSetProblems(input: DevboxAdmissionInput): string[] {
  * refusal names the missing evidence rather than only a gate id.
  */
 
+export function decisiveCompletenessProblems(arm: ArmResult, repetitions: number): string[] {
+  if (arm.decisiveRequested !== true) return [];
+  const rows = new Map<string, DecisiveSegmentObservation[]>();
+
+  for (const row of arm.decisiveSegments ?? []) {
+    const key = `${row.workload}/${row.repetition}/${row.segment}`;
+    const found = rows.get(key) ?? [];
+    found.push(row);
+    rows.set(key, found);
+  }
+
+  const problems: string[] = [];
+
+  for (const spec of DECISIVE_WORKLOADS) {
+    for (let repetition = 1; repetition <= repetitions; repetition++) {
+      for (let segment = 0; segment <= SEGMENTS_PER_WORKLOAD; segment++) {
+        const key = `${spec.id}/${repetition}/${segment}`;
+        const found = rows.get(key);
+        const row = found?.[0];
+        rows.delete(key);
+
+        if (found?.length !== 1 || row?.priced !== true || row.command?.ok !== true
+          || row.command.exitCode !== 0 || row.checkpoint?.outcome?.kind !== 'committed' || row.error !== null) {
+          problems.push(`arm ${arm.strategy} decisive segment ${key} is incomplete: ${row?.error ?? 'no unique priced observation'}`);
+        }
+      }
+    }
+  }
+
+  for (const key of rows.keys()) problems.push(`arm ${arm.strategy} recorded an unrequested decisive segment ${key}`);
+
+  return problems;
+}
+
 function devboxRequirements(input: DevboxAdmissionInput) {
   const g0 = identityProblems(input.identity);
   const g5: string[] = [];
@@ -6665,6 +7112,20 @@ function devboxRequirements(input: DevboxAdmissionInput) {
   const g9: string[] = [];
 
   const armSet = armSetProblems(input);
+
+  for (const arm of input.arms) g9.push(...decisiveCompletenessProblems(arm, input.repetitions));
+
+  for (const arm of input.arms) {
+    if (arm.decisiveRequested !== true) continue;
+
+    if (arm.c3 === undefined) g6.push(`arm ${arm.strategy} recorded no required live C3 observation`);
+    else {
+      const c3 = evaluateLiveC3(arm.c3);
+
+      if (!c3.admitted) g6.push(...c3.errors.map((error) => `arm ${arm.strategy} live C3: ${error}`));
+    }
+  }
+
   g5.push(...armSet);
   g6.push(...armSet);
   g9.push(...armSet);
@@ -7138,7 +7599,9 @@ async function main(): Promise<number> {
       + `${options.decisive ? ' and every decisive workload' : ''})\n`
       + `workers       ${planned.map((names) => names.worker).join(', ')}\n`
       + `buckets       ${planned.map((names) => names.bucket).join(', ')}\n`
-      + `artifact      ${options.out}\n\nNothing has run. Drop --plan to execute.\n`,
+      + `artifact      ${options.out}\n`
+      + (options.decisive ? `live C3       Seeded(61), 64MiB vol/dense.bin; Seeded(62), 64KiB at 8MiB; PUT bytes < ${C3_BYTES_BOUND}, object attempts = 1; cold file verification\n` : '')
+      + '\nNothing has run. Drop --plan to execute.\n',
     );
 
     return 0;
@@ -7380,7 +7843,7 @@ async function main(): Promise<number> {
           wrangler(['r2', 'bucket', 'create', lane.fixture.bucket]);
           const started = await deployFixture(token, lane.fixture, options.faultCuts);
           lane.stop = started.stop;
-          lane.live = started.fixture;
+          lane.live = { ...started.fixture, identity: { ...revision, workerVersion: started.workerVersion, image: SANDBOX_IMAGE } };
           lane.workerVersion = started.workerVersion;
         } catch (error) {
           lane.refusal = `deploy failed: ${describeThrown({ cause: error })}`;
@@ -7461,6 +7924,9 @@ async function main(): Promise<number> {
     'publication rendezvous': options.faultCuts
       ? 'armed at Worker boot; one added control RPC per successful object write'
       : 'unarmed; zero added control RPCs',
+    'publication accounting': 'counter lookup per PUT/part/complete; the C3 window additionally persists each attempt completion',
+    'witness profile': 'chunked',
+    'live C3': options.decisive ? 'required; isolated one-file baseline after the priced workloads; raw PUT window and genuinely cold digest check' : 'not requested',
   };
 
   if (frozenControls.length > 0) {

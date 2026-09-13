@@ -446,6 +446,8 @@ export class ContainerDisk {
   readonly overlays = new Map<string, OverlayRow>();
   readonly trees = new Map<string, LiveTree>();
   readonly execCalls: string[] = [];
+  readonly processFaults: Array<{ match: RegExp; exitCode: number; stderr: string }> = [];
+  readonly processFaultsReached: string[] = [];
   /** Plain files a mount serves on demand: present, readable, never charged. */
   readonly mountServed = new Set<string>();
   /** Paths an overlay's upper has deleted from a lower: the whiteouts. */
@@ -1526,6 +1528,14 @@ function chainExec(
     const refused = sessionShellRefusal(command);
 
     if (refused !== undefined) throw refused;
+    const fault = disk.dead || disk.stopped ? undefined : disk.processFaults.find((entry) => entry.match.test(command));
+
+    if (fault !== undefined) {
+      disk.processFaultsReached.push(command);
+
+      return { stdout: '', stderr: fault.stderr, exitCode: fault.exitCode };
+    }
+
     const ok = shellOk;
     // The chunked delta's own shell, answered with real bytes. See
     // `delta-shell.ts`.

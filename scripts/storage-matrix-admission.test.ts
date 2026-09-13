@@ -21,6 +21,7 @@ import {
   type RunIdentity,
   type Strategy,
   type ControlWitnessFacts,
+  type FileObservation,
 } from './bench-devbox-strategies';
 
 const cell: CellCompletion = { stage: 'blank', tree: 'T0', change: 'C0', cache: 'K0', completed: true };
@@ -33,16 +34,19 @@ const deciding: MeasuredCell = { id: cell, values: [100, 105], wallMs: 1_000 };
  * was built to see. One set for all three arms, because each classifier only
  * reads the groups its own witnesses name.
  */
+const MARKER: FileObservation = {
+  path: '/workspace/witness.txt', reply: { ok: true, exitCode: 0 }, error: null,
+  evidence: { kind: 'file', size: 7, sha256: 'a'.repeat(64) },
+};
+
 const WITNESSED_FACTS: ControlWitnessFacts = {
-  deltaLayerCollapse: {
-    chainId: 'chain-7',
-    deltaBytes: 71_303_168,
-    attachDetail: 'chain chain-7 142606336B base+delta layered',
-    deltaLayerMounted: true,
-    markerInMergedView: true,
-    markerInUpper: false,
-    collapsedChainId: 'chain-8',
-    collapsedNamesDelta: false,
+  chunkedAbsorption: {
+    markerPath: 'witness.txt', markerDigest: 'a'.repeat(64),
+    manifest: { v: 1, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
+    manifestRead: { ok: true, exitCode: 0 },
+    markerInMerged: MARKER, markerInUpper: { ...MARKER, path: '/var/tmp/devbox/upper/witness.txt' },
+    sidecarMounted: false, mounts: { ok: true, exitCode: 0 }, before: 'chain-7', after: 'chain-7',
+    afterNamesDelta: true, nextCheckpoint: { ok: true, outcome: { kind: 'committed' } }, wake: null,
   },
   mutableDelta: {
     key: 'backups/chain-7/delta.sqsh',
@@ -216,7 +220,7 @@ describe('G0-G9 storage run admission', () => {
       witnessChecks: controlWitnessChecks('snapshot-chain', WITNESSED_FACTS),
     });
 
-    expect(observed.expectedRedChecks).toEqual(['mutable-delta', 'delta-layer-collapse']);
+    expect(observed.expectedRedChecks).toEqual(['mutable-delta', 'chunked-absorption']);
 
     const record: StorageRunRecord = {
       ...validRecord(),
@@ -681,6 +685,15 @@ describe('the devbox run\'s own admission requirements', () => {
     // The declared cell is incomplete for the same reason, rather than being
     // scored as a fast arm.
     expect(gateReasons(verdict, 'G6')).toContain('T0/C0/K0');
+  });
+
+  test('a declared decisive run cannot omit its segment observations', () => {
+    const verdict = devboxVerdict([
+      measuredArm('snapshot-chain', { decisiveRequested: true, decisiveSegments: [] }),
+    ]);
+
+    expect(gateHeld(verdict, 'G9')).toBe(false);
+    expect(gateReasons(verdict, 'G9')).toContain('segment');
   });
 
   test('G6 accepts a cold attach exactly at the ceiling', () => {
