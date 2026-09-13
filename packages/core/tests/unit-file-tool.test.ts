@@ -605,9 +605,9 @@ describe('a `file` failure is attributable from the durable row alone', () => {
 
     try {
       output = await call(input);
-      acc.recordToolCall({ toolName: 'file', input: args, success: true, output });
+      acc.recordToolCall({ toolCallId: 'fixture-1', toolName: 'file', input: args, success: true, output });
     } catch (error) {
-      acc.recordToolCall({ toolName: 'file', input: args, error, ...failedToolOutcome({ cause: error }) });
+      acc.recordToolCall({ toolCallId: 'fixture-2', toolName: 'file', input: args, error, ...failedToolOutcome({ cause: error }) });
     }
 
     const emitted = events[0];

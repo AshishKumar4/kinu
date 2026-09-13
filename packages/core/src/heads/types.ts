@@ -150,6 +150,7 @@ export interface ArtifactRef {
 
 /** One tool call within a head step — name + (digested) input/output. */
 export interface HeadStepToolCall {
+  readonly toolCallId?: string;
   readonly name: string;
   readonly input?: unknown;
   readonly output?: unknown;

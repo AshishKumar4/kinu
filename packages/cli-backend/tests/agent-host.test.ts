@@ -12,6 +12,7 @@ import {
   openWorkspaceMainActor, SubordinateRosterStore,
   createTimerTrigger,
   initWorkspaceSchema,
+  initCompletedTurnTable, createCompletedTurnStore,
   DELEGATION_MAX_DEPTH,
   REPORT_TOOL,
   TriggerRegistry,
@@ -908,20 +909,7 @@ describe('LocalAgentHost', () => {
     });
   }
 
-  /**
-   * A TASK-LIFETIME child records nothing into the evolution window; a durable
-   * hire records its turn. The lifetime decides, at the host's one construction
-   * site for a child session.
-   *
-   * Both children run the same programmatic turn shape — one report-tool call
-   * and nothing else — and the task child's report is a FAILURE, the strongest
-   * signal the headless channel knows: recorded, that turn is graded
-   * `corrected` by the execution verdict and reflected into a lesson through a
-   * model call the asking caller waits on (`dismiss` joins `settleEvolution`).
-   * The actor is dismissed the moment it answers and every later ask mints a
-   * fresh one, so the lesson would sit under an id nothing reads again. The
-   * hire half is the control: the same ledgers, live for a child that persists.
-   */
+  /** Both child lifetimes retain task evidence without joining the turn window. */
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     // One host per half: the fixture model reports on its FIRST turn only, so
     // each child needs a model of its own to make its failing report.
@@ -1774,6 +1762,66 @@ describe('LocalAgentHost — the driver lease', () => {
     } finally {
       LocalAgentSession.prototype.flushPendingDrains = flush;
       await host.close();
+    }
+  });
+
+  test('a refused opener preserves the live driver claim and starts no model work', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const db = new Database(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+
+    const claim = rt.stores.claims.admit({
+      runId: 'live-run', turnId: 'live-turn', workMode: 'build', context: [], workingRevision: 0,
+      program: { kind: 'builtin', version: 0, digest: null, build: null },
+    });
+
+    rivalHolds(dbPath, 'interactive');
+    let calls = 0;
+
+    const { host } = makeHost(state, streamingModel('must not run', () => { calls++; }), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      await host.acquire('root');
+      expect(rt.stores.claims.read(claim.turnId)).toMatchObject({ epoch: claim.epoch, status: 'admitted', outcome: null });
+      expect(calls).toBe(0);
+    } finally {
+      await host.close();
+      db.close();
+    }
+  });
+
+  test('constructing a refused opener cannot reset the live driver review claim', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const db = new Database(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+    initCompletedTurnTable(rt.storage.execRaw);
+    const window = createCompletedTurnStore(rt.storage.sql, rt.actor);
+    window.enqueueReview({
+      userMessage: 'live review', assistantResponse: 'answer', toolCalls: [],
+      steps: 1, durationMs: 1, feedback: null, hadError: false, turnId: 'review-held',
+    }, null);
+    const held = window.takeQueuedReviews(1).reviews[0];
+
+    if (held === undefined) throw new Error('the driver did not claim its review');
+    rivalHolds(dbPath, 'interactive');
+
+    const { host } = makeHost(state, streamingModel('must not run'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      await host.acquire('root');
+      expect(window.countQueuedReviews()).toBe(0);
+      await retireRivals();
+      window.releaseQueuedReview(held.id);
+      expect(window.takeQueuedReviews(1).reviews.map((row) => row.turn.turnId)).toEqual(['review-held']);
+    } finally {
+      await host.close();
+      db.close();
     }
   });
 

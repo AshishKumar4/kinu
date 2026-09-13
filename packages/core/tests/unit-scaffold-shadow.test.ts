@@ -23,13 +23,15 @@ import {
   modifyScaffold,
   DEFAULT_SHADOW_CONFIG,
   initScaffoldTables,
+  WORKSPACE_RUN_ID,
   type PendingScaffold,
   type ShadowConfig,
   type AgentRuntime,
 } from '../src/index';
-import { testActorHandle } from '@kinu.run/test-utils';
+import { testActorHandle, createTestActors } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestRuntime } from './helpers';
+import { RunEventRecorder } from '../src/events/recorder';
 
 function setup() {
   const db = new Database(':memory:');
@@ -254,6 +256,21 @@ describe('decidePromotion', () => {
 });
 
 describe('applyPromotionDecision — closes the proposal→promote loop', () => {
+  test('a scaffold decision refuses another actor event recorder before changing the pointer', async () => {
+    const { rt } = createTestRuntime();
+    const code = 'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }';
+    const proposed = await modifyScaffold(rt, 'A candidate whose decision must stay on the owning actor event stream.', code);
+    expect(proposed.ok).toBe(true);
+    const pending = getPendingScaffold(rt.storage.sql, rt.actor);
+
+    if (pending === null) throw new Error('the candidate was not retained');
+    const other = createTestActors(rt.storage.sql, rt.storage.execRaw, { name: rt.actor.name }).sibling('other');
+    const events = new RunEventRecorder(rt.storage.sql, other);
+    await expect(applyPromotionDecision(rt, pending, 'promote', events)).rejects.toThrow('actor event recorder');
+    expect(getPendingScaffold(rt.storage.sql, rt.actor)?.version).toBe(pending.version);
+    expect(events.read(WORKSPACE_RUN_ID)).toEqual([]);
+  });
+
   test('promote copies the versioned pending code into the live file', async () => {
     // Regression for `kinu-scaffold-gap`: the pending lives in
     // scaffold/agent.js.v{N}, never in the live file at proposal time, so
@@ -286,7 +303,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(pending).not.toBeNull();
 
     if (!pending) return;
-    const promo = await applyPromotionDecision(rt, pending, 'promote');
+    const promo = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(promo.action).toBe('promote');
     expect(promo.newCurrentVersion).toBe(pending.version);
     expect(await rt.identity.scaffold.read()).toBe(pendingCode);
@@ -330,7 +347,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
     if (!pending) return;
 
-    const rb = await applyPromotionDecision(rt, pending, 'rollback');
+    const rb = await applyPromotionDecision(rt, pending, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(rb.action).toBe('rollback');
     expect(rb.newCurrentVersion).toBe(0);
     expect(await rt.identity.scaffold.read()).toBe(v0Code);
@@ -391,7 +408,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     const v1 = 'async function* run(rt, task) { yield "v1-promoted"; }';
     await modifyScaffold(rt, 'Propose v1 for promotion in the version-cycle regression test.', v1);
     let pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
-    await applyPromotionDecision(rt, pending, 'promote');
+    await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(await rt.identity.scaffold.read()).toBe(v1);
 
     // Propose v2, then roll it back. Live must return to v1 (the current).
@@ -400,7 +417,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(mod.ok).toBe(true);
     pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
     expect(pending.version).toBe(2); // monotonic above the promoted v1
-    const rb = await applyPromotionDecision(rt, pending, 'rollback');
+    const rb = await applyPromotionDecision(rt, pending, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(rb.action).toBe('rollback');
     expect(rb.newCurrentVersion).toBe(1); // back to the promoted v1, not pending-1=1 by luck
     expect(await rt.identity.scaffold.read()).toBe(v1);

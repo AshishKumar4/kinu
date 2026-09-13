@@ -21,6 +21,7 @@ import {
 import { clusterPathologies } from '../src/evolution/pathology';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime } from './helpers';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
 
@@ -64,7 +65,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
       currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'current', rationale: 'regressed', currentScore: 0.8, pendingScore: 0.3 },
     });
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     // v2 explicitly BRANCHES FROM the rolled-back v1, not the live current v0.
     const v2 = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v2'), { baseVersion: v1.version });
@@ -90,7 +91,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
       currentOutput: 'c', pendingOutput: 'p',
       judgeResult: { winner: 'pending', rationale: 'better', currentScore: 0.4, pendingScore: 0.9 },
     });
-    const outcome = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
+    const outcome = await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(outcome.action).toBe('promote');
     expect(await rt.identity.scaffold.read()).toBe(scaffoldSrc('v2'));
   });
@@ -413,7 +414,7 @@ describe('rejected proposals are queryable evidence', () => {
       });
     }
 
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
     expect(rejected!.kind).toBe('rolled_back');
@@ -427,7 +428,7 @@ describe('rejected proposals are queryable evidence', () => {
     const rt = setupRt();
     await seedV0(rt);
     await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback', new RunEventRecorder(rt.storage.sql, rt.actor));
 
     const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
     expect(rejected!.reason).toBe('discarded before any decisive shadow trial (0 trials, all ties)');

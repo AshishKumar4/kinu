@@ -150,6 +150,36 @@ const operationsOf = (recorder: RunEventRecorder) =>
     event.type === 'model_operation' ? [event] : []);
 
 describe('runOutcomeEnsemble — the judges write their operation lifecycle', () => {
+  test('a scaffold decision cannot collide with later hosted model operations', async () => {
+    const { harness } = await ensembleHarness();
+    const agent = harness.agent;
+    const runtime = agent.observeRuntime();
+    const first = await agent.runOutcomeEnsemble(['fake-a/m1', 'fake-b/m1']);
+    expect(first.run?.judged.map((row) => row.stored)).toEqual([3, 3]);
+    agent.harnessDeclareShadowCandidate();
+    await runtime.storage.vfs.writeFile(`${runtime.identity.scaffold.path}.v1`,
+      'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }');
+    expect(await agent.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });
+
+    const later = [3, 4, 5].map((index) => recordTurnOutcome(runtime.storage.sql, runtime.actor, {
+      turnId: `turn-${index}`, outcome: 'accepted', confidence: 0.8, source: 'classifier',
+      userMessage: `request ${index}`, assistantResponse: `answer ${index}`, followup: '', scaffoldVersion: 1,
+      now: 1_700_000_000_000 + index * 60_000,
+    }));
+
+    recordOutcomeLabels(runtime.storage.sql, runtime.actor, {
+      labeler: 'owner', labels: later.map((outcomeId) => ({ outcomeId, label: 'accepted' })), now: 1_700_100_000_000,
+    });
+    const second = await agent.runOutcomeEnsemble(['fake-a/m1', 'fake-b/m1']);
+    expect(second.run?.judged.map((row) => row.stored)).toEqual([3, 3]);
+    const retained = await agent.getRunEvents(WORKSPACE_RUN_ID);
+
+    expect(retained.filter((event) => event.type === 'model_operation')).toHaveLength(24);
+    expect(retained.filter((event) => event.type === 'model_call')).toHaveLength(12);
+    expect(retained.filter((event) => event.type === 'scaffold_promotion')).toHaveLength(1);
+    expect(new Set(retained.map((event) => event.eventIndex)).size).toBe(37);
+  });
+
   test('every judge call leaves start/end rows joined by operationId, with usage', async () => {
     const { harness, sql } = await ensembleHarness();
     const result = await harness.agent.runOutcomeEnsemble(['fake-a/m1', 'fake-b/m1']);

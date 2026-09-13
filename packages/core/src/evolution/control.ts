@@ -45,6 +45,7 @@ import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
   purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
+  type ScaffoldDecisionEvents,
 } from '../scaffold/shadow';
 import type {
   ShadowTrialDrain, ShadowTrialPlan, ShadowTrialQueueOutcome, ShadowTrialTurn,
@@ -107,6 +108,7 @@ export type JsonGenerator = <T>(opts: {
 /** What the control plane needs from whichever backend is hosting it. */
 export interface ScaffoldControl {
   readonly rt: AgentRuntime;
+  readonly events: ScaffoldDecisionEvents;
   readonly sql: SqlExecutor;
   readonly config: Pick<
     AgentConfigStore,
@@ -377,6 +379,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
       try {
         const result = await runAutoShadowEval({
           rt: control.rt,
+          events: control.events,
           task: trial.task,
           currentOutput: trial.currentOutput,
           judge: (prompt, schema) => control.judge({ schema, prompt }),
@@ -541,7 +544,7 @@ export async function applyScaffoldDecision(
   }
 
   const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
-  const result = await applyPromotionDecision(control.rt, pending, decision);
+  const result = await applyPromotionDecision(control.rt, pending, decision, control.events);
 
   return { ok: true, fromVersion, ...result };
 }

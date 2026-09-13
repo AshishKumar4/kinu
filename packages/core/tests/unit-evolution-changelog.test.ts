@@ -28,6 +28,7 @@ import {
 } from '../src/index';
 import { describePathology } from '../src/evolution/pathology';
 import { createTestRuntime } from './helpers';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 
@@ -365,7 +366,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       });
     }
 
-    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
+    await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     const now = Date.now();
 
     const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
@@ -509,10 +510,10 @@ describe('reverts — real paths only', () => {
   test('fact forget removes the fact; double-revert errors', async () => {
     const { rt, facts } = setup();
     facts.upsert('volatile', 42);
-    const result = await executeChangelogRevert({ rt, facts }, { type: 'fact_forget', target: 'volatile' });
+    const result = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, { type: 'fact_forget', target: 'volatile' });
     expect(result.ok).toBe(true);
     expect(facts.recall('volatile')).toBeNull();
-    const again = await executeChangelogRevert({ rt, facts }, { type: 'fact_forget', target: 'volatile' });
+    const again = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, { type: 'fact_forget', target: 'volatile' });
     expect(again.ok).toBe(false);
   });
 
@@ -522,7 +523,7 @@ describe('reverts — real paths only', () => {
     const id = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!.items![0].id;
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.95 });
 
-    const result = await revertChangelogEntryById({ rt, facts }, id);
+    const result = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, id);
 
     expect(result.ok).toBe(true);
     expect(facts.recall('sandbox.npm_version')).toBeNull();
@@ -534,7 +535,7 @@ describe('reverts — real paths only', () => {
     facts.upsert('shell', 'fish');
     const aggregate = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!;
 
-    const result = await revertChangelogEntryById({ rt, facts }, aggregate.id);
+    const result = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, aggregate.id);
 
     expect(result).toEqual({ ok: true, detail: 'forgot 2 facts' });
     expect(facts.all()).toEqual([]);
@@ -551,9 +552,9 @@ describe('reverts — real paths only', () => {
     const audit = () => rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'reflection' AND message LIKE 'Operator reverted%'`;
 
-    expect(await revertChangelogEntryById({ rt, facts }, 'no-such-entry')).toMatchObject({ ok: false });
+    expect(await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, 'no-such-entry')).toMatchObject({ ok: false });
     expect(audit()).toEqual([]);
-    expect((await revertChangelogEntryById({ rt, facts }, entry.id)).ok).toBe(true);
+    expect((await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, entry.id)).ok).toBe(true);
     expect(audit()).toEqual([{ message: `Operator reverted changelog entry ${entry.id}: forgot 1 fact` }]);
   });
 
@@ -561,7 +562,7 @@ describe('reverts — real paths only', () => {
     const { rt, facts } = setup();
     facts.upsert('present', true);
 
-    const result = await executeChangelogRevert({ rt, facts }, {
+    const result = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, {
       type: 'fact_forget_many', targets: ['missing', 'present'],
     });
 
@@ -575,7 +576,7 @@ describe('reverts — real paths only', () => {
     const { rt, facts } = setup();
     const version = await seedScaffoldPending(rt);
 
-    const result = await executeChangelogRevert({ rt, facts }, {
+    const result = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, {
       type: 'scaffold_rollback', target: String(version),
     });
 
@@ -595,7 +596,7 @@ describe('reverts — real paths only', () => {
     const { rt, facts } = setup();
     const version = await seedScaffoldPending(rt);
     const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
-    await applyPromotionDecision(rt, pending, 'promote');
+    await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(await rt.identity.scaffold.read()).toBe(V1_CODE);
 
     // The digest now shows the promotion as a revertable entry…
@@ -605,7 +606,7 @@ describe('reverts — real paths only', () => {
     expect(entry.revert).toBeDefined();
 
     // …and reverting it by id restores the predecessor end-to-end.
-    const result = await revertChangelogEntryById({ rt, facts }, entry.id);
+    const result = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, entry.id);
     expect(result.ok).toBe(true);
     expect(result.detail).toContain('rolled back to v0');
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE);
@@ -618,7 +619,7 @@ describe('reverts — real paths only', () => {
     expect(rows.find((r) => r.version === version)!.status).toBe('rolled_back');
 
     // A second revert of the same (now rolled-back) entry refuses.
-    const again = await executeChangelogRevert({ rt, facts }, {
+    const again = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, {
       type: 'scaffold_rollback', target: String(version),
     });
 
@@ -632,12 +633,12 @@ describe('reverts — real paths only', () => {
       outcome: 'accepted', confidence: 1, source: 'explicit',
       userMessage: 'q', assistantResponse: 'a',
     });
-    const missing = await revertChangelogEntryById({ rt, facts }, 'nope:1');
+    const missing = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, 'nope:1');
     expect(missing.ok).toBe(false);
     expect(missing.error).toContain('not found');
 
     const info = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'outcomes')!;
-    const refused = await revertChangelogEntryById({ rt, facts }, info.id);
+    const refused = await revertChangelogEntryById({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, info.id);
     expect(refused.ok).toBe(false);
     expect(refused.error).toContain('informational');
   });
@@ -924,7 +925,7 @@ describe('renderChangelogText + revert guards', () => {
 
   test('scaffold rollback refuses a target that is not a real version number', async () => {
     const { rt, facts } = setup();
-    const ctx = { rt, facts };
+    const ctx = { events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts };
 
     for (const target of ['0', '-1', 'abc', '1.5', '']) {
       const result = await executeChangelogRevert(ctx, { type: 'scaffold_rollback', target });
@@ -944,7 +945,7 @@ describe('renderChangelogText + revert guards', () => {
                    VALUES (${rt.actor.actorId}, 2, ${written + 1}, 'live proposal', 'pending')`;
     expect(getPendingScaffold(rt.storage.sql, rt.actor)!.version).toBe(2);
 
-    const result = await executeChangelogRevert({ rt, facts }, { type: 'scaffold_rollback', target: '1' });
+    const result = await executeChangelogRevert({ events: new RunEventRecorder(rt.storage.sql, rt.actor), rt, facts }, { type: 'scaffold_rollback', target: '1' });
     expect(result.ok).toBe(false);
     expect(result.error).toContain('no longer the pending under trial');
   });

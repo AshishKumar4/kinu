@@ -524,7 +524,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       });
 
       const engine = new EvolutionEngine(runtime, {
-        enabled: true,
         // The grading group as ONE unit. A synchronous run inside a Durable
         // Object is already atomic; answering through the platform's own
         // primitive keeps it so whatever core comes to put between the

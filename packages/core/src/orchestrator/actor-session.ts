@@ -80,6 +80,8 @@ export interface ActorExecutionResult {
    *  effect, and the identity every revision of the turn is keyed to. Null
    *  only when preparation failed before the claim was admitted. */
   readonly claim: ActorTurnClaim | null;
+  /** Admission evidence from the claim ledger; empty when no claim was admitted. */
+  readonly admittedMessages: readonly ModelMessage[];
 }
 
 interface ActiveTurn {
@@ -341,7 +343,7 @@ export class ActorSession {
         scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
           meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
-          stepContext: this.context.steps(claim) },
+          stepContext: this.context.steps(claim) } satisfies ChatOptions,
       });
 
       for await (const event of events) {
@@ -356,8 +358,8 @@ export class ActorSession {
             while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
             const call = index < 0 ? undefined : pending.splice(index, 1)[0];
             this.orchestrator.acc.recordToolCall(event.success
-              ? { toolName: event.toolName, input: call?.args ?? {}, success: true, output: event.result }
-              : { toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason,
+              ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, output: event.result }
+              : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason,
                   execution: event.execution, error: event.error ?? event.result });
             break;
           }
@@ -422,6 +424,7 @@ export class ActorSession {
 
     return {
       text, failure, program, claim: active.claim,
+      admittedMessages: active.claim === null ? [] : this.options.claims.admittedFor(active.claim).messages,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };
   }

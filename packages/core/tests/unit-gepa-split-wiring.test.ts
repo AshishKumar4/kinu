@@ -24,6 +24,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { getPendingPromptSection, listPromptSectionVersions, proposePromptSection, recordPromptSectionTrial } from '../src/prompting/section-store';
 import { createEvalExecutor, createTestActor, createTestRuntime, createTestWorkspace } from './helpers';
 import { scoreInterval } from '../src/utils/stats';
+import { RunEventRecorder } from '../src/events/recorder';
 
 /** Small enough to keep the pass cheap, above `clampGepaEvalBudget`'s floor of
  *  4 so the budget the test asks for is the budget the split is drawn at. */
@@ -81,6 +82,7 @@ function refusingControl(rt: AgentRuntime) {
 
   const control = {
     rt,
+    events: new RunEventRecorder(rt.storage.sql, rt.actor),
     sql: rt.storage.sql,
     config,
     surface: () => refuse('surface'),
@@ -115,6 +117,7 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
     reflectionPrompts,
     judgePrompts,
     control: {
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
       rt,
       sql: rt.storage.sql,
       config,

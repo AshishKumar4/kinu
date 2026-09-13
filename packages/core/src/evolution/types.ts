@@ -12,6 +12,8 @@ import type { ToolOutcome } from '../tools/outcome';
 
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {
+  /** Invocation identity; absent for observations without one. */
+  toolCallId?: string;
   name: string;
   args: JsonObject;
   result?: JsonValue;

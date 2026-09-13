@@ -51,6 +51,7 @@ export interface StepLike {
 /** ai-SDK v6 tool-result hook shape (Think 0.4 renamed args→input, result→output
  *  + added a success discriminator + durationMs). */
 export type ToolResultLike = ToolOutcome & {
+  toolCallId: string;
   toolName: string;
   input?: JsonObject;
   durationMs?: number;
@@ -221,11 +222,11 @@ export class TurnAccumulator {
     if (citesSpillAddress(c.input)) this.context.noteFollowUp();
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
     this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
-    this.toolCalls.push({ name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
+    this.toolCalls.push({ toolCallId: c.toolCallId, name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
 
     const event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'> = {
       name: c.toolName,
-      toolCallId: `tc-${this.toolCalls.length}`,
+      toolCallId: c.toolCallId,
       outcome,
     };
 

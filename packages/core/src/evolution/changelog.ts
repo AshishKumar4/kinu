@@ -18,7 +18,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive } from '../scaffold/archive';
-import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';
+import { getPendingScaffold, applyPromotionDecision, type ScaffoldDecisionEvents } from '../scaffold/shadow';
 import { rollbackScaffold } from '../scaffold/rollback';
 import { listGepaRuns } from './gepa/persistence';
 import {
@@ -659,6 +659,7 @@ export function renderChangelogText(
 export interface ChangelogRevertContext {
   rt: AgentRuntime;
   facts: FactsStore;
+  events: ScaffoldDecisionEvents;
 }
 
 export interface ChangelogRevertResult {
@@ -667,7 +668,7 @@ export interface ChangelogRevertResult {
   error?: string;
 }
 
-async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise<ChangelogRevertResult> {
+async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: ScaffoldDecisionEvents): Promise<ChangelogRevertResult> {
   const sql = rt.storage.sql;
   const actor = rt.actor;
   actor.assertCurrent();
@@ -687,7 +688,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
       return { ok: false, error: `scaffold v${version} is no longer the pending under trial` };
     }
 
-    const result = await applyPromotionDecision(rt, pending, 'rollback');
+    const result = await applyPromotionDecision(rt, pending, 'rollback', events);
 
     return { ok: true, detail: `discarded pending v${version}; current stays v${result.newCurrentVersion}` };
   }
@@ -779,7 +780,7 @@ export async function executeChangelogRevert(
         return { ok: false, error: `invalid scaffold version: ${action.target}` };
       }
 
-      return revertScaffoldVersion(ctx.rt, version);
+      return revertScaffoldVersion(ctx.rt, version, ctx.events);
     }
 
     case 'prompt_section_rollback': {
