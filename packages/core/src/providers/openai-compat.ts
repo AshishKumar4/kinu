@@ -15,6 +15,7 @@ import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types';
 import { createAuthedFetch, positiveInteger } from './util';
+import { withSseTerminal } from './sse-terminal';
 
 const ModelListSchema = v.object({
   data: v.array(v.object({
@@ -71,7 +72,7 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
       return createOpenAICompatible({
         name: providerId,
         baseURL: placeholder,
-        fetch: customFetch,
+        fetch: withSseTerminal(customFetch),
       }).chatModel(modelId);
     },
   };

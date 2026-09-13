@@ -450,6 +450,14 @@ describe('direct Workers AI binding — incremental streaming', () => {
     // has to reach the upstream reader or the model keeps generating.
     controller.abort();
     await reader.cancel();
+
+    // Cancellation propagates backward through the pipe in microtasks, and
+    // the async translation adds hops to that chain, so yield until it lands
+    // (bounded — a break in the chain fails here instead of hanging the
+    // file). The contract is eventual arrival, not hop count: abort-to-stop
+    // latency stays within the same task cluster either way.
+    for (let i = 0; i < 100 && !upstream.cancelled(); i++) await Promise.resolve();
+
     expect(upstream.cancelled()).toBe(true);
   });
 
