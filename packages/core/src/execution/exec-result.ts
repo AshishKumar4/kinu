@@ -5,7 +5,11 @@ import { ERROR_CODES, refusalOf, KinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
 
-const RefusalSchema = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
+const RefusalSchema = v.object({
+  reason: v.picklist(ERROR_CODES),
+  error: v.string(),
+  execution: v.optional(v.object({ exitCode: v.number() })),
+});
 
 /** A verdict the file plane answered with (`tools/file-tool.ts` `failure()`): the
  *  caller did not meet the operation's precondition. Not an error class. */
@@ -28,7 +32,11 @@ export const NO_OUTPUT = '(no output)';
 
 /** Encode a declared refusal-string channel; never use it to classify arbitrary output. */
 export function refusalText(error: KinuError | Refusal): string {
-  return JSON.stringify(error instanceof KinuError ? refusalOf(error) : { reason: error.reason, error: error.error });
+  if (error instanceof KinuError) return JSON.stringify(refusalOf(error));
+
+  const refusal = { reason: error.reason, error: error.error };
+
+  return JSON.stringify(error.execution === undefined ? refusal : { ...refusal, execution: error.execution });
 }
 
 
@@ -47,7 +55,7 @@ export function refusalText(error: KinuError | Refusal): string {
 export function answeredRefusal(payload: JsonValue): Refusal | null {
   const classified = v.safeParse(RefusalSchema, payload);
 
-  if (classified.success) return { reason: classified.output.reason, error: classified.output.error };
+  if (classified.success) return classified.output;
   const verdict = v.safeParse(FileVerdictSchema, payload);
 
   if (verdict.success) return { reason: 'bad_input', error: `${verdict.output.reason}: ${verdict.output.error}` };
@@ -56,10 +64,7 @@ export function answeredRefusal(payload: JsonValue): Refusal | null {
 }
 
 /** Command data stays text; execution failures retain their producer's class. */
-export const CommandResultSchema = v.union([v.string(), v.object({
-  ...RefusalSchema.entries,
-  execution: v.optional(v.object({ exitCode: v.number() })),
-})]);
+export const CommandResultSchema = v.union([v.string(), RefusalSchema]);
 
 export type CommandResult = v.InferOutput<typeof CommandResultSchema>;
 
