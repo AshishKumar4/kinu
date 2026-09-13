@@ -39,7 +39,7 @@ export default function HomePage() {
 
   return (
     <div className="h-full overflow-y-auto p-bg">
-      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
+      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
           <div className="mb-3.5 flex items-center gap-2.5">
             <KinuMark size={22} />
@@ -84,7 +84,7 @@ export default function HomePage() {
           <div className="flex items-center justify-end px-6 pb-5">
             <FilledButton
               type="submit"
-              disabled={creating || !mission.trim() || hasModels === false}
+              disabled={creating || hasModels === false}
               className="!h-10 !rounded-full px-5 p-t-control"
             >
               {creating && <Loader size="sm" />}

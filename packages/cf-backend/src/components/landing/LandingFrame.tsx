@@ -55,7 +55,7 @@ export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; captio
         </span>
         <span className="uppercase tracking-[.12em]">{WINDOW_TITLE[kind]}</span>
         <span className="ml-auto flex items-center gap-4">
-          <span className="hidden sm:inline">{caption}</span>
+          <span className="hidden sm:inline" data-landing-caption>{caption}</span>
           {kind === 'plan' && <LandingMovieReplay />}
         </span>
       </div>

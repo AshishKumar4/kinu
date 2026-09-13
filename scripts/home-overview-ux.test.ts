@@ -330,3 +330,62 @@ describe('the home workspace cards', () => {
     });
   }, 120_000);
 });
+
+describe('the home page is the new-workspace form', () => {
+  test('the create action carries the primary fill and the content centres on desktop', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.browser.newPage();
+      await page.setViewport({ width: 1280, height: 900 });
+      await page.goto(`${gallery.origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
+
+      try {
+        const fact = await page.evaluate(() => {
+          const submit = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Create workspace');
+          // The inner <main> — the app shell wraps the page in its own.
+          const grid = document.querySelector('form')?.closest('main') ?? null;
+
+          return {
+            primaryClass: submit?.classList.contains('p-btn') ?? false,
+            enabledEmpty: submit !== undefined && !submit.disabled,
+            alignContent: grid === null ? '' : getComputedStyle(grid).alignContent,
+            sidebarButton: [...document.querySelectorAll('aside button')].some((b) => b.textContent === 'New workspace'),
+          };
+        });
+
+        // The page's one primary action is brass even before a mission is
+        // typed: `create` refuses an empty mission itself, so the disabled
+        // chip was only hiding the colour the owner asked for.
+        expect(fact.primaryClass).toBe(true);
+        expect(fact.enabledEmpty).toBe(true);
+        // md+ content-centres the tracks; the rail is up at 1280px.
+        expect(fact.alignContent).toBe('center');
+        // The sidebar does not offer the form the page already is.
+        expect(fact.sidebarButton).toBe(false);
+      } finally {
+        await page.close();
+      }
+    });
+  }, 60_000);
+
+  test('mobile keeps the top flow', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.browser.newPage();
+      await page.setViewport({ width: 390, height: 844 });
+      await page.goto(`${gallery.origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
+
+      try {
+
+        const align = await page.evaluate(() => {
+
+          const grid = document.querySelector('form')?.closest('main') ?? null;
+
+          return grid === null ? '' : getComputedStyle(grid).alignContent;
+        });
+
+        expect(align).not.toBe('center');
+      } finally {
+        await page.close();
+      }
+    });
+  }, 60_000);
+});
