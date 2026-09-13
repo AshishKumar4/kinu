@@ -229,11 +229,11 @@ export interface RefinementDeps {
   /**
    * The read-only recursive refiner — the temporary-agent port.
    *
-   * Absent means this host has no roster substrate, so it cannot run a refiner.
+   * null declares a host without roster substrate, so it cannot run a refiner.
    * A request then STAYS `requested` for a host that can, rather than being
    * refused for a reason that is about the host and not about the request.
    */
-  readonly refiner?: TemporaryAgentPort;
+  readonly refiner?: TemporaryAgentPort | null;
   /** The owner's instruction-trust authority — where a proposed skill's digest
    *  is reported so the owner can approve those exact bytes. Absent means this
    *  host has no owner surface and a skill edit says so. */

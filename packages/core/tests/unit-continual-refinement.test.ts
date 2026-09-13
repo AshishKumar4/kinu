@@ -622,10 +622,10 @@ describe('the refiner — bounded references, prior history, strict typed answer
     expect(row?.detail).toContain('no roster substrate here');
   });
 
-  test('a host with no refiner leaves the request `requested` for a host that has one', async () => {
+  test.each([undefined, null])('a host with no refiner (%p) leaves the request `requested` for a host that has one', async (refiner) => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
-    const deps: RefinementDeps = { ...fx.deps(scriptedRefiner('{}').port), refiner: undefined };
+    const deps: RefinementDeps = { ...fx.deps(scriptedRefiner('{}').port), refiner };
 
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     const step = await advanceRefinementLane(deps);

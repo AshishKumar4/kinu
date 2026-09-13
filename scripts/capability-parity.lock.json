@@ -10,7 +10,7 @@
   "asymmetry BackgroundJobRunnerDeps.onSettled#absent-in-cli",
   "asymmetry ChatHistoryEntry.metadata#absent-in-cli",
   "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli",
-  "asymmetry RefinementDeps.refiner#absent-in-cli",
+
   "asymmetry TurnSinks.logActivity#absent-in-cli",
   "movable packages/cf-backend/src/agent-routing.ts",
   "movable packages/cf-backend/src/analytics/boundaries.ts",
