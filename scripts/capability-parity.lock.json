@@ -1,6 +1,1 @@
-[
-  "asymmetry AgentsSwarmDeps.announceHeadActivity#absent-in-cli",
-  "asymmetry AgentsSwarmDeps.reportNodeDelta#absent-in-cli",
-  "asymmetry AgentsSwarmDeps.runtimeForNodeWorkspace#absent-in-cf",
-  "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli"
-]
+[]
