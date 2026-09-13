@@ -111,6 +111,8 @@ export const HttpCallSchema = v.object({
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield';
+
 export const ExerciseResultSchema = v.object({
   register: RegisterSchema,
   claim: ClaimSchema,

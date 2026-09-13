@@ -82,6 +82,7 @@ import type {
   DriveOnceResult,
   ExerciseResult,
   HttpCall,
+  QueueProbeMode,
 } from './two-turn-shapes';
 import {
   DriveOnceInputSchema,
@@ -241,7 +242,7 @@ export class FakeAI extends WorkerEntrypoint {
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage'>;
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
@@ -468,7 +469,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Real socket intake and Think queue; only the remote model response is
    * held. Peer ingress queues a durable event-drain submission while both
    * socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: 'chat' | 'peer'): Promise<HttpCall[]> {
+  async queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
@@ -509,10 +510,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
       if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
       socket.accept();
-      const genesis = await target.beginGenesisTurn();
-
-      if (!genesis.started) throw new Error('queue probe genesis did not start');
-      await fetch('http://probe-control.invalid/queue/arrived');
 
       const send = async (text: string): Promise<void> => {
         if (socket === null) throw new Error('queue probe socket is closed');
@@ -536,8 +533,18 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         }
       };
 
-      await send('QUEUE-A');
-      await send('QUEUE-B');
+      if (mode === 'yield') {
+        await send('QUEUE-OWNER');
+        await fetch('http://probe-control.invalid/queue/arrived');
+        await target.beginGenesisTurn();
+      } else {
+        const genesis = await target.beginGenesisTurn();
+
+        if (!genesis.started) throw new Error('queue probe genesis did not start');
+        await fetch('http://probe-control.invalid/queue/arrived');
+        await send('QUEUE-A');
+        await send('QUEUE-B');
+      }
 
       if (mode === 'peer') {
         const peer = await target.receivePeerMessage({
@@ -550,11 +557,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         await send('QUEUE-C');
       }
 
+      if (mode === 'signal') await target.runTaskFromMcp('QUEUE-PROGRAMMATIC');
+
       const heldCalls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
 
       if (heldCalls.length !== 1) throw new Error('queued requests ran before the held genesis response was released');
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
-      await awaitFactsCompressed(recording, mode === 'chat' ? 3 : 5);
+
+      await awaitFactsCompressed(recording, { chat: 3, peer: 5, signal: 4, yield: 1 }[mode]);
       await awaitQuiet(recording);
 
       return await this.httpCalls();

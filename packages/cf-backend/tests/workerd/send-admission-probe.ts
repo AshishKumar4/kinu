@@ -27,6 +27,8 @@ import { Think, type ChatRecoveryConfig } from '@cloudflare/think';
 import type { ModelStreamPart } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel, ToolSet } from 'ai';
+import { SignalDelivery, type ProgrammaticTurn } from '@kinu.run/core';
+import * as v from 'valibot';
 
 const USAGE = {
   inputTokens: { total: 4, noCache: 4, cacheRead: undefined, cacheWrite: undefined },
@@ -38,6 +40,19 @@ export interface SubmitReceipt {
   submissionId: string;
   accepted: boolean;
   status: string;
+}
+
+interface SignalReplay {
+  readonly messageId: string;
+  readonly text: string;
+  readonly metadata: ProgrammaticTurn['metadata'];
+  readonly signalId: string;
+  readonly idempotencyKey: string | null;
+}
+
+export interface SignalReceipt extends SubmitReceipt {
+  readonly signalId: string;
+  readonly idempotencyKey: string | null;
 }
 
 /** One row of the object's submission ledger. */
@@ -159,6 +174,52 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
     return { submissionId: result.submissionId, accepted: result.accepted, status: result.status };
   }
 
+  /** Capture the shared signal policy's delivery once, then replay those
+   * exact transport inputs after an actual activation reset. */
+  async deliverSignal(text: string): Promise<SignalReceipt> {
+    const accepted = Promise.withResolvers<SignalReceipt>();
+
+    const signals = new SignalDelivery({
+      broadcast: (event) => this.broadcast(JSON.stringify(event)),
+      turnInFlight: () => false,
+      setTimer: () => { throw new Error('signal admission does not schedule a fixture timer'); },
+      enqueueTurn: async (turn) => {
+        const replay: SignalReplay = {
+          messageId: crypto.randomUUID(), text: turn.text, metadata: turn.metadata,
+          signalId: v.parse(v.string(), turn.metadata?.signalId), idempotencyKey: turn.idempotencyKey ?? null,
+        };
+
+        await this.ctx.storage.put('signal-replay', replay);
+        const receipt = await this.submitSignalReplay(replay);
+        accepted.resolve({ ...receipt, signalId: replay.signalId, idempotencyKey: replay.idempotencyKey });
+
+        return { status: 'queued' };
+      },
+    });
+
+    const outcome = await signals.deliver({ kind: 'mcp', text });
+
+    if (outcome !== 'queued') throw new Error('the signal was not admitted');
+
+    return accepted.promise;
+  }
+
+  async replaySignal(): Promise<SubmitReceipt> {
+    const replay = await this.ctx.storage.get<SignalReplay>('signal-replay');
+
+    if (replay === undefined) throw new Error('no signal delivery was retained');
+
+    return this.submitSignalReplay(replay);
+  }
+
+  private async submitSignalReplay(replay: SignalReplay): Promise<SubmitReceipt> {
+    const result = await this.submitMessages([{
+      id: replay.messageId, role: 'user', parts: [{ type: 'text', text: replay.text }], metadata: replay.metadata,
+    }], { idempotencyKey: replay.idempotencyKey ?? undefined });
+
+    return { submissionId: result.submissionId, accepted: result.accepted, status: result.status };
+  }
+
   /**
    * Several sends started in ONE tick and settled together.
    *
@@ -196,7 +257,9 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
    * would make a failed turn read as an answered one.
    */
   async answers(): Promise<string[]> {
-    return this.messages.flatMap((message) => (message.role === 'assistant'
+    const history = await this.syncMessagesFromStorage();
+
+    return history.flatMap((message) => (message.role === 'assistant'
       ? message.parts.flatMap((part) => (part.type === 'text' ? [part.text] : []))
       : []));
   }

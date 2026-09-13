@@ -216,7 +216,10 @@ export class SignalDelivery implements SignalDeliverer {
 
     try {
       const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
-      const { idempotencyKey, text, yieldsToUserMessage } = signal;
+      const { text, yieldsToUserMessage } = signal;
+      // Requeues keep their server card identity across durable admission.
+      // A yielding offer must still take the host's slot-time offer check.
+      const idempotencyKey = signal.idempotencyKey ?? (yieldsToUserMessage === true ? undefined : signal.cardId);
 
       const turn: ProgrammaticTurn = {
         text, metadata,

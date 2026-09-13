@@ -56,6 +56,36 @@ const FailuresSchema = v.array(DiagnosticFailureSchema);
 const HttpSchema = v.array(HttpCallSchema);
 
 describe('two real turns over the HTTP model seam', () => {
+  it('an ordinary signal arriving at the final model step is not lost at settlement', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('signal-queue-driver'));
+
+    const calls = v.parse(HttpSchema, await root.queuedConversation('signal'))
+      .filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(4);
+    const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
+
+    expect(calls[3]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'))).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A' },
+      { role: 'assistant', content: 'echo:QUEUE-A' },
+      { role: 'user', content: 'QUEUE-B' },
+      { role: 'assistant', content: 'echo:QUEUE-B' },
+      { role: 'user', content: 'QUEUE-PROGRAMMATIC' },
+    ]);
+  });
+
+  it('a genesis offer still yields inside its slot to an already admitted owner message', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('yield-queue-driver'));
+
+    const calls = v.parse(HttpSchema, await root.queuedConversation('yield'))
+      .filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.users.filter((text) => !text.startsWith('<'))).toEqual(['QUEUE-OWNER']);
+  });
+
   it('admits two websocket asks after held genesis through the installed Think queue', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('queue-driver'));
 
