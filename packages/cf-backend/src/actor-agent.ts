@@ -291,11 +291,11 @@ import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import type { UserCaller } from "./user/workspace-capability";
 import { sha256Hex } from "./lib/crypto";
-import { installAnalyticsDiagnostics } from "./analytics/install";
-import { openAnalyticsWindow } from "./analytics/writer";
+import { installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
+import { openAnalyticsWindow } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
-} from "./analytics/record";
+} from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 
 interface ClientRpcFrame {

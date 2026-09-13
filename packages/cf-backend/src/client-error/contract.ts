@@ -66,7 +66,7 @@
  */
 
 import * as v from 'valibot';
-import { MAX_BLOB_BYTES } from '../analytics/limits';
+import { MAX_BLOB_BYTES } from '@kinu.run/core/analytics';
 import { REPORTED_ROUTES } from '../app-routes';
 
 export const CLIENT_ERROR_ENDPOINT = '/api/client-errors';

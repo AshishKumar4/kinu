@@ -42,7 +42,7 @@
  * a workspace id and an admin's address — are declared as digests and are
  * written through `analyticsDigest`.
  */
-import type { ReservedLogField } from '@kinu.run/core/obs';
+import type { ReservedLogField } from '../log';
 import { assertWithinPlatformLimits } from './limits';
 import { assertPublishableNames } from './privacy';
 
