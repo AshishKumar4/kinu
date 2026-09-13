@@ -506,6 +506,8 @@ export class FakeSandbox {
    *  awaits before it captures a generation. `startGate` is the process start;
    *  these are two different calls and two different windows. */
   containerStartGate: Gate | undefined;
+  /** Container is running, but the SDK has not invoked the port-proven hook. */
+  containerHookGate: Gate | undefined;
   execGate: Gate | undefined;
   /** How long every command waits INSIDE the container before answering — the
    *  shape of a counted loop (`awaitLayer`, `awaitListenerCommand`), whose whole
@@ -1397,6 +1399,14 @@ export class FakeSandbox {
     this.startFaultAfterRunning = undefined;
 
     if (fault !== undefined) throw fault;
+    const beforeHook = this.containerHookGate;
+
+    if (beforeHook !== undefined) {
+      this.containerHookGate = undefined;
+      beforeHook.enter();
+      await beforeHook.promise;
+    }
+
     // 2026-09-13 cloud block trace b20260913105359: an adoption RPC inside
     // the SDK hook block never receives its reply. The patched SDK releases
     // its storage block first; Devbox's readiness singleflight gates callers.
