@@ -16,6 +16,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 
 import {
@@ -107,6 +108,29 @@ function fixture() {
   ];
 
   return { base, upper };
+}
+
+/** The block hashes a correct side reports, computed from the real bytes
+ *  themselves — never through `parseDeltaBlockHashes`, which is the code under
+ *  comparison. A base path that names no file answers null, as the wire does. */
+function expectedBlockHashes(
+  files: readonly { index: number; upperPath: string; basePath: string | null }[],
+): Map<number, { upper: ReadonlyMap<number, string>; base: ReadonlyMap<number, string> | null }> {
+  const blocks = (path: string): Map<number, string> => {
+    const bytes = readFileSync(path);
+    const out = new Map<number, string>();
+
+    for (let block = 0; block * DELTA_BLOCK_BYTES < bytes.length; block++) {
+      out.set(block, createHash('sha256').update(bytes.subarray(block * DELTA_BLOCK_BYTES, (block + 1) * DELTA_BLOCK_BYTES)).digest('hex'));
+    }
+
+    return out;
+  };
+
+  return new Map(files.map((file) => [file.index, {
+    upper: blocks(file.upperPath),
+    base: file.basePath === null ? null : blocks(file.basePath),
+  }] as const));
 }
 
 /** Plant entries on a real filesystem under `root`. */
@@ -280,8 +304,12 @@ describe('the delta shell against bash', () => {
     const hashCommand = deltaBlockHashCommand({ workDir: `${real.stage}/hash`, files });
     const hashedByBash = realShell(hashCommand);
     const hashedByDisk = deltaCommand(hashCommand, disk)!;
-    // find batches argv safely; directory iteration order is not wire order.
-    expect(parseDeltaBlockHashes(hashedByDisk.stdout, wanted)).toEqual(parseDeltaBlockHashes(hashedByBash.stdout, wanted));
+    // The expected side is hashed from the fixture's real bytes by this test —
+    // the property "bash, the emulation and the file agree" fails when the
+    // parser or the shell drifts, where comparing two parses could not.
+    const expected = expectedBlockHashes(files);
+    expect(parseDeltaBlockHashes(hashedByBash.stdout, wanted)).toEqual(expected);
+    expect(parseDeltaBlockHashes(hashedByDisk.stdout, wanted)).toEqual(expected);
     expect(hashedByDisk.exitCode).toBe(hashedByBash.exitCode);
     const hashes = parseDeltaBlockHashes(hashedByBash.stdout, wanted);
 
