@@ -18,11 +18,15 @@ export default function HomePage() {
   const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
   const listFailed = rosterError !== null;
   const { hasModels, busy, err, create } = useCreateWorkspace();
-  const [, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
+  const creating = busy || isPending;
 
   /** React owns the async action; the workspace hook owns its visible error. */
   const submit = (event?: FormEvent): void => {
     event?.preventDefault();
+
+    if (creating) return;
+
     startTransition(async () => {
       await create(mission);
     });
@@ -60,7 +64,7 @@ export default function HomePage() {
               placeholder={MISSION_PLACEHOLDER}
               rows={4}
               autoFocus
-              disabled={busy}
+              disabled={creating}
               className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
             />
           </div>
@@ -75,10 +79,10 @@ export default function HomePage() {
           <div className="flex items-center justify-end px-6 pb-5">
             <FilledButton
               type="submit"
-              disabled={busy || !mission.trim() || hasModels === false}
+              disabled={creating || !mission.trim() || hasModels === false}
               className="!h-10 !rounded-full px-5 p-t-control"
             >
-              {busy && <Loader size="sm" />}
+              {creating && <Loader size="sm" />}
               Create workspace
             </FilledButton>
           </div>
