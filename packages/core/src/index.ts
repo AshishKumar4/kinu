@@ -139,6 +139,8 @@ export {
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
   type WorkspaceTitleState,
+  isWorkspaceName,
+  validateWorkspaceName,
 } from './identity/naming';
 
 // Evolution engine (3-timescale auto-evolution)
@@ -1421,6 +1423,24 @@ export * from './providers/index';
 // Credential value shape (still exported for UserDO + tests; the previous
 // CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store';
+
+// Credential store policy: at-rest sealing, header projection, and the
+// request validators that keep bad payloads out of the store.
+export {
+  createCredentialCipher,
+  type CredentialCipher,
+  type CredentialEncryptionEnv,
+} from './credentials/envelope';
+
+export {
+  credentialToHeaders,
+  type CredentialHeaders,
+} from './credentials/headers';
+
+export {
+  validateCredential,
+  validateCredentialKey,
+} from './credentials/validate';
 
 // Durable plan review — shared domain and the submit_plan edit contract.
 export {

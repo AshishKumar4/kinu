@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { EGRESS_PLACEHOLDER_PREFIX, isEgressPlaceholder } from '@kinu.run/core';
-import { createCredentialCipher } from '../src/user/credential-envelope';
+import { createCredentialCipher } from '@kinu.run/core';
 import {
   initEgressVaultTables, listEgressSecrets, putEgressSecret,
   resolveEgressInjection, revokeEgressSecret, rewrapEgressSecrets,
