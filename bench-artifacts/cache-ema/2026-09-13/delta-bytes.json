@@ -1,0 +1,103 @@
+{
+  "control": "31493141c full-block renderer; fixed two-change file-read conversation, not a live token-count claim",
+  "base": {
+    "factsBlock": "Tea needs hot water.",
+    "memoryTail": "Read the saved note before answering follow-ups.",
+    "executors": [
+      {
+        "name": "workspace",
+        "available": true,
+        "configured": true,
+        "active": true,
+        "status": "active"
+      },
+      {
+        "name": "sandbox",
+        "available": true,
+        "configured": true,
+        "active": false,
+        "status": "idle"
+      }
+    ],
+    "tasks": {
+      "items": [
+        {
+          "id": "tea",
+          "title": "Read the note and verify the directory",
+          "status": "in_progress",
+          "parentId": null
+        }
+      ],
+      "total": 1
+    }
+  },
+  "changes": [
+    {
+      "state": {
+        "factsBlock": "Tea needs hot water.",
+        "memoryTail": "Read the saved note before answering follow-ups.",
+        "executors": [
+          {
+            "name": "workspace",
+            "available": true,
+            "configured": true,
+            "active": true,
+            "status": "active"
+          },
+          {
+            "name": "sandbox",
+            "available": true,
+            "configured": true,
+            "active": true,
+            "status": "active"
+          }
+        ],
+        "tasks": {
+          "items": [
+            {
+              "id": "tea",
+              "title": "Read the note and verify the directory",
+              "status": "in_progress",
+              "parentId": null
+            }
+          ],
+          "total": 1
+        }
+      },
+      "before": "<dynamic_context fingerprint=\"6b5aae81844ba39c\">\nLive system state from the Kinu runtime. It is not conversation, and the user did not write it. A later dynamic_context block supersedes every earlier one.\n\n## World model (facts you remembered)\nTea needs hot water.\n\n## Memory (newest MEMORY.md lessons and reflections)\nRead the saved note before answering follow-ups.\n\n## Execution status\nLive availability for the runtimes described in the system prompt, and what each one declares it can run:\n- workspace: active\n- sandbox: active, files at /sandbox\n\n## Your task list: what is still open (you keep this with the `tasks` tool)\n- tea [in_progress] Read the note and verify the directory\n</dynamic_context>",
+      "after": "<dynamic_context fingerprint=\"88f0ee91e3855a0e\" kind=\"delta\">\nKinu runtime state, not conversation or user text. Full blocks replace prior state.\nDelta sections replace named sections; omitted sections stay. Execution deltas update named runtimes. Cleared means empty.\n\n## Execution status\n- sandbox status went from `ready on demand` to `active`.\n</dynamic_context>",
+      "beforeBytes": 706,
+      "afterBytes": 366
+    },
+    {
+      "state": {
+        "factsBlock": "Tea needs hot water.",
+        "memoryTail": "Read the saved note before answering follow-ups.",
+        "executors": [
+          {
+            "name": "workspace",
+            "available": true,
+            "configured": true,
+            "active": true,
+            "status": "active"
+          },
+          {
+            "name": "sandbox",
+            "available": true,
+            "configured": true,
+            "active": true,
+            "status": "active"
+          }
+        ],
+        "tasks": {
+          "items": [],
+          "total": 0
+        }
+      },
+      "before": "<dynamic_context fingerprint=\"617bd509d5584e15\">\nLive system state from the Kinu runtime. It is not conversation, and the user did not write it. A later dynamic_context block supersedes every earlier one.\n\n## World model (facts you remembered)\nTea needs hot water.\n\n## Memory (newest MEMORY.md lessons and reflections)\nRead the saved note before answering follow-ups.\n\n## Execution status\nLive availability for the runtimes described in the system prompt, and what each one declares it can run:\n- workspace: active\n- sandbox: active, files at /sandbox\n</dynamic_context>",
+      "after": "<dynamic_context fingerprint=\"cba35a429335d874\" kind=\"delta\">\nKinu runtime state, not conversation or user text. Full blocks replace prior state.\nDelta sections replace named sections; omitted sections stay. Execution deltas update named runtimes. Cleared means empty.\n\n## Your task list: what is still open (you keep this with the `tasks` tool)\nCleared: no current entries.\n</dynamic_context>",
+      "beforeBytes": 570,
+      "afterBytes": 393
+    }
+  ]
+}

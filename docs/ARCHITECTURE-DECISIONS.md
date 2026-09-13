@@ -21,6 +21,12 @@ changed five lines of the system prompt on Build→Plan; the same surface now
 has identical system bytes in both modes. Execution remains profile-gated.
 The prompt matrix was re-pinned for this placement change, without raising
 its byte ceiling; the GEPA contract now owns only the static family slot.
+The first changed snapshot in a turn is full; later changes append named
+section deltas (execution status names only changed runtimes). Compaction
+collapses the base and deltas into a fresh full snapshot. The fixed two-change
+file-read control saved 340 and 177 bytes per append (706→366, 570→393),
+including the full/delta tag and explanatory header; this is a byte
+measurement, not a provider-token estimate.
 
 C2. The provider cache is addressed per provider, markers placed last. Anthropic
 gets four breakpoints (one after tools, one at the end of the system prompt,

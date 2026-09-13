@@ -308,8 +308,8 @@ export interface TurnLocalContext {
 }
 
 export const DYNAMIC_CONTEXT_HEADER =
-  'Live system state from the Kinu runtime. It is not conversation, and the user did not write it. '
-  + 'A later dynamic_context block supersedes every earlier one.';
+  'Kinu runtime state, not conversation or user text. Full blocks replace prior state.\n'
+  + 'Delta sections replace named sections; omitted sections stay. Execution deltas update named runtimes. Cleared means empty.';
 
 export const TURN_CONTEXT_HEADER =
   '[Turn context: live state maintained by the Kinu runtime, not written by the user.]';
@@ -581,24 +581,28 @@ const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
  * a glance which of two blocks is a re-statement and which is a real change,
  * and a superseded block is visibly stale rather than silently wrong.
  */
-export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
-  const sections: Array<string | null> = [];
+function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, string> {
+  const sections = new Map<keyof DynamicContext, string>();
 
-  if (ctx.mode) sections.push(renderWorkMode(ctx.mode));
+  const add = (key: keyof DynamicContext, section: string | null): void => {
+    if (section !== null) sections.set(key, section);
+  };
+
+  if (ctx.mode) add('mode', renderWorkMode(ctx.mode));
 
   if (ctx.craftedTools && ctx.craftedTools.length > 0) {
-    sections.push(`## Crafted tools available through execute_tools\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
+    add('craftedTools', `## Crafted tools available through execute_tools\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
   }
 
   const facts = ctx.factsBlock?.trim();
 
-  if (facts) sections.push(`## World model (facts you remembered)\n${facts}`);
+  if (facts) add('factsBlock', `## World model (facts you remembered)\n${facts}`);
 
   const memoryTail = ctx.memoryTail?.trim();
 
-  if (memoryTail) sections.push(`## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
+  if (memoryTail) add('memoryTail', `## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
 
-  sections.push(rosterSection(
+  add('recoveries', rosterSection(
     '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
@@ -619,7 +623,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
         + 'so try it before ruling it out.)']
       : [];
 
-    sections.push([
+    add('executors', [
       '## Execution status',
       'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
       ...rows,
@@ -639,53 +643,110 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
       ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. The runtime refuses a call that names none.'
       : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
 
-    sections.push([
+    add('devices', [
       '## Your user\'s machines (the `laptop` runtime)',
       doctrine,
       ...fleet.map((device) => renderDeviceLine(device, fleet)),
     ].join('\n'));
   }
 
-  sections.push(rosterSection(
+  add('tasks', rosterSection(
     '## Your task list: what is still open (you keep this with the `tasks` tool)',
     ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
     (task) => `${task.parentId ? '  - ' : '- '}${task.id} [${task.status}] ${clip(task.title)}`,
   ));
 
-  sections.push(rosterSection(
+  add('jobs', rosterSection(
     '## Background work still running (collect it before you finish)',
     ctx.jobs ?? EMPTY_ROSTER, MAX_JOBS,
     (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
   ));
 
-  sections.push(rosterSection(
+  add('delegates', rosterSection(
     '## Delegates working for you',
     ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
     (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
   ));
 
-  sections.push(rosterSection(
+  add('approvals', rosterSection(
     '## Waiting on the user (not on you)',
     ctx.approvals ?? EMPTY_ROSTER, MAX_APPROVALS,
     (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
   ));
 
-  sections.push(rosterSection(
+  add('missingCapabilities', rosterSection(
     '## Configured but not available this turn (plan without these, and say so if asked)',
     { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
     (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));
 
-  const present = sections.filter((section): section is string => section !== null);
+  return sections;
+}
 
-  if (present.length === 0) return null;
+function dynamicBlock(sections: readonly string[], kind: 'full' | 'delta' = 'full'): string | null {
+  if (sections.length === 0) return null;
 
   const body = sealDelimiters(
-    [DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n'),
+    [DYNAMIC_CONTEXT_HEADER, ...sections].join('\n\n'),
     DYNAMIC_CONTEXT_DELIMITER, 'dynamic_context',
   );
 
-  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
+  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}" kind="${kind}">\n${body}\n</dynamic_context>`;
+}
+
+export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
+  return dynamicBlock([...renderDynamicSections(ctx).values()]);
+}
+
+function executionRows(section: string): Map<string, { status: string; suffix: string; line: string }> {
+  const rows = new Map<string, { status: string; suffix: string; line: string }>();
+
+  for (const line of section.split('\n')) {
+    const match = /^- ([^:]+): ([^,(]+)(.*)$/.exec(line);
+    const [, name, status, suffix] = match ?? [];
+
+    if (name !== undefined && status !== undefined && suffix !== undefined) rows.set(name, { status, suffix, line });
+  }
+
+  return rows;
+}
+
+function executionDelta(before: string, after: string): string {
+  const previous = executionRows(before);
+  const current = executionRows(after);
+  const changes: string[] = ['## Execution status'];
+
+  for (const [name, row] of current) {
+    const old = previous.get(name);
+
+    if (old?.line === row.line) continue;
+    changes.push(old && old.suffix === row.suffix
+      ? `- ${name} status went from \`${old.status}\` to \`${row.status}\`.`
+      : row.line);
+  }
+
+  for (const name of previous.keys()) {
+    if (!current.has(name)) changes.push(`- ${name}: removed from execution status.`);
+  }
+
+  return changes.join('\n');
+}
+
+function dynamicDelta(previous: ReadonlyMap<keyof DynamicContext, string>, current: ReadonlyMap<keyof DynamicContext, string>): string | null {
+  const changed: string[] = [];
+
+  for (const [key, section] of current) {
+    const before = previous.get(key);
+
+    if (before === section) continue;
+    changed.push(key === 'executors' && before !== undefined ? executionDelta(before, section) : section);
+  }
+
+  for (const [key, section] of previous) {
+    if (!current.has(key)) changed.push(`${section.split('\n')[0]}\nCleared: no current entries.`);
+  }
+
+  return dynamicBlock(changed, 'delta');
 }
 
 function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
@@ -750,8 +811,7 @@ interface LedgerBlock {
    *  after that many messages, forever (the cache-stability contract), except
    *  where that slot has since become a tool result ({@link insertionPoint}). */
   index: number;
-  /** The rendered block text, which is also the append gate: a step whose
-   *  render is byte-identical to this adds nothing. */
+  /** The frozen full snapshot or delta carried by this message. */
   text: string;
   /** What this block costs the request, on the compaction ladder's chars/4
    *  scale. Priced ONCE, here at birth: the step pruner reads the ledger's
@@ -813,6 +873,14 @@ function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): nu
  */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
+  private latestFull: string | null = null;
+  private latestSections = new Map<keyof DynamicContext, string>();
+  private fullNextChange = true;
+
+  /** Keep the old prefix; the first state update of a new turn is a full base. */
+  beginTurn(): void {
+    this.fullNextChange = true;
+  }
 
   get size(): number {
     return this.blocks.length;
@@ -838,14 +906,11 @@ export class DynamicContextLedger {
   }
 
   /**
-   * Drop every superseded block, keeping the newest — the compaction ladder's
-   * first rung, and the ONLY thing that ever removes a frozen block.
+   * Collapse the full base and its deltas into one fresh full block at the
+   * newest position — the ONLY thing that removes a frozen block.
    *
-   * A superseded block is stale by definition (the header tells the model so)
-   * and fully re-derivable from live state, which makes it the cheapest thing
-   * in the request to give up: cheaper than any tool output, and far cheaper
-   * than a summary. The newest block stays because it is not history — it is
-   * the live state the model reads.
+   * The current full render was captured with the newest delta. Keeping just
+   * that delta would discard every unchanged fact from its base.
    *
    * Removing a mid-array message is exactly what `weave` refuses to do, because
    * it breaks the provider's prefix cache. So this is a pressure-relief act and
@@ -862,13 +927,13 @@ export class DynamicContextLedger {
    */
   dropSuperseded(): number {
     if (this.blocks.length <= 1) return 0;
-    const superseded = this.blocks.slice(0, -1);
-    this.blocks = this.blocks.slice(-1);
-    let freed = 0;
+    const newest = this.blocks.at(-1);
 
-    for (const block of superseded) freed += block.tokens;
+    if (newest === undefined || this.latestFull === null) return 0;
+    const before = this.overheadTokens;
+    this.blocks = [this.block(newest.index, this.latestFull)];
 
-    return freed;
+    return before - this.overheadTokens;
   }
 
   weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
@@ -884,17 +949,18 @@ export class DynamicContextLedger {
       previousIndex = block.index;
     }
 
-    const text = renderDynamicContextBlock(state);
+    const sections = renderDynamicSections(state);
+    const full = dynamicBlock([...sections.values()]);
 
     // A null render appends nothing; frozen blocks stay regardless (removing
     // a mid-array message would break the provider prefix cache).
-    if (text !== null && this.blocks[this.blocks.length - 1]?.text !== text) {
-      this.blocks.push({
-        index: history.length,
-        text,
-        tokens: Math.round(text.length / 4),
-        message: { role: 'user', content: text },
-      });
+    if (full !== null && this.latestFull !== full) {
+      const text = this.fullNextChange ? full : dynamicDelta(this.latestSections, sections);
+
+      if (text !== null) this.blocks.push(this.block(history.length, text));
+      this.fullNextChange = false;
+      this.latestFull = full;
+      this.latestSections = sections;
     }
 
     const woven: ModelMessage[] = [];
@@ -913,6 +979,13 @@ export class DynamicContextLedger {
 
   reset(): void {
     this.blocks = [];
+    this.latestFull = null;
+    this.latestSections = new Map();
+    this.fullNextChange = true;
+  }
+
+  private block(index: number, text: string): LedgerBlock {
+    return { index, text, tokens: Math.round(text.length / 4), message: { role: 'user', content: text } };
   }
 }
 
