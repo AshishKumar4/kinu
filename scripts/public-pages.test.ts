@@ -179,9 +179,13 @@ async function openLanding(
   ]);
   await page.bringToFront();
   await page.goto(`${origin}/landing.html`, { waitUntil: 'networkidle0' });
+  // Mutation-observed, not raf-polled: the h1 mounts inside one React commit,
+  // and under a six-gate wave a rAF-driven predicate can be starved long enough
+  // to report absence on a mounted page. The observer fires on the insertion
+  // itself, so the wait measures the DOM event, never the scheduler.
   await page.waitForFunction(
     () => document.querySelector('h1') !== null,
-    { timeout: 15_000 },
+    { polling: 'mutation', timeout: 15_000 },
   );
 
   return page;
