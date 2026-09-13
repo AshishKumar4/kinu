@@ -2492,6 +2492,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return readiness;
   }
 
+  /**
+   * A caller is using this box over a lane the lease cannot see — a terminal,
+   * for example. The host decides which of its entry points are a caller and
+   * calls this from exactly those. Refuses while unready, like every operation.
+   */
+  async noteTerminalActivity(): Promise<void> {
+    await this.ensureReady();
+    this.stampInteraction();
+  }
+
   /** The admission this box's settled phase grants, or undefined when it has
    *  not settled into one. ONE reader for the three places the gate asks. */
   #admission(): RestoreAdmission | undefined {
