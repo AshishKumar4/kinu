@@ -1,0 +1,20 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/unit-actor-tool-reach.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+
+packages/cf-backend/tests/unit-hosted-task-surface.test.ts:
+{"event":"analytics.sink_installed","fields":{"agentMetrics":false,"feedbackMarkers":false,"controlPlaneOps":false}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+{"event":"analytics.sink_installed","fields":{"agentMetrics":false,"feedbackMarkers":false,"controlPlaneOps":false}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+{"event":"analytics.sink_installed","fields":{"agentMetrics":false,"feedbackMarkers":false,"controlPlaneOps":false}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+{"event":"device.status_refresh_failed","code":"unavailable","cause":"refreshing the device status from the hub: harness UserDO: deviceRuntimeStatus is not reachable under bun","fields":{}}
+
+ 4 pass
+ 0 fail
+ 23 expect() calls
+Ran 4 tests across 2 files. [530.00ms]
