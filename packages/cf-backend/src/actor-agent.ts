@@ -84,7 +84,7 @@ import {
   advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn, ADVISOR_LANE_FIBER,
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   // canonical tool + prompt surface — single source of truth
-  buildActorTools,
+  buildActorTools, buildBuiltinTools,
   withClampedToolResults,
   type WebSearchProvider,
   buildSystemPromptSync,
@@ -225,12 +225,12 @@ import {
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   runOperationProfile, operationProfileStream, type OperationProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
-  resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
+  resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   beginModelOperation, toolSurfaceTokens, McpToolSurfaceSchema,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, renderToolResult, successfulToolOutcome,
   toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle, childContextResolver,
@@ -625,11 +625,10 @@ const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable'
  * both — its execution router's providers act as its credential on both planes —
  * so this is a list, not a policy.
  *
- * The workspace-level surfaces are deliberately absent: `web`, `agents` and the
- * MCP descriptor cache belong to the actor that owns the workspace's outbound
- * reach and its delegation ladder, and a binding is not the way to borrow them.
+ * Web uses the same provider the hosted turn receives. Delegation and the MCP
+ * descriptor cache are not lent to a slate.
  */
-function hostedActorNamespaces(actor: HostedActor): CodemodeProvider[] {
+function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
   // SAFETY: this runtime came from `ActorHostDeps.runtimeFor`, which on this
   // backend IS `createCFRuntime` — the core seam narrows the RETURN type to
   // `AgentRuntime`, it does not narrow the value, and `CFRuntime` always builds
@@ -638,8 +637,9 @@ function hostedActorNamespaces(actor: HostedActor): CodemodeProvider[] {
   // the whole point of `runtimeFor` is that the BACKEND owns the runtime.
   const runtime = actor.runtime as CFRuntime;
 
-  return [
+  const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
+    createWebCodemodeProvider(webSearch),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -647,6 +647,13 @@ function hostedActorNamespaces(actor: HostedActor): CodemodeProvider[] {
       facts: actor.stores.facts, sql: runtime.storage.sql, actor: actor.handle,
     })),
   ];
+
+  const native = buildBuiltinTools({
+    rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
+    fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
+  });
+
+  return { providers, native };
 }
 
 export abstract class ActorAgent extends Think<Env> {
@@ -4801,34 +4808,25 @@ export abstract class ActorAgent extends Think<Env> {
     );
 
     return await this.actorHost().run(entry.reference, async (actor) => {
-      if (route.kind !== 'namespace') {
+      if (route.kind !== 'namespace' && route.kind !== 'tool' && route.kind !== 'codemode') {
         // A hosted actor connects no MCP servers and holds no slate read model
         // of its own: those are workspace-level surfaces reached through the
         // main actor. A true reason, not a narrowing.
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const providers = providersInWorkMode(mode, hostedActorNamespaces(actor));
+      const surface = hostedActorSurface(actor, this.getWebSearchProvider());
+      const providers = providersInWorkMode(mode, surface.providers);
       // NARROWED BY THE CHILD'S OWN ROLE, which is what the header above has
       // always promised and what this path did not do: it went straight from the
       // namespaces to the lookup, so a child restricted to `scribe` still
       // answered `readFile ok:true` down a binding hop. The role is durable and
       // per actor, so the only thing missing was asking it.
-      const reach = await this.hostedSlateReach(actor, providers);
-      const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
+      const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
 
-      if (!provider) throw new KinuError('denied', `${route.namespace} is not within that actor's reach right now`);
+      if (route.kind === 'tool') return this.callSlateTool({ rt: actor.runtime, native: surface.native, providers, reach, route, mode });
 
-      if (!Object.hasOwn(provider.tools, route.member)) {
-        throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
-      }
-
-      const answered = await provider.tools[route.member]?.execute(...route.args);
-      const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
-
-      if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
-
-      return value.output;
+      return await callCodemodeMember(reach.narrowProviders(providers), route.namespace, route.member, route.args) ?? null;
     });
   }
 
@@ -4858,23 +4856,19 @@ export abstract class ActorAgent extends Think<Env> {
     }
 
     switch (route.kind) {
-      case 'namespace': {
+      case 'namespace':
+      case 'codemode': {
         const providers = providersInWorkMode(mode, this.slateNamespaces());
-        const reach = await this.slateReach(providers);
-        const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
+        const reach = slateToolReach(await this.slateReach(providers));
 
-        if (!provider) throw new KinuError('denied', `${route.namespace} is not within this actor's reach right now`);
+        return await callCodemodeMember(reach.narrowProviders(providers), route.namespace, route.member, route.args) ?? null;
+      }
 
-        if (!Object.hasOwn(provider.tools, route.member)) {
-          throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
-        }
+      case 'tool': {
+        const providers = providersInWorkMode(mode, this.slateNamespaces());
+        const reach = slateToolReach(await this.slateReach(providers));
 
-        const answered = await provider.tools[route.member]?.execute(...route.args);
-        const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
-
-        if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
-
-        return value.output;
+        return this.callSlateTool({ rt: this.rt, native: this.getRawToolsForWorkMode(mode), providers, reach, route, mode });
       }
 
       case 'mcp': {
@@ -4899,13 +4893,24 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /**
-   * A workspace read model, as this actor may read it. The twelve
-   * `SLATE_READ_MODELS` are the workspace ROOT's own `@callable` reads of
-   * root state (its snapshot, memory, status, jobs); no facet declares them and
-   * none is on the surface a facet reaches its root through, so the base answer
-   * is the absence of that capability. The orchestrator overrides this.
-   */
+  /** Native and crafted calls share the codemode factory over this caller's runtime. */
+  private async callSlateTool(input: {
+    rt: HostedActor['runtime']; native: ToolSet; providers: CodemodeProvider[];
+    reach: ToolSurfaceNarrowing; route: Extract<SlateBindingRoute, { kind: 'tool' }>; mode: WorkMode;
+  }): Promise<JsonValue> {
+    const { rt, native, providers, reach, route, mode } = input;
+    const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
+
+    const factory = createExecuteToolsFactory({
+      loader: this.env.LOADER, egress: codemodeEgress(), rt,
+      sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.getWebSearchProvider(), reach,
+      extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
+    });
+
+    return await inWorkMode(mode, () => factory.callTool(native, route.name, route.input)) ?? null;
+  }
+
+  /** Workspace read models belong to the root; the orchestrator supplies them. */
   protected async slateReadModel(source: SlateReadModel): Promise<JsonValue> {
     throw new KinuError('denied', `${source} is a workspace read model this actor does not hold`);
   }
@@ -4951,11 +4956,11 @@ export abstract class ActorAgent extends Think<Env> {
    * promises: a role change is seen on the next call.
    */
   private async hostedSlateReach(
-    actor: HostedActor, providers: readonly CodemodeProvider[],
+    actor: HostedActor, providers: readonly CodemodeProvider[], native: readonly string[],
   ): Promise<ToolSurfaceNarrowing> {
     const { profile } = await this.hostedActorProfile({
       actor: actor.handle,
-      availableTools: codemodeCapabilitiesFor(providers),
+      availableTools: [...native, ...codemodeCapabilitiesFor(providers)],
       workMode: 'build',
     });
 
@@ -5047,6 +5052,7 @@ export abstract class ActorAgent extends Think<Env> {
         loader: this.env.LOADER,
         egress: codemodeEgress(),
         rt: this.rt,
+        reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),
         webSearch: this.getWebSearchProvider(),
@@ -6794,7 +6800,7 @@ export abstract class ActorAgent extends Think<Env> {
     // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
     // accumulator records it + fires the activity log + run-event sinks.
     const input = jsonObject(ctx.input);
-    const outcome = ctx.success ? { success: true } satisfies ToolOutcome : failedToolOutcome({ cause: ctx.error });
+    const outcome = ctx.success ? successfulToolOutcome(ctx.toolName, ctx.output) : failedToolOutcome({ cause: ctx.error });
 
     const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
       toolName: ctx.toolName,

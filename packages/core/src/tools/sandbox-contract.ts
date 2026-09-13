@@ -30,7 +30,9 @@ import type { ToolSet } from 'ai';
 import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission } from '../execution/work-mode';
-import { branchableToolCall } from './outcome';
+import { branchableToolCall, bindProgramCall } from './outcome';
+import { TOOL_REACH, type ToolSurfaceNarrowing } from './registry';
+import { KinuError } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
 export {
@@ -191,11 +193,11 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
       execute: async (...args: unknown[]) => {
         const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
 
-        if (!input.success) {
-          return { error: `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes` };
-        }
-
         return branchableToolCall(async () => {
+          if (!input.success || args.length > 1) {
+            throw new KinuError('bad_input', `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes`);
+          }
+
           const result = await execute(input.output, { toolCallId: 'codemode-' + nanoid(), messages: [] });
 
           return result === undefined ? undefined : decodeJsonValue({ value: result });
@@ -205,6 +207,70 @@ export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
   }
 
   return out;
+}
+
+/** The host dispatcher shared by both sandboxes and by caller-scoped slate bindings. */
+export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>) {
+  const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
+
+  const tool = namespace === CRAFTED_TOOL_NAMESPACE ? member
+    : owner?.[0] ?? (member === 'exec' ? 'run' : ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'].includes(member) ? 'file' : `${namespace}.${member}`);
+
+  const call = bindProgramCall({ tool, action: owner === undefined ? null : member }, async (...args: unknown[]) => {
+    const value = await invoke(...args);
+
+    return value === undefined ? undefined : decodeJsonValue({ value });
+  }, namespace !== CRAFTED_TOOL_NAMESPACE);
+
+  return async (...args: unknown[]): Promise<JsonValue | undefined> => {
+    const value = await call(...args);
+
+    return value === undefined ? undefined : decodeJsonValue({ value });
+  };
+}
+
+/** A local crafted definition reports a rejection through its own captured host member. */
+export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]): CodemodeProvider['tools'] {
+  const functions: CodemodeProvider['tools'] = {};
+
+  for (const entry of crafted) {
+    functions[entry.name] = {
+      description: entry.description,
+      execute: async (...args) => {
+        const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
+        throw Object.assign(new Error(failure.message), { name: failure.name, code: failure.code });
+      },
+    };
+  }
+
+  return functions;
+}
+
+/** Slates inherit caller reach, but an app may neither delegate nor steer the actor. */
+export function slateToolReach(caller: ToolSurfaceNarrowing): ToolSurfaceNarrowing {
+  const allowsNamespace = (name: string) => name !== 'agent' && name !== 'agents' && caller.allowsNamespace(name);
+
+  return {
+    allowsTool: (name) => name !== 'agents' && name !== 'agent' && name !== 'execute_tools' && caller.allowsTool(name),
+    allowsNamespace,
+    narrowProviders: (providers) => providers.filter((provider) => allowsNamespace(provider.name)),
+  };
+}
+
+/** Names and implementations are resolved together; a held slate binding is not a grant. */
+export async function callCodemodeMember(providers: readonly CodemodeProvider[], namespace: string, member: string, args: readonly JsonValue[]): Promise<JsonValue | undefined> {
+  const call = codemodeFunction(namespace, member, async () => {
+    const provider = providers.find((candidate) => candidate.name === namespace);
+
+    if (provider === undefined) throw new KinuError('denied', `${namespace} is not within this actor's reach right now`);
+    const entry = Object.hasOwn(provider.tools, member) ? provider.tools[member] : undefined;
+
+    if (entry === undefined) throw new KinuError('missing', `${namespace} has no member ${member}; it offers ${Object.keys(provider.tools).join(', ')}`);
+
+    return entry.execute(...args);
+  });
+
+  return call(...args);
 }
 
 export type { JsonValue };

@@ -42,7 +42,7 @@ import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
 import { diagnostics, toKinuError } from './obs/index';
-import { failedToolOutcome, type ToolOutcome } from './tools/outcome';
+import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -581,8 +581,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             // display path bounds it at render.
             const rendered = renderToolResult(raw);
             const input = parseToolArgs(chunk.input);
-            await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, success: true });
-            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, success: true };
+            const outcome = successfulToolOutcome(chunk.toolName, raw);
+            await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, ...outcome });
+            yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, ...outcome };
             break;
           }
 

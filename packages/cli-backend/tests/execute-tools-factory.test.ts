@@ -9,7 +9,7 @@ import { jsonSchema, tool } from 'ai';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
-import { inWorkMode } from '@kinu.run/core';
+import { inWorkMode, successfulToolOutcome } from '@kinu.run/core';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -151,14 +151,17 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
     await expect(pending).rejects.toThrow("workspace.* is the agent's own virtual filesystem");
   });
 
-  test('a rejection caught by the model\'s own code is handled there, not swallowed', async () => {
+  test('a host rejection is an inspectable failure value; recovery preserves the inner census', async () => {
     const { tool } = makeToolWithFailingProvider(new Error('ENOENT: nope'));
 
     const out = await tool({
-      code: 'try { await workspace.readdir("/app"); } catch (e) { return "caught:" + e.message }',
+      code: 'const failure = await workspace.readdir("/app"); if (failure.success === false) return "caught:" + failure.error; throw new Error("missing failure discriminant");',
     });
 
     expect(out.result).toBe('caught:ENOENT: nope');
+    expect(successfulToolOutcome('execute_tools', out)).toEqual({ success: true, failures: [
+      { success: false, tool: 'file', action: null, reason: null, error: 'ENOENT: nope' },
+    ] });
   });
 
   test('the tool description tells the model what workspace.* actually is', async () => {

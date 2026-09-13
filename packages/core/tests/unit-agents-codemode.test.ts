@@ -515,9 +515,9 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // Reason first, like every other refusal on this surface: a script that
     // branches on the class must not have to parse prose for these two.
     expect(await member(ns, 'hire').execute('just a string'))
-      .toEqual({ reason: 'bad_input', error: 'agents.hire: expects a single options object' });
+      .toEqual({ success: false, reason: 'bad_input', error: 'agents.hire: expects a single options object' });
     expect(await member(ns, 'dismiss').execute(['researcher']))
-      .toEqual({ reason: 'bad_input', error: 'agents.dismiss: expects a single options object' });
+      .toEqual({ success: false, reason: 'bad_input', error: 'agents.dismiss: expects a single options object' });
     expect(await member(ns, 'hire').execute({ role: 'r', mission: 'm', budgetUsd: 5 }))
       .toMatchObject({ reason: 'bad_input', error: expect.stringContaining('budgetUsd') });
     expect(team.calls).toEqual([]);
@@ -526,9 +526,9 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
   test('missing required fields stay the tool\'s own sharp errors', async () => {
     const ns = namespaceOf(() => fullDeps());
     expect(await member(ns, 'msg').execute({ agent: 'researcher' }))
-      .toEqual({ reason: 'bad_input', error: 'msg requires a message' });
+      .toEqual({ success: false, reason: 'bad_input', error: 'msg requires a message' });
     // The refusal carries its classification, exactly as the declared type promises.
-    expect(await member(ns, 'swarm').execute({})).toEqual({ reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
+    expect(await member(ns, 'swarm').execute({})).toEqual({ success: false, reason: 'bad_input', error: expect.stringContaining('swarm needs `preset`') });
   });
 
   test('native and codemode reject the same capability-inapplicable fields', async () => {
@@ -552,7 +552,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
       role: 'researcher',
     });
 
-    expect(codemode).toEqual({ reason: 'bad_input', error: 'field "role" is not available for action "hire" on this actor' });
+    expect(codemode).toEqual({ success: false, reason: 'bad_input', error: 'field "role" is not available for action "hire" on this actor' });
   });
 });
 

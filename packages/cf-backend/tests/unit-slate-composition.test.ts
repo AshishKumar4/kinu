@@ -87,7 +87,9 @@ test('native MCP protocol failures reject while namespace responses retain their
     await expect(failed).rejects.not.toHaveProperty('execution');
     seedMcpAnswer(protocolFailure);
     const namespace = nativeToolFunctions({ mcp_github_read_issue: native });
-    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual(protocolFailure);
+    expect(await namespace.mcp_github_read_issue?.execute({})).toEqual({
+      success: false, reason: null, error: expect.stringContaining('remote execution failed'),
+    });
     await user.userDO.userMcp_update(owner, 'connection-id', { allowedTools: [] });
     await expect(invoke({})).rejects.toThrow('not in the allowed_tools list');
   } finally { user.close(); resetRecordedMcp(); }
@@ -317,6 +319,100 @@ test('a binding held by a hosted actor reaches its own files and role, never the
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toEqual({ ok: true, value: 'root wrote' });
   changeRole('scribe');
   expect(await call(asChild, 'readFile', ['/home/user/private.md'])).toMatchObject({ ok: false, reason: 'denied' });
+});
+
+test('native tool bindings use the caller file plane and lose reach immediately with its role', async () => {
+  const parent = orchestratorHarness();
+  const files = parent.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/native-reader', { recursive: true });
+  await files.writeFile('/home/user/slates/native-reader/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { FILE: { kind: 'tool', name: 'file' }, NOTES: { kind: 'memory', members: ['remember', 'recall'] } } },
+  }));
+  await files.writeFile('/home/user/slate-note.txt', 'root note');
+
+  const child = await hostedSubordinateHarness(parent, {
+    name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'general', mission: 'Read',
+  });
+
+  const caller = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'native-reader');
+
+  const call = () => parent.agent.slateBindingCallAs(caller, 'native-reader', 'FILE', {
+    member: 'call', args: [{ action: 'read', path: '/home/user/slate-note.txt' }], invocation: null,
+  });
+
+  expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
+  const memory = (asCaller: SlateCaller, member: string, args: JsonValue[]) => parent.agent.slateBindingCallAs(asCaller, 'native-reader', 'NOTES', { member, args, invocation: null });
+  expect(await memory(caller, 'remember', ['slate-key', 'child fact'])).toMatchObject({ ok: true, value: { ok: true } });
+  expect(await memory(ROOT_SLATE_CALLER, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: false } });
+  parent.agent.harnessInstallCatalog({
+    roles: { scribe: { description: 'Only memory.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
+    tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC } },
+  });
+  child.actor.stores.config.setRoleSelection('scribe');
+  expect(await call()).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
+  expect(await memory(caller, 'recall', ['slate-key'])).toMatchObject({ ok: true, value: { found: true, value: 'child fact' } });
+  child.actor.stores.config.setRoleSelection('general');
+  expect(await call()).toMatchObject({ ok: true, value: expect.stringContaining('root note') });
+});
+
+test('a slate cannot bind the agent, delegate through a tool alias, or widen a projection', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/limited', { recursive: true });
+
+  const bind = (binding: JsonValue) => files.writeFile('/home/user/slates/limited/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { CAP: binding } },
+  }));
+
+  const call = (member: string, args: JsonValue[] = []) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'limited', 'CAP', { member, args, invocation: null });
+  await bind({ kind: 'agent' });
+  expect(await call('hire')).toMatchObject({ ok: false, reason: 'bad_input' });
+  await bind({ kind: 'tool', name: 'agents' });
+  expect(await call('call', [{ action: 'hire', role: 'general', mission: 'should not run' }])).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
+
+  for (const namespace of ['agent', 'agents']) {
+    await bind({ kind: 'namespace', namespace });
+    expect(await call('hire')).toMatchObject({ ok: false, reason: 'denied' });
+  }
+
+  await bind({ kind: 'tasks', members: ['list'] });
+  expect(await call('list')).toMatchObject({ ok: true });
+  expect(await call('create', [{ title: 'not allowed' }])).toMatchObject({ ok: false, reason: 'denied' });
+  await bind({ kind: 'tasks', members: ['add'] });
+  expect(await call('add', [false])).toMatchObject({ ok: true, value: { success: false, reason: 'bad_input' } });
+  await bind({ kind: 'memory', members: ['remember'] });
+  expect(await call('remember', ['key', 'value', false])).toMatchObject({ ok: true, value: { success: false, reason: 'bad_input' } });
+});
+
+test('a tool binding keeps native Plan checks and the same approval ladder as codemode and direct run', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/tool-gate', { recursive: true });
+  await files.writeFile('/home/user/slates/tool-gate/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { RUN: { kind: 'tool', name: 'run' }, FILE: { kind: 'tool', name: 'file' } } },
+  }));
+  const marker = '/home/user/slate-tool-approved';
+  const command = `npm publish --dry-run && printf ran > ${marker}`;
+  const binding = () => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'tool-gate', 'RUN', { member: 'call', args: [{ command }], invocation: null });
+  const native = nativeToolFunctions(actor.agent.observeRawTools());
+  const codemode = () => native.run?.execute({ command });
+
+  for (const [mode, reason] of [['deny_all', 'denied'], ['strict', 'unavailable']]) {
+    await actor.agent.setShellApprovalMode(v.parse(v.picklist(['deny_all', 'strict']), mode));
+    expect(await binding()).toMatchObject({ ok: true, value: { success: false, reason } });
+    expect(await codemode()).toMatchObject({ success: false, reason });
+    expect(await actor.agent.executeInExecutor('workspace', command)).toMatchObject({ refusal: { reason } });
+    expect(await files.stat(marker)).toBeNull();
+  }
+
+  const planning: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
+
+  const write = () => actor.agent.slateBindingCallAs(planning, 'tool-gate', 'FILE', {
+    member: 'call', args: [{ action: 'write', path: marker, content: 'must not land' }], invocation: null,
+  });
+
+  expect(await write()).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
+  expect(await files.stat(marker)).toBeNull();
 });
 
 test('workspace read models are the root\'s own reads; a hosted actor holds none of them', async () => {

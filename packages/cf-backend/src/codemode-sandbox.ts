@@ -19,16 +19,15 @@
  *      (server.ts `CodemodeEgress`), so `fetch()` inside the sandbox is the
  *      real thing.
  *
- * Host tool failures THROW across the boundary — the dispatcher turns a
- * rejection into `{error}` and the sandbox proxy rethrows it as an `Error` the
- * program's own `try`/`catch` sees, with the namespace and member in front of
- * the message so the model knows which call raised.
+ * Host failures resolve to core's classified binding value. Only malformed
+ * programs throw; their native-name correction remains at this adapter.
  */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
+import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   explainNativeToolReferenceError, parsesAsExpression,
-  NO_TIMER_DEADLINE_MS, bindTaskPlan,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction,
   type CraftedToolSource,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -67,7 +66,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
       ? `async () => (\n${entry.code}\n)`
       : `() => { throw new Error(${JSON.stringify(`stored source does not parse: ${parseError}`)}); }`;
 
-    return `      ${JSON.stringify(entry.name)}: __kinu.defineCrafted(${JSON.stringify(entry.name)}, ${factory}),`;
+    return `      ${JSON.stringify(entry.name)}: __kinu.defineCrafted(${JSON.stringify(entry.name)}, ${factory}, tools[${JSON.stringify(entry.name)}]),`;
   });
 
   return [
@@ -85,9 +84,7 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
 }
 
 /**
- * Attribute a host rejection to the call that raised it, then rethrow — the
- * dispatcher carries the message across as `{error}` and the sandbox proxy
- * throws it, so the program's `catch` gets `workspace.readFile: ENOENT …`.
+ * Capture the invocation's task plan and failure census before the RPC hop.
  */
 function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
   return providers.map((provider) => {
@@ -95,13 +92,7 @@ function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
 
     for (const [name, fn] of Object.entries(provider.fns)) {
       const invoke = bindTaskPlan(fn);
-      fns[name] = async (...args: unknown[]) => {
-        try {
-          return await invoke(...args);
-        } catch (cause) {
-          throw new Error(`${provider.name}.${name}: ${renderThrownChain({ cause })}`, { cause });
-        }
-      };
+      fns[name] = codemodeFunction(provider.name, name, invoke);
     }
 
     const attributed: ResolvedProvider = { name: provider.name, fns };
@@ -144,7 +135,11 @@ export class KinuSandboxExecutor {
       : [{ name: 'codemode', fns: providers }];
 
     try {
-      const result = await this.#inner.execute(code, attributeProviders(providerArr));
+      // The vendor reads only err.message. Carry an explicitly thrown refusal
+      // as a result so the shared completion mapper retains its classification.
+      const callable = normalizeCode(code);
+      const source = `async () => { try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
+      const result = await this.#inner.execute(source, attributeProviders(providerArr));
 
       // DWE never throws for sandbox-internal failures (a bare `ReferenceError:
       // run is not defined` from code that reached for a native tool as if it

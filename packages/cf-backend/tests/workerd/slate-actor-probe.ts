@@ -29,13 +29,16 @@
  */
 import { Agent, getAgentByName } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import type { JsonValue } from '@kinu.run/core';
+import type { JsonValue, CraftedTool } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createExecuteToolsFactory } from '../../src/execute-tools';
 import { bindAgentSql } from '../../src/runtime';
-import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, type WorkMode } from '@kinu.run/core';
+import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress, codemodeEgress } from '../../src/codemode-egress';
+import { SlateHost } from '../../src/slates/host';
+import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
+import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 
 // The owner's own Durable Object. A production root claims an owner before its
 // directory exists, and the seal target below is a production root — so the
@@ -57,6 +60,53 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 export type SlateActorFamily = 'subordinate' | 'exploration';
 
 export class SlateActorProbeRoot extends Agent<ProbeEnv> {
+  async craftedSlate(): Promise<string> {
+    const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
+    const files = vfs.as(CRED_SESSION_USER);
+    files.mkdir('/home/user/slates/crafted', { recursive: true });
+    files.writeFile('/home/user/slates/crafted/package.json', JSON.stringify({
+      main: 'server.ts', slate: { bindings: { CALCULATE: { kind: 'tool', name: 'calculate' } } },
+    }));
+    const sql = bindAgentSql(this);
+    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
+    initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+
+    const crafted: CraftedTool = {
+      name: 'calculate', code: 'async ({n}) => ({answer: n*2, agent:typeof agent, agents:typeof agents})', description: 'Double',
+      params: null, scope: 'local', createdAt: 0, updatedAt: 0,
+    };
+
+    const factory = createExecuteToolsFactory({
+      loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'binding-probe',
+      webSearch: createDefaultWebSearchProvider({ fetch }), reach: slateToolReach(narrowToolSurface(undefined)),
+      rt: {
+        actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => {}),
+        craftStore: { list: () => [crafted] },
+      },
+    });
+
+    const host = new SlateHost({
+      ctx: this.ctx, env: this.env, workspace: 'binding-probe',
+      session: async () => ({ vfs, processes: new SessionProcessSupervisor() }),
+      registerPort: async () => { throw new Error('binding probe does not boot a process'); },
+      unregisterPorts: () => { throw new Error('binding probe does not register a port'); },
+      expose: async () => { throw new Error('binding probe does not expose a preview'); },
+      dispatch: async (caller, route) => {
+        if (route.kind !== 'tool') throw new Error('Expected a tool binding');
+
+        return await inWorkMode(caller.workMode, () => factory.callTool({}, route.name, route.input)) ?? null;
+      },
+    });
+
+    const call = (mode: WorkMode) => host.bindingCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'CALCULATE', { member: 'call', args: [{ n: 21 }], invocation: null });
+    const first = await call('build');
+    crafted.code = 'async ({n}) => n*3';
+    const second = await call('build');
+    const planned = await call('plan');
+
+    return JSON.stringify({ first, second, planned });
+  }
+
   async exercise(family: SlateActorFamily): Promise<{ answer: JsonValue; browserCallable: boolean }> {
     // A DIFFERENT id, so this is one object calling another and the dispatch
     // crosses the wire the seal governs; a same-object call would prove
