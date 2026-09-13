@@ -188,20 +188,7 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
   return { rpc, jobs: () => jobs, pending: () => pending };
 }
 
-/* ── The Supervise altitude: curriculum, run history, evolution, automations ─ */
-
-const SUPERVISE_TASKS = [
-  {
-    id: 'cur_1', task: 'Learn the checkout coupon schema well enough to fix the kind:null regression',
-    rationale: 'Three of the last five failures traced back to the same migration.',
-    predictedSuccess: 0.72, targetsSkills: ['sql', 'regression-triage'], proposedAt: NOW - 2 * 36e5, status: 'pending',
-  },
-  {
-    id: 'cur_2', task: 'Write a smoke check for the deploy-failed webhook',
-    rationale: 'The trigger has fired 41 times and nothing asserts its shape.',
-    predictedSuccess: 0.44, targetsSkills: ['testing'], proposedAt: NOW - 9 * 36e5, status: 'accepted',
-  },
-];
+/* ── The Supervise altitude: automations, run history, evolution ───────────── */
 
 const SUPERVISE_RUNS: RunSummary[] = [
   { runId: 'run_9c1', startedAt: NOW - 45 * 60e3, causedBy: 'chat', userMessage: 'Why does the percentage coupon drop off at checkout?', status: 'completed', eventCount: 62, turnsWithoutUsage: 0, usage: { input: 184_320, output: 9_140, cacheRead: 121_400 } },
@@ -243,7 +230,7 @@ const PageRequestSchema: v.GenericSchema<PageRequest> = v.object({
 export const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
 
-  if (method === 'listCurriculumTasks') return answer({ tasks: SUPERVISE_TASKS });
+  if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
 
   if (method === 'getRunSummaries') {
     const request = v.parse(PageRequestSchema, args?.[0] ?? {});

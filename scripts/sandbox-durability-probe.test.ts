@@ -1,26 +1,15 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { scratchDir } from '../packages/test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
+import { readFile } from 'node:fs/promises';
 
 import {
   durabilityArtifactPath, persistDurabilityArtifact,
   type DurabilityProbeArtifact,
 } from './sandbox-durability-probe';
 
-const temporaryDirectories: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, {
-    recursive: true,
-    force: true,
-  })));
-});
-
 describe('sandbox durability evidence', () => {
   test('persists the complete deployed-run record outside stdout', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
-    temporaryDirectories.push(root);
+    const root = scratchDir('durability-artifact');
 
     const artifact: DurabilityProbeArtifact = {
       schemaVersion: 2,
@@ -67,8 +56,7 @@ describe('sandbox durability evidence', () => {
   });
 
   test('refuses to overwrite evidence for an existing run id', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
-    temporaryDirectories.push(root);
+    const root = scratchDir('durability-artifact');
 
     const artifact: DurabilityProbeArtifact = {
       schemaVersion: 2,
@@ -103,8 +91,7 @@ describe('sandbox durability evidence', () => {
   });
 
   test('persists partial evidence and the failure when a phase fails', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
-    temporaryDirectories.push(root);
+    const root = scratchDir('durability-artifact');
 
     const artifact: DurabilityProbeArtifact = {
       schemaVersion: 2,

@@ -1,6 +1,7 @@
+import { scratchDir } from '../../test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+
 import { dirname, join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -12,6 +13,7 @@ import {
   openWorkspaceMainActor, SubordinateRosterStore,
   createTimerTrigger,
   initWorkspaceSchema,
+  initCompletedTurnTable, createCompletedTurnStore,
   DELEGATION_MAX_DEPTH,
   REPORT_TOOL,
   TriggerRegistry,
@@ -42,12 +44,6 @@ const DUMMY_LLM: LLMProviderConfig = {
   headers: {},
   model: 'fake-model',
 };
-
-const tempRoots: string[] = [];
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
 
 function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -324,9 +320,8 @@ async function seedAgent(state: string, name: string): Promise<string> {
  *  `project/`. Separate because that is the shape the product has — state is
  *  never inside the directory the agent works in. */
 function makeRoots() {
-  const state = mkdtempSync(join(tmpdir(), 'kinu-host-state-'));
-  const project = mkdtempSync(join(tmpdir(), 'kinu-host-project-'));
-  tempRoots.push(state, project);
+  const state = scratchDir('host-state');
+  const project = scratchDir('host-project');
 
   return { state, project };
 }
@@ -371,7 +366,6 @@ function makeHost(
 
   return { host: new LocalAgentHost(options), runtimes };
 }
-
 
 function peerEventCount(dbPath: string): number {
   const db = new Database(dbPath, { readonly: true });
@@ -498,7 +492,6 @@ function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | nu
   return matches[matches.length - 1]?.[1] ?? null;
 }
 
-
 describe('LocalAgentHost', () => {
   test('the daemon-owned conversation continues after its client disconnects', async () => {
     const { state, project } = makeRoots();
@@ -530,11 +523,11 @@ describe('LocalAgentHost', () => {
     const db = new Database(dbPath);
 
     const sessions = db.query<{ session_id: string }, []>(
-      'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
+      'SELECT DISTINCT session_id FROM actor_messages ORDER BY session_id',
     ).all();
 
     const rows = db.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM messages WHERE role IN ('user','assistant')",
+      "SELECT COUNT(*) AS n FROM actor_messages WHERE role IN ('user','assistant')",
     ).get();
 
     const config = openWorkspaceMainActor(makeSql(db)).config;
@@ -588,11 +581,11 @@ describe('LocalAgentHost', () => {
     const wakeId = `programmatic:${backgroundJobWakeTrigger(jobId)}`;
 
     const wakeRows = check.query<{ n: number }, [string]>(
-      'SELECT COUNT(*) AS n FROM messages WHERE id = ?',
+      'SELECT COUNT(*) AS n FROM actor_messages WHERE id = ?',
     ).get(wakeId);
 
     const assistantRows = check.query<{ n: number }, [string]>(
-      "SELECT COUNT(*) AS n FROM messages WHERE parent_id = ? AND role = 'assistant'",
+      "SELECT COUNT(*) AS n FROM actor_messages WHERE parent_id = ? AND role = 'assistant'",
     ).get(wakeId);
 
     const orphanRows = check.query<{ n: number }, []>(
@@ -717,7 +710,6 @@ describe('LocalAgentHost', () => {
     expect(actorRowCount(dbPath, reference.actorId)).toBeGreaterThan(0);
     await host.close();
   });
-
 
   /**
    * THE TEMPORARY RUNG, END TO END ON THE REAL LOCAL SUBSTRATE.
@@ -908,20 +900,7 @@ describe('LocalAgentHost', () => {
     });
   }
 
-  /**
-   * A TASK-LIFETIME child records nothing into the evolution window; a durable
-   * hire records its turn. The lifetime decides, at the host's one construction
-   * site for a child session.
-   *
-   * Both children run the same programmatic turn shape — one report-tool call
-   * and nothing else — and the task child's report is a FAILURE, the strongest
-   * signal the headless channel knows: recorded, that turn is graded
-   * `corrected` by the execution verdict and reflected into a lesson through a
-   * model call the asking caller waits on (`dismiss` joins `settleEvolution`).
-   * The actor is dismissed the moment it answers and every later ask mints a
-   * fresh one, so the lesson would sit under an id nothing reads again. The
-   * hire half is the control: the same ledgers, live for a child that persists.
-   */
+  /** Both child lifetimes retain task evidence without joining the turn window. */
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     // One host per half: the fixture model reports on its FIRST turn only, so
     // each child needs a model of its own to make its failing report.
@@ -1074,7 +1053,6 @@ describe('LocalAgentHost', () => {
     expect(capped.temporary).toBeUndefined();
     await reopened.close();
   });
-
 
   /**
    * EXACTLY ONE RESULT, AND ONLY ONE.
@@ -1638,12 +1616,12 @@ function userMessages(dbPath: string, actorId?: string): string[] {
     // "what did THIS agent hear" is a predicate now rather than a file choice.
     if (actorId !== undefined) {
       return db.query<{ content: string }, [string]>(
-        "SELECT content FROM messages WHERE role = 'user' AND actor_id = ?",
+        "SELECT content FROM actor_messages WHERE role = 'user' AND actor_id = ?",
       ).all(actorId).map((row) => row.content);
     }
 
     return db.query<{ content: string }, []>(
-      "SELECT content FROM messages WHERE role = 'user'",
+      "SELECT content FROM actor_messages WHERE role = 'user'",
     ).all().map((row) => row.content);
   } finally {
     db.close();
@@ -1774,6 +1752,66 @@ describe('LocalAgentHost — the driver lease', () => {
     } finally {
       LocalAgentSession.prototype.flushPendingDrains = flush;
       await host.close();
+    }
+  });
+
+  test('a refused opener preserves the live driver claim and starts no model work', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const db = new Database(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+
+    const claim = rt.stores.claims.admit({
+      runId: 'live-run', turnId: 'live-turn', workMode: 'build', context: [], workingRevision: 0,
+      program: { kind: 'builtin', version: 0, digest: null, build: null },
+    });
+
+    rivalHolds(dbPath, 'interactive');
+    let calls = 0;
+
+    const { host } = makeHost(state, streamingModel('must not run', () => { calls++; }), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      await host.acquire('root');
+      expect(rt.stores.claims.read(claim.turnId)).toMatchObject({ epoch: claim.epoch, status: 'admitted', outcome: null });
+      expect(calls).toBe(0);
+    } finally {
+      await host.close();
+      db.close();
+    }
+  });
+
+  test('constructing a refused opener cannot reset the live driver review claim', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const db = new Database(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+    initCompletedTurnTable(rt.storage.execRaw);
+    const window = createCompletedTurnStore(rt.storage.sql, rt.actor);
+    window.enqueueReview({
+      userMessage: 'live review', assistantResponse: 'answer', toolCalls: [],
+      steps: 1, durationMs: 1, feedback: null, hadError: false, turnId: 'review-held',
+    }, null);
+    const held = window.takeQueuedReviews(1).reviews[0];
+
+    if (held === undefined) throw new Error('the driver did not claim its review');
+    rivalHolds(dbPath, 'interactive');
+
+    const { host } = makeHost(state, streamingModel('must not run'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      await host.acquire('root');
+      expect(window.countQueuedReviews()).toBe(0);
+      await retireRivals();
+      window.releaseQueuedReview(held.id);
+      expect(window.takeQueuedReviews(1).reviews.map((row) => row.turn.turnId)).toEqual(['review-held']);
+    } finally {
+      await host.close();
+      db.close();
     }
   });
 

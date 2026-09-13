@@ -12,10 +12,10 @@
 //
 // The lanes exercised here are the ones the MCTS engine actually reads:
 // `explorer: rt.llm` and `judge: rt.judgeModel` (core mcts/engine.ts:306-307).
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLM, LLMProviderConfig, ModelRouteResolution } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
@@ -26,17 +26,10 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 /** A workspace on disk, exactly as `kinu evolve` finds one: an identity row, a
  *  SOUL, and whatever model the operator stored. No session is ever built. */
 async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: string }> {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-sessionless-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('sessionless');
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM, hostRoot: null, agentName: 'jarvis' });

@@ -6,6 +6,8 @@
  */
 'use strict';
 
+const { scratchDir } = require('../../test-utils/src/scratch');
+
 const { afterAll, describe, expect, spyOn, test } = require('bun:test');
 
 const fs = require('node:fs');
@@ -20,9 +22,9 @@ const { tolerate } = require('@kinu.run/core/obs');
  * The daemon reads its config and in-flight root once at module load. Set both
  * before require so this suite cannot inspect or modify the developer's home.
  */
-const INFLIGHT_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-inflight-'));
+const INFLIGHT_ROOT = scratchDir('daemon-inflight');
 
-const DEVICE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-home-'));
+const DEVICE_HOME = scratchDir('daemon-home');
 
 const previousKinuHome = process.env.KINU_HOME;
 
@@ -31,8 +33,6 @@ process.env.KINU_INFLIGHT_ROOT = INFLIGHT_ROOT;
 process.env.KINU_HOME = DEVICE_HOME;
 
 afterAll(() => {
-  fs.rmSync(INFLIGHT_ROOT, { recursive: true, force: true });
-  fs.rmSync(DEVICE_HOME, { recursive: true, force: true });
 
   if (previousKinuHome === undefined) delete process.env.KINU_HOME;
   else process.env.KINU_HOME = previousKinuHome;
@@ -73,12 +73,12 @@ function fakeWs() {
 }
 
 function setup(opts = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-'));
+  const root = scratchDir('daemon');
   const work = path.join(root, 'project');
   fs.mkdirSync(work, { recursive: true });
   const ctx = { checkpoints: createCheckpoints({ base: path.join(root, 'shadow'), keep: opts.keep, gitBin: opts.gitBin }) };
 
-  return { root, work, ctx, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, work, ctx };
 }
 
 // A sub-millisecond red of the two fixture-first tests below identifies the
@@ -91,7 +91,7 @@ function setup(opts = {}) {
 // `df /tmp` first when these rows go red that fast.
 describe('daemon token rotation', () => {
   test('the next ticket exchange uses the atomically persisted token', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
+    const root = scratchDir('daemon-token');
     const configPath = path.join(root, 'device.json');
     const cfg = { user: 'user-1', token: 'T0' };
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
@@ -106,38 +106,30 @@ describe('daemon token rotation', () => {
       });
     };
 
-    try {
-      await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
-      persistRotatedToken(cfg, 'T1', configPath);
-      await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
+    await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
+    persistRotatedToken(cfg, 'T1', configPath);
+    await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
 
-      expect(seen.map((body) => body.token)).toEqual(['T0', 'T1']);
-      expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe('T1');
-      expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
-      expect(fs.readdirSync(root)).toEqual(['device.json']);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    expect(seen.map((body) => body.token)).toEqual(['T0', 'T1']);
+    expect(JSON.parse(fs.readFileSync(configPath, 'utf8')).token).toBe('T1');
+    expect(fs.statSync(configPath).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(root)).toEqual(['device.json']);
   });
 
   test('a failed persist leaves memory and the old file unchanged', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
+    const root = scratchDir('daemon-token');
     const configPath = path.join(root, 'missing', 'device.json');
     const cfg = { user: 'user-1', token: 'T0' };
 
-    try {
-      expect(() => persistRotatedToken(cfg, 'T1', configPath))
-        .toThrow('persist rotated device token');
-      expect(cfg.token).toBe('T0');
-      expect(fs.existsSync(configPath)).toBe(false);
-      expect(fs.readdirSync(root)).toEqual([]);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    expect(() => persistRotatedToken(cfg, 'T1', configPath))
+      .toThrow('persist rotated device token');
+    expect(cfg.token).toBe('T0');
+    expect(fs.existsSync(configPath)).toBe(false);
+    expect(fs.readdirSync(root)).toEqual([]);
   });
 
   test('a failed atomic rename preserves config and reports rotation failure', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
+    const root = scratchDir('daemon-token');
     const configPath = path.join(root, 'device.json');
     const cfg = { user: 'user-1', token: 'T0' };
     const messages = [];
@@ -160,7 +152,6 @@ describe('daemon token rotation', () => {
       expect(messages[0]?.[0]).toBe('Device token rotation failed:');
     } finally {
       rename.mockRestore();
-      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });
@@ -442,7 +433,7 @@ describe('daemon device path confinement', () => {
     // unit test may touch.) Each path is judged by where it LANDS: a `..`
     // spelling and a symlink both resolve to the same file, and neither
     // spelling can write it.
-    const root = fs.mkdtempSync('/tmp/kinu-daemon-root-');
+    const root = scratchDir("daemon-root");
     const project = path.join(root, 'project');
     const outside = path.join(root, 'outside.txt');
     fs.mkdirSync(project);
@@ -450,247 +441,227 @@ describe('daemon device path confinement', () => {
     fs.symlinkSync(outside, path.join(project, 'link'));
     const ws = fakeWs();
 
-    try {
-      handle({
-        id: 'traversal',
-        method: 'readFile',
-        sandbox: scoped([project]),
-        params: [path.join(project, '..', 'outside.txt')],
-      }, ws, {});
-      handle({
-        id: 'symlink',
-        method: 'readFile',
-        sandbox: scoped([project]),
-        params: [path.join(project, 'link')],
-      }, ws, {});
-      handle({
-        id: 'traversal-write',
-        method: 'writeFile',
-        sandbox: scoped([project]),
-        params: [path.join(project, '..', 'outside.txt'), 'planted'],
-      }, ws, {});
-      handle({
-        id: 'symlink-write',
-        method: 'writeFile',
-        sandbox: scoped([project]),
-        params: [path.join(project, 'link'), 'planted'],
-      }, ws, {});
+    handle({
+      id: 'traversal',
+      method: 'readFile',
+      sandbox: scoped([project]),
+      params: [path.join(project, '..', 'outside.txt')],
+    }, ws, {});
+    handle({
+      id: 'symlink',
+      method: 'readFile',
+      sandbox: scoped([project]),
+      params: [path.join(project, 'link')],
+    }, ws, {});
+    handle({
+      id: 'traversal-write',
+      method: 'writeFile',
+      sandbox: scoped([project]),
+      params: [path.join(project, '..', 'outside.txt'), 'planted'],
+    }, ws, {});
+    handle({
+      id: 'symlink-write',
+      method: 'writeFile',
+      sandbox: scoped([project]),
+      params: [path.join(project, 'link'), 'planted'],
+    }, ws, {});
 
-      expect((await ws.response('traversal')).result).toBe('secret');
-      expect((await ws.response('symlink')).result).toBe('secret');
-      expect((await ws.response('traversal-write')).error).toContain('read-only in this device');
-      expect((await ws.response('symlink-write')).error).toContain('read-only in this device');
-      expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
+    expect((await ws.response('traversal')).result).toBe('secret');
+    expect((await ws.response('symlink')).result).toBe('secret');
+    expect((await ws.response('traversal-write')).error).toContain('read-only in this device');
+    expect((await ws.response('symlink-write')).error).toContain('read-only in this device');
+    expect(fs.readFileSync(outside, 'utf8')).toBe('secret');
 
-      // A path outside the home is readable — the whole disk is, in the
-      // sandbox — and refuses a write, which is what the kernel does to the
-      // shell for the same path.
-      handle({ id: 'read-system', method: 'readFile', sandbox: scoped([project]), params: ['/etc/hostname'] }, ws, {});
-      expect((await ws.response('read-system')).error).toBeUndefined();
-      handle({
-        id: 'write-system',
-        method: 'writeFile',
-        sandbox: scoped([project]),
-        params: ['/usr/local/kinu-planted.txt', 'x'],
-      }, ws, {});
-      expect((await ws.response('write-system')).error).toContain('read-only in this device');
-      expect(fs.existsSync('/usr/local/kinu-planted.txt')).toBe(false);
+    // A path outside the home is readable — the whole disk is, in the
+    // sandbox — and refuses a write, which is what the kernel does to the
+    // shell for the same path.
+    handle({ id: 'read-system', method: 'readFile', sandbox: scoped([project]), params: ['/etc/hostname'] }, ws, {});
+    expect((await ws.response('read-system')).error).toBeUndefined();
+    handle({
+      id: 'write-system',
+      method: 'writeFile',
+      sandbox: scoped([project]),
+      params: ['/usr/local/kinu-planted.txt', 'x'],
+    }, ws, {});
+    expect((await ws.response('write-system')).error).toContain('read-only in this device');
+    expect(fs.existsSync('/usr/local/kinu-planted.txt')).toBe(false);
 
-      // And a symlink is judged by where it LANDS: one pointing into Kinu's own
-      // directory is refused however it is spelled.
-      // The bait must point at a file that EXISTS: a dangling link cannot be
-      // followed, so the read would fail on the link rather than reach the
-      // fence, and the test would pass while proving nothing.
-      const bait = path.join(project, 'kinu-link');
-      const baited = path.join(DEVICE_HOME, 'baited-device.json');
-      fs.writeFileSync(baited, '{"token":"machine-secret"}', { mode: 0o600 });
-      fs.symlinkSync(baited, bait);
-      handle({ id: 'kinu-link', method: 'readFile', sandbox: scoped([project]), params: [bait] }, ws, {});
-      expect((await ws.response('kinu-link')).error).toContain("inside Kinu's own directory");
-      expect((await ws.response('kinu-link')).result).toBeUndefined();
-      expect(fs.readFileSync(baited, 'utf8')).toContain('machine-secret');
-      fs.rmSync(baited, { force: true });
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    // And a symlink is judged by where it LANDS: one pointing into Kinu's own
+    // directory is refused however it is spelled.
+    // The bait must point at a file that EXISTS: a dangling link cannot be
+    // followed, so the read would fail on the link rather than reach the
+    // fence, and the test would pass while proving nothing.
+    const bait = path.join(project, 'kinu-link');
+    const baited = path.join(DEVICE_HOME, 'baited-device.json');
+    fs.writeFileSync(baited, '{"token":"machine-secret"}', { mode: 0o600 });
+    fs.symlinkSync(baited, bait);
+    handle({ id: 'kinu-link', method: 'readFile', sandbox: scoped([project]), params: [bait] }, ws, {});
+    expect((await ws.response('kinu-link')).error).toContain("inside Kinu's own directory");
+    expect((await ws.response('kinu-link')).result).toBeUndefined();
+    expect(fs.readFileSync(baited, 'utf8')).toContain('machine-secret');
+    fs.rmSync(baited, { force: true });
   });
 
   test('scoped native mutations stay inside the resolved root', async () => {
     // Under /tmp rather than TMPDIR: this suite's TMPDIR is inside the real
     // home, which the agent home is mounted over, and a consented directory
     // the owner names is a directory they can still see.
-    const root = fs.mkdtempSync(path.join('/tmp', 'kinu-daemon-root-'));
+    const root = scratchDir('daemon-root');
     const project = path.join(root, 'project');
     fs.mkdirSync(project);
     const ws = fakeWs();
 
-    try {
-      const dir = path.join(project, 'nested');
-      const file = path.join(dir, 'data.txt');
-      handle({ id: 'mkdir', method: 'mkdirPath', sandbox: scoped([project]), params: [dir, { recursive: true }] }, ws, {});
-      expect((await ws.response('mkdir')).result).toEqual({ success: true });
-      handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
-      expect((await ws.response('write')).result).toEqual({ success: true });
-      handle({ id: 'stat', method: 'statPath', sandbox: scoped([project]), params: [file] }, ws, {});
-      expect((await ws.response('stat')).result).toMatchObject({ size: 2, isDir: false });
-      handle({ id: 'unlink', method: 'unlinkPath', sandbox: scoped([project]), params: [file] }, ws, {});
-      expect((await ws.response('unlink')).result).toEqual({ success: true });
-      const target = path.join(project, 'target.txt');
-      const link = path.join(project, 'target-link');
-      fs.writeFileSync(target, 'keep');
-      fs.symlinkSync(target, link);
-      handle({ id: 'unlink-link', method: 'unlinkPath', sandbox: scoped([project]), params: [link] }, ws, {});
-      expect((await ws.response('unlink-link')).result).toEqual({ success: true });
-      expect(fs.existsSync(target)).toBe(true);
-      expect(fs.existsSync(link)).toBe(false);
-      expect(fs.existsSync(file)).toBe(false);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    const dir = path.join(project, 'nested');
+    const file = path.join(dir, 'data.txt');
+    handle({ id: 'mkdir', method: 'mkdirPath', sandbox: scoped([project]), params: [dir, { recursive: true }] }, ws, {});
+    expect((await ws.response('mkdir')).result).toEqual({ success: true });
+    handle({ id: 'write', method: 'writeFile', sandbox: scoped([project]), params: [file, 'ok', {}] }, ws, {});
+    expect((await ws.response('write')).result).toEqual({ success: true });
+    handle({ id: 'stat', method: 'statPath', sandbox: scoped([project]), params: [file] }, ws, {});
+    expect((await ws.response('stat')).result).toMatchObject({ size: 2, isDir: false });
+    handle({ id: 'unlink', method: 'unlinkPath', sandbox: scoped([project]), params: [file] }, ws, {});
+    expect((await ws.response('unlink')).result).toEqual({ success: true });
+    const target = path.join(project, 'target.txt');
+    const link = path.join(project, 'target-link');
+    fs.writeFileSync(target, 'keep');
+    fs.symlinkSync(target, link);
+    handle({ id: 'unlink-link', method: 'unlinkPath', sandbox: scoped([project]), params: [link] }, ws, {});
+    expect((await ws.response('unlink-link')).result).toEqual({ success: true });
+    expect(fs.existsSync(target)).toBe(true);
+    expect(fs.existsSync(link)).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
   });
 });
 
 describe('daemon checkpoint protocol', () => {
   test('an exec frame with a checkpoint hint snapshots before running; restore round-trips', async () => {
-    const { work, ctx, cleanup } = setup();
+    const { work, ctx } = setup();
 
-    try {
-      fs.writeFileSync(path.join(work, 'data.txt'), 'original');
-      const ws = fakeWs();
+    fs.writeFileSync(path.join(work, 'data.txt'), 'original');
+    const ws = fakeWs();
 
-      handle({
-        id: 'rpc-checkprex0-1', method: 'exec', params: [`echo CLOBBERED > ${work}/data.txt && rm -f ${work}/data.txt && echo gone > ${work}/extra.txt`],
-        checkpoint: { agent: 'cloud-agent', turnId: 'turn-1', sessionId: 'default', dir: work },
-      }, ws, ctx);
-      const exec = await ws.response('rpc-checkprex0-1');
-      expect(exec.result.exitCode).toBe(0);
-      expect(fs.existsSync(path.join(work, 'data.txt'))).toBe(false);
-      expect(fs.readFileSync(path.join(work, 'extra.txt'), 'utf8').trim()).toBe('gone');
+    handle({
+      id: 'rpc-checkprex0-1', method: 'exec', params: [`echo CLOBBERED > ${work}/data.txt && rm -f ${work}/data.txt && echo gone > ${work}/extra.txt`],
+      checkpoint: { agent: 'cloud-agent', turnId: 'turn-1', sessionId: 'default', dir: work },
+    }, ws, ctx);
+    const exec = await ws.response('rpc-checkprex0-1');
+    expect(exec.result.exitCode).toBe(0);
+    expect(fs.existsSync(path.join(work, 'data.txt'))).toBe(false);
+    expect(fs.readFileSync(path.join(work, 'extra.txt'), 'utf8').trim()).toBe('gone');
 
-      handle({ id: 'r2', method: 'checkpointList', params: ['cloud-agent', 50] }, ws, ctx);
-      const list = (await ws.response('r2')).result;
-      expect(list).toHaveLength(1);
-      expect(list[0].turnId).toBe('turn-1');
-      expect(list[0].sessionId).toBe('default');
-      expect(list[0].dir).toBe(work);
+    handle({ id: 'r2', method: 'checkpointList', params: ['cloud-agent', 50] }, ws, ctx);
+    const list = (await ws.response('r2')).result;
+    expect(list).toHaveLength(1);
+    expect(list[0].turnId).toBe('turn-1');
+    expect(list[0].sessionId).toBe('default');
+    expect(list[0].dir).toBe(work);
 
-      handle({ id: 'r3', method: 'checkpointPlan', params: ['cloud-agent', work, list[0].id] }, ws, ctx);
-      const plan = (await ws.response('r3')).result;
-      const kinds = Object.fromEntries(plan.files.map((f) => [f.path, f.kind]));
-      expect(kinds['data.txt']).toBe('create');
-      expect(kinds['extra.txt']).toBe('delete');
+    handle({ id: 'r3', method: 'checkpointPlan', params: ['cloud-agent', work, list[0].id] }, ws, ctx);
+    const plan = (await ws.response('r3')).result;
+    const kinds = Object.fromEntries(plan.files.map((f) => [f.path, f.kind]));
+    expect(kinds['data.txt']).toBe('create');
+    expect(kinds['extra.txt']).toBe('delete');
 
-      handle({ id: 'r4', method: 'checkpointRestore', params: ['cloud-agent', work, list[0].id] }, ws, ctx);
-      const restore = (await ws.response('r4')).result;
-      expect(restore.preRestoreId).toBeTruthy();
-      expect(fs.readFileSync(path.join(work, 'data.txt'), 'utf8')).toBe('original');
-      expect(fs.existsSync(path.join(work, 'extra.txt'))).toBe(false);
-    } finally { cleanup(); }
+    handle({ id: 'r4', method: 'checkpointRestore', params: ['cloud-agent', work, list[0].id] }, ws, ctx);
+    const restore = (await ws.response('r4')).result;
+    expect(restore.preRestoreId).toBeTruthy();
+    expect(fs.readFileSync(path.join(work, 'data.txt'), 'utf8')).toBe('original');
+    expect(fs.existsSync(path.join(work, 'extra.txt'))).toBe(false);
   });
 
   test('snapshots dedupe on the turn id; a new turn snapshots again', async () => {
-    const { work, ctx, cleanup } = setup();
+    const { work, ctx } = setup();
 
-    try {
-      const ws = fakeWs();
-      const hint = (turnId) => ({ agent: 'a', turnId, sessionId: 's', dir: work });
+    const ws = fakeWs();
+    const hint = (turnId) => ({ agent: 'a', turnId, sessionId: 's', dir: work });
 
-      fs.writeFileSync(path.join(work, 'f.txt'), 'v1');
-      handle({ id: 'e1', method: 'exec', params: ['true'], checkpoint: hint('t1') }, ws, ctx);
-      await ws.response('e1');
-      fs.writeFileSync(path.join(work, 'f.txt'), 'v2');
-      handle({ id: 'e2', method: 'exec', params: ['true'], checkpoint: hint('t1') }, ws, ctx);
-      await ws.response('e2');
-      handle({ id: 'l1', method: 'checkpointList', params: ['a'] }, ws, ctx);
-      expect((await ws.response('l1')).result).toHaveLength(1); // deduped within turn
+    fs.writeFileSync(path.join(work, 'f.txt'), 'v1');
+    handle({ id: 'e1', method: 'exec', params: ['true'], checkpoint: hint('t1') }, ws, ctx);
+    await ws.response('e1');
+    fs.writeFileSync(path.join(work, 'f.txt'), 'v2');
+    handle({ id: 'e2', method: 'exec', params: ['true'], checkpoint: hint('t1') }, ws, ctx);
+    await ws.response('e2');
+    handle({ id: 'l1', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    expect((await ws.response('l1')).result).toHaveLength(1); // deduped within turn
 
-      handle({ id: 'e3', method: 'exec', params: ['true'], checkpoint: hint('t2') }, ws, ctx);
-      await ws.response('e3');
-      handle({ id: 'l2', method: 'checkpointList', params: ['a'] }, ws, ctx);
-      expect((await ws.response('l2')).result).toHaveLength(2);
-    } finally { cleanup(); }
+    handle({ id: 'e3', method: 'exec', params: ['true'], checkpoint: hint('t2') }, ws, ctx);
+    await ws.response('e3');
+    handle({ id: 'l2', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    expect((await ws.response('l2')).result).toHaveLength(2);
   });
 
   test('writeFile derives the project dir from the path when the hint has no dir', async () => {
-    const { work, ctx, cleanup } = setup();
+    const { work, ctx } = setup();
 
-    try {
-      fs.writeFileSync(path.join(work, 'package.json'), '{}'); // project marker
-      fs.mkdirSync(path.join(work, 'src'), { recursive: true });
-      fs.writeFileSync(path.join(work, 'src', 'a.txt'), 'original');
-      const ws = fakeWs();
+    fs.writeFileSync(path.join(work, 'package.json'), '{}'); // project marker
+    fs.mkdirSync(path.join(work, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(work, 'src', 'a.txt'), 'original');
+    const ws = fakeWs();
 
-      handle({
-        id: 'w1', method: 'writeFile', params: [path.join(work, 'src', 'a.txt'), 'CLOBBERED'],
-        checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: null },
-      }, ws, ctx);
-      expect((await ws.response('w1')).result).toEqual({ success: true });
-      expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('CLOBBERED');
+    handle({
+      id: 'w1', method: 'writeFile', params: [path.join(work, 'src', 'a.txt'), 'CLOBBERED'],
+      checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: null },
+    }, ws, ctx);
+    expect((await ws.response('w1')).result).toEqual({ success: true });
+    expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('CLOBBERED');
 
-      handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
-      const list = (await ws.response('l')).result;
-      expect(list).toHaveLength(1);
-      expect(list[0].dir).toBe(work); // walked up to the package.json marker
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    const list = (await ws.response('l')).result;
+    expect(list).toHaveLength(1);
+    expect(list[0].dir).toBe(work); // walked up to the package.json marker
 
-      handle({ id: 'r', method: 'checkpointRestore', params: ['a', work, list[0].id] }, ws, ctx);
-      await ws.response('r');
-      expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('original');
-    } finally { cleanup(); }
+    handle({ id: 'r', method: 'checkpointRestore', params: ['a', work, list[0].id] }, ws, ctx);
+    await ws.response('r');
+    expect(fs.readFileSync(path.join(work, 'src', 'a.txt'), 'utf8')).toBe('original');
   });
 
   test('frames without a checkpoint hint behave exactly as before (no snapshot)', async () => {
-    const { work, ctx, cleanup } = setup();
+    const { work, ctx } = setup();
 
-    try {
-      const ws = fakeWs();
-      handle({ id: 'rpc-nosnapexe0-1', method: 'exec', params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
-      expect((await ws.response('rpc-nosnapexe0-1')).result.exitCode).toBe(0);
-      handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
-      expect((await ws.response('l')).result).toEqual([]);
-    } finally { cleanup(); }
+    const ws = fakeWs();
+    handle({ id: 'rpc-nosnapexe0-1', method: 'exec', params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
+    expect((await ws.response('rpc-nosnapexe0-1')).result.exitCode).toBe(0);
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    expect((await ws.response('l')).result).toEqual([]);
   });
 
   test('degrades honestly when git is missing — operations still run, status says why', async () => {
-    const { work, ctx, cleanup } = setup({ gitBin: '/nonexistent/definitely-not-git' });
+    const { work, ctx } = setup({ gitBin: '/nonexistent/definitely-not-git' });
 
-    try {
-      const ws = fakeWs();
-      // The mutation is never blocked by the unavailable engine.
-      handle({
-        id: 'rpc-degexe1120-1', method: 'exec', params: [`echo ok > ${work}/y.txt`],
-        checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work },
-      }, ws, ctx);
-      expect((await ws.response('rpc-degexe1120-1')).result.exitCode).toBe(0);
-      expect(fs.readFileSync(path.join(work, 'y.txt'), 'utf8').trim()).toBe('ok');
+    const ws = fakeWs();
+    // The mutation is never blocked by the unavailable engine.
+    handle({
+      id: 'rpc-degexe1120-1', method: 'exec', params: [`echo ok > ${work}/y.txt`],
+      checkpoint: { agent: 'a', turnId: 't', sessionId: 's', dir: work },
+    }, ws, ctx);
+    expect((await ws.response('rpc-degexe1120-1')).result.exitCode).toBe(0);
+    expect(fs.readFileSync(path.join(work, 'y.txt'), 'utf8').trim()).toBe('ok');
 
-      handle({ id: 's', method: 'checkpointStatus', params: [] }, ws, ctx);
-      expect((await ws.response('s')).result).toEqual({
-        available: false, reason: 'checkpoints unavailable: git not found',
-      });
-      handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
-      expect((await ws.response('l')).result).toEqual([]);
-      handle({ id: 'r', method: 'checkpointRestore', params: ['a', work, 'abcdef0'] }, ws, ctx);
-      expect((await ws.response('r')).error).toBe('checkpoints unavailable: git not found');
-    } finally { cleanup(); }
+    handle({ id: 's', method: 'checkpointStatus', params: [] }, ws, ctx);
+    expect((await ws.response('s')).result).toEqual({
+      available: false, reason: 'checkpoints unavailable: git not found',
+    });
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    expect((await ws.response('l')).result).toEqual([]);
+    handle({ id: 'r', method: 'checkpointRestore', params: ['a', work, 'abcdef0'] }, ws, ctx);
+    expect((await ws.response('r')).error).toBe('checkpoints unavailable: git not found');
   });
 
   test('retention prunes to the configured keep', async () => {
-    const { work, ctx, cleanup } = setup({ keep: 2 });
+    const { work, ctx } = setup({ keep: 2 });
 
-    try {
-      const ws = fakeWs();
+    const ws = fakeWs();
 
-      for (let i = 0; i < 4; i++) {
-        fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
-        handle({ id: `e${i}`, method: 'exec', params: ['true'], checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work } }, ws, ctx);
-        await ws.response(`e${i}`);
-      }
+    for (let i = 0; i < 4; i++) {
+      fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
+      handle({ id: `e${i}`, method: 'exec', params: ['true'], checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work } }, ws, ctx);
+      await ws.response(`e${i}`);
+    }
 
-      handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
-      const list = (await ws.response('l')).result;
-      expect(list).toHaveLength(2);
-      expect(list.map((e) => e.turnId)).toEqual(['t3', 't2']);
-    } finally { cleanup(); }
+    handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
+    const list = (await ws.response('l')).result;
+    expect(list).toHaveLength(2);
+    expect(list.map((e) => e.turnId)).toEqual(['t3', 't2']);
   });
 
   /**
@@ -701,36 +672,34 @@ describe('daemon checkpoint protocol', () => {
    * plenty was reported as "It changed no device files."
    */
   test('checkpointList narrows by turn in the store, so a limit cannot bury a turn', async () => {
-    const { work, ctx, cleanup } = setup();
+    const { work, ctx } = setup();
 
-    try {
-      const ws = fakeWs();
+    const ws = fakeWs();
 
-      for (let i = 0; i < 3; i++) {
-        fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
-        handle({
-          id: `e${i}`, method: 'exec', params: ['true'],
-          checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work },
-        }, ws, ctx);
-        await ws.response(`e${i}`);
-      }
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
+      handle({
+        id: `e${i}`, method: 'exec', params: ['true'],
+        checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work },
+      }, ws, ctx);
+      await ws.response(`e${i}`);
+    }
 
-      // A limit of 1 keeps only the newest, so the oldest turn is outside it.
-      handle({ id: 'w', method: 'checkpointList', params: ['a', 1] }, ws, ctx);
-      const windowed = (await ws.response('w')).result;
-      expect(windowed.map((e) => e.turnId)).toEqual(['t2']);
+    // A limit of 1 keeps only the newest, so the oldest turn is outside it.
+    handle({ id: 'w', method: 'checkpointList', params: ['a', 1] }, ws, ctx);
+    const windowed = (await ws.response('w')).result;
+    expect(windowed.map((e) => e.turnId)).toEqual(['t2']);
 
-      // Keyed on that buried turn, the same limit returns it.
-      handle({ id: 'k', method: 'checkpointList', params: ['a', 1, 't0'] }, ws, ctx);
-      const keyed = (await ws.response('k')).result;
-      expect(keyed).toHaveLength(1);
-      expect(keyed[0].turnId).toBe('t0');
+    // Keyed on that buried turn, the same limit returns it.
+    handle({ id: 'k', method: 'checkpointList', params: ['a', 1, 't0'] }, ws, ctx);
+    const keyed = (await ws.response('k')).result;
+    expect(keyed).toHaveLength(1);
+    expect(keyed[0].turnId).toBe('t0');
 
-      // A turn with no checkpoint still reads empty, so the narrowing did not
-      // make every turn look restorable.
-      handle({ id: 'n', method: 'checkpointList', params: ['a', 50, 'never-ran'] }, ws, ctx);
-      expect((await ws.response('n')).result).toEqual([]);
-    } finally { cleanup(); }
+    // A turn with no checkpoint still reads empty, so the narrowing did not
+    // make every turn look restorable.
+    handle({ id: 'n', method: 'checkpointList', params: ['a', 50, 'never-ran'] }, ws, ctx);
+    expect((await ws.response('n')).result).toEqual([]);
   });
 });
 
@@ -753,7 +722,7 @@ describe('daemon toolchain probe', () => {
 
   /** A PATH directory holding executables named `names`. */
   function pathWith(names) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-which-'));
+    const dir = scratchDir('which');
 
     for (const name of names) {
       fs.writeFileSync(path.join(dir, name), '#!/bin/sh\n', { mode: 0o755 });
@@ -765,51 +734,39 @@ describe('daemon toolchain probe', () => {
   test('answers only about the names it was asked, and only those that resolve', async () => {
     const dir = pathWith(['node', 'git']);
 
-    try {
-      const ws = fakeWs();
-      withPath(dir, () => handle({ id: 1, method: 'which', params: [['node', 'bun', 'git', 'python3']] }, ws, {}));
+    const ws = fakeWs();
+    withPath(dir, () => handle({ id: 1, method: 'which', params: [['node', 'bun', 'git', 'python3']] }, ws, {}));
 
-      // `bun` and `python3` are not there. Reported as absent, which is a
-      // measurement — distinct from the hub never getting an answer at all.
-      expect((await ws.response(1)).result).toEqual({ present: ['node', 'git'] });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    // `bun` and `python3` are not there. Reported as absent, which is a
+    // measurement — distinct from the hub never getting an answer at all.
+    expect((await ws.response(1)).result).toEqual({ present: ['node', 'git'] });
   });
 
   test('a non-executable file of the right name is not a binary on PATH', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-which-'));
+    const dir = scratchDir('which');
     fs.writeFileSync(path.join(dir, 'python3'), 'not a program', { mode: 0o644 });
 
-    try {
-      const ws = fakeWs();
-      withPath(dir, () => handle({ id: 1, method: 'which', params: [['python3']] }, ws, {}));
+    const ws = fakeWs();
+    withPath(dir, () => handle({ id: 1, method: 'which', params: [['python3']] }, ws, {}));
 
-      // The capability reads "Runs Python". A file nobody can execute does not.
-      expect((await ws.response(1)).result).toEqual({ present: [] });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    // The capability reads "Runs Python". A file nobody can execute does not.
+    expect((await ws.response(1)).result).toEqual({ present: [] });
   });
 
   test('refuses to answer for anything but a bare binary name', async () => {
     const dir = pathWith(['node']);
 
-    try {
-      const ws = fakeWs();
-      // The probe must not become a way to ask whether paths on the user's
-      // machine exist. Names carrying a separator are dropped, not resolved —
-      // even one that would obviously succeed.
-      withPath(dir, () => handle({
-        id: 1,
-        method: 'which',
-        params: [['../etc/passwd', '/bin/sh', 'node/../node', 'node']],
-      }, ws, {}));
+    const ws = fakeWs();
+    // The probe must not become a way to ask whether paths on the user's
+    // machine exist. Names carrying a separator are dropped, not resolved —
+    // even one that would obviously succeed.
+    withPath(dir, () => handle({
+      id: 1,
+      method: 'which',
+      params: [['../etc/passwd', '/bin/sh', 'node/../node', 'node']],
+    }, ws, {}));
 
-      expect((await ws.response(1)).result).toEqual({ present: ['node'] });
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect((await ws.response(1)).result).toEqual({ present: ['node'] });
   });
 
   test('a malformed question is an error frame, never a confident empty answer', async () => {
@@ -930,114 +887,109 @@ describe('daemon process under Bun against a local hub', () => {
 
   test('HELLO on connect, rotation, exec, cancel, file op, and reconnect — all under Bun', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-e2e-'));
+    const root = scratchDir('daemon-e2e');
     // Outside KINU_HOME on purpose: Kinu's own directory is never served
     // through the tunnel (see the credential-fence test below), so a file op
     // that proves the socket works must target a consented directory instead.
-    const files = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-e2e-files-'));
+    const files = scratchDir('daemon-e2e-files');
+
+    const hub = startFakeHub();
 
     try {
-      const hub = startFakeHub();
+      // The daemon reads its origin from device.json, so the config lands
+      // after the hub exists and names the hub's real port.
+      makeConfig(root, hub.origin);
+      const { child, logPath } = spawnDaemon(root);
 
       try {
-        // The daemon reads its origin from device.json, so the config lands
-        // after the hub exists and names the hub's real port.
-        makeConfig(root, hub.origin);
-        const { child, logPath } = spawnDaemon(root);
+        // HELLO arrives with the runtime identity only a real Bun carries.
+        const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
+        expect(hello).toBeDefined();
+        expect(hello.user).toBe('user-1');
+        expect(hello.pid).toBeGreaterThan(0);
+        const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+        expect(daemonLog()).toContain('Connected');
 
-        try {
-          // HELLO arrives with the runtime identity only a real Bun carries.
-          const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
-          expect(hello).toBeDefined();
-          expect(hello.user).toBe('user-1');
-          expect(hello.pid).toBeGreaterThan(0);
-          const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
-          expect(daemonLog()).toContain('Connected');
+        // ROTATE: the hub rotates the long-lived token; the daemon persists
+        // it and ACKNOWLEDGES. The hub holds the superseded token valid until
+        // that frame, so this is what ends its grace.
+        const rotated = `pdt_${'c'.repeat(32)}`;
+        hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
+        await untilHub(() => JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token === rotated);
+        expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
+        expect(daemonLog()).toContain('Device token rotated');
+        // `untilHub` answers null on timeout, and `toBeDefined` accepts null — so
+        // the absent direction has to be spelled as "not null" to be able to fail.
+        expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
 
-          // ROTATE: the hub rotates the long-lived token; the daemon persists
-          // it and ACKNOWLEDGES. The hub holds the superseded token valid until
-          // that frame, so this is what ends its grace.
-          const rotated = `pdt_${'c'.repeat(32)}`;
-          hub.socket().send(JSON.stringify({ type: 'ROTATE', token: rotated }));
-          await untilHub(() => JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token === rotated);
-          expect(JSON.parse(fs.readFileSync(path.join(root, 'device.json'), 'utf8')).token).toBe(rotated);
-          expect(daemonLog()).toContain('Device token rotated');
-          // `untilHub` answers null on timeout, and `toBeDefined` accepts null — so
-          // the absent direction has to be spelled as "not null" to be able to fail.
-          expect(await untilHub(() => hub.frames.find((f) => f.type === 'ROTATE_ACK'))).not.toBeNull();
+        const reply = async (id, timeoutMs = 15_000) => {
+          const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
 
-          const reply = async (id, timeoutMs = 15_000) => {
-            const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+          if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
 
-            if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+          return frame;
+        };
 
-            return frame;
-          };
+        // exec round-trip through the real supervisor under Bun. The result
+        // frame is then ACKED — the supervisor publishes its ack FIFO before
+        // the result and exits only once the cloud confirms receipt, so an
+        // un-acked exec leaves a detached grandchild holding this runner's
+        // process table open after the test ends.
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2eexec00A-1', method: 'exec', params: ['echo hello-from-daemon'] }));
+        const execResult = await reply('rpc-e2eexec00A-1');
+        expect(execResult.result.exitCode).toBe(0);
+        expect(execResult.result.stdout).toContain('hello-from-daemon');
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2eack00A-1', method: 'execAck', params: ['rpc-e2eexec00A-1', 1] }));
+        await reply('rpc-e2eack00A-1');
 
-          // exec round-trip through the real supervisor under Bun. The result
-          // frame is then ACKED — the supervisor publishes its ack FIFO before
-          // the result and exits only once the cloud confirms receipt, so an
-          // un-acked exec leaves a detached grandchild holding this runner's
-          // process table open after the test ends.
-          hub.socket().send(JSON.stringify({ id: 'rpc-e2eexec00A-1', method: 'exec', params: ['echo hello-from-daemon'] }));
-          const execResult = await reply('rpc-e2eexec00A-1');
-          expect(execResult.result.exitCode).toBe(0);
-          expect(execResult.result.stdout).toContain('hello-from-daemon');
-          hub.socket().send(JSON.stringify({ id: 'rpc-e2eack00A-1', method: 'execAck', params: ['rpc-e2eexec00A-1', 1] }));
-          await reply('rpc-e2eack00A-1');
+        // execCancel: a command that outlives its cancellation window.
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2ecancelf-1', method: 'exec', params: ['sleep 30'] }));
+        await untilHub(() => fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1', 'state')));
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2ecanclX-1', method: 'execCancel', params: ['rpc-e2ecancelf-1', 1] }));
+        const cancelResult = await reply('rpc-e2ecanclX-1');
+        expect(cancelResult.result).toEqual({ requestId: 'rpc-e2ecancelf-1', cancelled: 'terminated' });
+        // A cancelled command's request directory is removed by the cancel
+        // itself; nothing waits on an ack. Confirm the tree is gone so the
+        // teardown below cannot race a live supervisor.
+        await untilHub(() => !fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1')));
 
-          // execCancel: a command that outlives its cancellation window.
-          hub.socket().send(JSON.stringify({ id: 'rpc-e2ecancelf-1', method: 'exec', params: ['sleep 30'] }));
-          await untilHub(() => fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1', 'state')));
-          hub.socket().send(JSON.stringify({ id: 'rpc-e2ecanclX-1', method: 'execCancel', params: ['rpc-e2ecancelf-1', 1] }));
-          const cancelResult = await reply('rpc-e2ecanclX-1');
-          expect(cancelResult.result).toEqual({ requestId: 'rpc-e2ecancelf-1', cancelled: 'terminated' });
-          // A cancelled command's request directory is removed by the cancel
-          // itself; nothing waits on an ack. Confirm the tree is gone so the
-          // teardown below cannot race a live supervisor.
-          await untilHub(() => !fs.existsSync(path.join(root, 'inflight', 'rpc-e2ecancelf-1')));
+        // file op: an absolute path the owner could have consented to.
+        const note = path.join(files, 'note.txt');
+        hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', params: [note, 'bun wrote this'] }));
+        const writeResult = await reply('rpc-e2efile0-1');
+        expect(writeResult.result).toEqual({ success: true });
+        expect(fs.readFileSync(note, 'utf-8')).toBe('bun wrote this');
 
-          // file op: an absolute path the owner could have consented to.
-          const note = path.join(files, 'note.txt');
-          hub.socket().send(JSON.stringify({ id: 'rpc-e2efile0-1', method: 'writeFile', params: [note, 'bun wrote this'] }));
-          const writeResult = await reply('rpc-e2efile0-1');
-          expect(writeResult.result).toEqual({ success: true });
-          expect(fs.readFileSync(note, 'utf-8')).toBe('bun wrote this');
+        // Reconnect after a socket drop: the hub closes; the daemon redials.
+        hub.socket().close();
+        const hello2 = await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1]);
+        expect(hello2).toBeDefined();
+      } finally {
+        // Teardown owns three things the runner's exit depends on: the
+        // daemon child (SIGTERM, then reaped through .exited), the in-flight
+        // root (any supervisor the test failed to ack dies with its process
+        // group — killing by -pid on the child's group is not possible here
+        // because Bun.spawn above is not detached, so each supervisor's own
+        // directory is checked and removed), and the hub.
+        child.kill('SIGTERM');
+        await child.exited;
+        const inflight = path.join(root, 'inflight');
 
-          // Reconnect after a socket drop: the hub closes; the daemon redials.
-          hub.socket().close();
-          const hello2 = await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1]);
-          expect(hello2).toBeDefined();
-        } finally {
-          // Teardown owns three things the runner's exit depends on: the
-          // daemon child (SIGTERM, then reaped through .exited), the in-flight
-          // root (any supervisor the test failed to ack dies with its process
-          // group — killing by -pid on the child's group is not possible here
-          // because Bun.spawn above is not detached, so each supervisor's own
-          // directory is checked and removed), and the hub.
-          child.kill('SIGTERM');
-          await child.exited;
-          const inflight = path.join(root, 'inflight');
+        if (fs.existsSync(inflight)) {
+          for (const entry of fs.readdirSync(inflight)) {
+            const state = path.join(inflight, entry, 'state');
 
-          if (fs.existsSync(inflight)) {
-            for (const entry of fs.readdirSync(inflight)) {
-              const state = path.join(inflight, entry, 'state');
+            if (!fs.existsSync(state)) continue;
+            const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
 
-              if (!fs.existsSync(state)) continue;
-              const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
-
-              // ESRCH is the supervisor already being gone; that is the
-              // teardown's goal, so nothing rethrows past it.
-              if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
-            }
+            // ESRCH is the supervisor already being gone; that is the
+            // teardown's goal, so nothing rethrows past it.
+            if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
           }
         }
-      } finally {
-        await hub.close();
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(files, { recursive: true, force: true });
+      await hub.close();
     }
   // A finite sequence, with its own waits: every `untilHub` fails by name
   // within its 10-15 s. The outer bound is their sum, not a detector — the
@@ -1052,51 +1004,47 @@ describe('daemon process under Bun against a local hub', () => {
    * phase inside the sequence test.
    */
   async function withDaemon(extraEnv, body) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-case-'));
+    const root = scratchDir('daemon-case');
+
+    const hub = startFakeHub();
 
     try {
-      const hub = startFakeHub();
+      makeConfig(root, hub.origin);
+      const { child, logPath } = spawnDaemon(root, extraEnv);
+      const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
 
       try {
-        makeConfig(root, hub.origin);
-        const { child, logPath } = spawnDaemon(root, extraEnv);
-        const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+        const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
 
-        try {
-          const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
+        if (!hello) throw new Error(`daemon never connected: log says ${daemonLog()}`);
 
-          if (!hello) throw new Error(`daemon never connected: log says ${daemonLog()}`);
+        const reply = async (id, timeoutMs = 15_000) => {
+          const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
 
-          const reply = async (id, timeoutMs = 15_000) => {
-            const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+          if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
 
-            if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+          return frame;
+        };
 
-            return frame;
-          };
+        await body({ hub, root, child, reply, daemonLog });
+      } finally {
+        child.kill('SIGTERM');
+        await child.exited;
+        const inflight = path.join(root, 'inflight');
 
-          await body({ hub, root, child, reply, daemonLog });
-        } finally {
-          child.kill('SIGTERM');
-          await child.exited;
-          const inflight = path.join(root, 'inflight');
+        if (fs.existsSync(inflight)) {
+          for (const entry of fs.readdirSync(inflight)) {
+            const state = path.join(inflight, entry, 'state');
 
-          if (fs.existsSync(inflight)) {
-            for (const entry of fs.readdirSync(inflight)) {
-              const state = path.join(inflight, entry, 'state');
+            if (!fs.existsSync(state)) continue;
+            const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
 
-              if (!fs.existsSync(state)) continue;
-              const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
-
-              if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
-            }
+            if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
           }
         }
-      } finally {
-        await hub.close();
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true });
+      await hub.close();
     }
   }
 
@@ -1228,40 +1176,36 @@ describe('daemon process under Bun against a local hub', () => {
     if (sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
     await withDaemon(undefined, async ({ hub, root, reply }) => {
       const agentHome = path.join(root, 'agents', 'ws-1', 'home');
-      const consented = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-consented-'));
+      const consented = scratchDir('daemon-consented');
 
-      try {
-        hub.socket().send(JSON.stringify({
-          id: 'rpc-sandboxrun-1',
-          method: 'exec',
-          // The hub computes the agent home per (device, workspace) beneath the
-          // agentRoot the daemon reported on HELLO; the daemon creates it 0700
-          // on first use, which is what this asserts by not creating it here.
-          sandbox: { tier: 'sandboxed', agentHome, roots: [consented] },
-          params: [[
-            'echo HOME=$HOME',
-            'printf agent > "$HOME/mine" && echo home-write-ok',
-            `printf root > ${JSON.stringify(path.join(consented, 'mine'))} && echo root-write-ok`,
-            'touch /usr/local/nope 2>&1 | head -1',
-            'echo KINU_SANDBOX=$KINU_SANDBOX',
-          ].join('; ')],
-        }));
-        const ran = await reply('rpc-sandboxrun-1');
-        expect(ran.error).toBeUndefined();
-        expect(ran.result.stdout).toContain('home-write-ok');
-        expect(ran.result.stdout).toContain('root-write-ok');
-        expect(ran.result.stdout).toContain('Read-only file system');
-        expect(ran.result.stdout).toContain('KINU_SANDBOX=1');
-        // The bytes landed where the model was told they would, on the
-        // machine's own filesystem, and the agent home was created 0700.
-        expect(fs.readFileSync(path.join(agentHome, 'mine'), 'utf-8')).toBe('agent');
-        expect(fs.readFileSync(path.join(consented, 'mine'), 'utf-8')).toBe('root');
-        expect(fs.statSync(agentHome).mode & 0o777).toBe(0o700);
-        hub.socket().send(JSON.stringify({ id: 'rpc-sandboxack-1', method: 'execAck', params: ['rpc-sandboxrun-1', 1] }));
-        await reply('rpc-sandboxack-1');
-      } finally {
-        fs.rmSync(consented, { recursive: true, force: true });
-      }
+      hub.socket().send(JSON.stringify({
+        id: 'rpc-sandboxrun-1',
+        method: 'exec',
+        // The hub computes the agent home per (device, workspace) beneath the
+        // agentRoot the daemon reported on HELLO; the daemon creates it 0700
+        // on first use, which is what this asserts by not creating it here.
+        sandbox: { tier: 'sandboxed', agentHome, roots: [consented] },
+        params: [[
+          'echo HOME=$HOME',
+          'printf agent > "$HOME/mine" && echo home-write-ok',
+          `printf root > ${JSON.stringify(path.join(consented, 'mine'))} && echo root-write-ok`,
+          'touch /usr/local/nope 2>&1 | head -1',
+          'echo KINU_SANDBOX=$KINU_SANDBOX',
+        ].join('; ')],
+      }));
+      const ran = await reply('rpc-sandboxrun-1');
+      expect(ran.error).toBeUndefined();
+      expect(ran.result.stdout).toContain('home-write-ok');
+      expect(ran.result.stdout).toContain('root-write-ok');
+      expect(ran.result.stdout).toContain('Read-only file system');
+      expect(ran.result.stdout).toContain('KINU_SANDBOX=1');
+      // The bytes landed where the model was told they would, on the
+      // machine's own filesystem, and the agent home was created 0700.
+      expect(fs.readFileSync(path.join(agentHome, 'mine'), 'utf-8')).toBe('agent');
+      expect(fs.readFileSync(path.join(consented, 'mine'), 'utf-8')).toBe('root');
+      expect(fs.statSync(agentHome).mode & 0o777).toBe(0o700);
+      hub.socket().send(JSON.stringify({ id: 'rpc-sandboxack-1', method: 'execAck', params: ['rpc-sandboxrun-1', 1] }));
+      await reply('rpc-sandboxack-1');
     });
   }, 60_000);
 
@@ -1336,7 +1280,7 @@ describe('daemon process under Bun against a local hub', () => {
   // from a test whose daemon exited.
   test('a supervisor whose daemon is gone stops waiting for an ack nobody can send', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-orphan-'));
+    const root = scratchDir('daemon-orphan');
     const requestId = 'rpc-orphanwait-1';
     const requestDir = path.join(root, 'inflight', requestId);
     let supervisorPid = 0;
@@ -1387,7 +1331,6 @@ describe('daemon process under Bun against a local hub', () => {
       }
     } finally {
       if (supervisorPid > 0) tolerate(() => process.kill(-supervisorPid, 'SIGKILL'), 'esrch');
-      fs.rmSync(root, { recursive: true, force: true });
     }
   // Two daemon spawns, one exec, and the supervisor's 1 s orphan poll, each
   // with its own named wait inside.
@@ -1403,7 +1346,7 @@ describe('daemon process under Bun against a local hub', () => {
     // `sessionGroups` sweeps the whole session on Linux only; a Mac signals the
     // shell's own group and says so.
     if (process.platform !== 'linux') return;
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-signal-'));
+    const root = scratchDir('daemon-signal');
     let job = 0;
 
     try {
@@ -1451,7 +1394,6 @@ describe('daemon process under Bun against a local hub', () => {
       }
     } finally {
       if (job > 0) tolerate(() => process.kill(job, 'SIGKILL'), 'esrch');
-      fs.rmSync(root, { recursive: true, force: true });
     }
   // One daemon spawn, one terminal, and the shell's own prompt inside it,
   // each with its own named wait.

@@ -228,7 +228,7 @@ describe('head tool surface — containment', () => {
     const { tools, capture } = buildSurface();
     const execute = toolExecute<{ code: string }, string>(tools.execute_tools);
     await execute({ code: 'return 1' });
-    expect(capture.toolCalls).toEqual([{ name: 'execute_tools', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
+    expect(capture.toolCalls).toEqual([{ toolCallId: 'test-tool-call', name: 'execute_tools', args: { code: 'return 1' }, result: 'ran', outcome: { success: true } }]);
   });
 
   test('the head prompt describes the real workspace it was given', () => {

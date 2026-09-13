@@ -117,7 +117,7 @@ export function readSubordinateInspection(
     }
 
     case 'history':
-      if (!tableExists(sql, 'assistant_messages') && !tableExists(sql, 'messages')) return missingSubordinateHistory(path);
+      if (!tableExists(sql, 'assistant_messages') && !tableExists(sql, 'actor_messages')) return missingSubordinateHistory(path);
 
       return { view: 'history', path, page: getChatHistoryPage(sql, actor, request.page) };
     case 'runs':

@@ -159,9 +159,9 @@ function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle) {
   claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
   // The pair the pick attributes from, under the actor that owns the turn:
   // `recordTakePick` resolves it through the actor-scoped conversation store.
-  void sql`INSERT INTO messages (actor_id, id, session_id, role, content)
+  void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content)
     VALUES (${actor.actorId}, 'u-9', 'default', 'user', 'please solve it')`;
-  void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+  void sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
     VALUES (${actor.actorId}, 'msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;
 
   return latestAlternateTakeSet(sql, actor)!;

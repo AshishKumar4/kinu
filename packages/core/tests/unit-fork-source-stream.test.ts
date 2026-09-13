@@ -28,7 +28,7 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
   ] as const;
 
   for (const [index, message] of messages.entries()) {
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${message.id}, ${'default'}, ${message.parent}, ${message.role},
               ${message.text}, ${1000 + index})`;
   }
@@ -162,7 +162,7 @@ describe('forkTransferFrames source streamer', () => {
     const ws = createTestWorkspace();
     await seedSource(ws);
     const million = 'x'.repeat(1_000_000);
-    void ws.sql`UPDATE messages SET content = ${million} WHERE id = ${'m3'}`;
+    void ws.sql`UPDATE actor_messages SET content = ${million} WHERE id = ${'m3'}`;
     await ws.vfs.writeFile('memory/large.md', 'y'.repeat(1_000_000));
     const frames = await framesFor(ws, 2048);
     const rowFrames = frames.filter(isRowFrame);
@@ -208,7 +208,7 @@ describe('forkTransferFrames source streamer', () => {
 
     const cycle = createTestWorkspace();
     await seedSource(cycle);
-    void cycle.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void cycle.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${openWorkspaceMainActor(cycle.sql).actorId}, ${'loop'}, ${'default'}, ${'loop'}, ${'user'},
               ${'self-parented'}, ${9})`;
 

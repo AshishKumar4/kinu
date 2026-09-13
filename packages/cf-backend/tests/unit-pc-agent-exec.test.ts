@@ -13,11 +13,12 @@
  * so these assert what the cloud agent receives, not how the daemon is built.
  */
 
-import { afterAll, describe, expect, test } from 'bun:test';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
@@ -27,12 +28,7 @@ import {
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
 
-const TEST_INFLIGHT_ROOT = mkdtempSync(join(tmpdir(), 'pc-agent-inflight-'));
-
-process.env.KINU_INFLIGHT_ROOT = TEST_INFLIGHT_ROOT;
-
 const require_ = createRequire(import.meta.url);
-
 
 const WatchableFileSystemSchema = v.object({ watch: v.function() });
 
@@ -101,8 +97,6 @@ const SupervisorRegistrySchema = v.object({
 });
 
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
-
-afterAll(() => rmSync(TEST_INFLIGHT_ROOT, { recursive: true, force: true }));
 
 function handle(message: DaemonMessage, socket: ReplySocket): void {
   pcAgent.handle(message, socket);
@@ -407,7 +401,7 @@ describe('pc-agent command cancellation', () => {
   });
 
   test('cancellation waits for the owned command group to die', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-cancel-'));
+    const dir = scratchDir('pc-agent-cancel');
     const { command, pidOf } = commandWithDescendant(dir, 'child');
     const ws = recorder();
     const runId = rpcId(201);
@@ -431,7 +425,7 @@ describe('pc-agent command cancellation', () => {
   }, 30_000);
 
   test('normal result remains replayable until the cloud ACK cleans it up', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-normal-ack-'));
+    const dir = scratchDir('pc-agent-normal-ack');
     const pidFile = join(dir, 'server.pid');
     const ws = recorder();
     const runId = rpcId(210);
@@ -477,7 +471,7 @@ describe('pc-agent command cancellation', () => {
   }, 30_000);
 
   test('a cancellation frame from a version this daemon does not speak is refused', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-cancel-version-'));
+    const dir = scratchDir('pc-agent-cancel-version');
     const { command, pidOf } = commandWithDescendant(dir, 'kept');
     const ws = recorder();
     const runId = rpcId(230);
@@ -512,9 +506,8 @@ describe('pc-agent command cancellation', () => {
     expect(ws.of('..')[0].error).toContain('request id');
   });
 
-
   test('a sweep reaches a command the registry has not registered yet', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-unregistered-'));
+    const dir = scratchDir('pc-agent-unregistered');
     const waiting = commandWithDescendant(dir, 'unregistered');
     // Built over the root while it is still empty, so it holds no entry for
     // the request below. That is the live window: the supervisor publishes
@@ -532,11 +525,10 @@ describe('pc-agent command cancellation', () => {
     expect(mine).toBeDefined();
     expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
       .toEqual({ requestId: rpcId(260), cancelled: 'terminated' });
-    rmSync(dir, { recursive: true, force: true });
   }, 30_000);
 
   test('a dropped socket terminates a command that still has no terminal result', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-disconnect-'));
+    const dir = scratchDir('pc-agent-disconnect');
     const waiting = commandWithDescendant(dir, 'waiting');
     const ws = recorder();
     handle({ id: rpcId(250), method: 'exec', params: [waiting.command] }, ws.socket);
@@ -612,7 +604,7 @@ describe('pc-agent durable supervisor', () => {
   }, 30_000);
 
   test('refuses a stale supervisor pid identity without signaling that pid', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'pc-agent-pid-reuse-'));
+    const root = scratchDir('pc-agent-pid-reuse');
     const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
     const id = rpcId(320);
     const requestDir = join(root, id);
@@ -625,13 +617,12 @@ describe('pc-agent durable supervisor', () => {
 
     await expect(registry.cancel(id)).rejects.toThrow('identity no longer matches');
     expect(alive(process.pid)).toBe(true);
-    rmSync(root, { recursive: true, force: true });
   });
 });
 
 describe('pc-agent supervisor guards', () => {
   test('accepts a filename-less watch event and rejects a watch error', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'pc-agent-watch-'));
+    const root = scratchDir('pc-agent-watch');
     const target = join(root, 'state');
     const rawAgentFs: unknown = require_('node:fs');
 
@@ -663,17 +654,15 @@ describe('pc-agent supervisor guards', () => {
       await expect(pcAgent.waitForFile(join(root, 'result'))).rejects.toThrow('watch failed');
     } finally {
       agentFs.watch = originalWatch;
-      rmSync(root, { recursive: true, force: true });
     }
   });
 
   test('rejects supervisor startup when the child exits before state publication', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'pc-agent-startup-'));
+    const root = scratchDir('pc-agent-startup');
     const child = new EventEmitter();
     const pending = pcAgent.waitForSupervisorState(root, child);
     child.emit('exit', 125, null);
     await expect(pending).rejects.toThrow('exited before publishing state');
-    rmSync(root, { recursive: true, force: true });
   });
 
   test('refuses unsupported hosts before creating a command directory', () => {
@@ -737,7 +726,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
   }
 
   test('the tool\'s abort kills the command and its child, and says it did', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-e2e-'));
+    const dir = scratchDir('pc-agent-e2e');
     const { command, pidOf } = commandWithDescendant(dir, 'e2e');
     const { provider, tunnel } = deviceChain();
     const controller = new AbortController();
@@ -768,7 +757,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
    * processes are there to prove it.
    */
   test('a stop the device cannot perform is reported as unconfirmed, with the command still running', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-orphan-'));
+    const dir = scratchDir('pc-agent-orphan');
     const { command, pidOf } = commandWithDescendant(dir, 'orphan');
     const { provider, tunnel } = deviceChain();
     const controller = new AbortController();
@@ -848,7 +837,7 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
 
 describe('pc-agent readRange RPC', () => {
   test('reads only the requested binary range, never a whole-file fallback', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'pc-agent-range-'));
+    const dir = scratchDir('pc-agent-range');
     const file = join(dir, 'large.bin');
     const window = 512 * 1024;
     const sentinel = Buffer.from('SENTINEL-PAST-WINDOW');

@@ -670,6 +670,18 @@ export function mockAgentsSdk(): void {
           cls.name, name,
         );
       }
+      /** The SDK's `destroy()` (`agents/dist/src-5W6JNKVb.js:5447`), scoped to
+       *  what is observable here: the alarm slot freed, durable storage —
+       *  KV and every SQLite table — gone, the isolate abort deferred past the
+       *  returning call. The facets half is absent for the same reason
+       *  `subAgent` is: this stand-in is always the root. */
+      async destroy(): Promise<void> {
+        if (!this.ctx) throw new Error('harness Agent: destroy needs a ctx');
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+        setTimeout(() => this.ctx?.abort('destroyed'), 0);
+      }
+
       async _cf_destroyDescendantFacet(path: readonly { className: string; name: string }[]): Promise<void> {
         const parent = this.selfPath;
 

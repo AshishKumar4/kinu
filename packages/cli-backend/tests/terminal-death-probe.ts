@@ -11,12 +11,9 @@
  *
  * Three instants, and each is a claim recovery has to answer:
  *
- *   • `before-claim` — the answer and the roster it owes are committed; the
- *     terminal claim is NOT. Killed from the `run_end` run-event, which
- *     `closeTurnRun` emits between the commit and `terminal.settle`. Recovery has
- *     only the intent row to work from, so a workspace that comes back with the
- *     turn recorded proves the intent carried it, and one that comes back empty
- *     is exactly the loss the review named.
+ *   • `before-settle` — the answer and terminal roster are committed, but the
+ *     effects have not run. Killed from the `run_end` event between the answer
+ *     commit and `terminal.settle`.
  *
  *   • `inside-claim` — INSIDE the commit that claims the transition and writes
  *     the roster, between the outer claim and the first roster row. No event and
@@ -39,7 +36,7 @@ import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { armShadowTrials, captureTakes, openTerminalWorkspace, scriptedModel } from './terminal-workspace';
 
-const MODES = ['before-claim', 'inside-claim', 'inside-title'] as const;
+const MODES = ['before-settle', 'inside-claim', 'inside-title'] as const;
 
 const [dbPath, rawMode] = process.argv.slice(2);
 
@@ -95,12 +92,8 @@ const session = new LocalAgentSession({
   db,
   model,
   onEvent: (event) => {
-    // `run_end` is the LAST event `closeTurnRun` emits, and the run seal sits
-    // between the durable commit and the terminal claim — so this is the
-    // interval the review's first finding is about, observed from production
-    // code rather than from a test-only hook.
-    if (mode === 'before-claim' && event.type === 'run-event' && event.event.type === 'run_end') {
-      die('before-claim');
+    if (mode === 'before-settle' && event.type === 'run-event' && event.event.type === 'run_end') {
+      die('before-settle');
     }
   },
 });

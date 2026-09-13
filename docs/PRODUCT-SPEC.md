@@ -277,8 +277,8 @@ This is the source inventory for the reviewed revision, not a proposed schema an
 
 | Family | Current records | Physical owner and significance |
 |---|---|---|
-| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | The agents SDK session tables inside the workspace's one SQLite. `assistant_messages` is the vendor's shape with no actor column — the root actor's transcript by construction (Think's session belongs to the workspace object); a child actor's default chat is the plain `messages` store. Messages carry session and ancestry fields. Kinu currently returns the SDK default session unchanged. |
-| Local conversation/search | `messages`, `conversation_fts`, `conversation_fts_state` | Current actor database. The search index is derived; it is not another authoritative conversation. Hosted readers select the pane store when present. |
+| Hosted conversation | `assistant_messages`, `assistant_config`, `assistant_compactions`, `assistant_fts` | The agents SDK session tables inside the workspace's one SQLite. `assistant_messages` is the vendor's shape with no actor column — the root actor's transcript by construction (Think's session belongs to the workspace object); a child actor's default chat is the plain `actor_messages` store. Messages carry session and ancestry fields. Kinu currently returns the SDK default session unchanged. |
+| Local conversation/search | `actor_messages`, `conversation_fts`, `conversation_fts_state` | Current actor database. The search index is derived; it is not another authoritative conversation. Hosted readers select the pane store when present. |
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |
 | SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
@@ -569,6 +569,29 @@ Code blocks must use the shared renderer with syntax colors, correct escaping, c
 - Empty Releases/Exploration surfaces remain hidden when they have no relevant content.
 - A slate preview is not automatically a release. The existing release workflow has its own deliverable, approval and publication state; it is not silently replaced by an agent-core deployment record.
 - An error state remains visible and recoverable. A success-looking placeholder must not hide a failed loader, missing file or disconnected executor.
+
+### 13.2.1 Workspace presentation requirements (2026-09-12)
+
+These requested targets supersede conflicting presentation proposals from the design report. They are acceptance requirements, not a claim of deployed completion.
+
+|ID|Required behavior|
+|---|---|
+|UX-01|Preserve the improved text readability and existing visual language.|
+|UX-02|Auto/Plan remains a compact control without an explanatory caption or first-use persistence for that caption.|
+|UX-03|Render reasoning, tool calls and replies in their recorded order. Completion must not regroup reasoning above earlier tool calls.|
+|UX-04|Tool failure changes the status to Failed without automatically expanding, reordering or emphasizing the call. Agent recovery remains the agent's responsibility.|
+|UX-05|Do not add a turn-level tool-count or failure-summary strip above the message.|
+|UX-06|Keep reads, lists and searches quiet. Make mutating operations prominent, including commands and codemode that change state.|
+|UX-07|Classify effects through shared execution contracts and trustworthy evidence, not arbitrary output fields. Unknown effects must not be labelled as measured reads.|
+|UX-08|Active reasoning shows several lines in a bounded scrolling viewport with a subtle activity animation. Respect reduced motion.|
+|UX-09|When reasoning finishes, collapse it to one or two lines with Expand. Preserve the user's deliberate inspection of completed content.|
+|UX-10|The Work/Supervise control retains symmetrical padding and an intact rounded border at desktop and mobile widths.|
+|UX-11|Supervise omits Curriculum and the header budget, prioritizes automations and run history, and hides Evolution until relevant evolution exists.|
+|UX-12|A new workspace starts with its inspector collapsed unless the user opens it or actionable items, slates or outputs warrant showing it.|
+|UX-13|Preserve explicit inspector choices without letting another workspace's open state override the new-workspace default. Passive updates must not steal focus.|
+|UX-14|Landing mocks use the same product components and interaction rules. Only disclosed sample data and demonstration controls differ.|
+
+Verify chronological and streaming transitions, failure presentation, empty/populated Supervise states, and inspector behavior across new and returning workspaces. Check both themes and desktop/mobile layouts. Readable screenshots alone do not prove effect classification or persistence.
 
 ### 13.3 Terminal-specific acceptance
 

@@ -2,19 +2,15 @@
 // one. The default is the owner's Kinu account — sealed at rest there and
 // reachable from every machine through the provider proxy — so that this disk
 // does not end up holding a second copy of the same key.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { readFileSync, writeFileSync } from 'node:fs';
+
 import { join } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 
-const homes: string[] = [];
-
-afterEach(() => { for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true }); });
-
 function kinuHome(config: JsonObject): string {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-secret-home-'));
-  homes.push(home);
+  const home = scratchDir('secret-home');
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
 
   return home;

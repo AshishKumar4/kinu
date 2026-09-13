@@ -43,7 +43,7 @@ import type {
 } from '@kinu.run/core';
 import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
-  verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
+  recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
@@ -78,7 +78,6 @@ import { TierIdSchema,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportStatus, type TaskTurnEnding,
-  TERMINAL_EFFECT_NAMES,
   terminalEffect, keyedScope,
   RunEndReasonSchema, WorkModeSchema,
   shadowTrialPlan, trimTrialContext,
@@ -143,7 +142,7 @@ import { TierIdSchema,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type AlarmScheduler, type BackgroundJob, type RawSqlExec,
+  type AlarmScheduler, type BackgroundJob,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   reasoningEffortOptions,
@@ -155,9 +154,9 @@ import { TierIdSchema,
   isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
-  readSoul,
+  readSoul, operatorMessageAdmitted,
   type ResolvedTurnProfile, type TierId,
-  decodeJsonValue, projectJsonValue, parseJsonValue, JsonValueSchema,
+  decodeJsonValue, projectJsonValue, JsonValueSchema,
   createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
   cancelBackgroundJob, jobResult, listBackgroundJobs,
@@ -238,8 +237,8 @@ export interface LocalOrchestrationInput {
   readonly session: () => LocalAgentSession;
   /** This host runs ONE task turn and exits; it never starts the cadence. */
   readonly oneShot: boolean;
-  /** Whether turn and session reflection record anything at all. */
-  readonly autoEvolve: boolean;
+  /** The operator's explicit opt-out of automatic learning. */
+  readonly noAutoEvolve?: boolean;
 }
 
 export function createLocalOrchestration(input: LocalOrchestrationInput): LocalOrchestration {
@@ -256,7 +255,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
   });
 
   const engine = new EvolutionEngine(input.runtime, {
-    enabled: input.autoEvolve,
+    enabled: input.noAutoEvolve !== true,
     // The turn review's own model calls debit the mission the reviewed turn
     // ran under — the same ledger, through the same seam, as the work it
     // reviews. Unbudgeted turns never reach it.
@@ -325,11 +324,6 @@ function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
   };
 }
 
-/** A turn's inference, replayable outside the turn that ran it: everything
- *  runChat needs except the two things that belong to one live turn only —
- *  its abort signal and its extension host. */
-type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
-
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
 type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
@@ -375,53 +369,6 @@ const NO_STRANDED_DELIVERY_GRACE = 0;
  *  turn's answer-plus-roster commit. A torn write that reports success is what
  *  an identity-function stand-in would buy. */
 export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
-
-/**
- * The frozen roster of a response whose answer is on disk and whose terminal
- * transition was never claimed.
- *
- * The assistant row is committed before core can claim anything — the roster is
- * a value this session reads, and reading it is not a durable act — so a process
- * killed in between would leave a durable answer that `resumeAll()` could not
- * see: `incomplete()` finds CLAIMS, and there would be none. Every take,
- * branch, recording, drain, trial and title of that turn would be lost with
- * nothing on disk to say so.
- *
- * This row closes that window because it is written in the SAME transaction as
- * the answer. It carries the roster core's own `declareTerminalRoster` produced
- * — never a re-derivation, which would score the turn against a world it did
- * not run in — and the next start hands it straight back to `settle()`, which
- * claims and replays it exactly as a first attempt.
- *
- * Deleted as soon as the transition has a claim behind it. A row that survives
- * a claim is harmless (`settle()` reads `resumed` or `done` and replays from the
- * ledger instead), but a row that is never deleted is a turn every later start
- * re-enters.
- */
-function initTerminalIntentTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS terminal_intents (
-    message_id  TEXT PRIMARY KEY,
-    turn_id     TEXT NOT NULL,
-    roster_json TEXT NOT NULL,
-    recorded_at INTEGER NOT NULL
-  )`);
-}
-
-/**
- * A recorded roster, read back.
- *
- * Narrowed on the way IN, not trusted: a row written by a build that named a
- * fourth lane or an effect this one does not have would otherwise be handed to
- * core as a roster and claimed. The per-effect ledger already blocks a row whose
- * NAME it cannot run; this is the same refusal one step earlier, where the whole
- * array is still a single unreadable value.
- */
-const RecordedRosterSchema: v.GenericSchema<OwedEffect[]> = v.array(v.object({
-  name: v.picklist(TERMINAL_EFFECT_NAMES),
-  scope: v.string(),
-  input: JsonValueSchema,
-  lane: v.union([v.literal('inline'), v.literal('detached')]),
-}));
 
 /**
  * The advisor's recorded input on THIS backend: core's whole recovery snapshot,
@@ -558,10 +505,7 @@ export interface LocalAgentSessionOpts {
    */
   providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
-  /** Disable auto-evolution (turn + session reflection). Default: enabled.
-   *  Set by the operator's `--no-auto-evolve`, and by the host for a
-   *  task-lifetime child, whose turn no later actor reads a lesson from
-   *  (`agent-host/host.ts`). */
+  /** The operator's opt-out of automatic step, turn and session learning. */
   noAutoEvolve?: boolean;
   /** This process runs ONE task turn and exits (`kinu exec`/`kinu run`).
    *  Two consequences, both about honesty rather than throttling:
@@ -622,6 +566,11 @@ interface QueueItem {
    *  the row the first one wrote (see `persist`). */
   idempotencyKey?: string;
   kind: 'user' | 'programmatic';
+  /** A programmatic turn that is a move OFFERED, not an event that must be
+   *  heard: if an operator message is admitted ahead of it — queued behind it
+   *  here, or already durable — the pump yields the slot and settles it
+   *  'yielded' without running a turn. See ProgrammaticTurn.yieldsToUserMessage. */
+  yieldsToUserMessage?: boolean;
   /**
    * Settle whoever queued this item — exactly once, and told whether the turn
    * RAN.
@@ -634,7 +583,7 @@ interface QueueItem {
    * which a success-only `resolve()` cannot help doing — loses the event and
    * discards the message in silence.
    */
-  settle: (refusal: Refusal | null) => void;
+  settle: (refusal: Refusal | null, yielded?: boolean) => void;
 }
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
@@ -805,11 +754,6 @@ export class LocalAgentSession implements BackendHost {
   /** True when this process runs one task turn and exits — see the `oneShot`
    *  option. Decides turn continuity and whether the cadence lane may start. */
   private readonly oneShot: boolean;
-  /** Whether this session runs the evolution lanes at all (`--no-auto-evolve`
-   *  turns them off). Held rather than only handed to the engine: a lane this
-   *  session will refuse must not be DECLARED as owed, or the refusal becomes a
-   *  row nothing can ever complete. */
-  private readonly autoEvolve: boolean;
   /** The mechanical completion gate (core completion-gate.ts). Armed only by a
    *  one-shot task turn: on the interactive surface the human reading the
    *  answer is the check, so it never arms and costs nothing. */
@@ -884,7 +828,6 @@ export class LocalAgentSession implements BackendHost {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
     this.oneShot = opts.oneShot === true;
-    this.autoEvolve = opts.noAutoEvolve !== true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.fallbackModel = opts.model ?? null;
@@ -917,7 +860,7 @@ export class LocalAgentSession implements BackendHost {
       eventLog: new EventLog(hubSql, this.rt.actor),
       session: () => this,
       oneShot: this.oneShot,
-      autoEvolve: this.autoEvolve,
+      noAutoEvolve: opts.noAutoEvolve === true,
     });
 
     const orchestration = opts.hosted ?? own;
@@ -928,12 +871,8 @@ export class LocalAgentSession implements BackendHost {
     this.eventLog = orchestration.eventLog;
 
     initWorkspaceBaselineTable(this.rt.storage.execRaw);
-    // The per-effect ledger a settled turn's suffix is claimed in, and the
-    // intent row that carries a roster whose claim never landed. Idempotent
-    // DDL, and here beside the rest of the schema for the same reason: a session
-    // may be the first thing to touch this database.
+    // The core terminal ledger is committed beside each local answer.
     initTerminalEffectTable(this.rt.storage.execRaw);
-    initTerminalIntentTable(this.rt.storage.execRaw);
 
     // Instruction approvals are keyed by the directory on THIS disk, because on
     // a local CLI that directory IS the authority — there is no owner/workspace
@@ -1027,7 +966,7 @@ export class LocalAgentSession implements BackendHost {
     // built it from the orchestration above — the same object `HostedActor`
     // carries, so a head or a node this session spawns claims its turns on the
     // very session the host holds. Standalone, this session is that host.
-    this.actorSession = opts.hosted?.actor.session ?? new ActorSession({
+    this.actorSession = 'actor' in orchestration ? orchestration.actor.session : new ActorSession({
       runtime: this.rt,
       claims: this.stores.claims,
       // The local host publishes NO installed build identity for its builtin
@@ -1035,13 +974,7 @@ export class LocalAgentSession implements BackendHost {
       // version in this repo is a placeholder, so a claim for a builtin turn
       // records the build as unknown rather than naming one nobody can verify.
       installedBuild: null,
-      orchestration: (own ?? createLocalOrchestration({
-        runtime: this.rt,
-        eventLog: this.eventLog,
-        session: () => this,
-        oneShot: this.oneShot,
-        autoEvolve: this.autoEvolve,
-      })).deps,
+      orchestration: orchestration.deps,
     });
     this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
     this.compactionExtension = createCompactionExtension({
@@ -1470,7 +1403,7 @@ export class LocalAgentSession implements BackendHost {
    *  rollback / craft retire / fact forget). Invalidates the model-bound
    *  state so a retired crafted tool disappears from the next turn. */
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore }, id);
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore, events: this.eventRecorder }, id);
 
     if (result.ok) this.invalidateModelState();
 
@@ -1616,10 +1549,16 @@ export class LocalAgentSession implements BackendHost {
       // 'skipped' is what a producer with a durable retry plane acts on: the
       // signal seam compensates on anything but 'queued', which is how an event
       // drain gets its rows back when another process holds the driver lease.
-      settle: (refusal) => resolve({ status: refusal ? 'skipped' : 'queued' }),
+      // 'yielded' is neither: the offer was consumed at its slot, so nothing
+      // comes back and nothing is retried.
+      settle: (refusal, yielded) => resolve({
+        status: yielded === true ? 'yielded' : refusal ? 'skipped' : 'queued',
+      }),
     };
 
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
+
+    if (input.yieldsToUserMessage === true) item.yieldsToUserMessage = true;
     this.queue.push(item);
 
     if (this.settlingDepth > 0) {
@@ -1657,7 +1596,7 @@ export class LocalAgentSession implements BackendHost {
     const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`;
 
     return this.rt.storage.sql<{ id: string }>`
-      SELECT id FROM messages
+      SELECT id FROM actor_messages
       WHERE actor_id = ${this.rt.actor.actorId} AND id = ${id} AND session_id = ${this.sessionId}
     `.length > 0;
   }
@@ -2150,6 +2089,25 @@ export class LocalAgentSession implements BackendHost {
    * exit printed promised the operator these jobs would resume.
    */
   async recoverBackgroundJobs(): Promise<void> {
+    const refusal = this.driverGate?.();
+
+    if (refusal) {
+      diagnostics.event('driver.startup_recovery_deferred', { reason: refusal.reason });
+
+      return;
+    }
+
+    const recovered = await recoverActorTurns({
+      resumable: (limit) => this.actorHost.resumable(limit),
+      acquire: async (reference) => reference.actorId === this.rt.actor.actorId
+        ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
+        : await this.actorHost.acquire(reference),
+    });
+
+    diagnostics.event('actor.turns_recovered', {
+      verified: recovered.verified.length, refused: recovered.refused.length,
+      unreadable: recovered.unreadable.length, active: recovered.active.length,
+    });
     const advisorOrphans: OrphanedFiber[] = [];
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
@@ -2192,58 +2150,7 @@ export class LocalAgentSession implements BackendHost {
       });
     }
 
-    await this.recoverActorClaims();
     await this.recoverTerminalTransitions(advisorOrphans);
-  }
-
-  /**
-   * Dispose of the turn claims a dead activation left behind.
-   *
-   * A start-of-life read, for the reason `unterminatedRuns` gives: this process
-   * is running none of these, so every one it finds was admitted by an earlier
-   * one. Each is loaded, its PROGRAM re-verified against the source its version
-   * still retains — the immutable `.vN` bytes, never the live alias a promotion
-   * moves — and then settled `indeterminate`.
-   *
-   * Indeterminate and not resumed, deliberately. The claim proves the turn was
-   * admitted; the effect ledgers (`tool_effect_claims`, `terminal_effects`)
-   * prove what it managed to do, and those are recovered by their own paths
-   * below and above. Re-running the turn under its own identity would repeat
-   * whatever the dead activation had already issued, and naming it `completed`
-   * would report an answer nobody has. So the honest disposition is the one
-   * word that says the work was claimed and its fate is unknown, and the
-   * verification result is stated on the claim's own run in the durable log.
-   */
-  private async recoverActorClaims(): Promise<void> {
-    for (const claim of this.stores.claims.unsettled()) {
-      const recovery = await verifyClaimedProgram(
-        claim,
-        (version) => readVersionedScaffoldSource(this.rt, version),
-        sha256Hex,
-        () => this.stores.claims.consumedContext(claim.turnId),
-      );
-
-      const note = recovery.kind === 'source_changed'
-        ? `the source of program v${claim.program.version} no longer digests to what this turn was admitted on`
-        + ` (claimed ${claim.program.digest ?? 'nothing'}, found ${recovery.found ?? 'no source'})`
-        : recovery.kind === 'build_unknown'
-          ? 'this turn ran the builtin loop under a build identity the host never published'
-          : `program v${claim.program.version} still retains the source this turn was admitted on`;
-
-      this.recordRunEvent({
-        type: 'error',
-        message: `recovered an unsettled turn claim (epoch ${claim.epoch}): ${note}`,
-        details: {
-          turnId: claim.turnId, epoch: claim.epoch, verification: recovery.kind,
-          consumedRevision: claim.consumedRevision,
-        },
-      }, claim.runId);
-      this.stores.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
-      this.emit({
-        type: 'background', event: 'turn_claim_recovered',
-        message: `turn ${claim.turnId} was admitted and never settled — ${note}`,
-      });
-    }
   }
 
   /**
@@ -2261,12 +2168,10 @@ export class LocalAgentSession implements BackendHost {
    * installed is a session nobody else can be driving (a fixture, a benchmark
    * harness), and it recovers unguarded.
    *
-   * Three sources, in order. First the advisor orphans the startup scan set
+   * First the advisor orphans the startup scan set
    * aside: a review is a model call, and two processes that both read the same
    * orphan and both see no note yet would each spend one and append their own.
-   * Then the intents: a response whose answer reached disk and whose transition
-   * was never claimed, replayed from the roster frozen beside the answer. Then
-   * the claims: a transition that was claimed and whose suffix is still owed.
+   * Then the terminal ledger: the roster committed beside each answer.
    */
   async recoverTerminalTransitions(
     advisorOrphans: readonly OrphanedFiber[] = [],
@@ -2285,7 +2190,6 @@ export class LocalAgentSession implements BackendHost {
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
 
-    await this.settleRecordedIntents();
     await this.terminal.resumeAll();
     // A replayed sequence can enqueue a turn (the completion gate does), and on
     // this path no turn owns the pump. What it must NOT do is decide the advisor's
@@ -2293,72 +2197,6 @@ export class LocalAgentSession implements BackendHost {
     // review is judged against travels in the improvement-lanes row rather than
     // being re-read from a RAM gate this process never armed.
     this.pump();
-  }
-
-  /**
-   * Claim and replay every response whose answer is on disk under a roster
-   * nothing ever claimed.
-   *
-   * The recorded roster is handed straight back to `settle()`, which needs no
-   * other input: an unclaimed intent takes the first-attempt path and claims
-   * exactly these rows, and one whose claim did land reads `resumed` or `done`
-   * and replays from the ledger instead. All three dispositions are correct, so
-   * this asks no question about which one applies.
-   *
-   * The intent is dropped once `settle()` has returned, because from that
-   * instant the ledger's rows carry the sequence. It is KEPT when `settle()`
-   * throws: the claim may never have landed, and this row is the only thing that
-   * could bring the roster back.
-   */
-  private async settleRecordedIntents(): Promise<void> {
-    const rows = this.rt.storage.sql<{ message_id: string; turn_id: string; roster_json: string }>`
-      SELECT message_id, turn_id, roster_json FROM terminal_intents ORDER BY recorded_at, message_id`;
-
-    for (const row of rows) {
-      const transition: TerminalTransition = { turnId: row.turn_id, messageId: row.message_id };
-
-      const parsed = v.safeParse(
-        RecordedRosterSchema,
-        tolerate(() => parseJsonValue(row.roster_json), 'malformed-input'),
-      );
-
-      if (!parsed.success) {
-        // A roster this build cannot read is not a roster it may guess at, and
-        // keeping the row would re-offer the same unreadable bytes on every
-        // start. The failure is named with the sequence it belonged to.
-        diagnostics.failure('turn.terminal_intent_unreadable', toKinuError({
-          doing: 'reading the roster a settled turn recorded beside its answer',
-          cause: new Error(parsed.issues.map((issue) => issue.message).join('; ')),
-          otherwise: 'unsupported',
-        }), { turnId: row.turn_id, messageId: row.message_id });
-        this.clearTerminalIntent(row.message_id);
-        continue;
-      }
-
-      const owed = parsed.output;
-
-      try {
-        this.settlingDepth += 1;
-
-        try {
-          await this.terminal.settle({
-            transition,
-            declare: () => owed,
-            hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
-          });
-        }
-        finally { this.settlingDepth -= 1; }
-      } catch (err) {
-        diagnostics.failure('turn.terminal_intent_replay_failed', toKinuError({
-          doing: 'claiming the roster a settled turn recorded beside its answer',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { turnId: row.turn_id, messageId: row.message_id });
-        continue;
-      }
-
-      this.clearTerminalIntent(row.message_id);
-    }
   }
 
   /**
@@ -2549,6 +2387,21 @@ export class LocalAgentSession implements BackendHost {
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
           item.settle(refusal);
+          continue;
+        }
+
+        // A turn that was OFFERED yields inside its slot: the check is here,
+        // at dequeue, never at admission — a user item queued after the offer
+        // was taken, or an operator row already durable, means somebody spoke
+        // first and that message is the turn now. Nothing runs, nothing is
+        // persisted; the offer is consumed.
+        if (item.yieldsToUserMessage === true
+          && (this.queue.some((queued) => queued.kind === 'user')
+            || operatorMessageAdmitted(this.rt.storage.sql, this.rt.actor, this.sessionId))) {
+          diagnostics.event('genesis.yielded_to_message', {
+            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
+          });
+          item.settle(null, true);
           continue;
         }
 
@@ -2950,10 +2803,6 @@ export class LocalAgentSession implements BackendHost {
     // Turn-local state (activation reasons) rides one trailing message for THIS
     // turn only. Neither is ever pushed into the durable history, so the stable
     // prefix stays cacheable.
-    const dynamicContext = {
-      ledger: this.actorSession.dynamic,
-      snapshot: () => this.dynamicContextSnapshot(memoryTail),
-    };
 
     // Provenance rides here, not in the system prompt: it flips whenever a
     // background job lands mid-session, and at system placement that flip
@@ -2998,13 +2847,7 @@ export class LocalAgentSession implements BackendHost {
     // and overflow recovery all budget against the same number.
     const contextWindow = this.sessionContextWindow();
 
-    // The turn's inference exactly as it ran, minus the two things that belong
-    // to THIS turn and nothing else (its abort signal and its extension host).
-    // Kept as a value so the shadow evaluation of a delegating pending scaffold
-    // replays the live turn rather than a reconstruction of it — the local peer
-    // of the DO's `_lastTurnOpts` stash. `this.history` is snapshotted because
-    // the assistant's answer is appended to it before the eval runs.
-    const liveTurnOpts: LiveTurnOpts = {
+    const liveTurn: ActorExecutionInput['chat'] = {
       model,
       // The window pair, both halves of it: `contextWindow` is the whole
       // window and `modelOutputLimit` the answer's share, and the input
@@ -3018,7 +2861,6 @@ export class LocalAgentSession implements BackendHost {
         modelOutputLimit: this.modelCatalog.modelOutputLimit(),
       },
       system: systemPrompt,
-      history: [...this.actorSession.history],
       // Model-capability attachment sanitization — runChat applies it to
       // the whole history BEFORE the transform seam and the ledger weave
       // (same ordering as the DO's beforeTurn); this.history itself is
@@ -3026,7 +2868,6 @@ export class LocalAgentSession implements BackendHost {
       attachments: {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
       },
-      dynamicContext,
       turnLocal: turnLocalMsgs.length > 0 ? turnLocalMsgs : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
@@ -3035,21 +2876,15 @@ export class LocalAgentSession implements BackendHost {
     };
 
     if (measured.providerReportedTokens !== undefined) {
-      liveTurnOpts.providerReportedTokens = measured.providerReportedTokens;
+      liveTurn.providerReportedTokens = measured.providerReportedTokens;
     }
 
-    if (providerOptions) liveTurnOpts.providerOptions = providerOptions;
-    // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
-    // replay re-runs those opts off the priced path, and its composition would
-    // otherwise overwrite the measurement the next real step reports.
+    if (providerOptions) liveTurn.providerOptions = providerOptions;
     // Exact pre-submission admission — the resolved provider's own count of the
     // assembled request (core `assembleTurnMessages` owns what is done with the
-    // number). On the LIVE turn only, for the same reason `meter` is: a
-    // shadow-eval replay re-runs these opts off the priced path, and the request
-    // it replays was already admitted here. A static-model session has no
+    // number). A static-model session has no
     // registry to ask, and is assembled ungated exactly as before.
     const resolver = this.modelResolver;
-    const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts };
 
     if (resolver) {
       liveTurn.countInputTokens = (request: CountableRequest) =>
@@ -3061,7 +2896,7 @@ export class LocalAgentSession implements BackendHost {
       loopVersion: await this.rt.identity.scaffold.version(),
       chat: liveTurn,
       extensions: [this.compactionExtension],
-      dynamic: dynamicContext.snapshot,
+      dynamic: () => this.dynamicContextSnapshot(memoryTail),
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
     }, (event) => {
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
@@ -3093,8 +2928,8 @@ export class LocalAgentSession implements BackendHost {
       assistantText: fullText,
       runError,
       interrupted,
-      trialContext: liveTurnOpts.history,
-      reachableTools: Object.keys(liveTurnOpts.tools ?? {}),
+      trialContext: execution.admittedMessages,
+      reachableTools: Object.keys(liveTurn.tools ?? {}),
       overflowRetry,
     });
 
@@ -3132,7 +2967,7 @@ export class LocalAgentSession implements BackendHost {
       return;
     }
 
-    const { messageId, facts, turn, owed, transition } = commit.committed;
+    const { facts, turn, owed, transition } = commit.committed;
 
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
@@ -3163,10 +2998,7 @@ export class LocalAgentSession implements BackendHost {
       // moment the transcript was persisted and had no recovery at all, so a
       // laptop killed here lost the whole suffix.
       //
-      // The roster is HANDED BACK, not rebuilt. It was frozen inside the commit
-      // above and is the same array the intent row carries, so the rows core
-      // claims are the rows a recovery would have replayed — a second
-      // declaration would read live state that has moved on.
+      // The core ledger already holds the roster committed with the answer.
       this.settlingDepth += 1;
 
       try {
@@ -3178,9 +3010,6 @@ export class LocalAgentSession implements BackendHost {
       }
       finally { this.settlingDepth -= 1; }
 
-      // The claim is behind the roster now, so the intent has nothing left to
-      // carry: from here the ledger's own rows are what a recovery reads.
-      this.clearTerminalIntent(messageId);
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = renderThrownChain({ cause: err });
@@ -3296,10 +3125,7 @@ export class LocalAgentSession implements BackendHost {
         overflowRetry: input.overflowRetry,
       });
 
-      // A response whose turn has no durable identity has nothing to claim
-      // against, so it also has nothing to record an intent under: it runs
-      // unledgered, and an intent keyed on an id no claim can use would be a
-      // recovery that re-ran the sequence on every later start.
+      // A response with no durable identity runs without a ledger key.
       const transition: TerminalTransition | null = this.currentTurnId === null
         ? null
         : { turnId, messageId };
@@ -3318,7 +3144,7 @@ export class LocalAgentSession implements BackendHost {
           item.kind === 'programmatic' ? item.metadata : undefined,
         );
 
-        if (transition !== null) this.recordTerminalIntent(transition, owed);
+        this.terminal.record(transition, owed);
       })();
 
       return { committed: { messageId, facts, turn, owed, transition } };
@@ -3333,20 +3159,6 @@ export class LocalAgentSession implements BackendHost {
         }),
       };
     }
-  }
-
-  /** Freeze what this response owes beside the answer itself. */
-  private recordTerminalIntent(
-    transition: TerminalTransition, owed: readonly OwedEffect[],
-  ): void {
-    void this.rt.storage.sql`INSERT OR REPLACE INTO terminal_intents
-      (message_id, turn_id, roster_json, recorded_at)
-      VALUES (${transition.messageId}, ${transition.turnId},
-              ${JSON.stringify(owed)}, ${Date.now()})`;
-  }
-
-  private clearTerminalIntent(messageId: string): void {
-    void this.rt.storage.sql`DELETE FROM terminal_intents WHERE message_id = ${messageId}`;
   }
 
   // ── The terminal transition ───────────────────────────────────────────
@@ -3404,7 +3216,7 @@ export class LocalAgentSession implements BackendHost {
     // session genuinely does not have the lane — and an effect a backend does
     // not have is an absent part, not a claimed row that completes on the
     // engine's refusal a moment later.
-    const sampled = this.autoEvolve ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
+    const sampled = this.engine.recordsTurns ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
 
     // The gate's decision belongs to the LIVE turn: `shouldGate` reads RAM the
     // gate keeps (armed, already fired) that a restart does not have, so the
@@ -3463,7 +3275,7 @@ export class LocalAgentSession implements BackendHost {
       // constructor field, so the roster and the turn cannot disagree — and a
       // replay records what the producing run had rather than what the
       // recovering one happens to be started with.
-      evolutionEnabled: this.autoEvolve,
+      evolutionEnabled: this.engine.recordsTurns,
     };
 
     const parts: Writable<TerminalTurnParts> = {};
@@ -4227,6 +4039,7 @@ export class LocalAgentSession implements BackendHost {
   private get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
+      events: this.eventRecorder,
       sql: this.rt.storage.sql,
       config: this.config,
       surface: (task, context, callScope) => {
@@ -4616,7 +4429,7 @@ export class LocalAgentSession implements BackendHost {
         // client fan-out and their turn queue — which is what a local fork is.
         session: () => this,
         oneShot: this.oneShot,
-        autoEvolve: this.autoEvolve,
+        noAutoEvolve: !this.engine.enabled,
       }).deps,
       // The origin the creation site NAMED, or the default for its kind. A
       // head inherits the parent's promoted program, which is what
@@ -4823,7 +4636,7 @@ export class LocalAgentSession implements BackendHost {
   ): void {
     const stamp = metadata === undefined ? null : JSON.stringify(stampTurnAuthor(metadata));
     const actorId = this.rt.actor.actorId;
-    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (actor_id, id, session_id, role, content, metadata)
+    void this.rt.storage.sql`INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, role, content, metadata)
       VALUES (${actorId}, ${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
     let parentId = turnId;
 
@@ -4833,12 +4646,12 @@ export class LocalAgentSession implements BackendHost {
         [STEER_STEP_METADATA_KEY]: steer.atStep,
       });
 
-      void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, metadata)
+      void this.rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, metadata)
         VALUES (${actorId}, ${steer.id}, ${this.sessionId}, ${parentId}, ${'user'}, ${steer.text}, ${steerStamp})`;
       parentId = steer.id;
     }
 
-    void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    void this.rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
       VALUES (${actorId}, ${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
   }
   /** One routed non-turn lane as an {@link LLM}: the tier's model, its effort,
@@ -4937,7 +4750,7 @@ export class LocalAgentSession implements BackendHost {
   private restoreHistory(): void {
     const rows = this.rt.storage.sql<{ role: string; content: string }>`
       SELECT role, content
-      FROM messages
+      FROM actor_messages
       WHERE actor_id = ${this.rt.actor.actorId}
         AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
       ORDER BY created_at DESC, rowid DESC`;

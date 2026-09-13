@@ -7,45 +7,22 @@
 // says so.
 //
 // TWO TESTS HERE COME FROM A LIVE FAILURE, and they are the reason the rest is
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+
 import { afterAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
-// Minted and released HERE, not in a shared helper: `gate:scratch-ownership`
-// reads the file that mints, and a module-scope `afterAll` in an imported file
-// registers with no suite and never fires. Only the prefix is shared.
-const mintedScratch = new Set<string>();
+const suiteRoot = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}snapshot-chain-`));
+
+afterAll(() => rmSync(suiteRoot, { recursive: true, force: true }));
 
 function devboxScratchDir(label: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}${label}-`));
-  mintedScratch.add(dir);
-
-  return dir;
+  return mkdtempSync(join(suiteRoot, `${label}-`));
 }
-
-afterAll(() => {
-  // The directory AND the siblings written beside it. Several cases use the
-  // minted path as a STEM — `<dir>.sqsh`, `<dir>.excludes` — so removing only
-  // the directory leaves those behind: measured 2026-09-10, ten such files
-  // survived one run. They leaked the same way under the shared prefix and
-  // were invisible there, which is `gate:scratch-ownership`'s own stated blind
-  // spot ("a leak inside a helper that takes the path as an argument").
-  for (const dir of mintedScratch) {
-    rmSync(dir, { recursive: true, force: true });
-    const stem = basename(dir);
-
-    for (const entry of readdirSync(tmpdir())) {
-      if (entry.startsWith(`${stem}.`)) rmSync(join(tmpdir(), entry), { recursive: true, force: true });
-    }
-  }
-
-  mintedScratch.clear();
-});
-
 
 import {
   archiveCommand,
@@ -290,6 +267,17 @@ function excludePatternsOf(command: string): readonly string[] {
  * an unrecognised command falls through to its first word — so a NEW command
  * shows up in the recorded calls instead of silently resolving as nothing.
  */
+const DELTA_SHELL_REPLIES: ReadonlyMap<string, ShellOutcome> = new Map([
+  ['# devbox-probe-v1', { call: 'deltaProbe', stdout: '0 ' }],
+  ['# devbox-whiteout-v1', { call: 'deltaWhiteoutStat', stdout: '0,0' }],
+  ['# devbox-basestat-v1', { call: 'deltaBaseStat', stdout: 'ABSENT' }],
+  ['# devbox-blockhash-v1', { call: 'deltaBlockHash', stdout: '' }],
+  ['# devbox-stage-v1', { call: 'deltaStage', stdout: '' }],
+  ['# devbox-materialize-v1', { call: 'deltaMaterialize', stdout: '' }],
+  ['# devbox-materialize-v1-post', { call: 'deltaMaterializePost', stdout: '' }],
+  ['# devbox-manifest-v1', { call: 'deltaManifest', stdout: '' }],
+]);
+
 function shellLabel(
   command: string,
   mounts: string,
@@ -301,6 +289,10 @@ function shellLabel(
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
+
+  const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]!);
+
+  if (delta !== undefined) return delta;
 
   // The staging-space probe: one command reporting `<need> <free>`.
   if (command.includes('df -Pk')) {
@@ -1111,7 +1103,23 @@ describe('attach — the mount must be observed to have landed', () => {
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
   });
 
-  test('a complete but unreferenced delta adopts itself; the mount is its validator',
+  test('a base-only attach verifies an unrecorded delta is absent in the store', async () => {
+    const calls: string[] = [];
+
+    const record = harness({
+      state: chainState({ delta: undefined }),
+      mounts: mountsAfterAttach(calls),
+      calls,
+      absent: (path) => path.endsWith('/delta.sqsh'),
+    });
+
+    expect((await attachOf(record)).kind).toBe('attached');
+    expect(record.calls).toContain(`objectFacts:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
+  });
+
+  test('a complete unreferenced delta is adopted despite a negative mounted stat',
     async () => {
       // A previous run crashed between the atomic PUT and the state write. The
       // PUT was all-or-nothing and squashfs verifies its own superblock, so the
@@ -1122,6 +1130,7 @@ describe('attach — the mount must be observed to have landed', () => {
         state: chainState({ delta: undefined }),
         mounts: mountsAfterAttach(calls),
         calls,
+        absent: (path) => path.endsWith('/delta.sqsh'),
       });
 
       record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
@@ -2987,7 +2996,6 @@ describe('denominator', () => {
   });
 });
 
-
 // ── accepted review findings ────────────────────────────────────────────────
 
 describe('discard sweeps every generation the record still names', () => {
@@ -3065,7 +3073,6 @@ describe('attachChain resets only its OWN directories', () => {
   });
 });
 
-
 /** The whole second both fingerprint marks land in. */
 const T_SAME = 1_700_000_000;
 
@@ -3073,27 +3080,23 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
   test('a same-size rename changes the per-path mark', () => {
     const dir = devboxScratchDir('devbox-fingerprint-rename');
 
-    try {
-      const firstPath = join(dir, 'before.txt');
-      const secondPath = join(dir, 'after.txt');
-      writeFileSync(firstPath, 'same-size');
-      utimesSync(firstPath, T_SAME + 0.5, T_SAME + 0.5);
+    const firstPath = join(dir, 'before.txt');
+    const secondPath = join(dir, 'after.txt');
+    writeFileSync(firstPath, 'same-size');
+    utimesSync(firstPath, T_SAME + 0.5, T_SAME + 0.5);
 
-      const run = (): string => {
-        const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+    const run = (): string => {
+      const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
 
-        if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
 
-        return proc.stdout.toString().trim();
-      };
+      return proc.stdout.toString().trim();
+    };
 
-      const first = run();
-      renameSync(firstPath, secondPath);
-      utimesSync(secondPath, T_SAME + 0.5, T_SAME + 0.5);
-      expect(run()).not.toBe(first);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const first = run();
+    renameSync(firstPath, secondPath);
+    utimesSync(secondPath, T_SAME + 0.5, T_SAME + 0.5);
+    expect(run()).not.toBe(first);
   });
 
   test('a same-size same-second rewrite changes the mark', () => {
@@ -3102,28 +3105,24 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     // this gate exists to keep shut.
     const dir = devboxScratchDir('devbox-fingerprint');
 
-    try {
-      const file = join(dir, 'w.txt');
-      writeFileSync(file, 'aaaaaaaaaa');
-      utimesSync(file, T_SAME + 0.25, T_SAME + 0.25);
+    const file = join(dir, 'w.txt');
+    writeFileSync(file, 'aaaaaaaaaa');
+    utimesSync(file, T_SAME + 0.25, T_SAME + 0.25);
 
-      const run = (): string => {
-        const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+    const run = (): string => {
+      const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
 
-        if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
 
-        return proc.stdout.toString().trim();
-      };
+      return proc.stdout.toString().trim();
+    };
 
-      const first = run();
+    const first = run();
 
-      writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE
-      utimesSync(file, T_SAME + 0.25, T_SAME + 0.75); // SAME SECOND, later fraction
+    writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE
+    utimesSync(file, T_SAME + 0.25, T_SAME + 0.75); // SAME SECOND, later fraction
 
-      expect(run()).not.toBe(first);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(run()).not.toBe(first);
   });
 
   test('a same-path rewrite with the mtime RESTORED still changes the mark', () => {
@@ -3134,29 +3133,25 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     // only an mtime restoration cannot undo that.
     const dir = devboxScratchDir('devbox-fingerprint-restored-mtime');
 
-    try {
-      const file = join(dir, 'w.txt');
-      const at = T_SAME + 0.5;
-      writeFileSync(file, 'aaaaaaaaaa');
-      utimesSync(file, at, at);
+    const file = join(dir, 'w.txt');
+    const at = T_SAME + 0.5;
+    writeFileSync(file, 'aaaaaaaaaa');
+    utimesSync(file, at, at);
 
-      const run = (): string => {
-        const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+    const run = (): string => {
+      const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
 
-        if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+      if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
 
-        return proc.stdout.toString().trim();
-      };
+      return proc.stdout.toString().trim();
+    };
 
-      const first = run();
+    const first = run();
 
-      writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE, SAME INODE
-      utimesSync(file, at, at); // MTIME PUT BACK EXACTLY
+    writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE, SAME INODE
+    utimesSync(file, at, at); // MTIME PUT BACK EXACTLY
 
-      expect(run()).not.toBe(first);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(run()).not.toBe(first);
   });
 });
 
@@ -3327,17 +3322,13 @@ describe('the real archiver applies the policy this file claims', () => {
   test('git metadata travels at every depth, as a directory and as a worktree file', () => {
     const dir = fixtureTree('devbox-archive-git');
 
-    try {
-      const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
+    const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
 
-      for (const kept of ['.git', '.git/HEAD', '.git/objects/ab/cd', 'sub/.git/HEAD', 'wt/.git']) {
-        expect(entries).toContain(kept);
-      }
-
-      expect(entries).toContain('keep.txt');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    for (const kept of ['.git', '.git/HEAD', '.git/objects/ab/cd', 'sub/.git/HEAD', 'wt/.git']) {
+      expect(entries).toContain(kept);
     }
+
+    expect(entries).toContain('keep.txt');
   });
 
   test('a regenerable tree goes at EVERY depth, not only the top level', () => {
@@ -3346,17 +3337,13 @@ describe('the real archiver applies the policy this file claims', () => {
     // `a.log` too, because a glob without `-wildcards` matches nothing.
     const dir = fixtureTree('devbox-archive-depth');
 
-    try {
-      const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
+    const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
 
-      for (const gone of [
-        'node_modules', 'node_modules/p/i.js', 'sub/deep/node_modules/p/i.js',
-        'a.log', 'sub/b.log', 'dist/o.js', 'sub/dist/o.js', '.cache/x', 'sub/.cache/x',
-      ]) {
-        expect(entries).not.toContain(gone);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    for (const gone of [
+      'node_modules', 'node_modules/p/i.js', 'sub/deep/node_modules/p/i.js',
+      'a.log', 'sub/b.log', 'dist/o.js', 'sub/dist/o.js', '.cache/x', 'sub/.cache/x',
+    ]) {
+      expect(entries).not.toContain(gone);
     }
   });
 
@@ -3368,24 +3355,20 @@ describe('the real archiver applies the policy this file claims', () => {
     // would be empty.
     const dir = fixtureTree('devbox-archive-globstar');
 
-    try {
-      const { entries } = archiveOf(dir, ['**/node_modules', 'dist/**', '**', 'a/**/b']);
-      expect(entries).toContain('keep.txt');
-      expect(entries).toContain('.git/HEAD');
+    const { entries } = archiveOf(dir, ['**/node_modules', 'dist/**', '**', 'a/**/b']);
+    expect(entries).toContain('keep.txt');
+    expect(entries).toContain('.git/HEAD');
 
-      for (const gone of [
-        'node_modules/p/i.js', 'sub/deep/node_modules/p/i.js', 'dist/o.js', 'sub/dist/o.js',
-        'a/b/c.txt', 'x/a/b/c.txt',
-      ]) {
-        expect(entries).not.toContain(gone);
-      }
-
-      // Nothing this policy does not name is touched.
-      expect(entries).toContain('a.log');
-      expect(entries).toContain('sub/.cache/x');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    for (const gone of [
+      'node_modules/p/i.js', 'sub/deep/node_modules/p/i.js', 'dist/o.js', 'sub/dist/o.js',
+      'a/b/c.txt', 'x/a/b/c.txt',
+    ]) {
+      expect(entries).not.toContain(gone);
     }
+
+    // Nothing this policy does not name is touched.
+    expect(entries).toContain('a.log');
+    expect(entries).toContain('sub/.cache/x');
   });
 
   test('the extraction options and the direct command are one policy', () => {
@@ -3394,14 +3377,10 @@ describe('the real archiver applies the policy this file claims', () => {
     // the policy in one mode and ignore it in the other.
     const dir = fixtureTree('devbox-archive-parity');
 
-    try {
-      const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
-      expect(declared).toEqual([...CHAIN_EXCLUDES]);
-      expect(archiveExcludeFile(declared)).toBe(archiveExcludeFile(CHAIN_EXCLUDES));
-      expect(archiveOf(dir, declared).entries).toEqual(archiveOf(dir, CHAIN_EXCLUDES).entries);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
+    expect(declared).toEqual([...CHAIN_EXCLUDES]);
+    expect(archiveExcludeFile(declared)).toBe(archiveExcludeFile(CHAIN_EXCLUDES));
+    expect(archiveOf(dir, declared).entries).toEqual(archiveOf(dir, CHAIN_EXCLUDES).entries);
   });
 
   test('the staging estimate measures exactly the bytes the archive takes', () => {
@@ -3413,12 +3392,8 @@ describe('the real archiver applies the policy this file claims', () => {
     // probe exists to prevent.
     const dir = fixtureTree('devbox-archive-estimate');
 
-    try {
-      for (const policy of [CHAIN_EXCLUDES, ['**/node_modules', 'dist/**', '**', 'a/**/b'], []]) {
-        expect(estimateOf(dir, policy)).toBe(archiveOf(dir, policy).bytes);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+    for (const policy of [CHAIN_EXCLUDES, ['**/node_modules', 'dist/**', '**', 'a/**/b'], []]) {
+      expect(estimateOf(dir, policy)).toBe(archiveOf(dir, policy).bytes);
     }
   });
 });

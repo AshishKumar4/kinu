@@ -29,11 +29,11 @@ export interface TurnStartContext {
 export interface ToolCallContext {
   readonly toolName: string;
   readonly args: JsonObject;
+  /** Execution identity, when the producer observes an invocation. */
+  readonly toolCallId?: string;
 }
 
-export type ToolResultContext = ToolOutcome & {
-  readonly toolName: string;
-  readonly args: JsonObject;
+export type ToolResultContext = ToolOutcome & ToolCallContext & {
   /** Full rendered content for display and repeat detection, never status evidence. */
   readonly result: string;
 };

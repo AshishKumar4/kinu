@@ -48,7 +48,7 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { PrepareStepContext } from '../extension';
-import type { BackendHost } from '../types/backend-host';
+import type { BackendHost, ProgrammaticTurn } from '../types/backend-host';
 import type {
   AgentSignal, SettledSignals, SignalCardState, SignalDeliverer, SignalOutcome,
   SignalUndeliveredReason,
@@ -215,11 +215,25 @@ export class SignalDelivery implements SignalDeliverer {
 
     try {
       const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
-      const { idempotencyKey, text } = signal;
+      const { idempotencyKey, text, yieldsToUserMessage } = signal;
 
-      const result = await this.host.enqueueTurn(
-        idempotencyKey === undefined ? { text, metadata } : { text, metadata, idempotencyKey },
-      );
+      const turn: ProgrammaticTurn = {
+        text, metadata,
+        ...(idempotencyKey !== undefined && { idempotencyKey }),
+        ...(yieldsToUserMessage === true && { yieldsToUserMessage }),
+      };
+
+      const result = await this.host.enqueueTurn(turn);
+
+      // The offer reached its slot and found the operator already speaking.
+      // That is a consumed offer, not a failed one: no failure row, no
+      // compensate — the message, not a retry, is what happens next. Its card
+      // is withdrawn exactly like an undelivered one: nothing ever read it.
+      if (result.status === 'yielded') {
+        this.moveCard(signal.cardId, 'undelivered');
+
+        return 'yielded';
+      }
 
       if (result.status === 'queued') return 'queued';
       reason = 'preempted';

@@ -26,7 +26,7 @@ export {
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
-  TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
+  TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
@@ -100,7 +100,7 @@ export {
 export {
   sessionTreeAncestry, chatPaneAncestry, hasPaneStore, usesPaneStore, forkPointExists, normalizeImportedConversation,
   answersForDrainTurns,
-  conversationCount, conversationTurnPair, conversationPageRows,
+  conversationCount, conversationTurnPair, conversationPageRows, operatorMessageAdmitted,
   SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,
   type SessionTreeNode, type ChatPaneRow,
   type ConversationTurnPair, type ConversationPageRow,
@@ -1290,7 +1290,7 @@ export { memoryBytes } from './memory/note';
 
 export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note';
 
-// Zero-LLM transcript search over the canonical `messages` table.
+// Zero-LLM transcript search over the actor's conversation authority.
 // Backs the `memory` tool's `conversations` action on both backends.
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,
@@ -1342,7 +1342,6 @@ export {
   boundRunEventQuery,
   RUN_EVENT_LIMIT_DEFAULT,
   RUN_EVENT_LIMIT_MAX,
-  cacheHitRate,
   summarizeSteps,
   CACHE_HIT_EMA_ALPHA,
   SPEND_SOURCES,

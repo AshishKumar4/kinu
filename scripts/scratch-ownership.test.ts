@@ -12,7 +12,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { auditScratchOwnership, readScannableSources } from './scratch-ownership';
-import { SCRATCH_PREFIXES } from '@kinu.run/test-utils';
+import { SCRATCH_PREFIXES, SCRATCH_ROOT_PREFIX } from '@kinu.run/test-utils';
 
 /** One file, as the gate reads its corpus. */
 function audit(path: string, source: string) {
@@ -100,6 +100,17 @@ describe('the fixes are accepted', () => {
 
     expect(found.problems).toEqual([]);
   });
+
+  test('an asynchronous raw mint without cleanup is refused', () => {
+    const found = audit('packages/x/tests/a.test.ts', [
+      "import { mkdtemp } from 'node:fs/promises';",
+      "import { tmpdir } from 'node:os';",
+      "import { join } from 'node:path';",
+      "const dir = await mkdtemp(join(tmpdir(), 'kinu-thing-'));",
+    ].join('\n'));
+
+    expect(found.problems.map((p) => p.rule)).toEqual(['released']);
+  });
 });
 
 describe('what it must NOT fire on', () => {
@@ -170,12 +181,9 @@ describe('the tree it governs', () => {
 
   test('every prefix the tree mints is one preflight can see', () => {
     const audited = auditScratchOwnership(readScannableSources());
-    // The sibling above floors `files` and `mintingFiles`; this claim quantifies
-    // over `prefixes`, which nothing floored. An extractor that stopped finding
-    // mkdtemp prefixes would report an empty set, and "every prefix the tree
-    // mints is one preflight can see" would be true of nothing — the gate's whole
-    // subject silently gone while it printed ok.
-    expect(audited.prefixes.length).toBeGreaterThan(20);
+    // A shared namespace collapses per-fixture prefixes. Its declaration must
+    // still be measured; the red fixtures above separately cover raw prefixes.
+    expect(audited.prefixes).toContain(SCRATCH_ROOT_PREFIX);
 
     for (const prefix of audited.prefixes) {
       expect(SCRATCH_PREFIXES.some((known) => prefix.startsWith(known))).toBe(true);

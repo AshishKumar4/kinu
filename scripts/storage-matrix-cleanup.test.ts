@@ -1,6 +1,7 @@
+import { scratchDir } from '../packages/test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, writeFileSync } from 'node:fs';
+
 import { dirname } from 'node:path';
 import {
   checkCleanup, createManifest, loadManifest, manifestPath, reconcileCounters,
@@ -45,68 +46,56 @@ function cleanManifest() {
 
 describe('durable teardown manifest', () => {
   test('persists every resource before cleanup starts', () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const manifest = cleanManifest();
-      writeManifest(root, manifest);
-      expect(manifestPath(root, manifest.runId)).toContain('bench-artifacts/teardown/cleanup-test.json');
-      expect(loadManifest(root, manifest.runId)).toEqual(manifest);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const manifest = cleanManifest();
+    writeManifest(root, manifest);
+    expect(manifestPath(root, manifest.runId)).toContain('bench-artifacts/teardown/cleanup-test.json');
+    expect(loadManifest(root, manifest.runId)).toEqual(manifest);
   });
 
   test('a signal-interrupted replay resumes from its persisted completed prefix', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const manifest = createManifest('recover', [
-        { kind: 'worker', name: 'worker' },
-        { kind: 'r2-bucket', name: 'bucket' },
-      ]);
+    const manifest = createManifest('recover', [
+      { kind: 'worker', name: 'worker' },
+      { kind: 'r2-bucket', name: 'bucket' },
+    ]);
 
-      writeManifest(root, manifest);
-      let calls = 0;
+    writeManifest(root, manifest);
+    let calls = 0;
 
-      const first = await replayTeardown(root, manifest, async () => {
-        calls += 1;
+    const first = await replayTeardown(root, manifest, async () => {
+      calls += 1;
 
-        return calls === 1 ? { ok: true } : { ok: false, error: 'SIGTERM interrupted deletion' };
-      });
+      return calls === 1 ? { ok: true } : { ok: false, error: 'SIGTERM interrupted deletion' };
+    });
 
-      expect(first.failures).toHaveLength(1);
-      expect(loadManifest(root, 'recover')?.entries.map((entry) => entry.done)).toEqual([true, false]);
+    expect(first.failures).toHaveLength(1);
+    expect(loadManifest(root, 'recover')?.entries.map((entry) => entry.done)).toEqual([true, false]);
 
-      const resumed = loadManifest(root, 'recover')!;
-      const second = await replayTeardown(root, resumed, async () => ({ ok: true }));
-      expect(second.failures).toEqual([]);
-      expect(second.manifest.entries.every((entry) => entry.done)).toBe(true);
-      expect(second.manifest.entries[0]?.attempts).toBe(1);
-      expect(second.manifest.entries[1]?.attempts).toBe(2);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const resumed = loadManifest(root, 'recover')!;
+    const second = await replayTeardown(root, resumed, async () => ({ ok: true }));
+    expect(second.failures).toEqual([]);
+    expect(second.manifest.entries.every((entry) => entry.done)).toBe(true);
+    expect(second.manifest.entries[0]?.attempts).toBe(1);
+    expect(second.manifest.entries[1]?.attempts).toBe(2);
   });
 
   test('a completed replay is idempotent and executes nothing twice', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const manifest = cleanManifest();
-      writeManifest(root, manifest);
-      let calls = 0;
+    const manifest = cleanManifest();
+    writeManifest(root, manifest);
+    let calls = 0;
 
-      const replay = await replayTeardown(root, manifest, async () => {
-        calls += 1;
+    const replay = await replayTeardown(root, manifest, async () => {
+      calls += 1;
 
-        return { ok: true };
-      });
+      return { ok: true };
+    });
 
-      expect(replay.failures).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(replay.failures).toEqual([]);
   });
 });
 
@@ -132,162 +121,138 @@ function killedAfterDeploy(runId: string): TeardownManifest {
 
 describe('a fresh driver finishes what a killed one started', () => {
   test('an abandoned run is reported by name and every entry replayed', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      writeManifest(root, killedAfterDeploy('20260901010101'));
-      // The run doing the scanning. Its own manifest is unfinished by
-      // construction, and replaying it would delete what it is about to use.
-      writeManifest(root, killedAfterDeploy('20260901020202'));
+    writeManifest(root, killedAfterDeploy('20260901010101'));
+    // The run doing the scanning. Its own manifest is unfinished by
+    // construction, and replaying it would delete what it is about to use.
+    writeManifest(root, killedAfterDeploy('20260901020202'));
 
-      const deleted: string[] = [];
-      const reported: string[] = [];
+    const deleted: string[] = [];
+    const reported: string[] = [];
 
-      const recovered = await recoverAbandonedRuns(
-        root,
-        '20260901020202',
-        async (entry: TeardownEntry) => {
-          deleted.push(`${entry.kind}:${entry.name}`);
+    const recovered = await recoverAbandonedRuns(
+      root,
+      '20260901020202',
+      async (entry: TeardownEntry) => {
+        deleted.push(`${entry.kind}:${entry.name}`);
 
-          return { ok: true };
-        },
-        (line) => reported.push(line),
-      );
+        return { ok: true };
+      },
+      (line) => reported.push(line),
+    );
 
-      expect(recovered).toHaveLength(1);
-      expect(recovered[0]).toMatchObject({ runId: '20260901010101', unfinished: 5, replayed: true, failures: [] });
-      expect(deleted).toEqual([
-        'worker:kinu-devbox-bench-20260901010101-snapshot-chain',
-        'container-app:kinu-devbox-bench-20260901010101-snapshot-chain-boxchain',
-        'r2-bucket:kinu-devbox-bench-20260901010101-snapshot-chain',
-        'do-state:ab-snapshot-chain-20260901010101',
-        'local-path:bench-artifacts/config/20260901010101',
-      ]);
-      // REPORTED, not only swept: an operator reading the log learns which run
-      // leaked and what it held.
-      expect(reported.join('\n')).toContain('run 20260901010101');
-      expect(reported.join('\n')).toContain('left 5 resource(s) undeleted');
-      expect(reported.join('\n')).toContain('worker:kinu-devbox-bench-20260901010101-snapshot-chain');
-      expect(loadManifest(root, '20260901010101')?.entries.every((entry) => entry.done)).toBe(true);
-      // The scanning run's own manifest is untouched.
-      expect(loadManifest(root, '20260901020202')?.entries.some((entry) => entry.done)).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ runId: '20260901010101', unfinished: 5, replayed: true, failures: [] });
+    expect(deleted).toEqual([
+      'worker:kinu-devbox-bench-20260901010101-snapshot-chain',
+      'container-app:kinu-devbox-bench-20260901010101-snapshot-chain-boxchain',
+      'r2-bucket:kinu-devbox-bench-20260901010101-snapshot-chain',
+      'do-state:ab-snapshot-chain-20260901010101',
+      'local-path:bench-artifacts/config/20260901010101',
+    ]);
+    // REPORTED, not only swept: an operator reading the log learns which run
+    // leaked and what it held.
+    expect(reported.join('\n')).toContain('run 20260901010101');
+    expect(reported.join('\n')).toContain('left 5 resource(s) undeleted');
+    expect(reported.join('\n')).toContain('worker:kinu-devbox-bench-20260901010101-snapshot-chain');
+    expect(loadManifest(root, '20260901010101')?.entries.every((entry) => entry.done)).toBe(true);
+    // The scanning run's own manifest is untouched.
+    expect(loadManifest(root, '20260901020202')?.entries.some((entry) => entry.done)).toBe(false);
   });
 
   test('a run retained with --keep is reported and deliberately left alone', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const kept = killedAfterDeploy('20260901030303');
-      kept.kept = true;
-      writeManifest(root, kept);
+    const kept = killedAfterDeploy('20260901030303');
+    kept.kept = true;
+    writeManifest(root, kept);
 
-      const reported: string[] = [];
-      let calls = 0;
+    const reported: string[] = [];
+    let calls = 0;
 
-      const recovered = await recoverAbandonedRuns(root, 'other', async () => {
-        calls += 1;
+    const recovered = await recoverAbandonedRuns(root, 'other', async () => {
+      calls += 1;
 
-        return { ok: true };
-      }, (line) => reported.push(line));
+      return { ok: true };
+    }, (line) => reported.push(line));
 
-      expect(calls).toBe(0);
-      expect(recovered[0]).toMatchObject({ runId: '20260901030303', replayed: false });
-      expect(reported.join('\n')).toContain('retained on purpose (--keep)');
-      expect(loadManifest(root, '20260901030303')?.entries.every((entry) => !entry.done)).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(calls).toBe(0);
+    expect(recovered[0]).toMatchObject({ runId: '20260901030303', replayed: false });
+    expect(reported.join('\n')).toContain('retained on purpose (--keep)');
+    expect(loadManifest(root, '20260901030303')?.entries.every((entry) => !entry.done)).toBe(true);
   });
 
   test('a recovery interrupted again leaves strictly less work, and the next one finishes it', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      writeManifest(root, killedAfterDeploy('20260901040404'));
-      let calls = 0;
+    writeManifest(root, killedAfterDeploy('20260901040404'));
+    let calls = 0;
 
-      const first = await recoverAbandonedRuns(root, 'other', async () => {
-        calls += 1;
+    const first = await recoverAbandonedRuns(root, 'other', async () => {
+      calls += 1;
 
-        return calls <= 2 ? { ok: true } : { ok: false, error: 'SIGKILL' };
-      }, () => {});
+      return calls <= 2 ? { ok: true } : { ok: false, error: 'SIGKILL' };
+    }, () => {});
 
-      expect(first[0]?.failures).toHaveLength(3);
-      expect(loadManifest(root, '20260901040404')?.entries.map((entry) => entry.done))
-        .toEqual([true, true, false, false, false]);
+    expect(first[0]?.failures).toHaveLength(3);
+    expect(loadManifest(root, '20260901040404')?.entries.map((entry) => entry.done))
+      .toEqual([true, true, false, false, false]);
 
-      const replayed: string[] = [];
+    const replayed: string[] = [];
 
-      const second = await recoverAbandonedRuns(root, 'other', async (entry) => {
-        replayed.push(entry.name);
+    const second = await recoverAbandonedRuns(root, 'other', async (entry) => {
+      replayed.push(entry.name);
 
-        return { ok: true };
-      }, () => {});
+      return { ok: true };
+    }, () => {});
 
-      expect(second[0]?.failures).toEqual([]);
-      // The two already-deleted resources are NOT deleted a second time.
-      expect(replayed).toHaveLength(3);
-      expect(loadManifest(root, '20260901040404')?.entries.every((entry) => entry.done)).toBe(true);
+    expect(second[0]?.failures).toEqual([]);
+    // The two already-deleted resources are NOT deleted a second time.
+    expect(replayed).toHaveLength(3);
+    expect(loadManifest(root, '20260901040404')?.entries.every((entry) => entry.done)).toBe(true);
 
-      // And once everything is done the scan stops finding it at all.
-      expect(scanUnfinishedManifests(root, 'other').unfinished).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    // And once everything is done the scan stops finding it at all.
+    expect(scanUnfinishedManifests(root, 'other').unfinished).toEqual([]);
   });
 
   test('a manifest a kill truncated is reported rather than silently skipped', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      writeManifest(root, killedAfterDeploy('20260901050505'));
-      writeFileSync(manifestPath(root, '20260901060606'), '{"schema":"storage-matrix/tear');
+    writeManifest(root, killedAfterDeploy('20260901050505'));
+    writeFileSync(manifestPath(root, '20260901060606'), '{"schema":"storage-matrix/tear');
 
-      const reported: string[] = [];
+    const reported: string[] = [];
 
-      const recovered = await recoverAbandonedRuns(
-        root, 'other', async () => ({ ok: true }), (line) => reported.push(line),
-      );
+    const recovered = await recoverAbandonedRuns(
+      root, 'other', async () => ({ ok: true }), (line) => reported.push(line),
+    );
 
-      expect(reported.join('\n')).toContain('cannot be decoded');
-      expect(reported.join('\n')).toContain('20260901060606');
-      // The unreadable one does not stop the readable one being swept.
-      expect(recovered.map((run) => run.runId)).toEqual(['20260901050505']);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(reported.join('\n')).toContain('cannot be decoded');
+    expect(reported.join('\n')).toContain('20260901060606');
+    // The unreadable one does not stop the readable one being swept.
+    expect(recovered.map((run) => run.runId)).toEqual(['20260901050505']);
   });
 
   test('the manifest is written atomically, so a kill cannot truncate it', () => {
     // `writeFileSync` truncates then writes: a signal in between leaves JSON
     // that does not parse, which is worse than no manifest at all because the
     // resources are real and the only list of them is unreadable.
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const manifest = killedAfterDeploy('20260901070707');
-      writeManifest(root, manifest);
-      writeManifest(root, manifest);
-      const directory = dirname(manifestPath(root, manifest.runId));
+    const manifest = killedAfterDeploy('20260901070707');
+    writeManifest(root, manifest);
+    writeManifest(root, manifest);
+    const directory = dirname(manifestPath(root, manifest.runId));
 
-      expect(readdirSync(directory)).toEqual(['20260901070707.json']);
-      expect(loadManifest(root, manifest.runId)?.runId).toBe('20260901070707');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(readdirSync(directory)).toEqual(['20260901070707.json']);
+    expect(loadManifest(root, manifest.runId)?.runId).toBe('20260901070707');
   });
 
   test('a directory that never held a manifest scans clean instead of throwing', () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      expect(scanUnfinishedManifests(root, 'any')).toEqual({ unfinished: [], unreadable: [] });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    expect(scanUnfinishedManifests(root, 'any')).toEqual({ unfinished: [], unreadable: [] });
   });
 });
 
@@ -297,18 +262,14 @@ describe('cleanup C1-C7', () => {
     overrides: Partial<CleanupProbes>,
     configure?: (manifest: TeardownManifest) => void,
   ): Promise<void> {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const manifest = cleanManifest();
-      configure?.(manifest);
-      writeManifest(root, manifest);
-      const report = await checkCleanup(root, manifest, probes(overrides), R2_OP_VOCABULARY);
-      expect(report.passed).toBe(false);
-      expect(report.checks.find((row) => row.gate === expected)?.ok).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const manifest = cleanManifest();
+    configure?.(manifest);
+    writeManifest(root, manifest);
+    const report = await checkCleanup(root, manifest, probes(overrides), R2_OP_VOCABULARY);
+    expect(report.passed).toBe(false);
+    expect(report.checks.find((row) => row.gate === expected)?.ok).toBe(false);
   }
 
   test('C1 detects a surviving Worker', async () => {
@@ -347,17 +308,13 @@ describe('cleanup C1-C7', () => {
   });
 
   test('all seven checks pass only after the dedicated bucket is deleted and replay is empty', async () => {
-    const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+    const root = scratchDir("storage-matrix");
 
-    try {
-      const manifest = cleanManifest();
-      writeManifest(root, manifest);
-      const report = await checkCleanup(root, manifest, probes(), R2_OP_VOCABULARY);
-      expect(report.passed).toBe(true);
-      expect(report.checks.map((row) => row.ok)).toEqual([true, true, true, true, true, true, true]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const manifest = cleanManifest();
+    writeManifest(root, manifest);
+    const report = await checkCleanup(root, manifest, probes(), R2_OP_VOCABULARY);
+    expect(report.passed).toBe(true);
+    expect(report.checks.map((row) => row.ok)).toEqual([true, true, true, true, true, true, true]);
   });
 });
 

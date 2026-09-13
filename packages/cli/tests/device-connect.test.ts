@@ -7,8 +7,9 @@
 // answers the retired /pc/daemon.js route, with poison, so a connect that
 // fetches executable bytes shows up as poison on disk.
 // Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
@@ -44,12 +45,9 @@ const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE } a
 const REQUIRED_SIBLINGS = [...DAEMON_SOURCE.matchAll(/require\('\.\/([^']+)'\)/g)]
   .map((m) => m[1] ?? '').filter((n) => n !== '');
 
-const tempDirs: string[] = [];
-
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('test-project');
 
   return dir;
 }
@@ -65,7 +63,6 @@ afterEach(async () => {
 
   for (const proc of sleepers.splice(0)) proc.kill();
 
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
 });
 
@@ -168,8 +165,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 }
 
 function makeHome(config: JsonObject): string {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-device-'));
-  tempDirs.push(home);
+  const home = scratchDir('device');
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
 
   return home;
@@ -702,8 +698,7 @@ describe('device-connect install hardening', () => {
   test('starts the daemon on the running Bun when Node is absent from PATH', async () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    const pathWithoutNode = mkdtempSync(join(tmpdir(), 'kinu-no-node-'));
-    tempDirs.push(pathWithoutNode);
+    const pathWithoutNode = scratchDir('no-node');
 
     const out = await runScript(home, daemonRuntimeProbe(stub.origin), { PATH: pathWithoutNode });
 
@@ -721,8 +716,7 @@ describe('device-connect install hardening', () => {
     // consulted, and this test's stub records every invocation to prove it.
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
-    const stubDir = mkdtempSync(join(tmpdir(), 'kinu-stub-node-'));
-    tempDirs.push(stubDir);
+    const stubDir = scratchDir('stub-node');
     writeFileSync(join(stubDir, 'node'), [
       '#!/bin/sh',
       // The stub records the probe, then acts healthy for --version and

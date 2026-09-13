@@ -4,8 +4,9 @@
  * daemon's own and it unlinks it on exit, which is exactly what restart has to
  * sequence correctly.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { tolerate } from '@kinu.run/core/obs';
@@ -19,7 +20,7 @@ const homes: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
+  const dir = scratchDir('test-project');
   homes.push(dir);
 
   return dir;
@@ -30,12 +31,11 @@ afterEach(() => {
     const pid = readPid(home);
 
     if (pid !== null) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
-    rmSync(home, { recursive: true, force: true });
   }
 });
 
 function makeHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'kinu-daemon-'));
+  const home = scratchDir('daemon');
   homes.push(home);
 
   return home;

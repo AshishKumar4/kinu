@@ -255,6 +255,39 @@ Production deployment and browser receipts are retained in the machine-local rel
 | `feat/landing-liveapps` | `archive/landing-liveapps-20260908` | `9b12fdf4ee` |
 | `fix/landing-composition` | `archive/landing-composition-20260908` | `1bec158c5` |
 
+### The 2026-09-12 reconciliation
+
+Fifteen branches were reconciled against the integration tip by content, not
+by patch id, and none needed a tag. `main` at `d49410f01`; the doc's own
+blob test (below) was run on every candidate before its branch went.
+
+Landed by a different commit, so the tree already held the behaviour: the
+fork-receiver authority (`fork.ts:386-390`), the vendor-schema gate
+(`c00f8ff73`), the pane-store docs, the PostCSS scroll test, the Work-tab
+click, both `fix/capability-required-shape` commits by patch id,
+`integrate/2026-09-12-v2`, and the whole of
+`eval/trajectory-and-agent-benchmarks` (its pi comparator is byte-identical
+on the tip, its reasoning-effort and session-affinity fixes are present in
+evolved form, and its audit report was deleted on the branch itself). Their
+remaining novel blobs were intermediate revisions of files whose landed
+versions are on `main`.
+
+Rejected by a later decision: the two-browser-rows frame loop, which the
+inspector rewrite deletes.
+
+Merged now: `e611638b4` (address-length schema) as `f594a4f1d`, and
+`f429f7b0c` (the 2026-09-09 whole-delta publication cost) as `9d081df3c`,
+which also re-sources the amplification figures the report had withdrawn as
+unsourced.
+
+Kept: `feat/devbox-durability-next` at `f3a0fcf7f`, the home the decisive
+report names for the 2026-09-08 native lineage. Its six sibling branches held
+zero blobs that branch lacks. `bench/mmap-contract-cost` shared its tip.
+
+Seven worktrees went. Three held residue, saved as
+`~/kinu-wip/<worktree>-2026-09-12.patch` with untracked and ignored files
+beside it.
+
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none

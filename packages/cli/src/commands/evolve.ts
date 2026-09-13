@@ -181,7 +181,7 @@ function createEvolveSession(rt: AgentRuntime): SessionWriter {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       const content = msg.parts.map(p => p.text).join('');
       messages.push({ id: msg.id, parentId, role: msg.role, content });
-      void rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+      void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
                           VALUES (${actorId}, ${msg.id}, ${'evolve'}, ${parentId ?? null}, ${msg.role}, ${content})`;
     },
     getHistory(leafId?: string | null) {

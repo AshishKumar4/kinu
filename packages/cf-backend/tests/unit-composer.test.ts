@@ -110,8 +110,8 @@ describe('the composer under a partial failure', () => {
   });
 });
 
-describe('the mode caption', () => {
-  test('Auto and Plan say what each mode does until the mode has been switched once', () => {
+describe('the mode control', () => {
+  test('the composer renders no explanatory caption beside Auto and Plan', () => {
     const html = renderToStaticMarkup(createElement(Composer, {
       value: '',
       onValueChange: () => {},
@@ -123,7 +123,7 @@ describe('the mode caption', () => {
       mode: { value: 'build', onChange: () => {}, locked: false },
     }));
 
-    expect(html).toContain('Auto acts within the permissions you granted. Plan submits a plan for your review before anything is written.');
+    expect(html).not.toContain('Auto acts within');
   });
 });
 

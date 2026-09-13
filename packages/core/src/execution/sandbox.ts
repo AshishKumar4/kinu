@@ -286,6 +286,13 @@ export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): P
     } catch (err) {
       lastErr = err;
 
+      // A caller-side classified refusal is the VERDICT, not a transport
+      // symptom: `unavailable` says the environment is still coming, and its
+      // reason is free to carry the platform's own transient text — a marker
+      // string cannot promote it back into the retry loop, or a minutes-long
+      // restore would be asked three times and filed once, invisibly.
+      if (err instanceof KinuError && err.code === 'unavailable') throw err;
+
       if (!isSandboxTransientError(err instanceof Error ? err : String(err)) || i === attempts - 1) {
         throw err;
       }

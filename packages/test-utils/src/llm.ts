@@ -16,26 +16,28 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
   let i = 0;
   const prompts: string[] = [];
 
+  function nextResponse(prompt: string): string {
+    prompts.push(prompt);
+    const out = responses[i++];
+
+    if (out === undefined) {
+      throw new Error(
+        `ScriptedLLM out of responses (called ${i} times, only ${responses.length} scripted).`,
+      );
+    }
+
+    return out;
+  }
+
   return {
     prompts,
     get callCount() { return i; },
     async *stream(opts: { messages?: Array<{ content: string }>; system?: string }) {
       const prompt = (opts.messages ?? []).map(m => m.content).join('\n');
-      prompts.push(prompt);
-      const out = responses[i++] ?? '';
-      yield out;
+      yield nextResponse(prompt);
     },
     async complete(prompt: string): Promise<string> {
-      prompts.push(prompt);
-      const out = responses[i++];
-
-      if (out === undefined) {
-        throw new Error(
-          `ScriptedLLM out of responses (called ${i} times, only ${responses.length} scripted).`,
-        );
-      }
-
-      return out;
+      return nextResponse(prompt);
     },
   };
 }

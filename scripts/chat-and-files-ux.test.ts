@@ -54,8 +54,7 @@ interface TailFrame {
   readonly heightCostPx: number;
   /** The tail "Thinking" row, addressed by the live region it announces on. */
   readonly thinkingRows: number;
-  /** A shimmering label — the live reasoning block wears one. */
-  readonly shimmerLabels: number;
+  readonly reasoning: { viewportHeight: number; lineHeight: number; pulse: string; duration: string; textAnimation: string } | null;
   /** The animated label a call in flight carries on its own row. */
   readonly runningIndicators: number;
 }
@@ -90,6 +89,7 @@ interface RunNode {
 
 interface Observed {
   readonly tails: Record<string, TailFrame>;
+  readonly reducedMotionTails: Record<string, TailFrame>;
   readonly chat: Record<string, ChatRow>;
   readonly forkInterruptedAfterClick: ChatRow;
   /** The failed-turn card's headline, keyed by whether it is a replay. */
@@ -228,11 +228,21 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
         streaming.classList.add('p-streaming');
       }
 
+      const viewport = row.querySelector('[data-reasoning-viewport]');
+      const label = viewport?.previousElementSibling;
+      const labelStyle = label ? getComputedStyle(label) : null;
+
       measured[row.getAttribute('data-stream-id') ?? ''] = {
         caretWidth: last === null ? 'none' : getComputedStyle(last, '::after').width,
         heightCostPx,
         thinkingRows: row.querySelectorAll('[aria-live="polite"]').length,
-        shimmerLabels: row.querySelectorAll('.p-shimmer').length,
+        reasoning: viewport ? {
+          viewportHeight: viewport.getBoundingClientRect().height,
+          lineHeight: Number.parseFloat(getComputedStyle(viewport).lineHeight),
+          pulse: labelStyle?.animationName ?? 'none',
+          duration: labelStyle?.animationDuration ?? '0s',
+          textAnimation: getComputedStyle(viewport).animationName,
+        } : null,
         // Tool styling can change; the semantic state is the contract.
         runningIndicators: row.querySelectorAll('[data-tool-state="running"]').length,
       };
@@ -288,6 +298,8 @@ async function run(): Promise<Observed> {
     await stream.waitForSelector('[data-gallery-stream] .p-streaming');
     await stream.waitForSelector('[data-stream-id="st-tool"] [data-tool-state="running"]', { timeout: 20_000 });
     const tails = await readTails(stream);
+    await stream.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+    const reducedMotionTails = await readTails(stream);
     await stream.close();
 
     const chatPage = await browser.newPage();
@@ -351,12 +363,16 @@ async function run(): Promise<Observed> {
     await tools.waitForSelector('[data-tool-group]');
 
     const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
-      const rows = [...group.querySelectorAll<HTMLElement>('[data-tool-state]')];
+      const rows = [...document.querySelectorAll<HTMLElement>('[data-tool-state]')];
       const mutation = rows.find((row) => row.dataset.toolEffect === 'mutate');
-      const compact = rows.find((row) => row.dataset.toolEffect === 'observe');
+      const compact = rows.find((row) => row.dataset.toolEffect === 'read');
+      const standalone = rows.filter((row) => row.closest('[data-tool-group]') === null);
+
+      const foldedCount = [...document.querySelectorAll('[data-tool-group]')]
+        .reduce((count, block) => count + Number(block.getAttribute('data-tool-count')), 0);
 
       return {
-        total: Number(group.getAttribute('data-tool-count') ?? 0),
+        total: foldedCount + standalone.length,
         collapsedRows: rows.length,
         mutationRows: rows.filter((row) => row.dataset.toolEffect === 'mutate').length,
         compactHeight: Math.round(compact?.getBoundingClientRect().height ?? 0),
@@ -369,7 +385,7 @@ async function run(): Promise<Observed> {
 
     // The preview card, read while the group is still folded: the reader has
     // clicked nothing, and the app the turn started is on screen.
-    const previewFrameHandle = await tools.waitForSelector('[data-tool-group] iframe');
+    const previewFrameHandle = await tools.waitForSelector('iframe');
 
     if (previewFrameHandle === null) throw new Error('the collapsed run drew no preview frame');
     const previewDocument = await previewFrameHandle.contentFrame();
@@ -389,7 +405,7 @@ async function run(): Promise<Observed> {
     );
 
     const expandedRows = await tools.$$eval(
-      '[data-tool-group] [data-tool-state]',
+      '[data-tool-state]',
       (rows) => rows.length,
     );
 
@@ -599,7 +615,7 @@ async function run(): Promise<Observed> {
     await explore.close();
 
     return {
-      tails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
+      tails, reducedMotionTails, chat, forkInterruptedAfterClick, chatErrorHeadings, toolActivity,
       filesRoot, filesInMount, filesAfterUp, treeFileNames,
       filesMarkdownRendered, filesPreviewText, filesEditorSeedsFromTheFile,
       filesAfterRename, filesAfterDelete, filesFiltered, filesOfflineRow,
@@ -671,7 +687,15 @@ describe('the streaming turn, as a browser lays it out', () => {
 
   test('streaming reasoning marks its own block live instead of adding a row', () => {
     expect(observed.tails[REASONING]!.thinkingRows).toBe(0);
-    expect(observed.tails[REASONING]!.shimmerLabels).toBeGreaterThan(0);
+    const reasoning = observed.tails[REASONING]!.reasoning;
+
+    expect(reasoning).not.toBeNull();
+    expect(reasoning!.viewportHeight).toBeGreaterThan(0);
+    expect(reasoning!.viewportHeight).toBeLessThanOrEqual(reasoning!.lineHeight * 4);
+    expect(reasoning!.pulse).toBe('pulse');
+    expect(reasoning!.duration).toBe('1.6s');
+    expect(reasoning!.textAnimation).toBe('none');
+    expect(observed.reducedMotionTails[REASONING]!.reasoning!.pulse).toBe('none');
   });
 
   test('a turn actively writing text is never also announced as thinking', () => {
@@ -694,10 +718,7 @@ describe('large tool runs, as the activity timeline draws them', () => {
   });
 
   test('the app a mid-run call started is on screen before any click', () => {
-    // The fold's budget is spent on failures and changes, and this call is
-    // neither — so before this rule it was one of the rows "Show 46 more
-    // calls" hid, and the running app the turn produced was reachable only by
-    // expanding a 54-row list.
+    // The app stays visible before the reader opens the folded reads.
     const { collapsedPreview } = observed.toolActivity;
     expect(collapsedPreview.folded).toBe('false');
     expect(collapsedPreview.text).toBe('the running app');
@@ -1593,6 +1614,107 @@ describe('independent settings and quality reads publish independently', () => {
         () => document.querySelector('[data-quality-branch="alignment"]')?.textContent?.includes('K_align') === true,
         { timeout: 10_000 },
       );
+      await page.close();
+    });
+  }, 240_000);
+});
+
+describe('the supervise view, live', () => {
+  const headingTexts = (page: Page) => page.$$eval('h2', (els) => els.map((el) => el.textContent));
+
+  test('a change landing after the page opened earns the Evolution section on the next revalidation', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=supervisefresh`, { waitUntil: 'networkidle0' });
+
+      // The settled fresh view: Automations and Run history mount, and the
+      // empty changes-only digest mounts no Evolution heading at all.
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Run history'),
+        { timeout: 20_000 },
+      );
+      expect(await headingTexts(page)).toEqual(['Automations', 'Run history']);
+
+      // A change lands. The page polls the changelog on the live-data cadence
+      // (5s), so the heading must appear with no reload and no click.
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:supervise-evolve')));
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Evolution'),
+        { timeout: 20_000 },
+      );
+      expect(await page.$eval('body', (body) => body.textContent ?? ''))
+        .toContain('I improved how I work');
+
+      // The next digest read throws once: the card must report the failure
+      // WITHOUT surrendering the entries it already showed — same policy the
+      // jobs read follows.
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:supervise-evolution-fail')));
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Could not load the evolution digest') === true,
+        { timeout: 20_000 },
+      );
+      expect(await page.$eval('body', (body) => body.textContent ?? ''))
+        .toContain('I improved how I work');
+
+      // That failure's own Retry — not the jobs one above it — recovers the
+      // read, and the notice leaves.
+      const retriedEvolution = await page.evaluate(() => {
+        const failure = [...document.querySelectorAll('div')]
+          .find((el) => el.querySelector('button') !== null
+            && el.textContent?.includes('Could not load the evolution digest') === true);
+
+        const retry = failure?.querySelector('button');
+
+        retry?.click();
+
+        return retry !== undefined && retry !== null;
+      });
+
+      expect(retriedEvolution).toBe(true);
+
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Could not load the evolution digest') === false,
+        { timeout: 20_000 },
+      );
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a failed background-jobs read reports itself and its retry republishes the rows', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=supervisefresh`, { waitUntil: 'networkidle0' });
+
+      // The scoped failure renders in the Automations section — never as
+      // silence and never as an empty jobs list.
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Could not load the background jobs') === true,
+        { timeout: 20_000 },
+      );
+
+      // Heal and click the failure's own Retry in one turn of the page, so the
+      // cadence poll cannot claim the retry's recovery first.
+      const retried = await page.evaluate(() => {
+        window.dispatchEvent(new Event('gallery:supervise-jobs-heal'));
+
+        const retry = [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.includes('Retry'));
+
+        retry?.click();
+
+        return retry !== undefined;
+      });
+
+      expect(retried).toBe(true);
+
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Pick a migration-backfill approach') === true,
+        { timeout: 20_000 },
+      );
+      expect(await page.$eval('body', (body) => body.textContent ?? ''))
+        .not.toContain('Could not load the background jobs');
       await page.close();
     });
   }, 240_000);

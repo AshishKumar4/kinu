@@ -18,8 +18,10 @@ import type { JsonObject } from '../utils/json';
  *  generation won the queue slot; 'failed' = the platform enqueue threw. */
 export type SignalUndeliveredReason = 'preempted' | 'failed';
 
-/** What actually happened to a delivered signal. */
-export type SignalOutcome = 'mid-turn' | 'queued' | 'undelivered';
+/** What actually happened to a delivered signal. 'yielded': the turn the
+ *  signal was offered reached its slot after an operator message was already
+ *  admitted — the offer was withdrawn and that message is the turn now. */
+export type SignalOutcome = 'mid-turn' | 'queued' | 'undelivered' | 'yielded';
 
 /** One asynchronous nudge at the agent: an event-hub drain, a settled
  *  background job, an overflow retry, a take pick, an MCP task, the turn's own
@@ -44,6 +46,12 @@ export interface AgentSignal {
   /** This signal carries a trusted turn mode and must not be spliced into a
    * differently-modeled live turn. Queue it as its own turn instead. */
   readonly requiresOwnTurn?: boolean | undefined;
+  /**
+   * The turn is a move offered to an agent nobody has spoken to, not an event
+   * it must hear. Set by the producer; forwarded to the host, which checks it
+   * inside the turn's slot and yields to an admitted operator message.
+   */
+  readonly yieldsToUserMessage?: boolean | undefined;
   /**
    * How strongly the producer asks this to be weighed, when it has an opinion.
    *

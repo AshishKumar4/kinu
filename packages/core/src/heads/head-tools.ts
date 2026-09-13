@@ -116,7 +116,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           merge_strategy: { type: 'string', enum: ['synthesize', 'best_of', 'consensus'] },
         },
       }),
-      execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
+      execute: async ({ rationale, heads, merge_strategy }, options): Promise<string> => {
         // Only the caller-requested deadline can still be spent here; depth was
         // settled when this tool was built. Recorded, not just returned: an
         // unrecorded refusal leaves no trace in the journal, so how often heads
@@ -125,7 +125,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
 
         if (exhausted.exhausted) {
           const failure = new KinuError('denied', 'Cannot split: budget exhausted (' + exhausted.reason + ').');
-          capture.recordToolCall('split_subheads', { rationale, heads }, failure.message, failedToolOutcome({ cause: failure }));
+          capture.recordToolCall('split_subheads', { rationale, heads }, failure.message, failedToolOutcome({ cause: failure }), options.toolCallId);
           throw failure;
         }
 
@@ -135,7 +135,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           });
 
           for (const id of result.childHeadIds) capture.childHeadIds.push(id);
-          capture.recordToolCall('split_subheads', { rationale, heads }, 'merged ' + result.headCount, { success: true });
+          capture.recordToolCall('split_subheads', { rationale, heads }, 'merged ' + result.headCount, { success: true }, options.toolCallId);
           const lines: string[] = [result.narrative];
 
           if (result.decisions.length) {
@@ -158,7 +158,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
 
           return lines.join('\n');
         } catch (err) {
-          capture.recordToolCall('split_subheads', { rationale, heads }, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }));
+          capture.recordToolCall('split_subheads', { rationale, heads }, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }), options.toolCallId);
           throw err;
         }
       },

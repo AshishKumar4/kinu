@@ -1,20 +1,15 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { scratchDir } from '../../test-utils/src/scratch';
+import { realpathSync, writeFileSync, mkdirSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { agentWorkspaceKey, groupAgentWorkspaces, reconcileAgentRefs, type ListedAgent } from '../src/agent-list';
 import * as v from 'valibot';
 
 import { createCLIRuntime } from '@kinu.run/cli-backend';
 
-const tempDirs: string[] = [];
-
 const repoRoot = resolve(__dirname, '../../..');
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe('CLI cloud agent registry sync', () => {
   test('merges local and server workspaces while dropping stale cloud refs', () => {
@@ -82,8 +77,7 @@ describe('CLI cloud agent registry sync', () => {
   });
 
   test('uses the cloud agent list as the source of truth for cloud refs', () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
-    tempDirs.push(home);
+    const home = scratchDir('agent-list');
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'config.json'), JSON.stringify({
       origin: 'https://kinu.test',
@@ -157,9 +151,8 @@ describe('CLI cloud agent registry sync', () => {
   });
 
   test('a cloud workspace whose name a placed local ref holds leaves the placement alone and reports the clash', () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
-    const project = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-project-')));
-    tempDirs.push(home, project);
+    const home = scratchDir('agent-list');
+    const project = realpathSync(scratchDir('project'));
     mkdirSync(join(home, 'shopbot'), { recursive: true });
     // `listLocalRefsAllProjects` only counts a ref whose database exists.
     writeFileSync(join(home, 'shopbot', 'agent.db'), '');
@@ -289,10 +282,9 @@ describe('virtual workspace grouping', () => {
 
 describe('the sidebar roster for one directory', () => {
   test('lists this project, unplaced agents, and cloud refs — never another project, and never merged duplicates', () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-agent-list-'));
-    const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-proj-')));
-    const otherDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-agent-other-')));
-    tempDirs.push(home, projectDir, otherDir);
+    const home = scratchDir('agent-list');
+    const projectDir = realpathSync(scratchDir('agent-proj'));
+    const otherDir = realpathSync(scratchDir('agent-other'));
     const stamp = '2026-06-08T00:00:00.000Z';
 
     const localRef = (name: string, cwd?: string, workspaceId?: string) => ({
@@ -384,9 +376,8 @@ describe('the sidebar roster for one directory', () => {
 
 describe('the local roster is one function', () => {
   test('transcripts with no agent lists the set list shows locally', () => {
-    const home = mkdtempSync(join(tmpdir(), 'kinu-roster-home-'));
-    const projectDir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-roster-proj-')));
-    tempDirs.push(home, projectDir);
+    const home = scratchDir('roster-home');
+    const projectDir = realpathSync(scratchDir('roster-proj'));
 
     for (const name of ['alpha', 'beta', 'gamma']) {
       mkdirSync(join(home, name));

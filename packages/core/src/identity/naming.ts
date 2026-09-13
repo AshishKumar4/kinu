@@ -172,7 +172,7 @@ export function resolveWorkspaceTitle(opts: {
  */
 const WORKSPACE_ADDRESS_MAX = 31;
 
-const WORKSPACE_ADDRESS = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
+const WorkspaceAddressSchema = v.pipe(v.string(), v.maxLength(WORKSPACE_ADDRESS_MAX), v.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/));
 
 /**
  * Why a name cannot be a workspace address, or null when it can. One grammar
@@ -182,7 +182,7 @@ const WORKSPACE_ADDRESS = /^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/;
  * folds case, so an address is lowercase or it is ambiguous.
  */
 export function workspaceAddressRefusal(name: string): string | null {
-  if (WORKSPACE_ADDRESS.test(name)) return null;
+  if (v.is(WorkspaceAddressSchema, name)) return null;
 
   return `the workspace name "${name}" cannot be a preview hostname label`
     + ` (a label holds lowercase letters, digits and hyphens, at most ${WORKSPACE_ADDRESS_MAX} characters, and carries no case)`;

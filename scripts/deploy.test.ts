@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { statSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { beforeAll, describe, expect, test } from "bun:test";
+import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { scratchDir } from "@kinu.run/test-utils";
 import {
   EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions,
   deployWaves,
@@ -13,8 +14,6 @@ import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
-
-const temporaryDirectories: string[] = [];
 
 /** The bench gate's argv AS THE FIXTURE REPO EXPANDS IT: the first seven words
  *  are what bash resolves the two globs to inside `runDeploy`'s fixture, and the
@@ -134,12 +133,6 @@ const POST_DEPLOY_GATES = [
   "bun run gate:trajectory",
 ] as const;
 
-afterEach(() => {
-  for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 function executable(path: string, source: string): void {
   writeFileSync(path, source);
   chmodSync(path, 0o755);
@@ -223,8 +216,7 @@ function runDeploy({
   option,
   ambientPhase = "",
 }: DeployRun = {}) {
-  const fixture = mkdtempSync(join(tmpdir(), "kinu-deploy-gate-"));
-  temporaryDirectories.push(fixture);
+  const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
   const buildEnvironmentLog = join(fixture, "build-environment.log");
   const phaseLog = join(fixture, "infra-phase.log");
@@ -280,7 +272,7 @@ exit 87
       KINU_DEPLOY_KILL: killGate,
       // Always explicit. The gate runner creates its log directory under TMPDIR,
       // and one test points it somewhere that cannot exist.
-      TMPDIR: temporaryRoot ?? tmpdir(),
+      TMPDIR: temporaryRoot ?? fixture,
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
@@ -1058,9 +1050,10 @@ describe("CLI distribution artifacts", () => {
   // Cloudflare's static-asset limit, per file, on both plans.
   const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 
-  function buildDist(): string {
-    const directory = mkdtempSync(join(tmpdir(), "kinu-cli-dist-test-"));
-    temporaryDirectories.push(directory);
+  function buildDist() {
+    const directory = scratchDir("cli-dist-test");
+    const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
+    const before = { bytes: readFileSync(manifest, "utf8"), mtimeMs: statSync(manifest).mtimeMs };
 
     const build = Bun.spawnSync(
       ["bash", join(REPO_ROOT, "scripts", "build-cli-dist.sh"), directory],
@@ -1069,8 +1062,12 @@ describe("CLI distribution artifacts", () => {
 
     expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
 
-    return directory;
+    return { directory, before };
   }
+
+  let distribution: ReturnType<typeof buildDist>;
+
+  beforeAll(() => { distribution = buildDist(); }, 300_000);
 
   function members(archive: string): Set<string> {
     const decoder = new TextDecoder();
@@ -1088,8 +1085,7 @@ describe("CLI distribution artifacts", () => {
     // bundle-time define now, so the manifest's bytes AND mtime survive a
     // build — a restore-on-exit would keep the bytes and move the mtime.
     const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
-    const before = { bytes: readFileSync(manifest, "utf8"), mtimeMs: statSync(manifest).mtimeMs };
-    const directory = buildDist();
+    const { directory, before } = distribution;
     expect(readFileSync(manifest, "utf8")).toBe(before.bytes);
     expect(statSync(manifest).mtimeMs).toBe(before.mtimeMs);
     // And the stamp still lands where it belongs: in what ships.
@@ -1099,7 +1095,7 @@ describe("CLI distribution artifacts", () => {
   }, 300_000);
 
   test("publishes one artifact per platform, plus the runtime they share", () => {
-    const directory = buildDist();
+    const { directory } = distribution;
 
     for (const platform of PLATFORMS) {
       const artifact = join(directory, `kinu-cli-${platform}.tar.gz`);
@@ -1135,7 +1131,7 @@ describe("CLI distribution artifacts", () => {
   }, 300_000);
 
   test("every artifact carries a matching checksum and fits the asset limit", () => {
-    const directory = buildDist();
+    const { directory } = distribution;
 
     for (const name of [...PLATFORMS.map((p) => `kinu-cli-${p}.tar.gz`), CPYTHON]) {
       const artifact = join(directory, name);
@@ -1153,7 +1149,7 @@ describe("CLI distribution artifacts", () => {
   // failure the old source archive kept having — a fresh machine installing
   // cleanly and then dying on `Cannot find module` — has no path left.
   test("the unpacked artifacts launch and report the build's stamped version", () => {
-    const directory = buildDist();
+    const { directory } = distribution;
     const decoder = new TextDecoder();
     const host = `${process.platform}-${process.arch}`;
     const installed = join(directory, "installed");
@@ -1200,13 +1196,5 @@ describe("CLI distribution artifacts", () => {
 
     expect(help.exitCode, launchFailure(help)).toBe(0);
     expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
-  }, 300_000);
-
-  // The build must not leave the tree it stamped for the bundle behind.
-  test("the version stamp does not survive into the working tree", () => {
-    const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
-    const before = readFileSync(manifest, "utf8");
-    buildDist();
-    expect(readFileSync(manifest, "utf8")).toBe(before);
   }, 300_000);
 });

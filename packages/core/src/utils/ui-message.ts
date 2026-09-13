@@ -4,7 +4,7 @@
  *
  * `assistant_messages.content` holds a serialized UI message, not text, and two
  * places need the flattened form: the transcript read model, and the fork write
- * — which reconstructs the plain `messages` mirror from the rich rows instead of
+ * — which reconstructs the plain `actor_messages` mirror from the rich rows instead of
  * carrying the same conversation across an RPC twice. Lives here rather than in
  * either of them because `read-models/status.ts` already imports
  * `identity/fork.ts`, so the projection cannot be owned by either without a
@@ -22,7 +22,7 @@
  *
  * The provenance is stated at the write, in the order the fallbacks degrade:
  * the author stamp the enqueue seam puts on every programmatic row (in the
- * serialized message on the rich table, in the `messages` mirror's metadata
+ * serialized message on the rich table, in the `actor_messages` mirror's metadata
  * column), then the `kinuEvent` name, then the row id —
  * `BackendHost.enqueueTurn` derives a programmatic turn's message id from
  * {@link programmaticMessageId}, which is durable on both backends and
@@ -153,7 +153,7 @@ export interface StoredRowProjection {
 
 /** A stored row's plain text and the provenance metadata beside it, from ONE
  *  parse. `assistant_messages` rows hold the serialized UI message and
- *  `messages` rows hold plain text; both reach this, so text that is not JSON
+ *  `actor_messages` rows hold plain text; both reach this, so text that is not JSON
  *  is a value here and nothing else is. */
 export function uiMessageRow(content: string): StoredRowProjection {
   const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
