@@ -59,6 +59,7 @@ import {
   LEAD_DELIVERY,
   LEAD_DIRECT_EDIT,
   sectionRenderer,
+  promptFamilyDelta,
   type PromptSectionOverrides,
   type RenderSection,
 } from './prompting/section-templates';
@@ -145,8 +146,7 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
   const family = surface.model.family;
 
   return render(OPERATING_GUIDANCE, {
-    kimi: family === 'kimi',
-    gpt: family === 'gpt',
+    familyDelta: promptFamilyDelta(OPERATING_GUIDANCE.id, family),
     planMode: surface.workMode === 'plan',
     planSubmission: surface.planSubmissionAvailable,
   });
@@ -445,9 +445,9 @@ export function buildSystemPromptSync(
     renderToolsSection(surface, render),
     renderAgentStateSection(surface, render),
     ...(lead ? [
-      render(LEAD_RESPONSIBILITY, {}),
-      render(LEAD_BRIEF, {}),
-      render(LEAD_PARALLEL, {}),
+      render(LEAD_RESPONSIBILITY, { hasTaskHire: surface.temporaryAsk }),
+      render(LEAD_BRIEF, { familyDelta: promptFamilyDelta(LEAD_BRIEF.id, surface.model.family) }),
+      render(LEAD_PARALLEL, { hasTaskHire: surface.temporaryAsk }),
       render(LEAD_REVIEW, {}),
       render(LEAD_INTERRUPTION, {}),
       render(LEAD_DELIVERY, {}),

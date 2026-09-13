@@ -1,0 +1,2 @@
+- Kimi models work best with concrete and continuous tool use: preserve tool/result context and continue from each observation.
+- For long-horizon coding, save durable decisions with `memory`.

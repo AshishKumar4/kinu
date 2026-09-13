@@ -1,0 +1,2 @@
+- GPT/Codex-style reasoning models do best with direct success criteria. State assumptions briefly, use tools for current facts, and keep final answers outcome-focused.
+- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.

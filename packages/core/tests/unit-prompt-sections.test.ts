@@ -178,7 +178,8 @@ describe('the prompt stays inside its byte budget', () => {
     // mission lost its heads/subordinates clause.
     // 2026-09-13: seven root-only fusion rule families and the task worker
     // contract. Exact measured bytes, no headroom; GEPA stays at 4,800/section.
-    const MATRIX_CEILING_BYTES = 225_915;
+    // Family deltas, the Gemini surface and lifetime gating: exact measured bytes.
+    const MATRIX_CEILING_BYTES = 229_498;
 
     const total = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
