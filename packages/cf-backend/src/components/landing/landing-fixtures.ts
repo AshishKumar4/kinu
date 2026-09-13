@@ -62,16 +62,8 @@ export const LANDING_PROFILE: UserProfile = {
 
 /* ── The checkout workspace: a Build turn, mid-fix ─────────────────────── */
 
-// The frame's disclosure, shared with the persists card below it: one string,
-// two places, no drift.
-export const CHECKOUT_FRAME_CAPTION = 'Example UI and sample data, not a live workspace.';
-
-// The tool the run kept, as the changelog records it. Purpose words match the
-// gallery's coupon_replay description, so the card states the thing verbatim.
-export const CHECKOUT_RETAINED_TOOL = {
-  name: 'coupon_replay',
-  purpose: 'Replay a checkout against a coupon code and diff the response.',
-} as const;
+// The frame's one honest line about what it is not.
+export const CHECKOUT_FRAME_CAPTION = 'Sample workspace';
 
 export const CHECKOUT_MESSAGES: UIMessage[] = [
   {
