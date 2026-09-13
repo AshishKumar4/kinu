@@ -256,8 +256,14 @@ describe('db.* in the local codemode sandbox', () => {
 
       // And the second actor cannot retire the shared physical table while the
       // first holds rows in it.
-      const refused = await s.run(`return await db.dropTable('slots');`, scout);
-      expect(refused.result).toMatchObject({ reason: 'denied' });
+      const refusal = {
+        success: false, reason: 'denied',
+        error: `table \`slots\` was declared by another agent (${s.actors.main.actorId}); delete your own rows instead`,
+      };
+
+      await expect(s.run(`return await db.dropTable('slots');`, scout)).rejects.toEqual(expect.objectContaining({
+        outcome: { ...refusal, failures: [{ ...refusal, tool: 'db', action: 'dropTable' }] },
+      }));
       expect(s.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_slots`[0]?.n).toBe(2);
     }
     finally { s.close(); }
@@ -267,7 +273,12 @@ describe('db.* in the local codemode sandbox', () => {
     const s = sandbox();
 
     try {
-      await s.run(`
+      const refusal = {
+        success: false, reason: 'bad_input', failedIndex: 1,
+        error: 'batch operation 1 was refused, so none of the batch landed: db.batch operation 1 (insert events): UNIQUE constraint failed: app_events.actor_id, app_events.k',
+      };
+
+      await expect(s.run(`
         // Two writes that land and one batch that does not
         await db.createTable({ name: 'events', scope: 'actor', columns: [{ name: 'k', type: 'text', primaryKey: true }] });
         await db.insert('events', [{ k: 'a' }]);
@@ -276,7 +287,11 @@ describe('db.* in the local codemode sandbox', () => {
           { op: 'insert', table: 'events', rows: [{ k: 'b' }] },
           { op: 'insert', table: 'events', rows: [{ k: 'b' }] },
         ]);
-      `);
+      `)).rejects.toEqual(expect.objectContaining({
+        outcome: { ...refusal, failures: [{ ...refusal, tool: 'db', action: 'batch' }] },
+      }));
+
+      expect(s.sql<{ n: number }>`SELECT COUNT(*) AS n FROM app_events`[0]?.n).toBe(0);
 
       const recorded = new RunEventRecorder(s.sql, s.actors.main)
         .read(WORKSPACE_RUN_ID, { limit: 50 })
