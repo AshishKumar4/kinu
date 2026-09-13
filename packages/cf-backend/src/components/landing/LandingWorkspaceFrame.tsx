@@ -40,11 +40,12 @@ import {
   SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
   checkoutWorkFixture, planRpc, superviseRpc,
 } from './landing-fixtures';
+import { MOVIE_CUES, MOVIE_END, type LandingMovieHandle } from '@kinu.run/core';
 import {
-  CURSOR_ENTER_AT, MOVIE_CUES, MOVIE_END,
+  CURSOR_ENTER_AT,
   composerTextAt, cueCountAt, cursorAt, discreteAt,
   MOVIE_PLAN,
-  type LandingMovieHandle, type MovieTarget,
+  type MovieTarget,
 } from './landing-movie-timeline';
 import { SlateDashboard } from './SlateDashboard';
 

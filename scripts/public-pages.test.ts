@@ -4,25 +4,11 @@ import type { Browser, Page } from 'puppeteer';
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
 
-// The walkthrough's deterministic drive, declared here rather than imported:
-// the timeline module lives in component-land (its story quotes the product's
-// fixtures), and importing it would drag the product's DOM components under
-// this gate's own JSX runtime. The shape below is kept identical to
-// `LandingMovieHandle` in `landing-movie-timeline.ts`.
-interface LandingMovieHandle {
-  readonly duration: number;
-  readonly cues: Record<string, number>;
-  seek(at: number): Promise<void>;
-  play(): void;
-  pause(): void;
-  state(): { t: number; playing: boolean; settled: boolean };
-}
-
-declare global {
-  interface Window {
-    __kinuLandingMovie?: LandingMovieHandle;
-  }
-}
+// The shared contract is dependency-free: this gate reads the handle shape
+// and its `declare global` without typechecking the timeline's
+// component-land imports, and the drive cannot drift from the product's own
+// declaration.
+import type { LandingMovieHandle } from '@kinu.run/core';
 
 const PHONE = { width: 390, height: 844 } as const;
 
@@ -327,9 +313,12 @@ beforeAll(async () => {
       await page.waitForFunction(
         () => document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
       );
-      // The plan frame is the walkthrough movie, and every beat below is a DOM
-      // or computed-style read off the seek the handle settles first.
-      const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues);
+
+      // Only the cue table crosses the boundary — the handle's methods are
+      // not serializable, so asking for it would read a lie.
+      const cues = await page.evaluate(
+        (): LandingMovieHandle['cues'] | undefined => window.__kinuLandingMovie?.cues,
+      );
 
       if (cues === undefined) throw new Error('the walkthrough publishes no cues');
 
@@ -423,6 +412,27 @@ beforeAll(async () => {
       ), { timeout: 15_000 });
 
       const cleared = { status: null, plansList: false };
+
+      // The clear check parked the story at t0 with no plan under review;
+      // the interactions read still asserts the approved one, so the pane
+      // has to re-decide it: seek the review back in, then a real click on
+      // the product's Approve runs decidePlanReview again.
+      await seek(cues.planReady + 200);
+      await page.waitForSelector(
+        '[data-landing-frame="plan"] [data-plan-decisions] button:not([disabled])',
+        { timeout: 15_000 },
+      );
+      await page.evaluate(() => {
+        const stage = document.querySelector('[data-landing-frame="plan"]');
+
+        const approve = [...(stage?.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button') ?? [])]
+          .find((button) => !button.disabled && /approve/i.test(button.textContent ?? ''));
+
+        approve?.click();
+      });
+      await page.waitForFunction(() => (
+        document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
+      ), { timeout: 15_000 });
 
       facts.movie = {
         typing: typing.length > 0,

@@ -13,7 +13,8 @@
  *   bun scripts/plan-demo-film.ts --out /tmp/demo.gif
  *
  * Frames are captured as PNGs and muxed to GIF with the system ffmpeg's
- * palettegen/paletteuse two-pass — GitHub's README renderer animates GIF
+ * palettegen/paletteuse two-pass (requires ffmpeg + ffprobe on PATH — a host
+ * prerequisite, nothing this script installs) — GitHub's README renderer animates GIF
  * everywhere, and the palette pass keeps the dark theme's ink clean under
  * 256 colours. Frame durations ride in the concat manifest, so a held beat
  * costs one screenshot, not one per tick.
@@ -36,27 +37,30 @@ import * as v from 'valibot';
 import { withGallery } from './gallery-harness';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 
-// The walkthrough's deterministic drive, declared here rather than imported,
-// for the reason `public-pages.test.ts` gives: the timeline module quotes the
-// product's fixtures, and importing it would drag the product's DOM
-// components under the scripts program's own JSX runtime. The shape is kept
-// identical to `LandingMovieHandle` in `landing-movie-timeline.ts`.
-interface LandingMovieHandle {
-  readonly duration: number;
-  readonly cues: Record<string, number>;
-  seek(at: number): Promise<void>;
-  play(): void;
-  pause(): void;
-  state(): { t: number; playing: boolean; settled: boolean };
-}
+// The shared contract is dependency-free: this program reads the cue table
+// and handle shape straight from it without typechecking the timeline's
+// component-land imports, and the drive cannot drift from the product's own
+// declaration. Its `declare global` covers `window.__kinuLandingMovie` here.
+import type { LandingMovieHandle, MovieCue } from '@kinu.run/core';
 
 declare global {
   interface Window {
-    __kinuLandingMovie?: LandingMovieHandle;
     /** Installed by this script's evaluateOnNewDocument virtual clock. */
     __setDemoNow?: (value: number) => void;
   }
 }
+
+/** What a seeker can ask the live movie for: the cue table and the duration.
+ *  The handle's methods do not cross `page.evaluate` — Puppeteer returns a
+ *  serialized copy, so reading the handle itself would type functions the
+ *  copy does not carry. */
+const movieStats = (page: Page): Promise<Pick<LandingMovieHandle, 'cues' | 'duration'> | undefined> => (
+  page.evaluate((): Pick<LandingMovieHandle, 'cues' | 'duration'> | undefined => {
+    const movie = window.__kinuLandingMovie;
+
+    return movie === undefined ? undefined : { cues: movie.cues, duration: movie.duration };
+  })
+);
 
 const REPO = resolve(import.meta.dir, '..');
 
@@ -76,22 +80,32 @@ export interface CaptureFrame {
   readonly holdMs: number;
 }
 
-/** `CURSOR_TRAVEL_MS` in `landing-movie-timeline.ts`: the cursor dwells on a
- *  target and travels for this long, arriving exactly at the next cue. */
-const CURSOR_TRAVEL_MS = 700;
+/** The recorder's own cadence — densify the window before each published cue
+ *  so the frames bracket whatever the movie does there. It deliberately does
+ *  NOT read the timeline's cursor timing: capture policy stays independent of
+ *  private animation constants, and the cue table is the contract. */
+const APPROACH_WINDOW_MS = 800;
 
-/** The cues the cursor arrives at, by name: `submitted` (the composer),
- *  `approve` (the click) and `finalText` (the slate tab). The cursor enters at
- *  `CURSOR_ENTER_AT`, which the handle does not publish, but the base cadence
- *  photographs it where it sits before it moves. */
-const CURSOR_ARRIVALS = ['submitted', 'approve', 'finalText'] as const;
+const APPROACH_STEP_MS = 160;
+
+/** The cues whose approach is sampled densely: the click and the two beats
+ *  the cursor travels to. */
+const CURSOR_ARRIVALS: readonly MovieCue[] = ['submitted', 'approve', 'finalText'];
+
+/** One evidence still: `at` an absolute stamp or `cue` a beat name resolved
+ *  off the live movie's table, `offsetMs` shifting either (negative for the
+ *  approach). */
+export type EvidenceStamp = { readonly name: string; readonly offsetMs?: number }
+  & ({ readonly at: number } | { readonly cue: MovieCue });
 
 /** The beats the recorder saves stills of next to the GIF, so a review can
- *  see what the animation actually says without decoding it: `at` an absolute
- *  stamp, or `cue` the named cue to resolve from the live movie. */
-export const EVIDENCE_STAMPS: readonly { name: string; at?: number; cue?: string }[] = [
+ *  see what the animation actually says without decoding it. */
+export const EVIDENCE_STAMPS: readonly EvidenceStamp[] = [
   { name: 'first', at: 0 },
   { name: 'review', cue: 'planReady' },
+  // The cursor mid-approach with the approve row scrolled into view — proof
+  // the click lands on a control the reader can see.
+  { name: 'preapprove', cue: 'approve', offsetMs: -400 },
   { name: 'approve', cue: 'approve' },
 ];
 
@@ -102,7 +116,7 @@ export const EVIDENCE_STAMPS: readonly { name: string; at?: number; cue?: string
  * clarity budget, not a size one. The last frame holds the settled state
  * before the loop restarts.
  */
-export function capturePlan(cues: Record<string, number>, end: number): readonly CaptureFrame[] {
+export function capturePlan(cues: LandingMovieHandle['cues'], end: number): readonly CaptureFrame[] {
   const stamps = new Set<number>();
 
   for (let at = 0; at < end; at += 560) stamps.add(at);
@@ -114,7 +128,7 @@ export function capturePlan(cues: Record<string, number>, end: number): readonly
 
     if (arrival === undefined) throw new Error(`the movie publishes no "${name}" cue`);
 
-    for (let at = Math.max(0, arrival - CURSOR_TRAVEL_MS); at <= arrival; at += 160) stamps.add(at);
+    for (let at = Math.max(0, arrival - APPROACH_WINDOW_MS); at <= arrival; at += APPROACH_STEP_MS) stamps.add(at);
   }
 
   const approve = cues['approve'];
@@ -149,14 +163,17 @@ async function openMovie(page: Page, origin: string): Promise<StageRegion> {
     { name: 'prefers-color-scheme', value: THEME },
     { name: 'prefers-reduced-motion', value: 'no-preference' },
   ]);
-  await page.evaluateOnNewDocument((theme: string) => {
-    // The landing reads its mode from localStorage before first paint.
+  await page.evaluateOnNewDocument((theme: string, epoch: number) => {
+    // The landing reads its mode from localStorage before first paint, and
+    // the fixtures stamp themselves off Date.now() at module evaluation —
+    // so the virtual epoch starts NOW, not at the first seek: a fixture's
+    // createdAt and a seek's stamp must share one clock or an approved plan
+    // reads older than the pending one.
     localStorage.setItem('theme', theme);
-    const real = Date.now.bind(Date);
-    let virtual: number | null = null;
+    let virtual = epoch;
     Object.defineProperty(window, '__setDemoNow', { value: (at: number) => { virtual = at; } });
-    Date.now = () => virtual ?? real();
-  }, THEME);
+    Date.now = () => virtual;
+  }, THEME, VIRTUAL_EPOCH);
   await page.goto(`${origin}/landing.html`, { waitUntil: 'networkidle0' });
   await page.waitForFunction(
     () => window.__kinuLandingMovie !== undefined && document.fonts.status === 'loaded',
@@ -190,10 +207,10 @@ async function openMovie(page: Page, origin: string): Promise<StageRegion> {
  *  which the plan pane has to be scrolled so the click lands on something
  *  the reader can see.
  */
-function approachingApprove(at: number, cues: Record<string, number>): boolean {
+function approachingApprove(at: number, cues: LandingMovieHandle['cues']): boolean {
   const approve = cues['approve'];
 
-  return approve !== undefined && at >= approve - CURSOR_TRAVEL_MS && at <= approve + CURSOR_TRAVEL_MS;
+  return approve !== undefined && at >= approve - APPROACH_WINDOW_MS && at <= approve + APPROACH_WINDOW_MS;
 }
 
 /** Seek the live timeline, then — during the approve approach — scroll the
@@ -210,7 +227,12 @@ async function seekTo(page: Page, at: number, revealApprove: boolean): Promise<v
     if (reveal) {
       const stage = document.querySelector(selector);
       const decisions = stage?.querySelector('[data-plan-decisions]');
-      const pane = decisions?.closest('[data-plan-scroll]');
+      // The scrollable ancestor of the decisions row is the Work pane's own
+      // overflow container — found, not named, because the row is a sibling
+      // of the document scroller inside PlanReviewView, not its child.
+      let pane: HTMLElement | null = decisions instanceof HTMLElement ? decisions.parentElement : null;
+
+      while (pane !== null && !/auto|scroll/.test(getComputedStyle(pane).overflowY)) pane = pane.parentElement;
 
       if (decisions instanceof HTMLElement && pane instanceof HTMLElement) {
         const paneRect = pane.getBoundingClientRect();
@@ -238,7 +260,7 @@ async function seekTo(page: Page, at: number, revealApprove: boolean): Promise<v
 
 /** A timeline stamp, absolute or the name of the cue to resolve off the live
  *  movie's published table — a name follows the timeline when beats move. */
-export type CueStamp = { readonly at: number } | { readonly cue: string };
+export type CueStamp = { readonly at: number } | { readonly cue: MovieCue };
 
 /** Photograph the whole stage once at the given stamp — one real frame of
  *  the real DOM, in the README's theme. The recorder saves the
@@ -251,7 +273,11 @@ export async function captureCueFrame(
   stamp: CueStamp,
 ): Promise<{ png: Uint8Array; phase: string; stage: StageRegion }> {
   const stageBox = await openMovie(page, origin);
-  const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues ?? {});
+  const movie = await movieStats(page);
+
+  if (movie === undefined) throw new Error('the landing movie handle went away after load');
+
+  const cues = movie.cues;
   const at = 'at' in stamp ? stamp.at : cues[stamp.cue];
 
   if (at === undefined) {
@@ -269,7 +295,9 @@ export async function captureCueFrame(
   return { png: new Uint8Array(png), phase, stage: stageBox };
 }
 
-/** One distinct frame of the manifest, and how long it is held. */
+/** One distinct frame of the manifest — named by basename, since the
+ *  manifest lives in the frames directory itself and relative names never
+ *  need quoting — and how long it is held. */
 export interface ManifestEntry {
   readonly file: string;
   holdMs: number;
@@ -285,13 +313,9 @@ export async function captureFrames(
 ): Promise<{ entries: readonly ManifestEntry[]; stage: StageRegion }> {
   const stageBox = await openMovie(page, origin);
 
-  const handle = await page.evaluate(() => {
-    const movie = window.__kinuLandingMovie;
+  const handle = await movieStats(page);
 
-    return movie === undefined ? null : { cues: movie.cues, duration: movie.duration };
-  });
-
-  if (handle === null) throw new Error('the landing movie handle went away after load');
+  if (handle === undefined) throw new Error('the landing movie handle went away after load');
 
   const plan = capturePlan(handle.cues, handle.duration);
   const entries: ManifestEntry[] = [];
@@ -310,8 +334,8 @@ export async function captureFrames(
       continue;
     }
 
-    const file = join(framesDir, `frame-${String(entries.length).padStart(3, '0')}.png`);
-    writeFileSync(file, shot);
+    const file = `frame-${String(entries.length).padStart(3, '0')}.png`;
+    writeFileSync(join(framesDir, file), shot);
     entries.push({ file, holdMs: step.holdMs });
     previous = bytes;
   }
@@ -345,28 +369,54 @@ export function muxGif(framesDir: string, manifestPath: string, out: string): vo
   execFileSync('ffmpeg', [
     '-y', '-v', 'error',
     '-f', 'concat', '-safe', '0', '-i', manifestPath,
-    '-vf', 'palettegen=stats_mode=full',
+    '-vf', 'palettegen=stats_mode=full:reserve_transparent=0',
     palette,
   ]);
   execFileSync('ffmpeg', [
     '-y', '-v', 'error',
     '-f', 'concat', '-safe', '0', '-i', manifestPath,
     '-i', palette,
+    // Every frame paints the whole canvas with no transparency: offsetting
+    // would crop a frame's rectangle and transdiff would mark unchanged
+    // pixels transparent — both make a frame depend on the one beneath it,
+    // and the film's no-smear guarantee would no longer be self-evident.
+    '-gifflags', '0',
     '-lavfi', 'paletteuse=dither=bayer:bayer_scale=4',
     out,
   ]);
 }
 
-// ffprobe's JSON prints its numbers as strings ("duration": "15.400000"), so
-// the schema accepts both spellings and the reads coerce.
+// ffprobe's JSON prints most numbers as strings ("duration": "15.400000")
+// and answers "N/A" for the ones it cannot read — so every field is taken as
+// string-or-number and each read is finite-checked: a parse that returns
+// NaN/Infinity would pass a width assertion onto a broken file.
 const ProbeOutputSchema = v.object({
   streams: v.array(v.object({
-    width: v.number(),
-    height: v.number(),
+    width: v.union([v.number(), v.string()]),
+    height: v.union([v.number(), v.string()]),
     nb_read_frames: v.union([v.number(), v.string()]),
     duration: v.union([v.number(), v.string()]),
   })),
 });
+
+/** Strictly-positive integer, or throws — the GIF's geometry and frame count
+ *  must be real before a caller can trust them. */
+function positiveInt(value: number, field: string, out: string): number {
+  if (!Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`ffprobe's ${field} for ${out} is ${String(value)}, not a positive integer`);
+  }
+
+  return value;
+}
+
+/** Finite and non-negative, or throws — durations may be 0, never NaN/N/A. */
+function finiteSeconds(value: number, field: string, out: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`ffprobe's ${field} for ${out} is ${String(value)}, not a finite duration`);
+  }
+
+  return value;
+}
 
 export interface GifFacts {
   readonly width: number;
@@ -392,11 +442,6 @@ export function probeGif(out: string): GifFacts {
   ]).toString();
 
   const probe = v.parse(ProbeOutputSchema, JSON.parse(raw));
-
-  if (probe.streams.length === 0) {
-    throw new Error(`ffprobe found no video stream in ${out}`);
-  }
-
   const stream = probe.streams[0];
 
   if (stream === undefined) throw new Error(`ffprobe found no video stream in ${out}`);
@@ -409,17 +454,14 @@ export function probeGif(out: string): GifFacts {
     out,
   ]).toString();
 
-  const packetDurations = packetsRaw.split('\n').filter((line) => line.length > 0).map(Number);
-
-  if (packetDurations.some(Number.isNaN)) {
-    throw new Error(`ffprobe's packet durations for ${out} did not parse`);
-  }
+  const packetDurations = packetsRaw.split('\n').filter((line) => line.length > 0)
+    .map((line, index) => finiteSeconds(Number(line), `packet ${String(index)} duration`, out));
 
   return {
-    width: stream.width,
-    height: stream.height,
-    frames: Number(stream.nb_read_frames),
-    durationS: Number(stream.duration),
+    width: positiveInt(Number(stream.width), 'width', out),
+    height: positiveInt(Number(stream.height), 'height', out),
+    frames: positiveInt(Number(stream.nb_read_frames), 'frame count', out),
+    durationS: finiteSeconds(Number(stream.duration), 'duration', out),
     packetDurations,
   };
 }
@@ -457,12 +499,19 @@ export async function filmMovie(
   }
 
   if (evidenceDir !== undefined) {
-    // The three moments a reviewer asks for: the opening state, the plan
-    // awaiting its decision, and the cursor on Approve.
-    for (const { name, at, cue } of EVIDENCE_STAMPS) {
-      const stamp: CueStamp = at !== undefined ? { at } : { cue: cue ?? '' };
-      const { png } = await captureCueFrame(page, origin, stamp);
-      writeFileSync(join(evidenceDir, `kinu-plan-demo-${name}.png`), png);
+    // The four moments a reviewer asks for: the opening state, the plan
+    // awaiting its decision, the cursor on approach, and the click itself.
+    const movie = await movieStats(page);
+
+    if (movie === undefined) throw new Error('the landing movie handle went away after load');
+
+    for (const stamp of EVIDENCE_STAMPS) {
+      const target = 'at' in stamp ? stamp.at : movie.cues[stamp.cue];
+
+      if (target === undefined) throw new Error(`the movie publishes no "${'cue' in stamp ? stamp.cue : String(stamp.at)}" cue`);
+
+      const { png } = await captureCueFrame(page, origin, { at: target + (stamp.offsetMs ?? 0) });
+      writeFileSync(join(evidenceDir, `kinu-plan-demo-${stamp.name}.png`), png);
     }
   }
 

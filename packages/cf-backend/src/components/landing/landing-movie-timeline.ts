@@ -20,6 +20,7 @@
 import type { UIMessage } from 'ai';
 
 import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/core';
+import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import { PLAN_FIXTURE, SLATE_PREVIEW_URL, SLATE_SUMMARY } from './landing-fixtures';
 
 /** The surfaces the walkthrough ever selects: the Work tab, then the slate it
@@ -36,35 +37,6 @@ export type MovieSurface = 'Work' | `slate:${string}`;
  *  reason: one literal, and the `MovieSurface` assignment above is the trip
  *  wire if it ever drifts. */
 const SLATE_PREFIX = 'slate:';
-
-/** Named beats, in absolute movie milliseconds. Order is the story. Spacing
- *  follows the deleted demo's `DEMO_CUES` calibration (`CURSOR_ENTER_AT` kept). */
-export const MOVIE_CUES = {
-  typeStart: 300,
-  sent: 2_600,
-  reasoning: 3_000,
-  readStart: 3_400,
-  readDone: 4_200,
-  searchStart: 4_400,
-  searchDone: 5_200,
-  submitted: 5_600,
-  planReady: 6_200,
-  approve: 8_600,
-  approvedText: 9_200,
-  manifestStart: 9_600,
-  manifestDone: 10_200,
-  serverStart: 10_400,
-  serverDone: 11_200,
-  clientStart: 11_400,
-  clientDone: 12_200,
-  previewStart: 12_400,
-  previewDone: 13_000,
-  slateOpen: 13_400,
-  finalText: 13_800,
-  end: 15_400,
-} as const;
-
-export const MOVIE_END = MOVIE_CUES.end;
 
 /** Everything the cursor can point at. Resolved to pixels by the frame. */
 export type MovieTarget = 'cursor-origin' | 'composer' | 'approve' | 'slate-tab';
@@ -339,25 +311,4 @@ export function discreteAt(t: number): MovieDiscrete {
       || (t >= MOVIE_CUES.approvedText && t < MOVIE_CUES.finalText),
     settled: t >= MOVIE_END,
   };
-}
-
-/** The movie's deterministic drive, installed on `window` by the plan frame.
- *  The public-page tests drive the SAME timeline through it — never a second
- *  copy of the story. */
-export interface LandingMovieHandle {
-  readonly duration: number;
-  readonly cues: typeof MOVIE_CUES;
-  /** Jump the timeline. Resolves once the beat's DOM is settled — the plan
-   *  chunk mounted, the approve click decided where the beat expects it — so
-   *  a caller can assert immediately. */
-  seek(at: number): Promise<void>;
-  play(): void;
-  pause(): void;
-  state(): { t: number; playing: boolean; settled: boolean };
-}
-
-declare global {
-  interface Window {
-    __kinuLandingMovie?: LandingMovieHandle;
-  }
 }

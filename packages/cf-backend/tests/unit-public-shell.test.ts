@@ -30,8 +30,9 @@ import {
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from '@kinu.run/core';
+import { MOVIE_CUES, MOVIE_END } from '@kinu.run/core';
 import {
-  CURSOR_ENTER_AT, MOVIE_CUES, MOVIE_END,
+  CURSOR_ENTER_AT,
   composerTextAt, cueCountAt, cursorAt, discreteAt,
 } from '../src/components/landing/landing-movie-timeline';
 
@@ -404,107 +405,286 @@ describe('the mark', () => {
 });
 
 /**
- * The README opens on the bug-fix film.
+ * The README opens on the planning-walkthrough film.
  *
- * An animated WebP paints frame over frame, so its failure mode is a leak: a
- * frame that alpha-blends onto the canvas leaves every earlier state showing
- * through, which is how an earlier landing film shipped rendering the chat, the
- * approval card and the tree all at once. Two properties rule that out and both
- * are asserted here. The base frame paints the whole canvas, and every frame
- * OVERWRITES its rectangle rather than blending into it, so no earlier pixel can
- * survive under a later one. The third assertion is layout: the declared width
- * and height are the canvas's own, so the page reserves the space before the
- * bytes arrive and nothing below the film moves when it loads.
+ * A GIF paints frame over frame, so its failure mode is a leak: a frame that
+ * restores-to-previous, offsets its rectangle, or marks pixels transparent
+ * lets earlier states show through — the same smear an earlier landing film
+ * shipped when the chat, the approval card and the tree rendered all at
+ * once. The invariant asserted here is stronger: every frame paints the
+ * whole canvas with no transparency, so no frame depends on any other. The
+ * final assertion is layout: the declared width and height are the canvas's
+ * own, so the page reserves the space before the bytes arrive and nothing
+ * below the film moves when it loads.
+ *
+ * `readFilm` validates framing and metadata only — never pixels; ffprobe's
+ * independent decode in `plan-demo-film.ts` remains the content evidence.
  */
 describe('the README demo film', () => {
-  const FILM = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-bugfix-demo.webp'));
+  const FILM = readFileSync(resolve(import.meta.dir, '../../../docs/assets/kinu-plan-demo.gif'));
   const README = readFileSync(resolve(import.meta.dir, '../../../README.md'), 'utf8');
 
   interface Frame {
     readonly x: number; readonly y: number;
     readonly width: number; readonly height: number;
-    /** False when the frame overwrites its rectangle, which is what we require. */
-    readonly blends: boolean;
+    /** Disposal 3 (restore-to-previous) or a transparent flag would let an
+     *  earlier frame bleed into this one; the film must carry neither. */
+    readonly restores: boolean;
+    readonly transparent: boolean;
   }
 
   interface Film {
     readonly width: number; readonly height: number;
-    /** 0 is the WebP spelling of "loop forever". */
-    readonly loops: number;
-    readonly animated: boolean;
+    /** The NETSCAPE2.0 loop count, 0 spelling "loop forever". */
+    readonly loops: number | null;
     readonly frames: readonly Frame[];
   }
 
-  /** WebP writes its geometry as little-endian 24-bit fields. */
-  function u24(buffer: Buffer, at: number): number {
-    return buffer[at]! | (buffer[at + 1]! << 8) | (buffer[at + 2]! << 16);
-  }
-
-  function readFilm(webp: Buffer): Film {
-    let width = 0, height = 0, loops = -1, animated = false;
-    const frames: Frame[] = [];
-
-    for (let at = 12; at + 8 <= webp.byteLength;) {
-      const tag = webp.subarray(at, at + 4).toString();
-      const size = webp.readUInt32LE(at + 4);
-      const body = webp.subarray(at + 8, at + 8 + size);
-
-      if (tag === 'VP8X') { width = u24(body, 4) + 1; height = u24(body, 7) + 1; }
-
-      if (tag === 'ANIM') { animated = true; loops = body.readUInt16LE(4); }
-
-      if (tag === 'ANMF') {
-        frames.push({
-          // The frame origin is stored halved, so the encoder can only place a
-          // frame on an even pixel.
-          x: u24(body, 0) * 2, y: u24(body, 3) * 2,
-          width: u24(body, 6) + 1, height: u24(body, 9) + 1,
-          // Flags bit 1: clear means alpha-blend onto the canvas, set means
-          // overwrite it.
-          blends: (body[15]! & 0x02) === 0,
-        });
-      }
-
-      at += 8 + size + (size & 1);
+  /** A bounded byte read — `Buffer[at]` returns undefined past the end and
+   *  undefined arithmetic can loop a sub-block skip forever. */
+  function byteAt(gif: Buffer, at: number, what: string): number {
+    if (at < 0 || at >= gif.byteLength) {
+      throw new Error(`the film ends mid-${what} at ${String(at)}`);
     }
 
-    return { width, height, loops, animated, frames };
+    return gif.readUInt8(at);
+  }
+
+  interface TakenBlock { readonly body: Buffer; readonly next: number }
+
+  /** A bounded slice of `size` bytes starting at `at`, advancing past it. */
+  function takeBlock(gif: Buffer, at: number, size: number, what: string): TakenBlock {
+    if (at + size > gif.byteLength) {
+      throw new Error(`the film ends mid-${what} at ${String(at)}`);
+    }
+
+    return { body: gif.subarray(at, at + size), next: at + size };
+  }
+
+  /** Walks the GIF block stream: header and logical screen descriptor, then
+   *  image descriptors and extensions until the 0x3b trailer. Every offset
+   *  comes from the file's own length fields and every read is bounded, so a
+   *  malformed film throws promptly instead of faking a pass or hanging. */
+  function readFilm(gif: Buffer): Film {
+    if (gif.byteLength < 13 || gif.subarray(0, 6).toString() !== 'GIF89a') {
+      throw new Error('not a GIF89a film');
+    }
+
+    const width = gif.readUInt16LE(6);
+    const height = gif.readUInt16LE(8);
+
+    if (width <= 0 || height <= 0) {
+      throw new Error(`the film declares a ${String(width)}x${String(height)} canvas`);
+    }
+
+    const packed = gif.readUInt8(10);
+    const gctSize = (packed & 0x80) !== 0 ? 3 * (2 ** ((packed & 7) + 1)) : 0;
+
+    if (13 + gctSize > gif.byteLength) throw new Error('the film ends mid-global colour table');
+
+    let at = 13 + gctSize;
+    let loops: number | null = null;
+    const frames: Frame[] = [];
+    // The graphic-control extension carries the NEXT image's disposal and
+    // transparency, so it is staged between descriptors.
+    let gce = { restores: false, transparent: false };
+
+    const skipSubBlocks = (what: string): void => {
+      for (;;) {
+        const size = byteAt(gif, at, what);
+
+        at += 1;
+
+        if (size === 0) return;
+        at = takeBlock(gif, at, size, what).next;
+      }
+    };
+
+    for (;;) {
+      const tag = byteAt(gif, at, 'block stream');
+
+      if (tag === 0x3b) {
+        at += 1;
+
+        return { width, height, loops, frames };
+      }
+
+      if (tag === 0x2c) {
+        const descriptor = takeBlock(gif, at + 1, 9, 'image descriptor').body;
+        const localPacked = descriptor.readUInt8(8);
+
+        frames.push({
+          x: descriptor.readUInt16LE(0), y: descriptor.readUInt16LE(2),
+          width: descriptor.readUInt16LE(4), height: descriptor.readUInt16LE(6),
+          ...gce,
+        });
+        gce = { restores: false, transparent: false };
+        at += 10;
+
+        const lctSize = (localPacked & 0x80) !== 0 ? 3 * (2 ** ((localPacked & 7) + 1)) : 0;
+
+        at = takeBlock(gif, at, lctSize, 'local colour table').next;
+        at = takeBlock(gif, at, 1, 'LZW minimum code size').next;
+        skipSubBlocks('image data');
+      } else if (tag === 0x21) {
+        const label = byteAt(gif, at + 1, 'extension label');
+
+        at += 2;
+
+        if (label === 0xf9) {
+          const size = byteAt(gif, at, 'graphic-control extension');
+
+          if (size !== 4) {
+            throw new Error(`graphic-control extension declares ${String(size)} bytes, not 4`);
+          }
+
+          const body = takeBlock(gif, at + 1, 4, 'graphic-control extension').body;
+          const packedGce = body.readUInt8(0);
+
+          gce = {
+            restores: ((packedGce >> 2) & 0x07) === 3,
+            transparent: (packedGce & 0x01) === 1,
+          };
+          at += 5;
+
+          if (byteAt(gif, at, 'graphic-control terminator') !== 0) {
+            throw new Error('graphic-control extension is not zero-terminated');
+          }
+
+          at += 1;
+        } else if (label === 0xff) {
+          const size = byteAt(gif, at, 'application extension');
+          const app = takeBlock(gif, at + 1, size, 'application extension');
+
+          at = app.next;
+
+          // NETSCAPE2.0's first sub-block is {1, lo, hi} — the loop count.
+          if (size === 11 && app.body.toString() === 'NETSCAPE2.0'
+            && byteAt(gif, at, 'loop sub-block') === 3) {
+            const loopBlock = takeBlock(gif, at + 1, 3, 'loop sub-block');
+
+            if (loopBlock.body.readUInt8(0) === 1) {
+              loops = loopBlock.body.readUInt16LE(1);
+            }
+
+            at = loopBlock.next;
+          }
+
+          skipSubBlocks('application extension');
+        } else {
+          skipSubBlocks('extension');
+        }
+      } else {
+        throw new Error(`unparseable GIF block 0x${tag.toString(16)} at ${String(at)}`);
+      }
+    }
+  }
+
+  /** The self-contained-frame invariant as named reasons — the same check
+   *  the shipped film and the negative fixtures are held to. */
+  function selfContained(film: Film): string[] {
+    const problems: string[] = [];
+    const [base] = film.frames;
+
+    if (base === undefined
+      || base.x !== 0 || base.y !== 0 || base.width !== film.width || base.height !== film.height) {
+      problems.push('the first frame must paint the whole canvas, or frame one shows through');
+    }
+
+    if (film.frames.some((frame) => frame.restores)) {
+      problems.push('restore-to-previous frames composite every earlier state into the current one');
+    }
+
+    if (film.frames.some((frame) => frame.transparent)) {
+      problems.push('transparent pixels let the frame beneath bleed through');
+    }
+
+    if (film.frames.some((f) => f.x !== 0 || f.y !== 0 || f.width !== film.width || f.height !== film.height)) {
+      problems.push('a cropped or offset frame depends on the one beneath it');
+    }
+
+    return problems;
   }
 
   const film = readFilm(FILM);
 
-  test('the film is an animated WebP that loops forever', () => {
-    expect(FILM.subarray(0, 4).toString(), 'no RIFF header').toBe('RIFF');
-    expect(FILM.subarray(8, 12).toString(), 'not WebP').toBe('WEBP');
-    expect(film.animated, 'the film carries no animation chunk').toBeTrue();
+  test('the film is an animated GIF that loops forever', () => {
     expect(film.frames.length, 'a film needs more than one frame').toBeGreaterThan(1);
     expect(film.loops, 'the film stops instead of looping').toBe(0);
-    expect(FILM.byteLength, 'the README film exceeds 2.5 MB').toBeLessThan(2_500_000);
+    // Full opaque frames pay more than transdiff's differencing — 5 MB is
+    // still the heaviest asset on the README by an order of magnitude.
+    expect(FILM.byteLength, 'the README film exceeds 5 MB').toBeLessThan(5_000_000);
   });
 
-  test('no frame can smear the one before it', () => {
-    const base = film.frames[0]!;
-    expect(
-      { x: base.x, y: base.y, width: base.width, height: base.height },
-      'the first frame must paint the whole canvas, or frame one shows through',
-    ).toEqual({ x: 0, y: 0, width: film.width, height: film.height });
-
-    const blending = film.frames.filter((frame) => frame.blends).length;
-    expect(blending, 'frames that alpha-blend composite every earlier state into the current one').toBe(0);
-
-    const escaping = film.frames.filter((f) => f.x + f.width > film.width || f.y + f.height > film.height);
-    expect(escaping, 'a frame paints outside the canvas').toBeEmpty();
+  test('every frame paints the whole canvas with no transparency', () => {
+    expect(selfContained(film)).toEqual([]);
   });
 
   test('the README reserves the film layout and shows it before the install steps', () => {
     expect(README).toContain(
-      `src="docs/assets/kinu-bugfix-demo.webp" width="${String(film.width)}" height="${String(film.height)}">`,
+      `src="docs/assets/kinu-plan-demo.gif" width="${String(film.width)}" height="${String(film.height)}">`,
     );
-    expect(README).toMatch(/<img alt="[^"]+" src="docs\/assets\/kinu-bugfix-demo\.webp"/);
-    // The install steps live under "Ways to use it" since the flagship
+    expect(README).toMatch(/<img alt="[^"]+" src="docs\/assets\/kinu-plan-demo\.gif"/);
+    // The install steps live under "Using it" since the flagship
     // restructure; the invariant is unchanged — the film shows first.
-    expect(README.indexOf('kinu-bugfix-demo.webp'))
-      .toBeLessThan(README.indexOf('## Ways to use it'));
+    expect(README.indexOf('kinu-plan-demo.gif'))
+      .toBeLessThan(README.indexOf('## Using it'));
+  });
+
+  /** A minimal well-formed GIF89a: 2x2 canvas, global palette of 2, then the
+   *  one-frame image stream the caller composes around. */
+  function fixtureGif(frame: { gce?: { transparent?: boolean; disposal?: number }; x?: number; y?: number; w?: number; h?: number }): Buffer {
+    const head = Buffer.from([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+      0x02, 0x00, 0x02, 0x00, // 2x2 canvas
+      0x80, 0x00, 0x00, // GCT flag, no sort, 2 colours
+      0x00, 0x00, 0x00, 0xff, 0xff, 0xff, // palette
+    ]);
+
+    const gce = frame.gce === undefined ? Buffer.alloc(0) : Buffer.from([
+      0x21, 0xf9, 0x04,
+      ((frame.gce.disposal ?? 0) << 2) | (frame.gce.transparent === true ? 1 : 0),
+      0x0a, 0x00, // 10cs delay
+      0x00, // transparent index
+      0x00,
+    ]);
+
+    const image = Buffer.from([
+      0x2c,
+      frame.x ?? 0, 0x00, frame.y ?? 0, 0x00, // left, top
+      frame.w ?? 2, 0x00, frame.h ?? 2, 0x00, // width, height
+      0x00, // no local table
+      0x02, 0x02, 0x44, 0x01, 0x00, // LZW stream
+    ]);
+
+    return Buffer.concat([head, gce, image, Buffer.from([0x3b])]);
+  }
+
+  test('the parser throws promptly on truncated, untrailered, or malformed input', () => {
+    const good = fixtureGif({});
+    const truncated = good.subarray(0, good.byteLength - 4); // mid image data
+    const untrailered = good.subarray(0, good.byteLength - 1); // no 0x3b
+    // GCE size byte sits at offset 21 in a fixture that carries one.
+    const badGce = Buffer.from(fixtureGif({ gce: {} }));
+    badGce[21] = 0x05;
+
+    expect(() => readFilm(good), 'a well-formed fixture must parse').not.toThrow();
+    expect(() => readFilm(truncated), 'a truncated sub-block must throw, not hang').toThrow('ends mid-');
+    expect(() => readFilm(untrailered), 'a missing trailer must throw').toThrow('mid-block stream');
+    expect(() => readFilm(badGce), 'a malformed GCE must throw').toThrow('graphic-control');
+  });
+
+  test('the self-contained invariant fails transparency at frame 0 and a cropped frame', () => {
+    const transparentFirst = readFilm(fixtureGif({ gce: { transparent: true } }));
+    expect(selfContained(transparentFirst)).toEqual([
+      'transparent pixels let the frame beneath bleed through',
+    ]);
+
+    const cropped = readFilm(fixtureGif({ x: 1, y: 0, w: 1, h: 2 }));
+    expect(selfContained(cropped)).toEqual([
+      'the first frame must paint the whole canvas, or frame one shows through',
+      'a cropped or offset frame depends on the one beneath it',
+    ]);
   });
 });
 
