@@ -1,5 +1,5 @@
 {
-  "measured": "69cae24ac: 990 test files, 890 runnable suites, 12060 tests, 33 runners, 61 non-public product members",
+  "measured": "7509d5eb1: 998 test files, 897 runnable suites, 12148 tests, 33 runners, 61 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -15,10 +15,6 @@
     },
     {
       "key": "mirror :: packages/cf-backend/tests/unit-durable-terminal.test.ts :: (file scope) :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/cf-backend/tests/unit-feedback-png.test.ts :: (file scope) :: mirrored constant",
       "count": 1
     },
     {
@@ -807,10 +803,6 @@
     },
     {
       "key": "source_text :: scripts/secret-scan.test.ts :: the current scanner source has no detector-shaped literal of its own :: reads a source file",
-      "count": 1
-    },
-    {
-      "key": "tautology_suspect :: packages/cf-backend/tests/unit-analytics-plane.test.ts :: the digest is stable, distinguishing, and empty for an absent identifier :: expected side computed by the code under test",
       "count": 1
     },
     {
