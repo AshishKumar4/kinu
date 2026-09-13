@@ -7,7 +7,8 @@
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { formatExecResult, type CommandResult } from '../src/execution/exec-result';
+import { answeredRefusal, formatExecResult, refusalText, type CommandResult } from '../src/execution/exec-result';
+import { KinuError, refusalOf } from '../src/obs/index';
 import { parseJsonValue } from '../src/utils/json';
 import { createInlineExecutor } from '../src/execution/inline';
 import { createNimbusExecutor } from '../src/execution/nimbus';
@@ -73,6 +74,17 @@ describe('formatExecResult', () => {
 
   test('a missing exit code is a success — transports that omit it never read as failures', () => {
     expect(formatExecResult({ stdout: 'ok' })).toBe('ok');
+  });
+
+  test('a refusal round-trip keeps the exit the error carried', () => {
+    // Both channels — the text a refusal serialises to and the object a member
+    // answered with — must carry the same metadata the error held.
+    const refusal = refusalOf(new KinuError('unavailable', 'no such command', { execution: { exitCode: 127 } }));
+
+    expect(parseJsonValue(refusalText(refusal))).toMatchObject({
+      reason: 'unavailable', execution: { exitCode: 127 },
+    });
+    expect(answeredRefusal(refusal)).toEqual(refusal);
   });
 });
 

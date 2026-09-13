@@ -186,11 +186,15 @@ export class KinuError extends Error {
 export type Refusal = {
   readonly reason: ErrorCode;
   readonly error: string;
+  /** The exit the substrate already reported — a 127 must not read as any other `unavailable`. */
+  readonly execution?: { readonly exitCode: number };
 };
 
 /** Project a classified failure onto the wire. */
 export function refusalOf(error: KinuError): Refusal {
-  return { reason: error.code, error: renderCauseChain(error) };
+  const refusal = { reason: error.code, error: renderCauseChain(error) };
+
+  return error.execution === undefined ? refusal : { ...refusal, execution: error.execution };
 }
 
 /**
