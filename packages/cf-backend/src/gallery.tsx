@@ -192,7 +192,11 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // The registry answers { entries, total }, the envelope `listWorkspaces`
   // validates; a bare array parses as nothing and HomePage photographs its
   // "couldn't load" state into every screenshot taken of this gallery.
-  "/api/user/workspaces": {
+  // `?frame=home&roster=empty` photographs the first-run account: the form
+  // carries the whole page when no workspace has ever existed.
+  "/api/user/workspaces": new URLSearchParams(location.search).get("roster") === "empty"
+    ? { entries: [], total: 0 }
+    : {
     entries: [
       { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
         ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
@@ -207,7 +211,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
     ],
     total: 5,
-  },
+    },
   // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
