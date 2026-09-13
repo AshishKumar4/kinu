@@ -3408,7 +3408,28 @@ export class OrchestratorAgent extends ActorAgent {
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
     try {
-      await recoverActorTurns(this.actorHost());
+      const host = this.actorHost();
+      const rootActorId = this.actorHandle().actorId;
+      const rootIsLive = () => this._inFlight;
+
+      // Think owns the foreground root, not the host's logical ActorSession.
+      // Core reads liveness through the actual driver, including after awaits.
+      await recoverActorTurns({
+        resumable: (limit) => host.resumable(limit),
+        acquire: async (reference) => {
+          const actor = await host.acquire(reference);
+
+          return {
+            runtime: actor.runtime,
+            stores: actor.stores,
+            session: {
+              get inFlight() {
+                return reference.actorId === rootActorId ? rootIsLive() : actor.session.inFlight;
+              },
+            },
+          };
+        },
+      });
     } catch (cause) {
       diagnostics.failure('actor.turn_recovery_failed', toKinuError({
         doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',

@@ -444,6 +444,42 @@ describe('one workspace database, many logical actors', () => {
     fx.db.close();
   });
 
+  test('recovery rechecks live ownership after awaited program verification', async () => {
+    const fx = build();
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    const path = `${actor.runtime.identity.scaffold.path}.v1`;
+    await actor.runtime.storage.vfs.writeFile(path, 'changed source');
+    actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0,
+      program: { kind: 'scaffold', version: 1, digest: sha256Hex('expected source'), build: null },
+    });
+    const reading = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const read = actor.runtime.storage.vfs.readFile.bind(actor.runtime.storage.vfs);
+
+    actor.runtime.storage.vfs.readFile = async (file, options) => {
+      if (file === path) {
+        reading.resolve();
+        await release.promise;
+      }
+
+      return read(file, options);
+    };
+
+    const recovering = recoverActorTurns(fx.host);
+    await reading.promise;
+    const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
+    release.resolve();
+    expect(await recovering).toEqual({ verified: [], refused: [], unreadable: [], active: ['turn-a'] });
+    expect(actor.stores.claims.read('turn-a')?.status).toBe('admitted');
+    actor.session.finishTurn(lease);
+
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], unreadable: [], active: [] });
+    expect(actor.stores.claims.read('turn-a')?.outcome).toBe('indeterminate');
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
   test('a retirement purge sweeps a table the schema grew, and nothing that carries no actor', async () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'subordinate');
