@@ -23,6 +23,7 @@ import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import { reviewRecordedTurn, type AdvisorRecoverySnapshot, type AdvisorDisposition } from '../advisor/review';
+import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
 
@@ -198,10 +199,10 @@ export class ActorSession {
       llm,
       govern: (llm, labels) => budget?.govern(llm, labels) ?? llm,
       gateOpen,
-      workspace: {
+      guidance: await advisorWorkspaceGuidance({
         vfs: workspace,
         limits: async () => ({ contextWindow, modelOutputLimit: contextWindow }),
-      },
+      }),
       deliver,
       parent: this.options.advisor?.parent,
       record: (note, id) => { engine.recordAdvisorNote(note, id); },

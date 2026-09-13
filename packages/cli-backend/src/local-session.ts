@@ -102,6 +102,7 @@ import { TierIdSchema,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
+  advisorWorkspaceGuidance,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
   type JsonObject,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
@@ -3992,10 +3993,10 @@ export class LocalAgentSession implements BackendHost {
     await reviewRecordedTurn({
       snapshot: recorded,
       llm: this.rt.advisorLlm,
-      workspace: {
+      guidance: await advisorWorkspaceGuidance({
         vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
         limits: async () => this.modelCatalog.contextFor(resolveModelRoute('advisor', await this.routingProfile()).model),
-      },
+      }),
       govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: recorded.gateOpen,
       deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),

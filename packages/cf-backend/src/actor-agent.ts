@@ -83,6 +83,7 @@ import {
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS,
   advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn, ADVISOR_LANE_FIBER,
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
+  advisorWorkspaceGuidance,
   // canonical tool + prompt surface — single source of truth
   buildActorTools, buildBuiltinTools,
   withClampedToolResults,
@@ -3293,14 +3294,14 @@ export abstract class ActorAgent extends Think<Env> {
    * routing profile — a fixed tier, so it is answerable on a cold activation
    * with no turn), the signal seam, and the note store.
    */
-  private runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
+  private async runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
     return reviewRecordedTurn({
       snapshot,
       llm: this.rt.advisorLlm,
-      workspace: {
+      guidance: await advisorWorkspaceGuidance({
         vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
         limits: async () => this.modelCatalog.contextFor((await this.modelForSource('advisor')).spec),
-      },
+      }),
       govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: false,
       deliver: (signal) => this.orch.signals.deliver(signal),

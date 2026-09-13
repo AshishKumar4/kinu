@@ -252,3 +252,35 @@ export async function collectWorkspaceAgentsMd(
     referenced: admission.referenced,
   };
 }
+
+/**
+ * What the advisor's caller already has: the workspace's file plane and the
+ * window the model sees. The review lane itself never reads a file — this is
+ * the context-assembly half of the advisor contract, so the admitted text
+ * arrives in the review as a string the way the turn record does.
+ */
+export interface AdvisorWorkspace {
+  readonly vfs: VFS;
+  readonly limits: () => Promise<ModelWindow>;
+}
+
+/**
+ * Optional workspace guidance (ADVISOR.md) is admitted BEFORE its bytes are
+ * read — the same admission the AGENTS.md chain runs, so an oversized file is
+ * a path-and-bytes pointer rather than a truncated read. The empty string is
+ * absence; an omitted file is the shared omission text.
+ */
+export async function advisorWorkspaceGuidance(workspace: AdvisorWorkspace | undefined): Promise<string> {
+  if (workspace === undefined) return '';
+  const path = 'ADVISOR.md';
+  const stat = await workspace.vfs.stat(path);
+
+  if (stat === null || stat.isDir) return '';
+  const admission = admitAgentsMd([{ path, bytes: stat.size }], await workspace.limits());
+
+  if (admission.referenced.length > 0) return renderInstructionOmission(admission.referenced, path);
+  const raw = await workspace.vfs.readFile(path, { encoding: 'utf8' });
+  const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+
+  return text.trim();
+}

@@ -13,8 +13,8 @@ import { createHash } from 'node:crypto';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../src/prompting/step-prune';
 import { CHARS_PER_TOKEN } from '../src/llm';
-import { renderInstructionOmission } from '../src/prompting/agents-md';
-import type { AdvisorWorkspace } from '../src/advisor/review';
+import { advisorWorkspaceGuidance, renderInstructionOmission } from '../src/prompting/agents-md';
+import type { AdvisorWorkspace } from '../src/prompting/agents-md';
 import { KinuError } from '../src/obs/error';
 import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '../src/obs/index';
 import {
@@ -61,7 +61,7 @@ async function lane(over: {
   gateOpen?: boolean;
   turn?: CompletedTurn;
   reachable?: readonly string[];
-  workspace?: AdvisorWorkspace;
+  guidance?: string;
 } = {}) {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
@@ -82,7 +82,7 @@ async function lane(over: {
       return 'queued';
     },
     record: (note) => { recorded.push(note); },
-    workspace: over.workspace,
+    guidance: over.guidance,
   });
 
   return { disposition, delivered, recorded };
@@ -117,8 +117,10 @@ describe('workspace advisor guidance', () => {
       limits: async () => limits,
     };
 
+    const guidance = await advisorWorkspaceGuidance(workspace);
+
     await lane({
-      workspace,
+      guidance,
       llm: {
         ...saying('{}'),
         complete: async (prompt) => {
