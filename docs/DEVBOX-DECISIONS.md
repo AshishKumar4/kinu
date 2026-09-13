@@ -65,15 +65,19 @@ an app port), re-decided 2026-09-13 on P3. Status: rebuilding on
 (DECISIVE-2026-09-05.md, "Six fresh starts") were measured under the reversed
 shape and do not bear on the port-proven one.
 
-D2. Restore inside the hook moves no bytes proportional to tree or file size.
-Attach mounts the store subtree, the base lower, and the delta's whole-file
-tree as lazy squashfuse lowers; readiness is published after that. Chunked
-big-file overrides are applied on first touch, never at attach. Decided
-2026-09-13 from R2 and the source fact that `chunked-delta.ts` planted every
-changed file into the upper at attach (copying each changed big file's whole
-base). Status: in design on `feat/devbox-gated-restore`; the first-touch
-trigger is the open question, and the fallback is a budgeted, generation-
-fenced hydration on the first post-readiness command, with its bytes stated.
+D2. Attach cost is O(M + L + D), not O(1). Attach mounts the store subtree
+and the base and legacy-delta lowers lazily, reads the chunked manifest
+(M records, one per changed file), and materialises every chunked file into
+the upper before readiness: for a changed big file that is its whole base
+plus its overrides, so D counts the full base bytes of each changed chunked
+file. Readiness is published only after that. Decided 2026-09-13 after three
+lazy designs were refuted: first-touch hydration (readiness would expose base
+bytes to supervised processes and previews), hydration on the first
+post-readiness command (same exposure), and serving overrides as a sparse
+delta lower (measured with fuse-overlayfs 1.7.1: a sparse newer inode shadows
+the whole base inode, holes read as zero; `tests/support/sparse-lower-probe.sh`).
+R2's O(1) attach needs a block-serving layer inside the container and is
+open (O2). Publication stays chunked (D4).
 
 D3. `onStart` reaches the container only through the budgeted restore path
 after a port-proven start. `scripts/do-init-gate.ts` pins this. Its previous
@@ -124,6 +128,9 @@ admitted only when every G gate passes; a refused run ranks nothing.
 
 O1. Live acceptance of the chunked chain on deployed Containers and R2 after
 the evidence corrections of 2026-09-12 (`6e6b9e43c`, `ccb5a2aab`).
-O2. The first-touch trigger for D2, or the measured cost of its fallback.
+O2. A block-serving layer inside the container that composes a file from
+base ranges and delta chunks per read, so attach no longer copies changed
+big files (R2). Not scheduled; the owner decides whether the D2 cost is
+acceptable.
 O3. A corrected candidate under the measurement contract above, if one is
 proposed; none is scheduled.
