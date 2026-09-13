@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1336" viewBox="0 0 640 1336" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="turn-title turn-desc">
 <title id="turn-title">CURRENT: A turn and its model steps</title>
-<desc id="turn-desc">Current simplified turn flow. A user message or durable wake is admitted with actor identity, role and trusted Plan or Build mode. Context is assembled, then step preparation handles signals, pruning and dynamic context. The model requests tools or produces output. Allowed tool calls record outcomes and loop to the next model step; a finished or stopped turn records completed, aborted or error and owed terminal effects. Cloud conversational actors use Think; local agents and swarm nodes use Core runChat.</desc>
+<desc id="turn-desc">A user message or durable wake is admitted with actor identity, role and trusted mode. Context assembly and step preparation supply history, signals and dynamic context. The model requests tools or produces output. Hosted workspace roots use Think; local agents and hosted logical actors use core inference. A finished or stopped turn records completed, aborted or error and owes terminal effects, including eligible turn recording and event draining.</desc>
 <!-- Sources: docs/ARCHITECTURE.md#the-turn-pipeline; packages/core/src/orchestrator/turn-lifecycle.ts; packages/core/src/prompting/prepare-step.ts. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
@@ -58,8 +58,8 @@
 </text>
 <text x="68" y="757" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Receive text and requested tool calls.</tspan>
-<tspan x="68" dy="30">Cloud actors: Think driver</tspan>
-<tspan x="68" dy="30">Local and swarm nodes: Core driver</tspan>
+<tspan x="68" dy="30">Hosted workspace root: Think driver</tspan>
+<tspan x="68" dy="30">Local and hosted logical actors: core</tspan>
 </text>
 </g>
 <path d="M320 856 V892" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#turn-arrow)" />
@@ -81,7 +81,7 @@
 </text>
 <text x="68" y="1139" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">completed / aborted / error</tspan>
-<tspan x="68" dy="30">Record state and owed terminal effects.</tspan>
+<tspan x="68" dy="30">terminal-effects.ts: record turn, drain events</tspan>
 <tspan x="68" dy="30">Evolution work does not block the queue.</tspan>
 </text>
 </g>

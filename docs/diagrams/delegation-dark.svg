@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Kinu delegation model</title>
-  <desc id="d">A running turn calls one agents tool with seven actions. Two of them spawn: swarm runs a configured tree search that settles back into this turn, and hire creates a persistent subordinate agent that outlives the turn and reports back as an event. A swarm’s candidates are scored by the verifier the caller declared in its own objective rather than judged by a model, and each of its nodes is a full agent running the same turn loop the caller runs. The remaining actions talk to agents that already exist: subordinates in this workspace, or the owner’s other workspaces as peers.</desc>
+  <desc id="d">A running turn calls one agents tool: swarm, hire, msg, list and dismiss. Swarm runs a configured search; hire creates a durable or task-lifetime agent. Hires and swarm nodes are logical actors of one workspace database on both backends. The task role handles general delegated work; specialist roles narrow the assignment and authority. Messages reach subordinates or permitted peer workspaces.</desc>
   <style>
     :root {
       --fg: #e6edf3;
@@ -63,12 +63,12 @@
       <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
     </marker>
   </defs>
-  <text class="h" x="24" y="30">Delegation — one tool, one ladder, keyed on lifetime and on who decides</text>
+  <text class="h" x="24" y="30">Delegation — one tool, with lifetime and role per hire</text>
   <text class="s" x="24" y="49">the doctrine has a single source: packages/core/src/tools/registry.ts</text>
   <text class="band" x="24" y="76">THE CALLER</text>
   <rect x="24" y="88" width="852" height="62" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="36" y="109" text-anchor="start">a turn, running</text>
-  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Seven actions — swarm · hire · ask · send · reply · list · dismiss.</text>
+  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Five actions — swarm · hire · msg · list · dismiss.</text>
   <text class="xs" x="36" y="139" text-anchor="start">Which ones exist here is structural: an actor gets the actions its backend wired deps for.</text>
   <path d="M255 150 L255 172" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-purple)"/>
   <path d="M691 150 L691 172" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
@@ -77,68 +77,68 @@
   <rect x="647" y="172" width="88" height="22" rx="11" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="xs mono" x="691" y="186.6" text-anchor="middle" fill="var(--orange)">hire</text>
   <rect x="24" y="204" width="462" height="94" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
-  <text class="b" x="36" y="225" text-anchor="start" fill="var(--purple)">ephemeral — a tree search that settles into this turn</text>
+  <text class="b" x="36" y="225" text-anchor="start" fill="var(--purple)">swarm — a configured tree search</text>
   <text class="xs" x="36" y="240" text-anchor="start">Search on breadth (2+ independent angles you would otherwise</text>
   <text class="xs" x="36" y="255" text-anchor="start">grind through one at a time) or on doubt (a failed attempt, two</text>
   <text class="xs" x="36" y="270" text-anchor="start">plausible approaches, a step that is expensive to undo, output</text>
   <text class="xs" x="36" y="285" text-anchor="start">you cannot check yourself).</text>
   <rect x="38" y="308" width="434" height="105" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="50" y="327" text-anchor="start">what you declare — a preset and an objective</text>
-  <text class="xs" x="50" y="342" text-anchor="start">preset fixes the shape: seven values, six of them named searches</text>
-  <text class="xs" x="50" y="357" text-anchor="start">(prove among them) and custom. objective states the metric, the</text>
-  <text class="xs" x="50" y="372" text-anchor="start">unit, the direction, the target, and verify as {kind, spec} naming</text>
-  <text class="xs" x="50" y="387" text-anchor="start">a registered instrument. A verifier is CODE that runs, so a metric</text>
-  <text class="xs" x="50" y="402" text-anchor="start">nothing can execute is not an objective.</text>
+  <text class="b" x="50" y="327" text-anchor="start">what you declare — a preset and its inputs</text>
+  <text class="xs" x="50" y="342" text-anchor="start">Six named searches, plus custom with explicit axes.</text>
+  <text class="xs" x="50" y="357" text-anchor="start">When required, the objective names the metric, unit,</text>
+  <text class="xs" x="50" y="372" text-anchor="start">direction, target and a registered verifier as {kind, spec}.</text>
+  <text class="xs" x="50" y="387" text-anchor="start">Verification runs code. Model judgment and an unranked</text>
+  <text class="xs" x="50" y="402" text-anchor="start">candidate set are separate scoring choices.</text>
   <rect x="24" y="423" width="462" height="75" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
   <text class="b" x="36" y="442" text-anchor="start" fill="var(--purple)">a node runs as</text>
   <text class="xs" x="36" y="457" fill="var(--fg)">cf</text>
-  <text class="xs" x="70" y="457">a logical actor of the one workspace — its own seat, its own home</text>
+  <text class="xs" x="70" y="457">Logical workspace actors, each with its own home</text>
   <text class="xs" x="36" y="472" fill="var(--fg)">cli</text>
-  <text class="xs" x="70" y="472">the same, over the same one database</text>
+  <text class="xs" x="70" y="472">Logical workspace actors, over the workspace database</text>
   <text class="xs" x="36" y="487" fill="var(--fg)"></text>
   <text class="xs" x="70" y="487">one loop body, in the isolate that ran the search</text>
   <rect x="24" y="508" width="462" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="36" y="527" text-anchor="start">still running at 30 s?</text>
-  <text class="xs" x="36" y="542" text-anchor="start">it detaches into a background job whose completion wakes you</text>
+  <text class="b" x="36" y="527" text-anchor="start">on a live session</text>
+  <text class="xs" x="36" y="542" text-anchor="start">a search backgrounds on spawn; completion wakes its caller</text>
   <rect x="506" y="204" width="370" height="94" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
-  <text class="b" x="518" y="225" text-anchor="start" fill="var(--orange)">persistent — outlives this turn</text>
-  <text class="xs" x="518" y="240" text-anchor="start">Hire when the work must outlive the turn:</text>
-  <text class="xs" x="518" y="255" text-anchor="start">several features at once, or a long-running</text>
-  <text class="xs" x="518" y="270" text-anchor="start">effort. One subordinate per independent</text>
-  <text class="xs" x="518" y="285" text-anchor="start">workstream, run in parallel.</text>
+  <text class="b" x="518" y="225" text-anchor="start" fill="var(--orange)">Durable or task-lifetime hire</text>
+  <text class="xs" x="518" y="240" text-anchor="start">Durable: retain context between assignments.</text>
+  <text class="xs" x="518" y="255" text-anchor="start">Task: report once, then archive with history kept.</text>
+  <text class="xs" x="518" y="270" text-anchor="start">Choose task for general delegated work, or a</text>
+  <text class="xs" x="518" y="285" text-anchor="start">researcher, planner, auditor or designer role.</text>
   <rect x="520" y="308" width="342" height="105" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="532" y="327" text-anchor="start">SubordinateAgent</text>
+  <text class="b" x="532" y="327" text-anchor="start">Logical workspace actor</text>
   <text class="xs" x="532" y="342" text-anchor="start">its own context, carried across turns</text>
-  <text class="xs" x="532" y="357" text-anchor="start">its own full turn loop and evolution</text>
+  <text class="xs" x="532" y="357" text-anchor="start">shared inference loop; role-narrowed tools</text>
   <text class="xs" x="532" y="372" text-anchor="start">shares the workspace’s files</text>
-  <text class="xs" x="532" y="387" text-anchor="start">may swarm, and may hire to the depth cap; may not peer</text>
+  <text class="xs" x="532" y="387" text-anchor="start">delegation stays within role and depth limits</text>
   <text class="xs" x="532" y="402" text-anchor="start">reports back as an event that wakes you</text>
   <rect x="506" y="423" width="370" height="75" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
   <text class="b" x="518" y="442" text-anchor="start" fill="var(--orange)">runs as</text>
   <text class="xs" x="518" y="457" fill="var(--fg)">cf</text>
-  <text class="xs" x="552" y="457">SubordinateAgent facets</text>
+  <text class="xs" x="552" y="457">Logical workspace actors in one DO</text>
   <text class="xs" x="518" y="472" fill="var(--fg)">cli</text>
-  <text class="xs" x="552" y="472">not wired — a local session gets the</text>
+  <text class="xs" x="552" y="472">Logical workspace actors, hosted locally</text>
   <text class="xs" x="518" y="487" fill="var(--fg)"></text>
-  <text class="xs" x="552" y="487">swarm rung and nothing else</text>
+  <text class="xs" x="552" y="487">hires and branches share workspace SQLite</text>
   <rect x="506" y="508" width="370" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="518" y="527" text-anchor="start">scope</text>
-  <text class="xs" x="518" y="542" text-anchor="start">subordinate hires into this workspace; workspace makes a new one</text>
+  <text class="xs" x="518" y="542" text-anchor="start">subordinate here, or a new peer workspace</text>
   <path d="M691 553 L691 583" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
   <text class="xs" x="703" y="573">the roster a subordinate joins</text>
   <rect x="24" y="587" width="852" height="130" rx="10" fill="var(--blueFill)" stroke="var(--blueLine)"/>
-  <text class="b" x="38" y="609" fill="var(--blue)">ask · send · reply · list · dismiss — talking to what already exists</text>
+  <text class="b" x="38" y="609" fill="var(--blue)">msg · list · dismiss — talking to what already exists</text>
   <text class="xs" x="38" y="628">One address space: a name resolves to a subordinate in this workspace, otherwise to one of the owner’s other workspaces.</text>
   <rect x="38" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="50" y="658" text-anchor="start">subordinates</text>
-  <text class="xs" x="50" y="672" text-anchor="start">ask assigns and expects the answer; send steers,</text>
-  <text class="xs" x="50" y="686" text-anchor="start">fire-and-forget; dismiss ends a role for good</text>
+  <text class="xs" x="50" y="672" text-anchor="start">hire assigns work; msg steers or follows up;</text>
+  <text class="xs" x="50" y="686" text-anchor="start">list reads the roster; dismiss archives the agent</text>
   <rect x="457" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="469" y="658" text-anchor="start">peers — the owner’s other workspaces</text>
-  <text class="xs" x="469" y="672" text-anchor="start">same ask/send; reply answers an incoming agent</text>
-  <text class="xs" x="469" y="686" text-anchor="start">message by its event id</text>
-  <text class="xs" x="38" y="735">A busy agent is never blocked on — the message queues immediately for its own mode-homogeneous turn, so follow-ups go out as soon as you have them.</text>
+  <text class="xs" x="469" y="672" text-anchor="start">msg names an agent, or answers an incoming</text>
+  <text class="xs" x="469" y="686" text-anchor="start">agent message by event_id; never both</text>
+  <text class="xs" x="38" y="735">A message to a busy agent is queued; it does not make the sender wait for the running assignment to finish.</text>
   <rect x="24" y="747" width="852" height="48" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
-  <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm, and it has one spelling</tspan> — every configured search of any depth is this one call, measured against your objective.</text>
+  <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm</tspan> — one call, with the preset's resolved search and scoring configuration.</text>
   <text class="xs" x="38" y="782">The MCTS engine is unchanged — lifetime evolution and kinu evolve still call runMCTS; the agents tool never reaches it.</text>
 </svg>
