@@ -1,0 +1,22 @@
+[devbox-bench] deployed https://kinu-devbox-bench-b20260913131044-snapshot-chain.ashishkmr472.workers.dev at version 8bd17250-76fd-4c41-8efc-c9c6a41d044d
+[devbox-bench] C3 empty baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 1)
+[devbox-bench] C3 empty baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] C3 empty baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 2)
+[devbox-bench] C3 empty baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] C3 empty baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 3)
+[devbox-bench] C3 empty baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] C3 cold restore: the container is stopped and no current restoration is running; driving readiness through one no-op exec (drive 1)
+[devbox-bench] C3 cold restore: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] 2GiB dense baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 1)
+[devbox-bench] 2GiB dense baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] 2GiB dense baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 2)
+[devbox-bench] 2GiB dense baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] 2GiB dense baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 3)
+[devbox-bench] 2GiB dense baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] 2GiB dense baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 4)
+[devbox-bench] 2GiB dense baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] 2GiB dense baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 5)
+[devbox-bench] 2GiB dense baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+[devbox-bench] 2GiB dense baseline: no restoration has run for this container yet; driving readiness through one no-op exec (drive 6)
+[devbox-bench] 2GiB dense baseline: the readiness drive did not answer (this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.); the state poll keeps the verdict
+{"artifact":"/home/mrwhite0racle/Kinu-wt-block-layer-impl/bench-artifacts/block-attach/b20260913131044/observations.json","c3AttachMs":null,"largeAttachMs":null,"errors":["C3 cold restore did not attach within its 55000 ms ceiling (last reading: pending — running=true restoration=unstarted, 4 incident(s) recorded (1 undelivered), unready: no restoration has run for this container yet)","C3 must publish exactly 1 object attempt","C3 publication bytes must be observed and strictly below 196608","the post-overwrite restore was not proven genuinely cold","C3 cold file correctness is unmeasured","storage attach phases were not observed","block payload counters were not observed","2GiB dense baseline did not attach within its 55000 ms ceiling (last reading: pending — running=true restoration=unstarted, 9 incident(s) recorded (0 undelivered), unready: no restoration has run for this container yet)"]}
