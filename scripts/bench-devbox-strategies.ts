@@ -3809,6 +3809,12 @@ async function fireCutVictim(
 }
 
 
+/** Run 20260913154111: a top-level exit killed the SDK's persistent shell.
+ * The child returns the write status while the session stays available. */
+export function readOnlyLayerProbeCommand(layerPoint: string): string {
+  return `( touch '${layerPoint}/.faultcut-ro-probe' 2>&1; code=$?; rm -f '${layerPoint}/.faultcut-ro-probe' 2>/dev/null; exit $code )`;
+}
+
 /**
  * The read-only probe, as one observation: read the live mounts, find the
  * layer the wake is serving (a delta layer wins over the base lower, and only
@@ -3849,7 +3855,7 @@ async function probeReadOnlyLayer(
   const probe = await execInBox(
     fixture,
     box,
-    `touch '${layerPoint}/.faultcut-ro-probe' 2>&1; code=$?; rm -f '${layerPoint}/.faultcut-ro-probe' 2>/dev/null; exit $code`,
+    readOnlyLayerProbeCommand(layerPoint),
   );
 
   evidence.readOnlyProbe = probe;
