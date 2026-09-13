@@ -422,7 +422,7 @@ test('Plan does not run a promoted native scaffold, but Build still can', async 
   expect(existsSync(marker)).toBe(false);
   expect(existsSync(initialized)).toBe(false);
   expect(streamed(events)).toBe('the standard Plan loop answered');
-  await session.setRole('general');
+  await session.setRole('task');
   await session.send('Run the configured Build loop.');
   expect(readFileSync(marker, 'utf8')).toBe('native scaffold effect');
   expect(readFileSync(initialized, 'utf8')).toBe('initializer effect');

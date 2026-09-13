@@ -246,7 +246,7 @@ export interface LocalProfileCoordinates {
 export function getLocalProfileCoordinates(name: string): LocalProfileCoordinates {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'actor_config')) {
-      return { roleId: 'general', assignedTier: null };
+      return { roleId: 'task', assignedTier: null };
     }
 
     const config = openWorkspaceMainActor(makeSql(db)).config;

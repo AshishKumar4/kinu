@@ -46,7 +46,7 @@ const { rt } = createTestRuntime();
 // intentionally conditional, so its own matrix case is its proof surface.
 const FULL = PROMPT_MATRIX.find((c) => c.name === 'cf-full-surface');
 
-const ROLE = PROMPT_MATRIX.find((c) => c.name === 'role-general');
+const ROLE = PROMPT_MATRIX.find((c) => c.name === 'role-task');
 
 if (!FULL || !ROLE) throw new Error('matrix lost a required proof surface');
 

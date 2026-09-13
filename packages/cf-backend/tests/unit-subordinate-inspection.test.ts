@@ -106,7 +106,7 @@ describe('owner reads of retained subordinate paths', () => {
     const leaf = fixture.child(child, 'leaf');
     const events = new RunEventRecorder(fixture.sql, leaf);
     events.emit('run', { type: 'run_start', agentId: 'leaf' });
-    events.emit('run', { type: 'tool_call_end', name: 'agents', toolCallId: 'ask-1', args: { action: 'ask', role: 'general' }, result: { agent: 'nested', transcript: 'kept' }, outcome: { success: true } });
+    events.emit('run', { type: 'tool_call_end', name: 'agents', toolCallId: 'ask-1', args: { action: 'ask', role: 'task' }, result: { agent: 'nested', transcript: 'kept' }, outcome: { success: true } });
     events.emit('run', { type: 'run_end', reason: 'completed' });
     const before = fixture.sql`SELECT run_id, event_index, type FROM run_events ORDER BY run_id, event_index`;
     const first = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'run', query: { limit: 2 } });

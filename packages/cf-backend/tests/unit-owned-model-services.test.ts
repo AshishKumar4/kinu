@@ -496,7 +496,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
     return resolveTurnProfile({
       envelope: envelopeWithDeepPin(defaultModel),
       provider,
-      roleId: 'general',
+      roleId: 'task',
       workMode: 'build',
       availableTools: [],
       activeSkills: [],

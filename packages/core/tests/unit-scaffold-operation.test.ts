@@ -56,7 +56,7 @@ function candidateProfile(spec: string) {
   return resolveTurnProfile({
     envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
     provider: { revision: 'one', availableModels: ['openai/chat-fast', spec] },
-    roleId: 'general', workMode: 'build', availableTools: ['tool_a', 'tool_b'], activeSkills: [],
+    roleId: 'task', workMode: 'build', availableTools: ['tool_a', 'tool_b'], activeSkills: [],
   });
 }
 

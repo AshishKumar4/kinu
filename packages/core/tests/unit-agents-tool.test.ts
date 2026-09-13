@@ -71,7 +71,7 @@ function testProfile(): AgentsProfileContext {
       catalog,
     },
     provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
-    roleId: 'general',
+    roleId: 'task',
     availableTools: [],
   };
 }
@@ -195,7 +195,7 @@ function makeTeam(
     create: async (input) => ({
       name: input.name ?? 'researcher',
       displayName: 'Researcher',
-      subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+      subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
     }),
     rename: async (input) => {
       calls.push({ action: 'rename', input });

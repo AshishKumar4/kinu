@@ -101,7 +101,7 @@ describe('reachability of the root policy read', () => {
 
     const child = await hostedSubordinateHarness(workspace, {
       name: 'grantee-1', displayName: 'Grantee', nameOrigin: 'user',
-      mission: 'inherit the workspace policy', roleId: 'implementer',
+      mission: 'inherit the workspace policy', roleId: 'task',
     });
 
     // It recorded nothing of its own, so anything it holds, it holds because the
@@ -139,7 +139,7 @@ describe('reachability of the root policy read', () => {
 
     const child = await hostedSubordinateHarness(workspace, {
       name: 'grantee-2', displayName: 'Grantee', nameOrigin: 'user',
-      mission: 'inherit an empty policy', roleId: 'implementer',
+      mission: 'inherit an empty policy', roleId: 'task',
     });
 
     const shell = child.actor.runtime.shell;

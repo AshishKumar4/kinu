@@ -135,9 +135,9 @@ describe('the role a create request asks for', () => {
   });
 
   test('selects nothing when the request names the default role', async () => {
-    // 'general' is where a workspace already starts, so asking for it is not a
+    // 'task' is where a workspace already starts, so asking for it is not a
     // selection and must not spend an RPC changing the role to itself.
-    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'general' });
+    const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'task' });
 
     expect(created.status).toBe(201);
     expect(created.calls).toEqual([`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`, 'genesis']);
@@ -169,7 +169,7 @@ describe('the model and effort a create request asks for', () => {
     const turn = resolveTurnProfile({
       envelope,
       provider: { revision: 'r1', availableModels: [CATALOG_DEFAULT] },
-      roleId: 'general',
+      roleId: 'task',
       workMode: 'build',
       availableTools: [],
       activeSkills: [],

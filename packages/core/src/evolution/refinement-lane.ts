@@ -441,7 +441,7 @@ async function askRefiner(
   // construction site `gate:wired` cannot see. Named here, the wire is
   // connected at both ends in a form the gate reads.
   const brief: TemporaryRunRequest = {
-    role: 'general',
+    role: 'task',
     roleLabel: 'refiner',
     task: renderRefinerBrief(deps, request, contextRefs),
     contextRefs,
