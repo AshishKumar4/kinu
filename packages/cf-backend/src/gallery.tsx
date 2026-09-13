@@ -119,7 +119,7 @@ import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
-import { LogBlock } from "@/components/surfaces/ActivitySurface";
+import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
 import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
@@ -192,7 +192,11 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // The registry answers { entries, total }, the envelope `listWorkspaces`
   // validates; a bare array parses as nothing and HomePage photographs its
   // "couldn't load" state into every screenshot taken of this gallery.
-  "/api/user/workspaces": {
+  // `?frame=home&roster=empty` photographs the first-run account: the form
+  // carries the whole page when no workspace has ever existed.
+  "/api/user/workspaces": new URLSearchParams(location.search).get("roster") === "empty"
+    ? { entries: [], total: 0 }
+    : {
     entries: [
       { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
         ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
@@ -207,7 +211,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
       { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
     ],
     total: 5,
-  },
+    },
   // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
@@ -4763,7 +4767,7 @@ const ACTIVITY_LATEST = {
 } satisfies NonNullable<ActivitySnapshot["latest"]>;
 
 const ACTIVITY_CACHE_HIT = {
-  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, emaAlpha: 0.2,
+  samples: 344, last: 0.94, ema: 0.91, mean: 0.88, p95: 0.97, p99: 0.99, emaAlpha: 0.2,
 };
 
 /** Two labels, one nested inside the other and one already spent — the mission
@@ -4879,7 +4883,7 @@ const ACTIVITY_FRESH: ActivitySnapshot = {
   telemetry: {
     steps: 0, windowLimit: 2000, tokens: {}, usd: 0, pricedSteps: 0, unpricedSteps: 0,
     stepsWithoutUsage: 0,
-    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, emaAlpha: 0.2 },
+    cacheHit: { samples: 0, last: null, ema: null, mean: null, p95: null, p99: null, emaAlpha: 0.2 },
   },
   spend: {
     producers: [],
@@ -5948,6 +5952,7 @@ async function mount() {
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
+  else if (frame === "activitycache") node = <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];
@@ -6001,7 +6006,15 @@ async function mount() {
   }
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
-    node = <div className="h-screen p-bg p-text"><HomePage /></div>;
+    // The real chrome, not the page alone: the sidebar's own route logic
+    // decides what it renders at "/", and photographing the page without the
+    // rail would pass a sidebar the app never shows.
+    node = (
+      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
+      </div>
+    );
   } else node = <All />;
 
   if (frame in EXPLORATION_FRAMES) {

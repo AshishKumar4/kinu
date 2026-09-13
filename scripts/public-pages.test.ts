@@ -114,7 +114,7 @@ interface Facts {
   movie?: MovieFact;
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
-  persists?: { text: string };
+  persists?: { text: string; caption: string };
   heroTreeText?: { text: string };
   checkoutLead?: { firstIsProse: boolean; firstIsTool: boolean };
   homeLink?: { visible: boolean; hasGraphic: boolean };
@@ -570,6 +570,9 @@ beforeAll(async () => {
 
       facts.persists = await page.evaluate(() => ({
         text: document.querySelector('[data-landing-persists]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        // The checkout frame's own caption, behind the same stable hook the
+        // card used to carry.
+        caption: document.querySelector('[data-landing-caption]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       }));
 
       facts.heroTreeText = await page.evaluate(() => ({
@@ -824,10 +827,13 @@ describe('the standalone landing runs', () => {
 });
 
 describe('the landing demonstration leads with its result', () => {
-  test('the persists card names the kept tool under the sample-data label', () => {
+  test('the crafted-tool card is gone and the frame names itself a sample', () => {
     const persists = required(facts.persists, 'persists card');
-    expect(persists.text).toContain('coupon_replay');
-    expect(persists.text).toContain('Example UI and sample data, not a live workspace.');
+    // The owner rejected the coupon_replay card outright: no card, no reuse
+    // line, and the caption that introduces the frame is the short form.
+    expect(persists.text).toBe('');
+    expect(persists.caption).toContain('Sample workspace');
+    expect(persists.caption).not.toContain('Example UI');
   });
 
   test('the hero tree carries its text equivalent', () => {
