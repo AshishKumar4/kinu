@@ -59,7 +59,7 @@ import type { Command } from '@nimbus-sh/core/substrate/lifo/commands/types.js';
 import * as v from 'valibot';
 import type { ExecutorCapability } from '../execution/types';
 import { WORKSPACE_ROOT } from './workspace-path';
-import { KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
+import { KinuError, refusalOf, renderCauseChain, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 
 /**
@@ -81,7 +81,7 @@ import type { JsonValue } from '../utils/json';
  */
 export async function workspaceCommandNotFound(
   outcome: { stdout: string; stderr: string; exitCode: number; refusal?: Refusal },
-  cataloged: (bin: string) => boolean | Promise<boolean>,
+  cataloged: (bin: string) => boolean | { readonly unreadable: KinuError } | Promise<boolean | { readonly unreadable: KinuError }>,
 ): Promise<typeof outcome> {
   if (outcome.refusal !== undefined || outcome.exitCode !== 127) return outcome;
 
@@ -90,7 +90,9 @@ export async function workspaceCommandNotFound(
   if (missing === undefined) return outcome;
 
   const bin = missing.includes('/') ? missing.slice(missing.lastIndexOf('/') + 1) : missing;
-  const installable = await cataloged(bin);
+  const catalog = await cataloged(bin);
+  const installable = catalog === true;
+  const unreadable = catalog !== true && catalog !== false ? catalog.unreadable : undefined;
 
   return {
     ...outcome,
@@ -100,11 +102,15 @@ export async function workspaceCommandNotFound(
         + (installable
           ? `Run it in the sandbox executor (runtime 'sandbox'), or install it with \`nimbus install ${bin}\`.`
           : `Run it in the sandbox executor (runtime 'sandbox'), which ships a full toolchain, `
-            + `or install it with \`nimbus install ${bin}\` if a Nimbus runtime provides it.`),
+            + `or install it with \`nimbus install ${bin}\` if a Nimbus runtime provides it.`)
+        // A catalog that threw is a fact this refusal carries, not hides:
+        // "no bins known" and "could not ask" are different answers.
+        + (unreadable === undefined ? '' : ` The runtime catalog could not be read: ${renderCauseChain(unreadable)}`),
       { execution: { exitCode: outcome.exitCode } },
     )),
   };
 }
+
 
 /** Parse the shape `runtimes.list()` answers with — `{installed, available}`
  *  on the SDK handle, a bare `installed` array on hosts that wrap it — into the
@@ -122,7 +128,7 @@ const NimbusRuntimeCatalogSchema = v.union([
  *  installed bins already, plus every bin name the still-available runtime
  *  manifests declare (the same merge `runtimeEntrypoints` performs for the
  *  embedded registry — substrate's own table, not a second list). */
-export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string>> {
+export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
   try {
     const parsed = v.safeParse(NimbusRuntimeCatalogSchema, await list());
 
@@ -138,10 +144,10 @@ export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefin
     }
 
     return names;
-  } catch (error) {
-    void error;
-
-    return new Set();
+  } catch (cause) {
+    // A list() that threw is a fact the refusal carries — distinct from a
+    // catalog that parsed and named no bins.
+    return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
   }
 }
 

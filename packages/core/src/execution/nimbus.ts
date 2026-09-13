@@ -1064,8 +1064,13 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
       // table. No runtimes handle on this box → nothing is installable here.
       const runtimes = box.runtimes?.list?.bind(box.runtimes);
 
-      return workspaceCommandNotFound(outcome, async (bin) =>
-        runtimes === undefined ? false : (await sessionRuntimeBins(runtimes)).has(bin));
+      return workspaceCommandNotFound(outcome, async (bin) => {
+        if (runtimes === undefined) return false;
+
+        const catalog = await sessionRuntimeBins(runtimes);
+
+        return 'unreadable' in catalog ? catalog : catalog.has(bin);
+      });
     },
   };
 }
