@@ -205,7 +205,7 @@ import {
   // Shared catalog view of the resolved model
   ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
-  assembleTurnMessages, measureCompactionTrigger,
+  assembleTurnMessages, measureCompactionTrigger, orderUserTurnMessages,
 
   // AGENTS.md (agents.md standard) — cloud workspace discovery, and the trust
   // authority that decides whether discovered bytes earn system placement.
@@ -6141,6 +6141,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     return runOperationProfile(null, async () => {
+      const turnMessages = orderUserTurnMessages(ctx.messages, ctx.continuation);
       this._turnProgram = null;
       ctx.signal?.throwIfAborted();
       // The scaffold and the soul are both files this turn is about to read, and
@@ -6188,7 +6189,7 @@ export abstract class ActorAgent extends Think<Env> {
       // at `beginTurn`, and the recorded turn carries it so a recovering host's
       // own engine cannot re-judge a turn it did not run.
       this._turnEvolutionEnabled = this.turnRecordsEvolution();
-      this._turnOriginContext = Object.freeze(structuredClone([...ctx.messages]));
+      this._turnOriginContext = Object.freeze(structuredClone([...turnMessages]));
       // Fresh splice coordinates for this streamText call. Steers already
       // buffered survive — they were typed for the turn that is about to run.
       this.userSteer.beginTurn();
@@ -6199,7 +6200,7 @@ export abstract class ActorAgent extends Think<Env> {
       // concurrently with this turn; never blocks it. Programmatic turns
       // (reactor / job wake) are not user verdicts.
       if (!this.lastUserTurnIsProgrammatic()) {
-        this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
+        this.orch.observeUserTurn(extractLastUserText(turnMessages), this._turnContinuity);
       }
 
       // Start a new run for the event log, with provenance so cross-run history
@@ -6212,7 +6213,7 @@ export abstract class ActorAgent extends Think<Env> {
       openTurnRun(this.eventRecorder, this._currentRunId, {
         agentId: this.actorHandle().actorId,
         causedBy: 'chat',
-        userMessage: extractLastUserText(ctx.messages),
+        userMessage: extractLastUserText(turnMessages),
         turnIndex: this.orch.sessionTurnIndex,
       });
 
@@ -6231,7 +6232,7 @@ export abstract class ActorAgent extends Think<Env> {
       const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
         vfs: this.getSkillsVfs(),
         config: this.config,
-        userText: extractLastUserText(ctx.messages),
+        userText: extractLastUserText(turnMessages),
         roleSkills,
         trust,
         limits: {
@@ -6400,7 +6401,7 @@ export abstract class ActorAgent extends Think<Env> {
       // sanitization is copy-on-write per message with per-part replacement, so
       // the raw count IS the sanitized durable length — and it is stashed because
       // recordTurnTelemetry writes the next measurement against the same number.
-      const rawMessages = this._cliCwd ? withCliCwdContext(ctx.messages, this._cliCwd) : ctx.messages;
+      const rawMessages = this._cliCwd ? withCliCwdContext(turnMessages, this._cliCwd) : turnMessages;
       this._turnDurableLength = rawMessages.length;
       this._turnContextWindow = this.sessionContextWindow();
       const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
