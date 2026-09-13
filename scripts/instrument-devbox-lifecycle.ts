@@ -25,6 +25,7 @@ const methods = new Set(['activate', 'durableClaim', 'adoptOrTurnOver', 'runStar
   'startContainer', 'recoverAndStart', 'admitControlListener', 'startAndWaitForPorts', 'startContainerIfNotRunning', 'waitForPort', 'syncPendingStoppedEvents']);
 
 for (const path of files) {
+  if (process.argv.includes('--vendor-only') && !path.startsWith('node_modules/')) continue;
   const absolute = root + path;
 
   if (!realpathSync(absolute).startsWith(root)) throw new Error(`refusing a shared dependency: ${path}; copy it into this worktree first`);

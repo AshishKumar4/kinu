@@ -232,6 +232,25 @@ describe('the start hook owns restoration', () => {
     expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
   });
 
+  test('a stale startup schedule does not reopen the hook around an active caller', async () => {
+    const { box, container } = await stoppedBoxWithService();
+    await box.start();
+    const parked = gate();
+    container.execGate = parked;
+    const caller = box.exec('echo active caller');
+    await parked.reached;
+    const commands = container.execs.length;
+
+    try {
+      await box.devboxStartup();
+      expect(container.execs).toHaveLength(commands);
+      expect((await box.devboxState()).ready).toBe(true);
+    } finally {
+      parked.release();
+      await caller;
+    }
+  });
+
   test('an interrupted durable claim refuses a second restore on the same boot', async () => {
     const { box, container, rows } = runningBoxWithService();
     container.running.running = true;

@@ -1,0 +1,243 @@
+{
+  "runId": "b20260913145258",
+  "date": "2026-09-13T15:02:41.563Z",
+  "source": {
+    "commit": "4ded56c3b6417b8cc52866de48e9360ecda6f9e1",
+    "dirtyDigest": "sha256:6e604bfe90d27e458e5f0270cc4aa693d87200c6dbf853d0ceb96f59658ea111"
+  },
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e",
+  "worker": "kinu-devbox-bench-b20260913145258-snapshot-chain",
+  "bucket": "kinu-devbox-bench-b20260913145258-snapshot-chain",
+  "workerVersion": "ac445d8e-5e09-463b-a6a0-0b60b0ea83c9",
+  "scope": "one 2GiB storage cell; not full strategy admission",
+  "c3": null,
+  "large": {
+    "box": "ab-snapshot-chain-b20260913145258",
+    "bytes": 2147483648,
+    "representation": "random dense changed file in block-lower",
+    "initial": {
+      "attach": {
+        "kind": "empty",
+        "detail": "no chain recorded; an empty overlay is attached"
+      },
+      "state": {
+        "extractionAllowed": false,
+        "storePrefix": "boxes/fd82e7ea9c40c2f6155815408dca397914c928d75a6617a5faa9d96c42113720/",
+        "state": {
+          "restoration": "attached",
+          "running": true,
+          "lastAttach": {
+            "kind": "empty",
+            "detail": "no chain recorded; an empty overlay is attached"
+          },
+          "bootId": "e9d2b2f8-ec11-49ef-86f6-e9415680a522",
+          "chain": null,
+          "incidents": {
+            "total": 4,
+            "undelivered": 1
+          },
+          "strategy": "snapshot-chain",
+          "durable": true,
+          "ready": true,
+          "lastInteractionAt": 1789311217420,
+          "replacedCount": 0,
+          "supervised": [],
+          "ports": []
+        },
+        "ok": true,
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-b20260913145258",
+        "ms": 42
+      },
+      "redrives": 4,
+      "ms": 26330,
+      "startedAt": 1789311192376
+    },
+    "restoration": {
+      "attach": {
+        "kind": "attached",
+        "detail": "chain 908f712d-5e87-4389-ab11-4df84e2d8021 2147557376B base+delta block-composed"
+      },
+      "state": {
+        "extractionAllowed": false,
+        "storePrefix": "boxes/fd82e7ea9c40c2f6155815408dca397914c928d75a6617a5faa9d96c42113720/",
+        "state": {
+          "restoration": "attached",
+          "running": true,
+          "lastAttach": {
+            "kind": "attached",
+            "detail": "chain 908f712d-5e87-4389-ab11-4df84e2d8021 2147557376B base+delta block-composed"
+          },
+          "bootId": "96cb8b2c-51f4-46db-89e1-f801b2759f73",
+          "chain": {
+            "base": {
+              "bytes": 2147487744,
+              "objectVersion": "7e5f64bc74484b388c694e325f59f6c6",
+              "id": "908f712d-5e87-4389-ab11-4df84e2d8021"
+            },
+            "delta": {
+              "bytes": 69632,
+              "objectVersion": "7e5f64b5bdcaa5905e3e95890cecd29b",
+              "id": "4c543e55-0d02-4b1b-bfdc-a2b4c2932e31"
+            },
+            "mode": "chain",
+            "rev": 2,
+            "deltaFormat": "chunked",
+            "at": 1789311730530,
+            "changeVersion": "watch-1-1789311237902:0",
+            "upperMark": "6cf50023de27b5c2c0801a87bce9d144a21045d0ec89bc88dd5a00d40bd11677",
+            "retiredDeltas": []
+          },
+          "incidents": {
+            "total": 5,
+            "undelivered": 0
+          },
+          "strategy": "snapshot-chain",
+          "durable": true,
+          "ready": true,
+          "lastInteractionAt": 1789311747534,
+          "quietSince": 1789311731118,
+          "lastTick": {
+            "running": true,
+            "ping": "ok",
+            "armedNext": true,
+            "decision": "hold",
+            "at": 1789311731118
+          },
+          "replacedCount": 1,
+          "supervised": [],
+          "ports": []
+        },
+        "ok": true,
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-b20260913145258",
+        "ms": 11
+      },
+      "redrives": 2,
+      "ms": 11445,
+      "startedAt": 1789311736180
+    },
+    "restoreProbe": {
+      "kind": "destroy-cold-restore",
+      "treeBytes": 2147483648,
+      "wallMs": 4124,
+      "probeAt": 1789311743304,
+      "outcome": "ok",
+      "phases": {
+        "containerStart": 297,
+        "storeMount": 1513,
+        "baseAttach": 2938,
+        "attached": 4032,
+        "bootId": 575
+      }
+    },
+    "blockReads": {
+      "generation": "908f712d-5e87-4389-ab11-4df84e2d8021:4c543e55-0d02-4b1b-bfdc-a2b4c2932e31:96cb8b2c-51f4-46db-89e1-f801b2759f73",
+      "payloadBytes": 0,
+      "indexPages": 0,
+      "readRequests": 0
+    },
+    "baseline": {
+      "ok": true,
+      "outcome": {
+        "kind": "committed",
+        "bytes": 2147487744,
+        "movedBytes": 2147487744
+      },
+      "ms": 190766,
+      "state": "done",
+      "token": "checkpoint-5a898d0f-38c1-4d08-8d56-e7f7c0fec53c",
+      "kind": "quiesce"
+    },
+    "checkpoint": {
+      "ok": true,
+      "outcome": {
+        "kind": "committed",
+        "bytes": 2147557376,
+        "movedBytes": 69632
+      },
+      "ms": 230756,
+      "state": "done",
+      "token": "checkpoint-73717e69-fdf9-46ff-b07c-491fa7478af0",
+      "kind": "quiesce"
+    },
+    "fileProbe": {
+      "ok": true,
+      "exitCode": 0,
+      "stdout": "{\"size\":2147483648,\"ranges\":[{\"position\":0,\"sha256\":\"33e897fbb806e5a10dbbb1cb932b85a665ea96a30ac28823413e30b4d7ebd57e\"},{\"position\":8388608,\"sha256\":\"832bad806596de7ef835c4d62be3377ebe7fa71f48bcce3238157cd7986c1fdb\"},{\"position\":2147418112,\"sha256\":\"484bc11544bddf2a4872b6144430cc3e2ef56de1a7fbadaf919ad2ca7401a9b1\"}]}",
+      "stderr": "",
+      "ms": 278
+    },
+    "expectedFile": {
+      "ok": true,
+      "exitCode": 0,
+      "stdout": "{\"size\":2147483648,\"ranges\":[{\"position\":0,\"sha256\":\"33e897fbb806e5a10dbbb1cb932b85a665ea96a30ac28823413e30b4d7ebd57e\"},{\"position\":8388608,\"sha256\":\"832bad806596de7ef835c4d62be3377ebe7fa71f48bcce3238157cd7986c1fdb\"},{\"position\":2147418112,\"sha256\":\"484bc11544bddf2a4872b6144430cc3e2ef56de1a7fbadaf919ad2ca7401a9b1\"}]}",
+      "stderr": "",
+      "ms": 194
+    },
+    "publication": {
+      "extractionAllowed": false,
+      "storePrefix": "boxes/fd82e7ea9c40c2f6155815408dca397914c928d75a6617a5faa9d96c42113720/",
+      "state": {
+        "restoration": "attached",
+        "running": true,
+        "lastAttach": {
+          "kind": "empty",
+          "detail": "no chain recorded; an empty overlay is attached"
+        },
+        "bootId": "e9d2b2f8-ec11-49ef-86f6-e9415680a522",
+        "chain": {
+          "base": {
+            "bytes": 2147487744,
+            "objectVersion": "7e5f64bc74484b388c694e325f59f6c6",
+            "id": "908f712d-5e87-4389-ab11-4df84e2d8021"
+          },
+          "delta": {
+            "bytes": 69632,
+            "objectVersion": "7e5f64b5bdcaa5905e3e95890cecd29b",
+            "id": "4c543e55-0d02-4b1b-bfdc-a2b4c2932e31"
+          },
+          "mode": "chain",
+          "rev": 2,
+          "deltaFormat": "chunked",
+          "at": 1789311730530,
+          "changeVersion": "watch-1-1789311237902:0",
+          "upperMark": "6cf50023de27b5c2c0801a87bce9d144a21045d0ec89bc88dd5a00d40bd11677",
+          "retiredDeltas": []
+        },
+        "incidents": {
+          "total": 4,
+          "undelivered": 0
+        },
+        "strategy": "snapshot-chain",
+        "durable": true,
+        "ready": true,
+        "lastInteractionAt": 1789311500067,
+        "quietSince": 1789311731118,
+        "lastTick": {
+          "running": true,
+          "ping": "ok",
+          "armedNext": true,
+          "decision": "hold",
+          "at": 1789311731118
+        },
+        "replacedCount": 0,
+        "supervised": [],
+        "ports": []
+      },
+      "ok": true,
+      "strategy": "snapshot-chain",
+      "box": "ab-snapshot-chain-b20260913145258",
+      "ms": 14
+    },
+    "errors": []
+  },
+  "lifecycle": [],
+  "cleanup": [
+    "worker: deleted or absent",
+    "kinu-devbox-bench-b20260913145258-snapshot-chain-snapshotchainbox: absent",
+    "absent",
+    "drained 0 objects and 0 multipart uploads"
+  ],
+  "errors": []
+}
