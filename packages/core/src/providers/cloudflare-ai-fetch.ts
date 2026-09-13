@@ -4,9 +4,10 @@
 // proxy. One implementation of resolve-auth → placeholder-URL rewrite →
 // refresh-on-401 retry → error mapping, so the request shape cannot drift
 // between the three consumers.
-import type { AuthResolution, AuthResolver } from '@kinu.run/core';
-import { asFetchFunction, withRateLimitRetry } from '@kinu.run/core';
-import { diagnostics, tolerate, toKinuError } from '@kinu.run/core/obs';
+import type { AuthResolution, AuthResolver } from './types';
+import { asFetchFunction } from './fetch-shim';
+import { withRateLimitRetry } from './rate-limit-retry';
+import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import { repairSseCachedUsage } from './stream-usage-repair';
 import * as v from 'valibot';
 
@@ -64,7 +65,19 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
         : input.url;
 
     const send = async (resolved: AuthResolution) => {
-      const headers = new Headers(init?.headers);
+      // Not `new Headers(init?.headers)`: the DOM HeadersInit union's iterable
+      // arm is wider than what some ambient lib combinations accept, and the
+      // constructor's parameter, not this module, is what narrows. Copying by
+      // shape accepts every arm under every lib.
+      const headers = new Headers();
+      const incoming = init?.headers;
+
+      if (incoming !== undefined) {
+        if (incoming instanceof Headers) incoming.forEach((value, key) => headers.set(key, value));
+        else if (Symbol.iterator in incoming) {
+          for (const [key, value] of incoming) headers.set(key, value);
+        } else for (const [key, value] of Object.entries(incoming)) headers.set(key, value);
+      }
 
       for (const [key, value] of Object.entries(resolved.headers)) headers.set(key, value);
 

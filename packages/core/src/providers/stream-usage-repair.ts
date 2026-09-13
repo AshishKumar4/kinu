@@ -35,8 +35,8 @@
  */
 
 import * as v from 'valibot';
-import { JsonObjectSchema, type JsonObject } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { tolerate } from '../obs/index';
 
 /** The cache detail a usage report carries, all of it optional: a duplicate
  *  that dropped or nulled the whole object is precisely the shape needing

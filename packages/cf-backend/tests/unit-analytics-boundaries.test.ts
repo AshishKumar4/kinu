@@ -490,7 +490,7 @@ describe('the gate fails when an instrument is missing', () => {
   test('an event name nothing emits at its file is caught', () => {
     const invented = {
       event: 'provider.error_that_was_renamed',
-      site: 'packages/cf-backend/src/providers/cloudflare-ai-fetch.ts',
+      site: 'packages/core/src/providers/cloudflare-ai-fetch.ts',
     };
 
     const emitted = sitesOf(invented.site).some((site) => site.firstString === invented.event);

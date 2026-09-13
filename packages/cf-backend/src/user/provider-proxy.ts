@@ -36,7 +36,7 @@ import {
   providerProxyBaseURL, proxyTargetAllowed,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
-import { errorResponse } from '../providers/cloudflare-ai-fetch';
+import { errorResponse } from '@kinu.run/core';
 import { json } from '../lib/http';
 import { ownerCaller, type UserCaller } from './workspace-capability';
 import { validateCredentialKey } from './validate';
