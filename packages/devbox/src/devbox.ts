@@ -1,67 +1,10 @@
 /**
- * Devbox — one ephemeral container presented as a persistent machine.
+ * One ephemeral container presented as a durable workspace.
  *
- * A Cloudflare container is spot capacity with an ephemeral disk. It can be
- * recycled between two consecutive calls, and when it comes back the disk is
- * blank. Everything in this class exists to make that container look, to its
- * caller, like a machine that was simply asleep.
- *
- * WHAT THIS CLASS OWNS
- *
- *   The restoration, run ONCE PER CONTAINER INSTANCE on the first delivered
- *   frame after a container start. `Container.onStart` is awaited inside
- *   `blockConcurrencyWhile` (`@cloudflare/containers`, `container.js:583` for
- *   `start()`), and the platform delivers no timer to a Durable Object while
- *   that block is held — which is why the restore does NOT run there. The
- *   hook's first command on a fresh container opens the SDK's control
- *   connection, and that connect is bounded by `setTimeout` on the Durable
- *   Object (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js:3563`, a 30 s
- *   abort) and retried through another (`:812`, a 3 s backoff): a container
- *   whose server is not yet accepting at the hook's first attempt cannot be
- *   reached from inside the gate at all, and the platform resets the object at
- *   its 30 s cap. Measured on six fresh container starts (2026-09-10): one
- *   admitted at 3,270 ms, five reset with no phase stamped
- *   (`bench/measure-first/DECISIVE-2026-09-05.md`).
- *
- *   So the hook reads this object's own storage and nothing else: it arms the
- *   three durable chains and marks the restoration PENDING, so no operation
- *   is admitted on the strength of a phase settled before this start. The
- *   restore itself runs on the delivered frame that asked — the readiness
- *   request or the `devboxStartup` row — under the raced budget, where a
- *   deadline can fire (`racedRestoreSteps`). Every door joins the one
- *   single-flight attempt, fenced by the generation, and admission reads only
- *   a SETTLED phase: `restoring` admits nobody.
- *
- *   Once per instance, and never twice on the same one: the container's own
- *   boot id (`/tmp/devbox-boot-id`, dead with the instance) is compared
- *   against the durable row on the first delivered frame after a start, and a
- *   match on a settled box is adopted without a restore. The settled phase is
- *   durable (`devbox:restoration`), so an activation after a platform reset
- *   adopts the same way.
- *
- *   The readiness gate, for everything else. A container replaced under a
- *   live object never fires the hook — the SDK sees a running, healthy
- *   container — so `ensureReady()` guards every operation, adopts or drives
- *   the one attempt, and returns what it admitted the caller INTO —
- *   restored, or repair with a reason — refusing everything else.
- *
- * HOW IT IS CONSUMED
- *
- *   The way `Sandbox` itself is consumed: extend the class and override the
- *   protected hooks. There is no options bag, no plugin registry and no event
- *   emitter, because the thing being configured is a Durable Object class and a
- *   subclass is already the platform's way to configure one.
- *
- *     class MyBox extends Devbox<Env> {
- *       protected override get store() {
- *         return { binding: 'BUCKET', bucket: this.env.BUCKET };
- *       }
- *       protected override async hasBackgroundWork() { … }
- *     }
- *
- *   A subclass that overrides nothing is a working ephemeral box: it attaches
- *   nothing, checkpoints nothing, and says so. That is a real state, not a
- *   placeholder.
+ * Admission proves the Sandbox control listener before the SDK opens its
+ * onStart block. The hook adopts the same boot or restores one fresh boot
+ * under one raced budget. Requests and maintenance adopt or refuse; they
+ * never run a second filesystem restore.
  */
 
 import { Sandbox } from '@cloudflare/sandbox';
@@ -102,7 +45,7 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
   openStartBudget, awaitListenerCommand,
-  racedRestoreSteps, runRestoreStep, type RestoreSteps,
+  racedRestoreSteps, runRestoreStep, ContainerStartOverrun, ContainerStartInterrupted, type RestoreSteps,
 } from './lifecycle';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
@@ -190,10 +133,9 @@ const BOOT_ID_KEY = 'devbox:boot-id';
 
 /** The settled phase of the last restoration, written beside the boot id it
  *  settled on. Memory-only state does not survive the platform resetting the
- *  object mid-restore; this row lets the next activation adopt a restoration
- *  the container already holds instead of running it again. Deleted whenever
- *  the generation turns over, so a stale phase can never be adopted for a
- *  container it did not settle on. */
+ *  object mid-restore. Settled phases may be adopted; a persisted `restoring`
+ *  phase requires recovery before another attempt. Generation turnover clears
+ *  the row, so a stale phase cannot admit a different container. */
 const SETTLED_KEY = 'devbox:restoration';
 
 const REPLACED_COUNT_KEY = 'devbox:replaced-count';
@@ -208,14 +150,8 @@ const HEARTBEAT_CALLBACK = 'devboxHeartbeat';
 
 const INCIDENT_CALLBACK = 'devboxIncidents';
 
-/**
- * The container-start hook's claim, read by `scripts/do-init-gate.ts`: the work
- * it hands the platform's gate touches this object's own storage and nothing
- * else — no container command, no R2, no Durable Object timer. The gate holds
- * the method the hook returns to that claim by name. The identifier appears in
- * the hook's body so the claim is made where it can be checked.
- */
-const BOUNDED_STORAGE_ONLY = 'devbox:onStart touches only this object\'s own storage';
+/** A classified recovery obligation; executed outside the SDK start block. */
+const RECOVERY_ACTION_KEY = 'devbox:recovery-action';
 
 /**
  * Where the snapshot chain's seed stamp lives inside the container.
@@ -389,16 +325,6 @@ export interface DevboxReport {
 }
 
 /**
- * WHICH DOOR opened a restoration.
- * Two, both delivered frames: the `devboxStartup` schedule row a container
- * start arms, and a readiness request. Both join the same single-flight run;
- * `where` is the answer to "who is driving this" for whoever is polling. The
- * container-start hook is not a door: it arms and marks, and reaches no
- * container (see `onStart`).
- */
-type RestorationDoor = 'schedule' | 'request';
-
-/**
  * What THIS container generation's restoration established, as ONE value.
  *
  * It replaces a pair of flags that could disagree. Readiness and the attach
@@ -437,11 +363,11 @@ type Restoration =
   /**
    * An attempt is IN FLIGHT for this generation.
    *
-   * `where` names the door that opened it ({@link RestorationDoor}), and the
+   * `where` names the door that opened it (the container-start hook), and the
    * honest answer to seeing this at all is "wait", never "drive": a second
    * driver would open a rival restoration against the same container.
    */
-  | { readonly phase: 'restoring'; readonly where: RestorationDoor; readonly since: number }
+  | { readonly phase: 'restoring'; readonly where: 'start'; readonly since: number }
   /** The work directory is attached AND every supervised process, listener and
    *  port came back. The only phase that is `ready`. */
   | { readonly phase: 'attached' }
@@ -610,6 +536,7 @@ type ReadValueOptions = NonNullable<ReadArms['value']['args'][1]>;
 
 export class Devbox<Env = unknown> extends Sandbox<Env> {
   #storage: DevboxStorage | undefined;
+  #gateRestore: { readonly generation: number; readonly run: Promise<void> } | undefined;
   /**
    * The lifecycle attempt this box is on, and the fence for every write below.
    *
@@ -629,21 +556,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  waiting on work whose result is already discarded. */
   #startup: { readonly generation: number; readonly run: Promise<void> } | undefined;
   /** The clock of the restore in flight, opened by the attempt on its
-   *  delivered frame and read by every phase stamp until the attempt settles.
+   *  hook and read by every phase stamp until the attempt settles.
    *  Memory only: a witness that wants the stamps past a reset keeps them
    *  itself, through `onRestorePhase`. */
   #phaseClock: RestoreClock | undefined;
   #restoration: Restoration = { phase: 'unstarted' };
-  /** RESTORE PENDING: something happened to the container that this box has
-   *  not yet reconciled with the phase it holds — a container start (the hook
-   *  marks it, every time it fires), or an activation over a running container
-   *  whose durable rows name a settled restoration. Both gates deliver no
-   *  timer, so neither asks the container: a control server that accepts the
-   *  connection and never answers would hold the block to the platform's
-   *  cancel, the reset would repeat it, for ever. The question — is this the
-   *  instance the rows name — is asked on the first delivered frame instead
-   *  (`#resolveAdoption`), where the SDK's own request deadline fires. Until
-   *  then the box admits nobody on the strength of what it held before. */
+  /** Activation defers identity comparison until the control listener is reachable. */
   #adoptionPending = false;
   /** The work-directory holders the last release pass signalled, kept only
    *  long enough for a refused detach to name them. Cleared on every detach
@@ -727,22 +645,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       });
   }
 
-  /**
-   * One activation's own work, inside its gate: sweep the dead schedule rows,
-   * then note the running container's settled restoration as ADOPTION
-   * PENDING. Storage only — no container command runs in this gate, because
-   * the gate delivers no timer to bound one: a control server that accepts
-   * the connection and never answers would hold the block to the platform's
-   * 30 s cancel, the reset would activate again, and the same command would
-   * hang again, with no request, alarm, stop or destroy ever delivered. The
-   * boot id is compared on the first delivered frame (`#resolveAdoption`),
-   * where the SDK's request deadline can fire.
-   */
+  /** Constructor work is storage-only; it does not yet have control-port proof. */
   async #activate(): Promise<void> {
     await this.#sweepUnknownSchedules();
 
     if (this.ctx.container?.running === true) {
       this.#adoptionPending = (await this.#durableClaim()) !== undefined;
+      const settled = await this.ctx.storage.get<SettledRestoration>(SETTLED_KEY);
+
+      if (settled?.phase === 'unattached' && isSettledRestoration(settled)) {
+        // Refusal is safe to retain even when identity stamping failed.
+        this.#restoration = settled;
+      }
     }
   }
 
@@ -766,10 +680,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *
    * A MATCH ADOPTS; A MISMATCH OVER A SETTLED PHASE TURNS THE GENERATION
    * OVER. Memory can name `attached` for an instance that is gone — the
-   * container was stopped and started again under this live object, and the
-   * hook that fired for the new instance could only mark, not ask. Serving
-   * that phase would admit a caller onto a bare `/workspace`; the turnover
-   * leaves the box `unstarted`, and the door that asked drives the restore.
+   * container was replaced under this live object. Serving that phase would
+   * admit a caller onto a bare `/workspace`; the turnover leaves the box
+   * `unstarted`, which only the next start hook may restore.
    */
   async #resolveAdoption(): Promise<void> {
     if (this.#adoptionPending) await this.#adoptOrTurnOver();
@@ -796,8 +709,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * correctly, superseding the attempt that had just restored the box.
    *
    * NOT TIMED. Only a restore opens the witness's clock (`#restoreNow`): an
-   * adoption is one `cat`, and it runs on every delivered frame that follows
-   * a hook's mark — a `/state` poll included — so a clock opened here would
+   * adoption is one `cat`, including the first frame after activation, so a
+   * clock opened here would
    * overwrite the restore's settled row with an unsettled one at exactly the
    * moment a reader asks for it (measured on run `kinu-devbox-bench-
    * 20260911001505`: both probe rows read as unsettled adoptions over restores
@@ -805,12 +718,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * compares the row's open time against the wake's own.
    */
   async #adoptOrTurnOver(): Promise<void> {
+    const generation = this.#generation;
     this.#adoptionPending = false;
     const claim = await this.#durableClaim();
 
-    if (claim === undefined) return;
+    if (claim === undefined || !this.#owns(generation)) return;
+    const actual = await this.#readBootId();
 
-    if ((await this.#readBootId()) === claim.expected) {
+    if (!this.#owns(generation)) return;
+
+    if (actual === claim.expected) {
       this.#restoration = claim.settled;
 
       return;
@@ -818,7 +735,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     const held = this.#restoration;
 
-    if (held.phase !== 'attached' && held.phase !== 'repair') return;
+    if (held.phase === 'unstarted' || held.phase === 'restoring') return;
     console.error(
       '[devbox] the box claims a restoration the container does not carry; restoring it '
       + 'rather than serving callers a world that is gone',
@@ -923,7 +840,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /**
    * The restore in flight moved: it `opened` (at 0), a phase landed, or it
-   * `settled` — each `atMs` after the attempt opened on its delivered frame.
+   * `settled` — each `atMs` after the attempt opened inside the hook.
    * The default reports nothing. A witness overrides it to keep the stamps
    * somewhere a platform reset cannot erase; synchronous, because the
    * attempt waits for nothing of the witness's.
@@ -981,85 +898,117 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return true;
   }
 
-  /**
-   * THE CONTAINER-START HOOK ARMS THE BOX, MARKS THE RESTORE PENDING, AND
-   * REACHES NO CONTAINER.
-   *
-   * `Container.onStart` is awaited inside `blockConcurrencyWhile`
-   * (`@cloudflare/containers`, `container.js:583`), so this is the one method
-   * on this class that runs while the platform's own critical section is held
-   * — and a Durable Object timer set inside that block is not delivered until
-   * the block releases. That is the whole reason the restore does not run
-   * here. The owner's earlier placement DID restore here, so that nothing
-   * could observe a half-restored box; measured on six fresh container starts
-   * (2026-09-10, `bench/measure-first/DECISIVE-2026-09-05.md`) it admitted
-   * one and the platform reset five at the `do.block_concurrency.cancel_ms`
-   * cap with no phase stamped. The first command on a fresh container opens
-   * the SDK's control connection, whose connect abort (`@cloudflare/sandbox`,
-   * `dist/sandbox-CPj2jsbz.js:3563`, `DEFAULT_CONNECT_TIMEOUT_MS`, 30 s) and
-   * retry backoff (`:812`, `DEFAULT_INITIAL_RETRY_DELAY_MS`, 3 s) are both
-   * Durable Object timers: a container whose server is not yet accepting at
-   * the first attempt either hangs to an abort that cannot fire or sleeps on
-   * a retry that cannot wake, and the platform's cap is what ends it. The
-   * platform's own "no container instance" wait is paid OUTSIDE
-   * this block, in `startContainerIfNotRunning`; the block opens the moment
-   * the instance exists, before the server inside it accepts. Structural,
-   * not a margin: no budget consulted between commands can shorten the one
-   * command in flight.
-   *
-   * WHAT SURVIVES OF THE EARLIER PLACEMENT is the invariant it was chosen
-   * for: nothing is admitted onto a container this box has not restored or
-   * adopted. The hook marks the restore PENDING (`#adoptionPending`), so the
-   * first delivered frame compares the container's boot id against the
-   * durable row before any phase settled earlier can admit anyone; a match
-   * adopts, a mismatch turns the generation over and the door drives the
-   * restore under the raced budget, where deadlines fire. Once per instance
-   * holds through the boot id, not through this hook: the SDK fires the hook
-   * from its own control paths on a container that is already up, so a hook
-   * that restored, or turned the generation over, on every entry would fence
-   * the very attempt it opened.
-   *
-   * STORAGE ONLY, and the gate holds it to that: `scripts/do-init-gate.ts`
-   * requires the `BOUNDED_STORAGE_ONLY` marker, refuses `async` and any
-   * own-scope await, and scans the method handed back for container reaches
-   * and Durable Object timers by name.
-   * `packages/devbox/tests/restore-after-start.test.ts` proves the shape
-   * against a container that never answers.
-   */
-  override onStart(): Promise<void> {
-    void BOUNDED_STORAGE_ONLY;
-
-    return this.#noteContainerStart();
+  /** Plain SDK starts must also prove the control listener before our hook. */
+  override start(...args: Parameters<Sandbox<Env>['start']>): Promise<void> {
+    return this.startAndWaitForPorts({
+      ports: this.defaultPort,
+      startOptions: args[0],
+      cancellationOptions: {
+        abort: args[1]?.signal,
+        waitInterval: args[1]?.waitInterval,
+        instanceGetTimeoutMS: this.policy.portWaitMs,
+        portReadyTimeoutMS: this.policy.portWaitMs,
+      },
+    });
   }
 
-  /** The work the hook hands the gate: mark, then arm. Armed here rather than
-   *  by the door, because a reset between this frame and the first delivered
-   *  one must leave rows that continue the work; the attempt that settles
-   *  retires the startup row it no longer needs. */
-  async #noteContainerStart(): Promise<void> {
-    this.#adoptionPending = true;
+  /** The SDK opens this block only after the control listener has answered. */
+  override onStart(): Promise<void> {
+    return this.#restoreInStartGate();
+  }
+
+  /** Reconnects join the hook; a settled boot is adopted without re-attaching. */
+  async #restoreInStartGate(): Promise<void> {
+    const pending = this.#gateRestore;
+
+    if (pending?.generation === this.#generation) return await pending.run;
+    const run = this.#runStartHook();
+    this.#gateRestore = { generation: this.#generation, run };
+
+    try {
+      await run;
+    } finally {
+      if (this.#gateRestore?.run === run) this.#gateRestore = undefined;
+    }
+  }
+
+  /** One budget includes adoption, restore, resumption and durable settlement. */
+  async #runStartHook(): Promise<void> {
+    const budgetMs = Math.min(this.policy.attachBudgetMs, DEFAULT_DEVBOX_POLICY.attachBudgetMs);
+    const budget = openStartBudget(budgetMs);
+    let generation = this.#generation;
+
+    const result = await runRestoreStep(
+      budget.remainingMs(),
+      async () => {
+        const previous = await this.ctx.storage.get<Restoration>(SETTLED_KEY);
+
+        if (!this.#owns(generation)) return;
+
+        if (previous?.phase === 'restoring') {
+          const claim = await this.#claimRecovery();
+          await this.#recover(generation, claim, { cause: new ContainerStartInterrupted() });
+
+          return;
+        }
+
+        await this.#adoptOrTurnOver();
+
+        if (this.#restoration.phase !== 'unstarted') return;
+        generation = this.#generation;
+        const failure = await this.#restoreNow(generation, racedRestoreSteps(budget));
+
+        if (failure !== undefined) console.error(`[devbox] start refused: ${describe(failure)}`);
+      },
+      (failure) => console.error(`[devbox] abandoned start hook failed: ${describe(failure)}`),
+    );
+
+    if (!this.#owns(generation)) return;
+
+    if (result.kind !== 'done') {
+      const clock = this.#phaseClock;
+      const attached = clock?.stamps.attached !== undefined;
+
+      const cause = result.kind === 'late'
+        ? new ContainerStartOverrun('Devbox.onStart', budgetMs)
+        : result.cause;
+
+      if (clock !== undefined) this.#settleClock(clock);
+      this.#invalidateGeneration();
+
+      if (attached) {
+        const reason = `[deadline → repair] restoration did not settle inside the ${budgetMs}ms hook budget`;
+        await this.#settle({ phase: 'repair', incomplete: reason });
+        await this.#record('process', reason);
+      } else {
+        const generation = this.#generation;
+        const claim = await this.#claimRecovery();
+        await this.#recover(generation, claim, { cause });
+      }
+    }
+
     await this.#armContainerSchedules();
+
+    if (this.#admission() !== undefined) this.deleteSchedules(STARTUP_CALLBACK);
   }
 
   /**
    * The durable row is what a post-reset activation adopts, so every site that
    * settles the box goes through here rather than writing memory alone. The
-   * transient phases delete the row instead: a stale settled phase beside a
-   * turned-over generation is a box the next activation would adopt onto a
-   * container it never restored.
+   * `restoring` replaces the old settled row before any new boot is stamped.
+   * It admits nobody and lets the next activation recognize interrupted work.
+   * `unstarted` deletes the row; neither can be adopted as a settled phase.
    */
   async #settle(restoration: Restoration): Promise<void> {
-    this.#restoration = restoration;
+    const generation = this.#generation;
 
-    if (
-      restoration.phase === 'attached'
-      || restoration.phase === 'repair'
-      || restoration.phase === 'unattached'
-    ) {
+    if (restoration.phase !== 'unstarted') {
       await this.ctx.storage.put(SETTLED_KEY, restoration);
     } else {
       await this.ctx.storage.delete(SETTLED_KEY);
     }
+
+    if (this.#owns(generation)) this.#restoration = restoration;
   }
 
   /**
@@ -1155,8 +1104,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * reliable signal there is.
    *
    * FENCED, like every other write a restoration makes, and fenced BEFORE the
-   * container write as well as after it. The stamp is the last phase and the one
-   * with the most awaits before its writes: the previous-id read, the container
+   * container write as well as after it. Identity is stamped before attachment
+   * and checked again before settlement: the previous-id read, the container
    * read, the replacement count, and the exec itself. A stale attempt that
    * parked at any of them used to run its writes anyway — overwriting the
    * SUCCESSOR's boot id with one naming a container that no longer exists, which
@@ -1174,11 +1123,21 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // incremented nothing, so a box could be replaced repeatedly and report zero.
     const previous = await this.ctx.storage.get<string>(BOOT_ID_KEY);
 
+    if (previous !== undefined && await this.#readBootId() === previous) {
+      if (this.#owns(generation)) this.#stampPhase('bootId');
+
+      return;
+    }
+
     if (this.#owns(generation) && previous !== undefined && (await this.#readBootId()) !== previous) {
       const replaced = (await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0) + 1;
 
-      if (this.#owns(generation)) await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
-      console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
+      if (!this.#owns(generation)) return;
+      await this.ctx.storage.put(REPLACED_COUNT_KEY, replaced);
+
+      if (this.#owns(generation)) {
+        console.error(`[devbox] the container instance was replaced (${replaced} so far)`);
+      }
     }
 
     // NOTHING IS WRITTEN INTO A CONTAINER THIS ATTEMPT NO LONGER OWNS. Every
@@ -1229,27 +1188,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return expected !== undefined && (await this.#readBootId()) !== expected;
   }
 
-  /**
-   * Re-attach before committing when the instance underneath was replaced.
-   *
-   * MEASURED DEFECT THIS REPAIRS. `ensureReady()` accepts this object's
-   * in-memory `attached` restoration as proof that THIS container holds the
-   * mount, and the platform replaces a container instance without telling
-   * anyone — measured at roughly once per workload phase under churn. Every
-   * operation between that replacement and the next heartbeat (up to
-   * `heartbeatSeconds`) therefore runs on a fresh container with NO mount, and
-   * its writes land in the bare `/workspace` directory. Deployed boxes died of
-   * it on 2026-08-31 in both shapes it takes: a mount the fresh container
-   * refuses because the directory it must cover is no longer empty, and an
-   * attach that lays a fresh overlay OVER those bytes, so the wake reports
-   * `empty` for a box that had been written to.
-   *
-   * A COMMIT IS THE RIGHT PLACE TO ASK. It is the moment this box claims bytes
-   * are durable, it happens at checkpoint cadence rather than per operation, and
-   * one `cat` of the boot marker is the whole cost. The re-attach is the
-   * ordinary restoration, so it goes through the same recovery ladder and the
-   * same residue handling every attach has.
-   */
+  /** A checkpoint must refuse a replaced workspace until the startup hook restores it. */
   async #healReplacedContainer(): Promise<void> {
     await this.#resolveAdoption();
     // BOTH ADMITTING PHASES. A box in `repair` is serving callers over a work
@@ -1263,11 +1202,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (!await this.#containerWasReplaced()) return;
     console.error(
-      '[devbox] the container was replaced under an attached box; re-attaching before this '
-      + 'commit rather than reporting one against a container that is gone',
+      '[devbox] the restored container was replaced; refusing this commit until the start hook restores it',
     );
     this.#invalidateGeneration();
-    await this.#drive('request');
+    await this.kickStartup();
+    throw new Error('this devbox is not ready: the restored container was replaced; a startup is armed');
   }
 
   /** The id this container instance is carrying, or undefined when the file is
@@ -1279,39 +1218,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return value.length > 0 ? value : undefined;
   }
 
-  /**
-   * ONE restore attempt, and it always CLASSIFIES.
-   *
-   * ON A DELIVERED FRAME, ALWAYS: `#startupAttempt` runs it under the raced
-   * budget, where the deadline it races is delivered, and a failure climbs the
-   * recovery ladder — classify, record, arm, and if the class says so destroy
-   * the identity — because the timers that path waits on are delivered there.
-   * The container-start hook never reaches here; it marks and arms, and this
-   * is the frame that does the work.
-   *
-   * IT DOES NOT THROW; IT HANDS THE FAILURE BACK. Every outcome leaves the box
-   * in a NAMED state (`attached`, `repair`, or `unattached` with the reason),
-   * and the classified cause is RETURNED so a caller whose policy is to raise
-   * one raises exactly that value rather than a second wording of it.
-   *
-   * IT SAYS SO WHILE IT RUNS, which is the other half. The first thing it
-   * publishes is `restoring`, before the ladder claim's own await, so no window
-   * exists in which an attempt is in flight and this box still reports that none
-   * has begun. See {@link Restoration}: that window was measured as a 300 s
-   * freeze in which every poll read `unstarted` and decided to wait. `where` is
-   * the DOOR that opened it, passed in rather than inferred: a poller reading
-   * `restoring` wants to know which door is driving.
-   *
-   * IT IS TIMED, entry to settle, on the clock every phase stamp reads
-   * (`#openClock`): the witness sees `opened`, each landmark as it lands, and
-   * `settled` with the wall time — however the attempt ended.
-   */
+  /** Publish the in-flight phase and time the hook's generation-owned restoration. */
   async #restoreNow(
     generation: number,
-    where: RestorationDoor,
     steps: RestoreSteps,
   ): Promise<{ readonly cause: unknown } | undefined> {
-    this.#restoration = { phase: 'restoring', where, since: Date.now() };
+    await this.#settle({ phase: 'restoring', where: 'start', since: Date.now() });
+
+    if (!this.#owns(generation)) return undefined;
     const clock = this.#openClock();
 
     try {
@@ -1349,6 +1263,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     }
 
     try {
+      await this.#stampBootId(generation);
+
+      if (!this.#owns(generation)) return undefined;
       await this.#attachAndRestore(generation, claim, steps);
 
       return undefined;
@@ -1418,20 +1335,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     if (!this.#owns(generation)) return;
     this.#stampPhase('attached');
     await this.#recordAttach(outcome);
+    // Boot proof and durable settlement still need their shares after services.
+    steps.declare(2);
     const restored = await this.#restartWorkloads(generation, steps);
 
     if (!this.#owns(generation)) return;
 
-    // Stamped after the whole walk, so no id exists on an instance whose
-    // restoration is still half-done — a stamp taken earlier would make one look
-    // healthy. It IS taken when a service failed to come back: the id answers
-    // "which container instance is this", which the heartbeat's replacement
-    // detection needs whether or not every service returned, and the
-    // incompleteness reason is what answers "is this box ready".
-    //
-    // A STEP LIKE ANY OTHER, so it draws its own allowance and reports rather
-    // than throws. A boot id the container will not write leaves the box in
-    // `repair`, not replaced.
+    // Re-prove the early instance stamp before publishing its settled phase.
     const stamped = await steps.run(
       async () => await this.#stampBootId(generation),
       (failure) => {
@@ -1475,270 +1385,90 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
   }
 
-  /**
-   * THE SCHEDULE DOOR: the restoration, driven from the `devboxStartup` row.
-   *
-   * ONE OF TWO DOORS ONTO ONE RUN. The container-start hook arms this row and
-   * marks the restore pending; this row and any readiness request
-   * (`ensureReady` → `#drive('request')`) are the delivered frames that do the
-   * work. Both join the same single-flight attempt, so whichever arrives first
-   * does the work and the other waits on it.
-   *
-   * IT IS THE ONLY DRIVER FOR A BOX NOBODY IS ASKING ABOUT: a container
-   * started and no request followed, the platform replaced a container
-   * instance under a live object, or the object was reset mid-restore and the
-   * SDK — which by then sees a running, healthy container — never calls the
-   * start hook again. The row is durable, so it survives the reset that its
-   * own frame died in.
-   *
-   * PUBLIC BECAUSE IT IS A SCHEDULE CALLBACK: `Container.schedule` rejects a
-   * name it cannot call back on this class, and the alarm loop looks it up by
-   * name (`@cloudflare/containers`, `container.js:1532`).
-   */
+  /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   async devboxStartup(): Promise<void> {
-    await this.#drive('schedule');
+    await this.#startContainer();
+
+    if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
   }
 
-  /**
-   * Admit a container, then restore it — or join the attempt already doing so.
-   *
-   * `where` is the door this drive came through, and it travels no further than
-   * the `restoring` phase it publishes: the work is identical either way.
-   */
-  async #drive(where: RestorationDoor): Promise<void> {
-    // ADMISSION IS OBSERVED, NEVER ASSUMED, and it is asked on every attempt.
-    //
-    // MEASURED DEFECT THIS REPAIRS. The question used to be skipped whenever
-    // `ctx.container.running` was true, and that flag says the platform holds an
-    // instance — not that anything inside it answers. So the sequence a cold
-    // start really produces was: attempt one asks the platform, gives up when
-    // the port has not answered inside `portWaitMs`, and records an admission
-    // refusal; the platform brings the container up regardless; attempt two sees
-    // `running` and goes straight to the attach — against a container whose RPC
-    // server may still be starting. Every exec the attach then makes retries
-    // inside the SDK for up to two minutes apiece, which is how a restoration
-    // consumed a 300 s container-start budget and reported nothing but the
-    // overrun. Measured on the deployed benchmark, run 20260831184750.
-    //
-    // `start` IS the observation: it asks the platform for the instance and
-    // proves it answers before returning, and it is idempotent on a container
-    // already running — so asking again costs one health probe and buys the
-    // guarantee that nothing below runs commands on a container that has never
-    // answered one. It waits for the INSTANCE, never for an app port: a port
-    // the box has not restored yet answers nothing, so a restore that starts
-    // the app cannot wait behind that port — that is a deadlock by
-    // construction, measured live on the deployed benchmark (every admission
-    // refused on a running container whose port was dark). Each app port is
-    // proved inside the restore instead, by its own listener proof under the
-    // restoration budget.
-    //
-    // AND IT MARKS HEALTHY FIRST: the patched SDK sets healthy before the hook
-    // in `start()` (see `patches/@cloudflare%2Fcontainers@0.3.7.patch`), the
-    // way `startAndWaitForPorts` does after its port wait
-    // (`container.js:632-636`) — so the first command the restore issues below
-    // routes straight to the container instead of opening a nested start.
-    //
-    // ONLY A CONTAINER THAT WAS DOWN TURNS THE GENERATION OVER. A probe against
-    // a running container observes the instance an in-flight attempt is already
-    // restoring, so invalidating here would supersede that attempt and the
-    // caller meant to JOIN it would open a second restoration against the same
-    // container instead.
-    if (this.ctx.container?.running !== true) this.#invalidateGeneration();
-    // THE GENERATION THIS ADMISSION SPEAKS FOR, read before its own await. It is
-    // a SECOND read from the one below on purpose: a refusal is only this
-    // attempt's to report, while a probe that SUCCEEDED across a turnover is
-    // still the restoration the live generation needs — so the refusal is fenced
-    // and the restoration adopts whatever generation is current.
-    const admitting = this.#generation;
-    let admissionRefusal: string | null = null;
-
-    try {
-      await this.start(undefined, {
-        portToCheck: this.defaultPort,
-        // THE PROBE LASTS ITS WHOLE WINDOW. `retries: 1` makes the SDK's
-        // `totalTries` exactly one, so the first refusal ends the call after
-        // one poll and the abort below can never fire. The retry count is the
-        // window divided by the interval — the SDK's own default shape — so
-        // one call polls the whole window.
-        retries: Math.ceil(this.policy.portWaitMs / ADMISSION_POLL_INTERVAL_MS),
-        waitInterval: ADMISSION_POLL_INTERVAL_MS,
-        // The PORT policy bounds the probe, which is the question it is named
-        // for. It is not the container's admission deadline: a container still
-        // coming up has not failed, so the answer to a probe that did not land
-        // in that window is another probe, not a longer one.
-        signal: AbortSignal.timeout(this.policy.portWaitMs),
-      });
-    } catch (error) {
-      // Capacity and a container that has not answered yet are both admission
-      // outcomes, not failed attachments. No recovery ladder applies to an
-      // identity that was never admitted.
-      //
-      // AND A SUPERSEDED ADMISSION IS INERT, for the reason `#recover` is.
-      // `start` is the longest await on this path — a whole `portWaitMs` — and
-      // an attempt parked inside it holds no resource lane, no
-      // checkpoint lane and no single-flight entry, so the heartbeat's own busy
-      // check cannot see it and a quiesce can land there. Recording then puts a
-      // live blocker about a container nobody asked to exist on the one channel
-      // trusted, and arming wakes a box that was deliberately stopped, one
-      // second after a `quiesce` that arms nothing on purpose.
-      if (this.#owns(admitting)) {
-        const failure = classifyRecovery({ cause: error });
-        admissionRefusal = `[${failure} → retry] ${describe({ cause: error })}`;
-        await this.#record('attach', admissionRefusal);
-
-        if (this.#owns(admitting)) {
-          // ASK AGAIN ON THE STARTUP CADENCE, not the heartbeat's. The re-arm used
-          // to be `heartbeatSeconds`, so a container that needed a few more seconds
-          // than one port probe allows was left unattached for a full heartbeat —
-          // the dominant term in a 44,189 ms cold attach whose container was up
-          // within seconds. This is the same row `kickStartup` arms, so the retry
-          // rides machinery that already exists, and it cannot spin: each attempt
-          // spends its own port probe before it can fail again.
-          await this.#arm(STARTUP_CALLBACK, 1);
-        }
-      }
+  /** All delivered startup doors share admission and destructive recovery. */
+  async #startContainer(): Promise<void> {
+    if (this.ctx.container?.running !== true
+      && (this.#restoration.phase !== 'unstarted' || this.#gateRestore !== undefined)) {
+      this.#invalidateGeneration();
     }
 
-    // THE ADMITTED-NOTHING EXIT, keyed on the named outcome the catch
-    // classified: the container was never admitted, so there is no restoration
-    // to report and no ladder to climb — the incident record and the successor
-    // row are the whole answer, and every later caller re-enters through
-    // `ensureReady()` → this callback.
-    if (admissionRefusal !== null) return;
-    // ADOPT, OR RESTORE. The admission above ran the start hook, which marked
-    // the restore pending and armed the rows; this is the delivered frame that
-    // asks the container which instance it is. A settled box on the same
-    // instance is adopted — one durable read plus one `cat` — and a box whose
-    // memory names a phase the container refutes turns its generation over.
-    await this.#adoptOrTurnOver();
-
-    // A SETTLED PHASE ADMITS, whether adopted just now or held in memory while
-    // its durable row lands; only an unsettled box drives the attempt. An
-    // adopted REFUSAL is not settled for this purpose: the ladder already
-    // spoke, and this drive continues into the attempt the retry owes.
-    if (this.#admission() !== undefined) return;
-    const generation = this.#generation;
     const pending = this.#startup;
 
-    // JOIN ONLY THIS GENERATION'S ATTEMPT. An entry from a superseded one is
-    // work whose result is already discarded, so joining it would hand the
-    // caller a restoration that never happened.
-    if (pending !== undefined && pending.generation === generation) {
-      return await this.#awaitAttempt(pending.run, where);
-    }
-
-    const run = this.#startupAttempt(generation, where);
-    this.#startup = { generation, run };
-
-    return await this.#awaitAttempt(run, where);
-  }
-
-  /**
-   * Wait for the attempt the way THIS door is allowed to wait.
-   *
-   * THE ALARM DOOR DRIVES IT TO COMPLETION. It holds no caller, and a
-   * restoration for a box nobody is asking about has to be driven by something.
-   *
-   * A REQUEST DOOR WAITS ONLY ITS OWN FRAME BUDGET, and then answers from the
-   * restoration's state. What waits here is a request racing the one
-   * attempt, and its answer is the honest one: `restoring`, for this long,
-   * ask again. The box's own
-   * readiness gate turns that into the re-askable refusal its callers already
-   * classify; nothing is abandoned, because the attempt keeps running under the
-   * single-flight entry and the next ask joins or reads it.
-   *
-   * A LATE FAILURE IS REPORTED, NEVER DROPPED: {@link runRestoreStep} keeps a
-   * handler on the work it stopped waiting for, so an attempt that rejects after
-   * its budget cannot surface as an unhandled rejection.
-   */
-  async #awaitAttempt(run: Promise<void>, where: RestorationDoor): Promise<void> {
-    if (where === 'schedule') return await run;
-
-    const joined = await runRestoreStep(
-      this.policy.requestJoinMs,
-      async () => await run,
-      (failure) => {
-        console.error(
-          '[devbox] the restoration this request joined settled after the request had '
-          + `answered: ${describe({ cause: failure.cause })}`,
-        );
-      },
-    );
-
-    // A FAILURE STILL TRAVELS. The caller asked for readiness, so a classified
-    // refusal is its answer — the same value `#startupAttempt` raised.
-    if (joined.kind === 'failed') throw joined.cause;
-  }
-
-  /**
-   * THE GENERATION'S ONE ATTEMPT, fenced by the generation that owns it.
-   *
-   * The failure path is the recovery ladder in `lifecycle.ts` — a taxonomy, not
-   * one retry policy — and every write it makes is guarded, including the
-   * release of the single-flight entry: an attempt that released a successor's
-   * entry let the next caller start a second concurrent restoration against the
-   * same container.
-   *
-   * THE THROW IS THIS METHOD'S POLICY, and `#restoreNow` deliberately has none:
-   * it classifies and hands the cause back, so the decision to raise belongs
-   * here, where the caller is an operation — a commit that must not report
-   * against a box with no work directory, or an `attachNow()` repairing on
-   * somebody's behalf. The SDK's own error is what that caller sees and what its
-   * own classifier reads; a message re-written here would be this class's second
-   * opinion on it. A drive from the schedule door discards it: the alarm loop
-   * reduces a thrown callback to a console line, and the ladder has already
-   * recorded the failure and armed whatever comes next.
-   *
-   * RAISED EVEN WHEN SUPERSEDED. A superseded attempt publishes nothing, arms
-   * nothing and destroys nothing — but it still OWES its caller an answer, and
-   * "the work you asked for did not happen" is that answer whoever ended up
-   * owning the lifecycle.
-   */
-  async #startupAttempt(generation: number, where: RestorationDoor): Promise<void> {
-    let failed: { readonly cause: unknown } | undefined;
+    if (pending?.generation === this.#generation) return await pending.run;
+    const run = this.#recoverAndStart();
+    this.#startup = { generation: this.#generation, run };
 
     try {
-      failed = await this.#restoreNow(
-        generation,
-        where,
-        racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs)),
-      );
-    } catch (error) {
-      // NOTHING MAY BE LEFT `restoring` FOR EVER. `#restoreNow` classifies every
-      // restore failure and RETURNS it, so reaching this catch means something
-      // outside the restore threw — this object's own storage, in the ladder
-      // claim. Rethrowing alone would leave the phase at `restoring`, which is
-      // the one reading `kickStartup` treats as "somebody is working on it": no
-      // row would be armed and no poller would ever drive again. So the box is
-      // left refusing WITH A REASON and with a successor armed, and the cause
-      // still travels to whoever asked.
-      if (this.#owns(generation)) {
-        const reason = `the restoration could not run: ${describe({ cause: error })}`;
-        await this.#settle({ phase: 'unattached', reason, retry: true });
-        await this.#record('attach', reason);
-
-        if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, this.policy.heartbeatSeconds);
-      }
-
-      throw error;
+      await run;
     } finally {
-      // OUR OWN ENTRY ONLY. Owning the generation is what proves the entry is
-      // ours: a generation holds at most one live attempt, because a second
-      // caller joins the first.
-      if (this.#owns(generation)) this.#startup = undefined;
+      if (this.#startup?.run === run) this.#startup = undefined;
+    }
+  }
+
+  async #recoverAndStart(): Promise<void> {
+    const recovery = await this.ctx.storage.get<{
+      readonly owner: string;
+      readonly action: 'retry' | 'replace';
+      readonly reason: string;
+    }>(RECOVERY_ACTION_KEY);
+
+    if (recovery !== undefined) {
+      const claim = parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY));
+
+      if (claim.kind === 'row' && claim.row.owner === recovery.owner) {
+        if (recovery.action === 'replace') {
+          this.deleteSchedules(STARTUP_CALLBACK);
+          await this.#replaceContainer(recovery.reason);
+        } else {
+          this.#invalidateGeneration(this.#startup);
+          await this.stop('SIGTERM');
+          await this.#awaitContainerStopped();
+        }
+
+        await this.ctx.storage.delete(RECOVERY_ACTION_KEY);
+
+        if (recovery.action === 'replace') return;
+      } else {
+        // A successful successor retired the old recovery claim.
+        await this.ctx.storage.delete(RECOVERY_ACTION_KEY);
+      }
     }
 
-    if (failed !== undefined) throw failed.cause;
+    await this.#admitControlListener();
+  }
 
-    // A SETTLED RESTORATION RETIRES THE ROW THAT WOKE IT. The hook arms a
-    // startup row for a box with nothing restored yet and the SDK runs that hook
-    // on every admission probe, so a row outlives the attempt it asked for —
-    // and a row that fires on an attached box costs a wake, a port probe and a
-    // boot-id read, once a second, for as long as the box lives. Deleting it
-    // here is what makes the chain end where the work ended.
-    if (this.#owns(generation)
-      && (this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair')) {
-      this.deleteSchedules(STARTUP_CALLBACK);
+  /** Instance allocation and control-listener proof are outside the hook budget. */
+  async #admitControlListener(): Promise<void> {
+    const generation = this.#generation;
+
+    try {
+      await this.startAndWaitForPorts({
+        ports: this.defaultPort,
+        cancellationOptions: {
+          instanceGetTimeoutMS: this.policy.portWaitMs,
+          portReadyTimeoutMS: this.policy.portWaitMs,
+          waitInterval: ADMISSION_POLL_INTERVAL_MS,
+          abort: AbortSignal.timeout(this.policy.portWaitMs),
+        },
+      });
+    } catch (cause) {
+      if (!this.#owns(generation)) {
+        console.error(`[devbox] superseded admission refused: ${describe({ cause })}`);
+
+        return;
+      }
+
+      const failure = classifyRecovery({ cause });
+      await this.#record('attach', `[${failure} → retry] ${describe({ cause })}`);
+
+      if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, 1);
     }
   }
 
@@ -1810,12 +1540,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (expected !== undefined && actual !== expected) {
       this.#invalidateGeneration();
-      await this.#drive('request');
+      await this.#startContainer();
 
       return;
     }
 
     const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs));
+    steps.declare(2);
     const restored = await this.#restartWorkloads(generation, steps);
 
     if (!this.#owns(generation)) return;
@@ -1847,15 +1578,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * readiness, file an attach failure, release a successor's single-flight entry,
    * or destroy an identity it did not start on.
    *
-   * The container-start hook never turns the generation over: the SDK fires
-   * it on a container that is already up, so a turnover there would fence the
-   * attempt in flight. It marks the restore pending instead, and the delivered
-   * frame that resolves the mark holds the evidence — a failed adoption over a
-   * settled phase (`#adoptOrTurnOver`).
+   * A repeated hook does not imply a replacement. The hook turns over only
+   * when the boot comparison refutes a settled generation. Destructive recovery
+   * may preserve its own startup flight while retiring the container it owns.
    */
-  #invalidateGeneration(): void {
+  #invalidateGeneration(recoveryFlight?: { readonly run: Promise<void> }): void {
     this.#generation += 1;
-    this.#startup = undefined;
+    this.#startup = recoveryFlight === undefined
+      ? undefined
+      : { generation: this.#generation, run: recoveryFlight.run };
     this.#restoration = { phase: 'unstarted' };
     this.#adoptionPending = false;
     // The settled phase named the identity this turnover just retired. A row
@@ -1917,13 +1648,25 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #settleRecovery(
     claim: RecoveryClaim,
     generation: number,
-    stage: RecoveryStage | undefined,
+    decision: ReturnType<typeof recoveryStep>,
+    restoration: Extract<Restoration, { readonly phase: 'unattached' }>,
   ): Promise<boolean> {
     return await this.#ownedRecoveryWrite(
       claim,
       generation,
       async () => {
-        await this.ctx.storage.put(ATTACH_RECOVERY_KEY, recoveryRow(claim.token, stage));
+        await this.ctx.storage.transaction(async (transaction) => {
+          await transaction.put(ATTACH_RECOVERY_KEY, recoveryRow(claim.token, decision.stage));
+          await transaction.put(SETTLED_KEY, restoration);
+
+          if (decision.action === 'retry' || decision.action === 'replace') {
+            await transaction.put(RECOVERY_ACTION_KEY, {
+              owner: claim.token, action: decision.action, reason: restoration.reason,
+            });
+          } else {
+            await transaction.delete(RECOVERY_ACTION_KEY);
+          }
+        });
       },
     );
   }
@@ -1947,10 +1690,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * that compared, yielded, and then wrote would put a stage back on top of that
    * success and arm the replacement of a container that is working.
    * `blockConcurrencyWhile` is the platform's own critical section and the only
-   * primitive that closes it — except where one is ALREADY held, which is the
-   * whole of `#critical` below. The class header warns against putting SLOW work
-   * inside that block, where the platform's cancel window resets the object;
-   * this section is one read and one write, orders of magnitude below it.
+   * primitive used here. This section performs one ownership read and one
+   * write, including when the surrounding start hook already holds a block.
    *
    * BOTH TOKENS ARE CHECKED, and neither is enough alone. The durable owner
    * catches the attempt whose row a newer one already deleted, across evictions
@@ -2005,43 +1746,33 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // nothing, publishes nothing. Its successor owns every one of those.
     if (decision.action === 'inert') return;
 
-    if (!await this.#settleRecovery(claim, generation, decision.stage)) return;
-
-    if (!this.#owns(generation)) return;
     // THE TAG LEADS, and that placement is load-bearing: `recordIncident`
     // truncates a reason at INCIDENT_REASON_MAX_CHARS, and a long cause chain
     // would have eaten a trailing tag. The host's own prose points the agent at
     // the reported cause to learn which recovery was chosen, so the tag has to
     // survive the bound rather than be the first thing past it.
     const reason = `[${failure} → ${decision.action}] ${describe(thrown)}`;
+    const restoration = { phase: 'unattached', reason, retry: decision.action === 'retry' } as const;
+
+    if (!await this.#settleRecovery(claim, generation, decision, restoration)) return;
+
+    if (!this.#owns(generation)) return;
     // THE DECISION TRAVELS WITH THE STATE. The arm below is ONE durable write,
     // made from an isolate the platform may reset at any point after the
     // decision; carrying the answer here is what lets a later caller notice
     // the row is missing and deliver the retry the ladder promised.
-    await this.#settle({ phase: 'unattached', reason, retry: decision.action === 'retry' });
+    this.#restoration = restoration;
     await this.#record('attach', reason);
 
     if (!this.#owns(generation)) return;
 
-    if (decision.action === 'retry') {
-      // A SCHEDULE, not the next operation: retrying per operation would record
-      // an incident per operation for one broken box.
+    if (decision.action === 'retry' || decision.action === 'replace') {
       await this.#arm(STARTUP_CALLBACK, this.policy.heartbeatSeconds);
 
       return;
     }
 
-    // A LADDER THAT IS DONE ASKING TAKES ITS WAKE-UP WITH IT. The container-start
-    // hook arms a startup row for a box with no restoration yet (see
-    // `#armContainerSchedules`), and the SDK runs that hook on every admission
-    // probe — so by the time a failure classifies as `refuse` or `replace`, a row
-    // exists that would wake this box a second later and file the same incident
-    // again. `kickStartup` refuses to arm a NEW one on a terminal phase; this is
-    // the other half, for the one already written. The SDK's own delete, by
-    // callback name (`container.js:1492-1494`).
     this.deleteSchedules(STARTUP_CALLBACK);
-
-    if (decision.action === 'replace') await this.#replaceContainer(reason);
   }
 
   /**
@@ -2060,7 +1791,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * for would only bill for the wake.
    */
   async #replaceContainer(reason: string): Promise<void> {
-    this.#invalidateGeneration();
+    this.#invalidateGeneration(this.#startup);
     const replacing = this.#generation;
 
     try {
@@ -2234,26 +1965,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return down;
   }
 
-  /**
-   * Wait, bounded, for a restored server to start listening. True once one does.
-   *
-   * IT REALLY WAITS. The op is called `await-port` and it used to probe exactly
-   * once, immediately after the container reported the process STARTED — which
-   * is the moment the process was forked, not the moment it bound a socket.
-   * `npm run dev` and anything that installs on boot take seconds, so a healthy
-   * server was declared silent and the incident that followed reached the agent
-   * as a blocker telling it not to hand out a URL that worked moments later.
-   * Wrong blockers in the one channel built to be trusted are worse than none.
-   *
-   * IT WAITS IN THE CONTAINER, IN ONE COMMAND, which is what makes it legal
-   * inside the init gate — and cheaper everywhere else. The wait used to be a
-   * Durable Object loop around `scheduler.wait`, so a thirty-second window at a
-   * two-second cadence cost fifteen DO↔container round trips per port, and
-   * inside `blockConcurrencyWhile` its timer would never be delivered at all:
-   * the proof would hang, and the platform would answer by RESETTING the object.
-   * `awaitListenerCommand` moves the loop and the sleep to the container, where
-   * a count bounds them and the object waits on one hop.
-   */
+  /** One container-side listener loop, raced against its share of the hook budget. */
   async #awaitListener(port: number, steps: RestoreSteps): Promise<boolean> {
     // WHICHEVER IS SMALLER: this port's own cap, or what is left of the whole
     // restoration's budget. The cap alone was a timer per port, so silence cost
@@ -2324,16 +2036,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return false;
   }
 
-  /**
-   * Arm the durable startup callback that restores a box nobody has restored.
-   * This is deliberately not an attachment operation: the `devboxStartup` row
-   * this arms is the delivered frame that admits the container and restores
-   * it — for a box nobody is asking about, the only driver there is.
-   *
-   * Calling it again is harmless. A running, unstarted generation can occur
-   * after an object eviction consumed its one-shot row, so it re-arms that row;
-   * an attached or terminal generation is left untouched.
-   */
+  /** Arm the only start coordinator. This method never touches the container. */
   async kickStartup(): Promise<void> {
     // Scheduling is durable and never waits on container admission. The
     // scheduled startup callback owns raw start, attach, and readiness outside
@@ -2346,7 +2049,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // costs one schedule read and writes nothing. A terminal class is left
     // alone: waking a box to repeat work the ladder refused is the incident
     // storm this whole taxonomy exists to avoid.
-    if (this.#startup !== undefined) return;
+    if (this.#startup !== undefined || this.#gateRestore !== undefined) return;
     const held = this.#restoration;
 
     // An attempt in flight owes nothing: it will settle into a phase, and this
@@ -2355,126 +2058,32 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     if (held.phase === 'attached' || held.phase === 'repair') return;
 
-    if (held.phase === 'unattached' && !held.retry) return;
+    if (held.phase === 'unattached' && !held.retry
+      && await this.ctx.storage.get(RECOVERY_ACTION_KEY) === undefined) return;
     await this.#arm(STARTUP_CALLBACK, 1);
   }
 
-  /**
-   * The readiness gate every operation passes through, and WHAT it admits the
-   * operation into.
-   *
-   * THE REQUEST DOOR. On a cold start the first operation is what restores
-   * the box: the container-start hook marked the restore pending and armed
-   * the rows, and this is the delivered frame that resolves the mark — adopts
-   * the instance the rows name, or drives the one attempt and joins it. It
-   * covers what no hook can: a container replaced under a live object, which
-   * fires no hook at all.
-   *
-   * IT RETURNS THE ADMISSION rather than resolving `void`. A box in `repair` is
-   * admitted deliberately: refusing `exec` would deny the agent the one way it
-   * has to fix the service that did not come back. But "admitted into a world
-   * where something is missing" and "admitted into the world the caller left"
-   * are different facts, and a gate that resolved `void` for both made the
-   * difference discoverable only by a separate poll nobody was obliged to make.
-   *
-   * EVERY OTHER PHASE ANSWERS `pending` — and that closes a measured hole.
-   * The tail of this method used to be a bare `await this.devboxStartup()`
-   * with no check after it — and `devboxStartup` RETURNS NORMALLY when the
-   * container was never admitted (its admitted-nothing exit). So an operation
-   * against a box the platform had no capacity for ran as if ready: measured
-   * live in probe `blp1`, `exec` answered success in 62 ms while the box's own
-   * state said no restoration had attached anything. For a mount-backed
-   * strategy that means the caller's bytes land in a bare `/workspace` nothing
-   * will ever checkpoint.
-   *
-   * The refusal for that case does NOT write `unattached`: nothing was
-   * classified, the container was simply not there yet, and `unattached` is
-   * terminal to every poller that reads it. The box stays re-armable and this
-   * caller is told to ask again. `pending` is a VALUE rather than the throw
-   * `ensureReady` performs, because only a return survives a Durable Object
-   * RPC boundary with its `kind` intact — the transport normalises every
-   * thrown error's name to `Error`, which is why the classifier a remote
-   * caller needs cannot ride an error class.
-   */
+  /** Requests may start a stopped box, then adopt the hook's settled generation. */
   async resolveReadiness(): Promise<RestoreReadiness> {
+    if (this.ctx.container?.running !== true) await this.#startContainer();
     await this.#resolveAdoption();
+    const admission = this.#admission();
 
-    // A stopped container may still have the previous instance's attached
-    // state in memory. Let the startup callback turn that generation over
-    // before this method can accept it as ready.
-    if (this.ctx.container?.running !== true) {
-      await this.#drive('request');
+    if (admission !== undefined) return admission;
+
+    await this.kickStartup();
+
+    if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
+      throw new Error(
+        `this devbox has no attached work directory: ${this.#restoration.reason}. `
+        + 'That recovery class is terminal: call attachNow() to attempt the attach again.',
+      );
     }
-
-    const settled = this.#admission();
-
-    if (settled !== undefined) return settled;
-
-    if (this.#restoration.phase === 'unattached') {
-      // THE RETRY THE TAXONOMY PROMISED, DRIVEN HERE WHEN NOTHING ELSE WILL.
-      //
-      // MEASURED DEFECT THIS REPAIRS. `stale-owner → retry` is the ordinary
-      // answer to platform churn, and the ONE schedule row `#recover` arms is
-      // the only thing that can re-drive it: this gate refused every operation
-      // on `unattached`, and `kickStartup` no-opped on any phase but
-      // `unstarted`. Lose that single write — the isolate can be reset between
-      // the decision and the arm — and /create, /wake and every operation are
-      // inert for ever on a box the ladder said to try again.
-      //
-      // So the question asked here is not "how many times have I tried" but "is
-      // anything going to try": an attempt in flight, or a future row. When the
-      // answer is no, THIS caller drives the attach. The schedule stays the rate
-      // limit — a failed attempt arms its own successor before it returns — so
-      // one broken box still cannot file an incident per call, and a class the
-      // ladder called terminal is never re-attempted here at all.
-      if (
-        this.#restoration.retry
-        && this.#startup === undefined
-        && !await this.#pending(STARTUP_CALLBACK)
-      ) {
-        await this.#drive('request');
-        // A drive that failed again leaves a FRESH reason and a fresh arm, and
-        // only a box still unattached refuses below.
-        const droveTo = this.#admission();
-
-        if (droveTo !== undefined) return droveTo;
-      }
-
-      if (this.#restoration.phase === 'unattached') {
-        // THE REFUSAL NAMES BOTH HALVES: the taxonomy's own `[class → action]`
-        // tag, which the reason already carries, and whether anything is going
-        // to try again. A caller told this is terminal is being told to call
-        // `attachNow()`; one told a retry is under way is being told to ask
-        // again.
-        if (!this.#restoration.retry) {
-          throw new Error(
-            `this devbox has no attached work directory: ${this.#restoration.reason}. `
-            + 'That recovery class is terminal: call attachNow() to attempt the attach again.',
-          );
-        }
-
-        return {
-          kind: 'pending',
-          reason: `this devbox has no attached work directory: ${this.#restoration.reason}. `
-            + 'A retry is already under way; operations are refused until it lands.',
-        };
-      }
-    }
-
-    await this.#drive('request');
-    const drove = this.#admission();
-
-    if (drove !== undefined) return drove;
-    // NOTHING ATTACHED, AND NOTHING CLASSIFIED IT. The drive above returned
-    // without a work directory: either the platform admitted no container (the
-    // admitted-nothing exit, which records an incident and re-arms) or an
-    // attempt is still in flight. Both are re-armable, so the box's phase is
-    // left exactly as it is and only this operation is refused.
 
     return {
       kind: 'pending',
       reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
-        + 'Nothing has been classified as a failure; a startup is armed, so ask again.',
+        + 'A startup is armed, so ask again.',
     };
   }
 
@@ -2544,7 +2153,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * IT DESTROYS NOTHING. The stage is preserved, so if this attempt fails too,
    * the ladder is still at `replace` and the answer is another refusal rather
    * than another destruction. A success deletes the row, and the box is back.
-   * A fresh container's first delivered frame clears the same refusal for the
+   * A fresh container's start hook clears the same refusal for the
    * same reason: a fresh container is a fresh chance to attach, and one that
    * attaches heals itself.
    *
@@ -2566,7 +2175,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       return outcome ?? { kind: 'empty', detail: 'this box has attached nothing' };
     }
 
-    if (this.#unready() !== undefined) await this.#settle({ phase: 'unstarted' });
+    if (this.#unready() !== undefined) {
+      await this.#settle({ phase: 'unstarted' });
+      await this.#startContainer();
+
+      if (this.#admission() === undefined) {
+        throw new Error(`this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+      }
+    }
+
     await this.ensureReady();
     const outcome = await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY);
 
@@ -2606,7 +2223,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         // startup is armed, so ask again` — the armed operation row
         // still `pending`, the lane still held, until the runner died.
         //
-        // The same law `#awaitAttempt` holds a request door to: join the one
+        // The checkpoint joins the one
         // attempt, wait `requestJoinMs`, then answer from the restoration's
         // state. NOTHING IS ABANDONED — the attempt keeps running under the
         // single-flight entry and the next ask joins or reads it — and a
@@ -2640,6 +2257,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
             movedBytes: undefined,
           };
         }
+      }
+
+      if (this.ctx.container?.running === true && this.#admission() === undefined) {
+        return {
+          kind: 'failed', reason: `this devbox is not ready: ${this.#unready()}`,
+          bytes: undefined, movedBytes: undefined,
+        };
       }
 
       return await this.#requireStorage().checkpoint(kind);
@@ -3436,6 +3060,16 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         return beat;
       }
 
+      await this.#resolveAdoption();
+      const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
+
+      if (!settled) {
+        await this.#tick({ running: true, ping: 'unready', armedNext: true });
+        await this.kickStartup();
+
+        return beat;
+      }
+
       try {
         // NO PORT ARGUMENT. `containerFetch(request, port)` takes a PORT as its
         // second parameter, not a timeout: passing a millisecond value there
@@ -3470,29 +3104,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // work directory twice. An attempt in flight owns the identity it is
       // establishing; the beat asks the question only of a box that has
       // settled on an instance and may have lost it since.
-      await this.#resolveAdoption();
-      const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
-
       if (settled && await this.#containerWasReplaced()) {
-        console.error(
-          '[devbox] the container instance was replaced; re-driving the restoration now '
-          + 'rather than waiting for the next operation',
-        );
-        // Turn the generation over and re-drive immediately. Waiting for the
-        // next operation would leave supervised processes and ports down for as
-        // long as the box is idle, which is exactly when nobody is watching —
-        // and the attempt that was restoring the replaced instance is now inert,
-        // so it cannot publish readiness for a container that is gone.
         this.#invalidateGeneration();
         await this.#tick({ running: true, ping: 'ok', armedNext: true, replaced: true });
-
-        try {
-          await this.#drive('schedule');
-        } catch (error) {
-          console.error(
-            `[devbox] re-driving after replacement failed: ${describe({ cause: error })}`,
-          );
-        }
+        await this.kickStartup();
 
         return beat;
       }
@@ -3506,7 +3121,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       let backgroundWork = this.#activeCallers !== 0
         || this.#resources.busy()
         || this.#lane.busy()
-        || this.#startup !== undefined;
+        || this.#startup !== undefined
+        || this.#gateRestore !== undefined;
 
       if (!backgroundWork) {
         // An unreachable host means POSSIBLY busy, so hold. Never stop on a guess.
@@ -3846,18 +3462,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     };
   }
 
-  /** Container exec that does NOT pass the readiness gate.
-   *
-   *  Every internal probe, mount and archive command uses this — the strategy's
-   *  own `exec` port included. The public `exec` waits for the restoration to
-   *  finish, and the restoration itself runs commands, so routing internal work
-   *  through the public method would make it wait for itself.
-   *
-   *  CALLED INSIDE THE PLATFORM'S GATE, by the container-start restore: the box
-   *  is admitted through `start()`, which the patched SDK marks healthy before
-   *  the hook, so a command issued here routes straight to the container (see
-   *  `onStart` for the line numbers).
-   */
+  /** Internal commands bypass public readiness; startup has already proved the control listener. */
   async #rawExec(
     command: string,
     cwd = DEVBOX_WORKDIR,

@@ -1,46 +1,3 @@
-// The restoration runs on the first DELIVERED frame after a container start,
-// and this file is what holds that placement to its promises: once per start,
-// durable, and admission waits on it.
-//
-// `Container.onStart` is awaited inside `blockConcurrencyWhile`
-// (`@cloudflare/containers`, `container.js:583`), and a Durable Object timer
-// set inside that block is not delivered until the block releases. The first
-// command on a fresh container opens the SDK's control connection, whose
-// connect abort (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js:3563`,
-// `setTimeout` 30 s) and retry backoff (`:812`, `setTimeout` 3 s) are both
-// such timers — so a restore inside the hook either hangs to an abort that
-// cannot fire or sleeps on a retry that cannot wake, and the platform resets
-// the object at its cap. Measured on six fresh container starts (2026-09-10,
-// `bench/measure-first/DECISIVE-2026-09-05.md`): one admitted, five reset with
-// no phase stamped. The hook therefore reaches no container: it marks the
-// restore pending and arms the rows, and the delivered frame does the work.
-//
-// The proofs here are the ones that keep it:
-//
-//   T1  the hook asks the container nothing: `start()` settles against a
-//       container that never answers a command.
-//   T2  the first delivered frame restores, and admission waits on it: the
-//       operation runs only after the stamp, the processes and the ports.
-//   T3  once per start: a second delivered frame on the same instance adopts
-//       — no second stamp, no second process start.
-//   T4  a settled restore retires its startup row.
-//   T5  a request arriving mid-restore joins the one attempt and is admitted
-//       after it settles; one with no join budget is refused re-askably.
-//   T6  while restoring the box reports the door that is driving.
-//   T7  a re-entered hook is harmless: it issues no command and opens no
-//       second restoration.
-//   T8  the settled phase is durable: a fresh activation over the running
-//       container adopts it on its first delivered frame, asking one `cat`.
-//   T9  a start the hook marked over a settled phase is not served: the
-//       delivered frame compares the boot id and restores a fresh instance.
-//   T10 a witness reads the attempt's clock: opened, the phases in walk order,
-//       settled — and an adoption reports its own, shorter, clock.
-//
-// RED DIRECTION. T1 fails on the in-gate tree: `box.start()` reaches the
-// parked exec and holds the gate. T2's ordering fails there too — the stamp
-// lands inside `start()`, before any frame is delivered. The file imports only
-// harness APIs both trees have, so the same file runs there and goes red for
-// the reason each test names.
 import { describe, expect, test } from 'bun:test';
 
 import type { RestoreClockPhase } from '../src/devbox';
@@ -67,14 +24,6 @@ class TestBox extends Devbox<unknown> {
 
   protected override get previewHost(): string | undefined {
     return 'preview.test';
-  }
-}
-
-/** A box whose request frames may wait almost no time at all: the join
- *  budget is the one bound a request door has, and this box spends it. */
-class ImpatientBox extends TestBox {
-  protected override get policy(): DevboxPolicy {
-    return { ...TEST_POLICY, requestJoinMs: 1 };
   }
 }
 
@@ -156,7 +105,7 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
   return { box, container: FakeSandbox.last!, activation };
 }
 
-describe('the restore runs on the first delivered frame after a container start', () => {
+describe('the start hook owns restoration', () => {
   for (const termination of ['stop', 'destroy'] as const) {
     test(`actual container ${termination} loses local state while the same identity keeps durable state`, async () => {
       const { box, container, rows } = harness(TestBox);
@@ -209,242 +158,211 @@ describe('the restore runs on the first delivered frame after a container start'
     });
   }
 
-  test('T1: the hook asks the container nothing — start() settles against a container that never answers', async () => {
-    // THE RED PROOF, and the measured defect it stands for. The control
-    // server accepts and never answers: any exec parks for ever. Under the
-    // in-gate placement `start()` reaches that exec inside the platform's
-    // block and holds it to the 30 s cancel — five of six fresh starts on the
-    // deployed bench. Here the hook must settle first.
-    const { box, container } = await stoppedBoxWithService();
-    const silent = gate();
-    container.execGate = silent;
+  test('T1: restore holds the hook and readiness is absent until it settles', async () => {
+    const { box, container, rows } = await stoppedBoxWithService();
 
-    const outcome = await Promise.race([
-      box.start().then(() => 'settled' as const),
-      silent.reached.then(() => 'asked the container' as const),
-    ]);
-
-    expect({ outcome, execs: container.execs }).toEqual({ outcome: 'settled', execs: [] });
-    expect(container.starts).toEqual([]);
-    // Nothing settled, nothing served: the box is not ready and says why.
-    const state = await box.devboxState();
-    expect({ restoration: state.restoration, ready: state.ready })
-      .toEqual({ restoration: 'unstarted', ready: false });
-  });
-
-  test('T2: the first delivered frame restores, and the operation runs only after it', async () => {
-    const { box, container } = await stoppedBoxWithService();
-    await box.start();
-    expect(stamps(container)).toBe(0);
-
-    const out = await deliver(container, () => box.exec('echo hi'));
-
-    expect(out.exitCode).toBe(0);
-    // The restore ran on this frame, and every step of it landed before the
-    // operation's own command. Under the in-gate placement the stamp is
-    // already there when `start()` returns.
-    expect(stamps(container)).toBe(1);
-    const echo = container.execs.findIndex((command) => command.includes('echo hi'));
-    const stamp = container.execs.findIndex((command) => command.includes(STAMP_COMMAND));
-    expect(stamp).toBeLessThan(echo);
-    expect(container.starts).toEqual([
-      { command: 'bun run server.ts', cwd: '/workspace', processId: 'p1' },
-    ]);
-    expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
-    const state = await box.devboxState();
-    expect({ restoration: state.restoration, ready: state.ready }).toEqual({
-      restoration: 'attached', ready: true,
+    const parked = gate();
+    container.stampGate = parked;
+    let returned = false;
+    const start = box.start().then(() => { returned = true; });
+    await parked.reached;
+    expect(returned).toBe(false);
+    expect(container.initGate).toBeDefined();
+    expect(rows.get('devbox:restoration')).toEqual({
+      phase: 'restoring', where: 'start', since: expect.any(Number),
     });
-  });
-
-  test('T3: once per start — a second delivered frame on the same instance adopts', async () => {
-    const { box, container } = await stoppedBoxWithService();
-    await box.start();
-    expect((await box.resolveReadiness()).kind).toBe('restored');
-    const stampedOnce = stamps(container);
-    const restarts = container.starts.length;
-
-    // The SDK asks for a start again — its own control paths do — and the
-    // hook marks the restore pending again. The next frame compares the boot
-    // id and adopts: one `cat`, no stamp, no second process.
-    await box.start();
-    expect((await box.resolveReadiness()).kind).toBe('restored');
-
-    expect(stamps(container)).toBe(stampedOnce);
-    expect(container.starts).toHaveLength(restarts);
-    expect(container.execs.at(-1)).toBe('cat /tmp/devbox-boot-id 2>/dev/null || true');
-  });
-
-  test('T4: a settled restore retires its startup row', async () => {
-    const { box, container } = await stoppedBoxWithService();
-
-    await box.start();
-    // The hook armed the row: a box with nothing restored needs a driver in
-    // case no request follows.
-    expect(armed(container)).toBe(1);
-
-    await box.resolveReadiness();
-    // The attempt that settled retired it: a row firing on an attached box is
-    // a wake, a port probe and a boot-id read nobody asked for.
-    expect(armed(container)).toBe(0);
-  });
-
-  test('T5: a request arriving mid-restore joins the one attempt and is admitted after it', async () => {
-    const { box, container } = await stoppedBoxWithService();
-    await box.start();
-    const parked = gate();
-    container.stampGate = parked;
-
-    const first = box.exec('echo first');
-    await parked.reached;
-    const second = box.exec('echo second');
-
+    expect((await box.devboxState()).ready).toBe(false);
     parked.release();
-    expect((await first).exitCode).toBe(0);
-    expect((await second).exitCode).toBe(0);
-    // ONE restoration: a second would have stamped a second boot id and
-    // started the same process twice.
-    expect(stamps(container)).toBe(1);
-    expect(container.starts).toHaveLength(1);
-  });
-
-  test('T5b: a request with no join budget is refused re-askably, and the attempt keeps running', async () => {
-    const harnessed: Harness<ImpatientBox> = harness(ImpatientBox);
-    proc(harnessed.rows, 'p1');
-    port(harnessed.rows, 3000, 'tok3000');
-    harnessed.container.listening.add(3000);
-    await harnessed.container.stop();
-    const { box, container } = harnessed;
-    await box.start();
-    const parked = gate();
-    container.stampGate = parked;
-
-    const opener = box.devboxStartup();
-    await parked.reached;
-    // The honest answer: restoring, ask again. Nothing is abandoned.
-    await expect(box.exec('echo hi')).rejects.toMatchObject(
-      { message: expect.stringContaining('not ready') });
-
-    parked.release();
-    await opener;
-    expect((await box.exec('echo hi')).exitCode).toBe(0);
-    expect(stamps(container)).toBe(1);
-  });
-
-  test('T6: while restoring the box reports the door that is driving', async () => {
-    const { box, container } = runningBoxWithService();
-    const parked = gate();
-    container.stampGate = parked;
-
-    const attempt = box.devboxStartup();
-    await parked.reached;
-
-    const during = await box.devboxState();
-    expect(during.restoration).toBe('restoring');
-    expect(during.unready).toContain('in the schedule');
-
-    parked.release();
-    await attempt;
-    expect((await box.devboxState()).restoration).toBe('attached');
-  });
-
-  test('T7: a re-entered hook issues no command and opens no second restoration', async () => {
-    // Measured: the SDK fires this hook from its own control paths on a
-    // container that is already up — once 37 ms into a restore's first exec.
-    const { box, container } = runningBoxWithService();
-
-    await Promise.all([box.onStart(), box.onStart()]);
-    expect(container.execs).toEqual([]);
-
-    const [first, second] = await Promise.all([box.resolveReadiness(), box.devboxStartup()]);
-
-    expect(first).toEqual({ kind: 'restored' });
-    expect(second).toBeUndefined();
-    expect(stamps(container)).toBe(1);
-    expect(container.starts).toHaveLength(1);
-    expect(armed(container)).toBe(0);
-  });
-
-  test('T8: the settled phase is durable — a fresh activation over the running container adopts it', async () => {
-    // THE HANG THIS ALSO REFUSES. A box that restored once, its container
-    // still running, and a control server that ACCEPTS the connection and
-    // never answers. The activation reads the boot id nowhere near its own
-    // gate: it marks the adoption pending, and the first delivered frame
-    // asks, where a deadline works.
-    const restored = await stoppedBoxWithService();
-    await restored.box.start();
-    await restored.box.resolveReadiness();
-    expect(restored.rows.get('devbox:restoration')).toEqual({ phase: 'attached' });
-    // The stamp landed in the container and its mirror in the rows.
-    expect(restored.rows.get('devbox:boot-id')).toBe(restored.container.bootId);
-
-    const { box, container, activation } = activatedOverRunning(restored.rows);
-    const silent = gate();
-    container.execGate = silent;
-
-    const outcome = await Promise.race([
-      activation.then(() => 'settled' as const),
-      silent.reached.then(() => 'asked the container' as const),
-    ]);
-
-    expect({ outcome, execs: container.execs }).toEqual({ outcome: 'settled', execs: [] });
-
-    container.execGate = undefined;
-    container.bootId = restored.container.bootId;
-    expect((await box.resolveReadiness()).kind).toBe('restored');
-    expect(container.execs.at(-1)).toBe('cat /tmp/devbox-boot-id 2>/dev/null || true');
-    expect(stamps(container)).toBe(0);
-  });
-
-  test('T9: a start marked over a settled phase is not served — the frame compares the boot id and restores', async () => {
-    // The container was stopped and started again under this live object —
-    // the SDK's own paths do that — and memory still says `attached` for an
-    // instance that is gone. The hook could only mark; the delivered frame
-    // asks, finds no boot id, and restores the fresh instance rather than
-    // admitting a caller onto a bare work directory.
-    const { box, container } = await stoppedBoxWithService();
-    await box.start();
-    await box.resolveReadiness();
-    expect((await box.devboxState()).restoration).toBe('attached');
-    const stampedOnce = stamps(container);
-
-    container.bootId = undefined;
-    await box.onStart();
-    const admitted = await box.resolveReadiness();
-
-    expect(admitted.kind).toBe('restored');
-    expect(stamps(container)).toBe(stampedOnce + 1);
+    await start;
+    expect(rows.get('devbox:restoration')).toEqual({ phase: 'attached' });
     expect((await box.devboxState()).ready).toBe(true);
   });
 
-  test('T9b: a pending adoption whose container was replaced is caught by the beat, not served', async () => {
-    const restored = await stoppedBoxWithService();
-    await restored.box.start();
-    await restored.box.resolveReadiness();
-    const { box, container, activation } = activatedOverRunning(restored.rows);
-    container.bootId = undefined;
-    await activation;
+  test('T2: the delivered command follows restore, process resumption and exposure', async () => {
+    const { box, container } = await stoppedBoxWithService();
+    await box.start();
+    expect(stamps(container)).toBe(1);
+    expect(container.starts).toHaveLength(1);
+    expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
+    expect((await deliver(container, () => box.exec('echo hi'))).exitCode).toBe(0);
+    expect(container.execs.findIndex(command => command.includes(STAMP_COMMAND)))
+      .toBeLessThan(container.execs.findIndex(command => command.includes('echo hi')));
+  });
 
-    await box.devboxHeartbeat();
+  test('a failed settled-phase write never publishes readiness', async () => {
+    const { box, container, storage, rows } = await stoppedBoxWithService();
+    const parked = gate();
+    container.stampGate = parked;
+    const start = box.start();
+    await parked.reached;
+    storage.faultOn('devbox:restoration', new Error('settled row could not be persisted'));
+    parked.release();
+    await start;
+    expect((await box.devboxState()).ready).toBe(false);
+    expect(rows.get('devbox:restoration')).not.toEqual({ phase: 'attached' });
+    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
+  });
 
-    // The beat resolved the adoption first: the rows named an instance the
-    // container does not carry, so nothing was adopted — the box is not served
-    // as attached, and no quiesce was decided over it. The request door then
-    // restores the instance nobody restored: one fresh stamp.
-    const beaten = await box.devboxState();
-    expect({ restoration: beaten.restoration, decision: beaten.lastTick?.decision })
-      .toEqual({ restoration: 'unstarted', decision: 'hold' });
-    await box.resolveReadiness();
+  test('a fresh boot replaces the old settled row with an unready claim before stamping', async () => {
+    const { box, container, rows } = runningBoxWithService();
+    container.running.running = true;
+    rows.set('devbox:boot-id', 'old-boot');
+    rows.set('devbox:restoration', { phase: 'attached' });
+    const parked = gate();
+    container.stampGate = parked;
+    const start = box.start();
+    await parked.reached;
+    expect(rows.get('devbox:restoration')).toEqual({
+      phase: 'restoring', where: 'start', since: expect.any(Number),
+    });
+    expect((await box.devboxState()).ready).toBe(false);
+    parked.release();
+    await start;
+    expect(rows.get('devbox:restoration')).toEqual({ phase: 'attached' });
+    expect(rows.get('devbox:boot-id')).not.toBe('old-boot');
+  });
+
+  test('T3: a second onStart on the same boot adopts without restoring', async () => {
+    const { box, container } = await stoppedBoxWithService();
+    await box.start();
+    const before = { stamps: stamps(container), starts: container.starts.length };
+    await box.onStart();
+    expect({ stamps: stamps(container), starts: container.starts.length }).toEqual(before);
+    expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
+  });
+
+  test('an interrupted durable claim refuses a second restore on the same boot', async () => {
+    const { box, container, rows } = runningBoxWithService();
+    container.running.running = true;
+    container.bootId = 'interrupted-boot';
+    rows.set('devbox:boot-id', 'interrupted-boot');
+    rows.set('devbox:restoration', { phase: 'restoring', where: 'start', since: 1 });
+    rows.set('devbox:attach-recovery', { owner: 'interrupted-owner' });
+    await box.start();
+    expect(stamps(container)).toBe(0);
+    expect(container.starts).toEqual([]);
+    expect((await box.devboxState()).unready).toContain('[abandoned → replace]');
+    container.deleteSchedules('devboxStartup');
+    await expect(box.resolveReadiness()).rejects.toThrow('no attached work directory');
+    expect(armed(container)).toBe(1);
+    await box.devboxStartup();
+    expect(container.destroys).toBe(1);
+    expect(container.running.running).toBe(false);
+    await box.ensureReady();
     expect(stamps(container)).toBe(1);
   });
 
-  test('T10: a witness reads the attempt\'s clock — opened, the phases in walk order, settled', async () => {
-    // The bench fixture keeps these durably as they land, so an attempt the
-    // platform resets still names its last phase. A fresh box mounts no store
-    // and no base, so those two are absent — not zero. The harness storage
-    // attaches with no container command, so `containerStart` lands on the
-    // first exec after it here; on the shipped chain it is the attach's own
-    // mount probe.
+  test('a failed recovery transaction spends no destructive ladder rung', async () => {
+    const { box, container, rows, storage } = runningBoxWithService();
+    storage.faultOn('devbox:last-attach', new Error('the attach record failed'));
+    storage.faultOn('devbox:recovery-action', new Error('the recovery action write failed'));
+    await box.start();
+    expect(rows.get('devbox:attach-recovery')).toEqual({ owner: expect.any(String), stage: 'retry' });
+    expect(rows.get('devbox:recovery-action')).toEqual({
+      owner: expect.any(String), action: 'retry', reason: expect.any(String),
+    });
+    expect((await box.devboxState()).ready).toBe(false);
+    expect(container.destroys).toBe(0);
+  });
+
+  test('T4: successful hook settlement retires startup immediately', async () => {
+    const { box, container } = await stoppedBoxWithService();
+    await box.start();
+    expect(armed(container)).toBe(0);
+    await box.resolveReadiness();
+    expect(armed(container)).toBe(0);
+  });
+
+  test('T5: requests delivered during the hook wait behind it', async () => {
+    const { box, container } = await stoppedBoxWithService();
+    const parked = gate();
+    container.stampGate = parked;
+    const start = box.start();
+    await parked.reached;
+    const first = deliver(container, () => box.exec('echo first'));
+    const second = deliver(container, () => box.exec('echo second'));
+    expect(container.execs.some(command => command.startsWith('echo'))).toBe(false);
+    parked.release();
+    await start;
+    expect((await first).exitCode).toBe(0);
+    expect((await second).exitCode).toBe(0);
+    expect(stamps(container)).toBe(1);
+    expect(container.starts).toHaveLength(1);
+  });
+
+  test('T5b: the request door refuses an unsettled running generation without restoring', async () => {
+    const { box, container } = runningBoxWithService();
+    container.running.running = true;
+    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
+    expect(container.execs).toEqual([]);
+    expect(container.starts).toEqual([]);
+    expect(armed(container)).toBe(1);
+  });
+
+  test('T6: the in-flight phase names the hook', async () => {
+    const { box, container } = runningBoxWithService();
+    const parked = gate();
+    container.stampGate = parked;
+    const start = box.start();
+    await parked.reached;
+    const state = await box.devboxState();
+    expect(state.restoration).toBe('restoring');
+    expect(state.unready).toContain('in the start');
+    parked.release();
+    await start;
+    expect((await box.devboxState()).restoration).toBe('attached');
+  });
+
+  test('T7: a re-entered hook joins one in-memory attempt', async () => {
+    const { box, container } = runningBoxWithService();
+    container.running.running = true;
+    const parked = gate();
+    container.stampGate = parked;
+    const first = box.onStart();
+    await parked.reached;
+    const second = box.onStart();
+    parked.release();
+    await Promise.all([first, second]);
+    expect(stamps(container)).toBe(1);
+    expect(container.starts).toHaveLength(1);
+  });
+
+  test('T8: an activation adopts the durable settled generation at the request door', async () => {
+    const restored = await stoppedBoxWithService();
+    await restored.box.start();
+    const { box, container, activation } = activatedOverRunning(restored.rows);
+    await activation;
+    expect(container.execs).toEqual([]);
+    container.bootId = restored.container.bootId;
+    expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
+    expect(stamps(container)).toBe(0);
+    expect(container.starts).toEqual([]);
+  });
+
+  test('T9: a fresh boot restores inside its own hook, never adopts the prior boot', async () => {
+    const { box, container } = await stoppedBoxWithService();
+    await box.start();
+    container.bootId = undefined;
+    await box.onStart();
+    expect(stamps(container)).toBe(2);
+    expect((await box.devboxState()).ready).toBe(true);
+  });
+
+  test('T9b: heartbeat refuses a replaced generation and arms the only coordinator', async () => {
+    const restored = await stoppedBoxWithService();
+    await restored.box.start();
+    const { box, container, activation } = activatedOverRunning(restored.rows);
+    container.bootId = undefined;
+    await activation;
+    await box.devboxHeartbeat();
+    expect((await box.devboxState()).ready).toBe(false);
+    expect(await box.resolveReadiness()).toMatchObject({ kind: 'pending' });
+    expect(stamps(container)).toBe(0);
+    await box.devboxStartup();
+    expect(stamps(container)).toBe(1);
+  });
+
+  test('T10: the restore witness settles inside start and adoption leaves its clock alone', async () => {
     const seen: [RestoreClockPhase, number][] = [];
 
     class WitnessBox extends TestBox {
@@ -453,31 +371,41 @@ describe('the restore runs on the first delivered frame after a container start'
       }
     }
 
-    const harnessed: Harness<WitnessBox> = harness(WitnessBox);
-    proc(harnessed.rows, 'p1');
-    harnessed.container.listening.add(3000);
-    await harnessed.container.stop();
-
-    await harnessed.box.start();
-    expect(seen).toEqual([]);
-    await harnessed.box.resolveReadiness();
-
+    const { box } = harness(WitnessBox);
+    await box.start();
     const phases = seen.map(([phase]) => phase);
     expect(phases[0]).toBe('opened');
     expect(phases.at(-1)).toBe('settled');
-    expect(phases.slice(1, -1).sort()).toEqual(['attached', 'bootId', 'containerStart']);
-    expect(phases.indexOf('attached')).toBeLessThan(phases.indexOf('bootId'));
+    expect(phases).toContain('attached');
+    expect(phases).toContain('bootId');
     const clock = seen.map(([, atMs]) => atMs);
-    expect(clock[0]).toBe(0);
     expect([...clock].sort((a, b) => a - b)).toEqual(clock);
-
-    // A second start on the same instance adopts, and an adoption opens no
-    // clock: the witness's row stays the restore's, so a reader polling after
-    // a start that adopted sees the restore that settled, not one `cat`.
     seen.length = 0;
-    await harnessed.box.start();
-    await harnessed.box.resolveReadiness();
+    await box.start();
     expect(seen).toEqual([]);
+  });
+
+  test('an over-budget hook settles unready and late work cannot publish readiness', async () => {
+    class BudgetBox extends TestBox {
+      protected override get policy(): DevboxPolicy {
+        return { ...TEST_POLICY, attachBudgetMs: 10 };
+      }
+    }
+
+    const { box, container, rows } = harness(BudgetBox);
+    const parked = gate();
+    container.execGate = parked;
+    const start = box.start();
+    await parked.reached;
+    await start;
+    expect(container.initGate).toBeUndefined();
+    expect((await box.devboxState()).ready).toBe(false);
+    expect(rows.has('devbox:restoration')).toBe(true);
+    expect((await box.devboxState()).unready).toContain('[abandoned → replace]');
+    expect((await box.checkpointNow('tick')).kind).toBe('failed');
+    parked.release();
+    await expect(box.resolveReadiness()).rejects.toThrow('no attached work directory');
+    expect((await box.devboxState()).ready).toBe(false);
   });
 
   test('a schedule row naming a callback this class cannot call is dropped at activation', async () => {
@@ -553,10 +481,9 @@ describe('every ending is a named state, and no ending rejects into the platform
     // a phase left `restoring` for ever, never an activation dying into a
     // reset with the reason held only in a rejection nobody reads.
     const { box, container, storage } = await stoppedBoxWithService();
-    await box.start();
     storage.faultOn('devbox:attach-recovery', new Error('durable storage unreachable'));
 
-    await expect(box.resolveReadiness()).rejects.toThrow('durable storage unreachable');
+    await box.start();
 
     const state = await box.devboxState();
     expect(state.restoration).toBe('unattached');
