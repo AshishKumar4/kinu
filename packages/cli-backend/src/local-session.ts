@@ -289,6 +289,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
         enqueueTurn: (turn) => input.session().enqueueTurn(turn),
         turnInFlight: () => input.session().turnInFlight(),
         setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
+        reconcileDurableWake: null,
         get headRuntime() { return input.session().headRuntime; },
       },
       engine,

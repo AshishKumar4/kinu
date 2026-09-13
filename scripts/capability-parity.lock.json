@@ -4,7 +4,7 @@
   "asymmetry AgentsSwarmDeps.reportNodeDelta#absent-in-cli",
   "asymmetry AgentsSwarmDeps.runtimeForNodeWorkspace#absent-in-cf",
   "asymmetry ArchiveExportOptions.files#absent-in-cli",
-  "asymmetry BackendHost.reconcileDurableWake#absent-in-cli",
+
   "asymmetry BackgroundJobRunnerDeps.onCancelled#absent-in-cli",
   "asymmetry BackgroundJobRunnerDeps.onDetached#absent-in-cli",
   "asymmetry BackgroundJobRunnerDeps.onSettled#absent-in-cli",
