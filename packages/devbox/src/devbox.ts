@@ -2069,10 +2069,18 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Requests may start a stopped box, then adopt the hook's settled generation. */
   async resolveReadiness(): Promise<RestoreReadiness> {
-    if (this.ctx.container?.running !== true) await this.#startContainer();
+    const wasRunning = this.ctx.container?.running === true;
+
+    if (!wasRunning) await this.#startContainer();
     // Join application readiness without withholding the hook's RPC replies.
-    await this.#gateRestore?.run;
+    const hook = this.#gateRestore;
+
+    if (hook?.generation === this.#generation) await hook.run;
     await this.#resolveAdoption();
+
+    // Allocation can report running before the SDK opens onStart. The same
+    // generation-owned coordinator covers that gap and still proves the port.
+    if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
     const admission = this.#admission();
 
     if (admission !== undefined) return admission;
