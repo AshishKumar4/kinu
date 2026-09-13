@@ -20,7 +20,7 @@
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet';
 import { collapsePath, IMPORT_CANDIDATES, parse, walk } from './syntax';
 import type { Parsed, SyntaxNode } from './syntax';
-import { isParseable, isTestFile, readMatching } from './sources';
+import { isDocument, isParseable, isTestFile, readMatching } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -107,6 +107,9 @@ export function findViolations(sources: ReadonlyMap<string, string>): Violation[
   const violations: Violation[] = [];
 
   for (const [file, text] of sources) {
+    // Imported Markdown is still an architectural dependency, but its prose
+    // declares no outgoing code edges. Keep it in the resolution universe.
+    if (isDocument(file)) continue;
     const fromLayer = layerOf(file);
 
     for (const edge of edgesOf(parse(file, text))) {
@@ -136,11 +139,11 @@ export const BLIND_SPOTS: readonly string[] = [
 ];
 
 if (import.meta.main) {
-  const sources = readMatching((file) => isParseable(file) && file.startsWith(CORE) && !isTestFile(file));
+  const sources = readMatching((file) => (isParseable(file) || isDocument(file)) && file.startsWith(CORE) && !isTestFile(file));
   const violations = findViolations(sources);
 
   const measured = assertMeasured(GATE, [
-    ['core source files parsed', sources.size],
+    ['core source and text modules measured', sources.size],
     ['layers declared', LAYER_NAMES.length],
     ['directories and root files assigned below the harness', LAYERS.size],
   ]);

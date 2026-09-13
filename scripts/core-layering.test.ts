@@ -63,4 +63,17 @@ describe('core-layering', () => {
     expect(() => findViolations(corpus({ 'vfs/b.ts': "import { y } from '../gone/a';" })))
       .toThrow(/names no file in the corpus/);
   });
+
+  test('text modules retain their layer boundary without parsing prose as code', () => {
+    const sources = corpus({
+      'vfs/a.ts': 'import text from "../prompts/role.md" with { type: "text" };',
+      'prompts/role.md': '## Instructions\nUse the declared tools.',
+    });
+
+    expect(findViolations(sources).map(keyOf)).toEqual([
+      `${C}vfs/a.ts -> ${C}prompts/role.md (value)`,
+    ]);
+    sources.delete(`${C}prompts/role.md`);
+    expect(() => findViolations(sources)).toThrow('names no file in the corpus');
+  });
 });

@@ -28,6 +28,7 @@ import { definePromptSection } from '../../../src/prompting/template';
 
 const verification = definePromptSection(
   'fixture/verification',
+  '{{shellNote}}{{#if hasShell}}{{/if}}',
   '## Verification\n- always{{#if hasShell}}\n- {{shellNote}}{{/if}}',
 );
 

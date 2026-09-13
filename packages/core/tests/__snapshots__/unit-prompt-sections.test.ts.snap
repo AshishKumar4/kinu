@@ -1,0 +1,32 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`every registered section reaches a rendered prompt the Markdown extraction preserves every rendered byte of the surface matrix 1`] = `
+{
+  "cf-full-surface": "bfebc74584cf3e3d84c0ab30c64229b3e8ec064fa125598ba29fd88beb5a80fb",
+  "cli-local-full-surface": "5199813c1fa9fe731f68f734c8a0b619816944c9200c61644fa7a751cec385ba",
+  "code-execution": "53ab6280231934667d481a8b174a11698658ad6b39f93cf6da8d940907dbb6b8",
+  "defaults": "9e3775fb5ef0be1a7a708efb0b5262a7e13240947a1cd30b51ad1c9c9aa8863f",
+  "delegation-hire-only": "8b66b5a9bb28fd0ef86b1b15404dffe427871808fb1805ae113c9838aa28f2d2",
+  "delegation-report-subordinate": "1e857164d9acd68d313415c795919f0a3989bc8eb4f683a78a7a25b7c33926d4",
+  "delegation-swarm-only": "9d426d6df83a0afd55d83f11f36a9f78ce82f0040bcfc80d1699b6297a741635",
+  "delegation-swarm-with-codemode": "d32ec1c243f73fe6b0db880627e32bf607bbb35f22c34551ff1109eb86172046",
+  "delegation-task-lifetime": "195a428f3a12b8f14ddb006d3a977f2254101ccd2d269756c401424acb222426",
+  "executors-cli-local-laptop": "6ad78732aae64a313b5ef15dbd465247e0f53c5242d543eec7e324c258dd0b82",
+  "executors-offline-laptop": "96e9256f4b8e60636768b21d9cf8e296669e666bf39dbaaea5c738a64cf20418",
+  "executors-preview-capable": "1a332a3c5d372fa005bd66891cc0dcba819cc584e6709e44e8e1ba07a96c6c8c",
+  "executors-unnamed-namespace": "39e12db09174bf302b2b763976375713942faf076757795fb744663651f1adad",
+  "executors-workspace-only": "3055d3f2acc1dfa60e9084a2ac237ccb2cf71c6ef69fe880ed993e5f7355d717",
+  "external-tools": "b4c089d04c6427411e91660220f7957c8ab0da140ed52d5464ac92689f774c5d",
+  "family-gpt": "f23034bc78dc7b6d063087d5a1447d6b701b51dcf0c9f7e54ae06be02b89c820",
+  "family-kimi": "007885552e6dc407bbd6d55e2c897d1512ef86524d27f4d50f66db67d036bbe9",
+  "no-tools": "917c75c118f5f9948b96681945f46d941ea2509cfe9dac77260e72ff83d2b6c6",
+  "plan-mode-with-submission": "99ee9be9ca76aeefea09eee3f079109f179922689db74ab74c413a6f8c5318bd",
+  "plan-mode-without-submission": "fcc7d67faec674443cabb63201aeedc5aea7d424faf0a86479c92c2635e0a1b1",
+  "role-auditor": "2b2b3a3299acae7d66cbd62bcdcc1c9af025a4c5ed0e3aa7766939330aecef14",
+  "role-designer": "b051a3a518751dbc3bf0753f1da2fa2ab23104ed3434ad0d7cc692634fef8e0f",
+  "role-general": "b677aeeff6244d3e9ebe766d5234e416fd8f9ce3f6f8437971ff5ff4f171b663",
+  "role-implementer": "771f5e0f95bb70083d31733c3ab5a87aa2b25c74854c3adbcbe4f7af1f221629",
+  "role-planner": "812f243b8816a914e82896a959896d13ebe61aba2e8e54ea1dc14fd818f0b0ee",
+  "role-researcher": "1dd231623acc00679be6a17a203dac54e51ae824f26d61fd293d8b4426f9be60",
+}
+`;

@@ -285,7 +285,7 @@ function renderNodes(
  */
 export interface PromptSection<Source extends string> {
   readonly id: string;
-  readonly source: Source;
+  readonly source: string;
   render(slots: TemplateSlots<Source>): string;
   renderFrom(source: string, slots: TemplateSlots<Source>): string;
 }
@@ -301,8 +301,16 @@ export interface PromptSection<Source extends string> {
  */
 export function definePromptSection<const Source extends string>(
   id: string,
-  source: Source,
+  declaration: Source,
+  source: string = declaration,
 ): PromptSection<Source> {
+  const declared = templateContract(id, declaration);
+  const used = templateContract(id, source);
+
+  if (JSON.stringify(declared) !== JSON.stringify(used)) {
+    fail(id, `source contract ${JSON.stringify(used)} differs from declaration ${JSON.stringify(declared)}`);
+  }
+
   const compiled = compileTemplate(id, source);
   let override: { source: string; nodes: readonly TemplateNode[] } | null = null;
 
