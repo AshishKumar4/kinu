@@ -174,6 +174,24 @@ admitted only when every G gate passes; a refused run ranks nothing.
 
 O1. Live acceptance of the chunked chain on deployed Containers and R2 after
 the evidence corrections of 2026-09-12 (`6e6b9e43c`, `ccb5a2aab`).
+The matrix witnesses `chunked-absorption`, `mutable-delta`, and
+`chainArchiveExpectations` keyed by `base.id` describe the retired eager
+attach and mutable publication. They must be re-registered against immutable
+delta IDs and the composed lower before a full admitted run. The bounded C3
+and 2 GiB cells are storage evidence, not G1–G10 strategy admission.
+
+The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
+`ad8a2346b`, image digest `d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0`)
+was refused before either changed-file restore. The 64 MiB C3 baseline
+publication took 656,741 ms and failed at s3fs fsync/close with EIO; the
+2 GiB sparse baseline took 217,663 ms and failed at the same boundary.
+Both requested attach figures and payload counters are unmeasured, not zero.
+Raw observations and the completed teardown manifest are committed under
+`bench-artifacts/block-attach/b20260913094839/` and
+`bench-artifacts/teardown/b20260913094839.json`. Worker, container application,
+bucket and generated configuration were removed; the final residue scan
+found zero objects and zero multipart uploads. No workload was changed to
+make this refusal green. R2 publication must be diagnosed before O1 can close.
 O2. Storage implementation closed by D7. Deployed latency evidence remains
 part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is

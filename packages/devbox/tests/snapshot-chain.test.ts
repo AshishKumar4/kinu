@@ -3967,6 +3967,18 @@ const REPLACED_DIGEST = 'f'.repeat(64);
 const REPLACED_VERSION = 'upload-that-replaced-it';
 
 describe('an archive replaced at the same length is refused', () => {
+  test('an immutable delta also refuses replacement at a different length', async () => {
+    const id = '12345678-1111-4111-8111-123456789abc';
+    const calls: string[] = [];
+    const state = chainState();
+
+    const record = harness({ state: { ...state, delta: { ...deltaLayer(id, DELTA_BYTES), id } },
+      calls, mounts: mountsAfterAttach(calls) });
+
+    record.objects.set(deltaObjectKey(STORE_ROOT, id), DELTA_BYTES + 4096);
+    await expect(attachOf(record)).rejects.toThrow('state declares');
+  });
+
   test('the current generation is refused and the retained fallback serves', async () => {
     const calls: string[] = [];
     const record = harness({ state: withFallback(), mounts: mountsAfterAttach(calls), calls });
