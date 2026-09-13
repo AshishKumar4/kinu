@@ -157,6 +157,58 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
 }
 
 describe('the restore runs on the first delivered frame after a container start', () => {
+  for (const termination of ['stop', 'destroy'] as const) {
+    test(`actual container ${termination} loses local state while the same identity keeps durable state`, async () => {
+      const { box, container, rows } = harness(TestBox);
+      await box.ensureReady();
+      await box.writeFile('/tmp/uncheckpointed-marker', 'local only');
+      const identity = container.ctx.id.toString();
+      const previousBoot = container.bootId;
+      const remote = new Map([['backups/remote', new Uint8Array([1, 2, 3])]]);
+      container.chainStore = { root: 'backups', objects: remote };
+      rows.set('durable-lifecycle-marker', 'keep this');
+      container.stagedArchives.set('/var/tmp/devbox/local-stage', new Uint8Array([4]));
+      container.s3fsMounts.add('/backups');
+      container.overlayMounts.add('/workspace');
+      container.layerMounts.add('/var/tmp/devbox/lower-base');
+
+      await container[termination]();
+
+      expect(container.files.size).toBe(0);
+      expect(container.bootId).toBeUndefined();
+      expect(container.stagedArchives.size).toBe(0);
+      expect(container.s3fsMounts.size + container.overlayMounts.size + container.layerMounts.size).toBe(0);
+      expect(rows.get('durable-lifecycle-marker')).toBe('keep this');
+      expect(remote.get('backups/remote')).toEqual(new Uint8Array([1, 2, 3]));
+
+      await box.start();
+      await box.ensureReady();
+      expect(container.ctx.id.toString()).toBe(identity);
+      expect(container.bootId).not.toBe(previousBoot);
+      await expect(box.readFile('/tmp/uncheckpointed-marker')).rejects.toThrow('File not found');
+    });
+
+    test(`a refused container ${termination} keeps the still-running generation intact`, async () => {
+      const { box, container } = harness(TestBox);
+      await box.ensureReady();
+      await box.writeFile('/tmp/uncheckpointed-marker', 'local only');
+      const previousBoot = container.bootId;
+      container.stagedArchives.set('/var/tmp/devbox/local-stage', new Uint8Array([4]));
+      container.s3fsMounts.add('/backups');
+      container.overlayMounts.add('/workspace');
+      container.layerMounts.add('/var/tmp/devbox/lower-base');
+      container[termination === 'stop' ? 'stopFault' : 'destroyFault'] = new Error('termination refused');
+
+      await expect(container[termination]()).rejects.toThrow('termination refused');
+
+      expect(container.running.running).toBe(true);
+      expect(container.bootId).toBe(previousBoot);
+      expect(container.stagedArchives.size).toBe(1);
+      expect(container.s3fsMounts.size + container.overlayMounts.size + container.layerMounts.size).toBe(3);
+      expect((await box.readFile('/tmp/uncheckpointed-marker')).content).toBe('local only');
+    });
+  }
+
   test('T1: the hook asks the container nothing — start() settles against a container that never answers', async () => {
     // THE RED PROOF, and the measured defect it stands for. The control
     // server accepts and never answers: any exec parks for ever. Under the
