@@ -98,8 +98,85 @@ blocks plus whole small files in one delta object, so a 64 KiB overwrite in a
 which measured whole-delta publication re-uploading unchanged dirty data
 quadratically. D2 changes where the delta is consumed, not how it is written.
 
-D5. Snapshot-chain is the current strategy under R3. Each alternative's
-disposition, from the reconstruction of 2026-09-13:
+D5. Snapshot-chain is refused full strategy admission on 2026-09-13.
+Settlement run `20260913154111`, clean `fed2b9d779`, ran from
+15:41:12.703 to 16:02:22.337 UTC and completed the checkpoint ladder, but
+failed G3, G6 and G9. It ranks no strategy. Snapshot-chain remains the
+shipped implementation; no alternative is shown better under R3.
+
+The source manifest numbers its ten gates G0–G9, not G1–G10. These are the
+run's recorded verdicts, without combining observations from other runs:
+
+| Gate | Verdict | Deciding evidence |
+| --- | --- | --- |
+| G0 Provenance | Pass | Clean `fed2b9d779`; Worker `25825c2d-1a73-47da-9b15-68e1912c906e`; pinned image digest `3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e` |
+| G1 Mount truth | Pass | Workspace mount, writable upper, named archives and durable bytes verified |
+| G2 Filesystem semantics | Pass | Both re-registered witnesses observed; no unexpected semantic failure |
+| G3 Publication safety | Refused | The read-only probe's top-level `exit` terminated the persistent SDK shell, so write refusal and the aggregate cut verdict were unobserved |
+| G4 Security | Pass | F7 stale writer, F10 hostile metadata, F11 capability escape/replay and F12 credential exposure completed |
+| G5 Restore complexity | Pass | Counted store window and bounded-k archive-depth check passed; this is not a CPU or peak-memory profile |
+| G6 Complete cells | Refused | Cold attach 25,039 ms exceeded 25,000 ms; C3 made three object attempts; C3 cold restore exhausted the 55-second observer and file correctness was unmeasured |
+| G7 Reconciled accounting | Pass | Operation and byte accounting reconciled |
+| G8 Complete cleanup | Pass | All seven teardown entries completed; Worker, container application, bucket and generated config absent; object/multipart residue absent |
+| G9 Statistical validity | Refused | Only 15 of 40 requested segment observations existed, 13 priced; later workload preparations were refused during replacement startup |
+
+Both npm profiles completed their first repetition. Git repetition 1
+completed segments 0–2; after the idle-policy quiesce, segments 3–4 were
+refused. SQLite repetition 1 and all four second-repetition preparations
+were attempted before replacement startup settled and returned “ask again”.
+This was the request-admission gap fixed by D13 (`c0181b5eb`), not a stale
+startup row discarded by D12. The original refusal remains recorded.
+
+The immutable-publication witness retained the first 81,932,288-byte delta
+with its original etag, published a new UUID key, and advanced the record
+from revision 20 to 21. The composed-restore witness read the exact marker
+on a new boot, found it absent from the fresh upper, observed both lower
+mounts and zero payload bytes, index pages and read requests, then committed
+the next checkpoint without collapsing the base. Archive checks use each
+delta's own ID. The legacy-only `delta-layer-collapse` profile remains:
+`snapshot-chain.ts` still collapses a mounted non-chunked delta, and the
+full-upper conformance row proves that live property.
+
+The G3 command now runs in a subshell (`9ae255d17`). Its local POSIX-shell
+control was red for session termination and green for preserving both a
+failed write's status 1 and a writable control's status 0. Neither this fix
+nor D13 has a completed post-fix cloud matrix: three consecutive deployed
+attempts were refused at initial container admission. Every one retained
+the platform message “There is no container instance that can be provided
+to this Durable Object, try again later”. State observations included brief
+`running:true` readings, but no restore settled and the final reading was
+stopped. The unchanged 55-second observation ceiling ended measurement.
+
+| Run | Source | UTC interval on 2026-09-13 | Outcome |
+| --- | --- | --- | --- |
+| `20260913161007` | `c0181b5eb` | 16:10:09.351–16:11:45.088 | Eight admission incidents; no restore or workload |
+| `20260913161823` | `9ae255d17` | 16:18:25.294–16:19:40.525 | Eight admission incidents; no restore or workload |
+| `20260913162021` | `9ae255d17` | 16:20:22.861–16:21:40.113 | Nine admission incidents; no restore or workload |
+
+All three pass G0 and G8 and refuse the other eight gates for missing
+measurements. Their seven-entry teardown manifests are complete, cleanup
+errors are empty, and bucket/multipart absence is verified. Deployment
+attempts stopped at the authorized three-consecutive-refusal limit.
+The earlier `20260913154033` provisioning attempt failed with Cloudflare
+R2 API code 10001 before Worker deployment and also completed teardown.
+
+The bounded storage figures remain separate evidence: C3 attached in
+5,218 ms in `b20260913143908`; the dense 2 GiB changed file attached in
+3,735 ms in `b20260913145258`. Both read zero payload bytes, index pages and
+file-read requests at attach and passed their byte checks. The dense figure
+used retained diagnostic instrumentation, not a clean tree. Neither figure
+admits a strategy. The settlement run's C3 still observed a zero-byte
+directory PUT, a zero-byte file-placeholder PUT, and the 69,632-byte payload
+PUT. The one-attempt requirement remains red; no attempt was hidden.
+
+Raw run artifacts are `bench-artifacts/devbox-strategies-<run>.json`,
+per-arm observations are `bench-artifacts/<run>/snapshot-chain.json`, and
+receipts are `bench-artifacts/teardown/<run>.json`. Selected lifecycle logs
+and driver output are under `bench-artifacts/devbox-admission/<run>/`.
+Observer processes were stopped. No runtime budget, gate bound, workload or
+lock was increased. No fallback was added.
+
+The alternatives' dispositions at this settlement are:
 
 | Candidate | Evidence | Disposition |
 | --- | --- | --- |
@@ -108,7 +185,7 @@ disposition, from the reconstruction of 2026-09-13:
 | bounded-layers | 40/40 deciding ticks in one configuration; lazy wake constant at 5 requests from 1k to 100k files but fetched bytes 495,655 to 49,609,348 | Unsettled; constant request count is not constant work |
 | merkle-pack v1 | Full index read on open; 4 MiB cap refused large trees; 4/40 ticks versus chain 40/40 | Structural disadvantage for this full-index design; paged designs not judged |
 | native root/extent + merkle v4 | Matched C1 lookup 1,038 to 5,183 GETs versus chain 5; dirty MAP_SHARED writes escaped FUSE; refusing them broke SQLite WAL | Not shown better on the preserved configuration |
-| snapshot-chain, chunked | Local C3 and many-file proofs pass; the 2026-09-12 live run refused admission on G2, G3, G6 | Current strategy; live acceptance open |
+| snapshot-chain, chunked | Local C3 and many-file proofs pass; `20260913154111` refused admission on G3, G6, G9; three post-fix attempts failed container admission | Shipped implementation; full strategy admission refused |
 
 No comparison run to date was admitted end to end; see "Comparisons not
 admitted" in `kinu-logs/devbox-history-report.json`. The removal of the
@@ -266,13 +343,13 @@ admitted only when every G gate passes; a refused run ranks nothing.
 
 ## Open
 
-O1. Live acceptance of the chunked chain on deployed Containers and R2 after
-the evidence corrections of 2026-09-12 (`6e6b9e43c`, `ccb5a2aab`).
-The matrix witnesses `chunked-absorption`, `mutable-delta`, and
-`chainArchiveExpectations` keyed by `base.id` describe the retired eager
-attach and mutable publication. They must be re-registered against immutable
-delta IDs and the composed lower before a full admitted run. The bounded C3
-and 2 GiB cells are storage evidence, not G1–G10 strategy admission.
+O1. Full live acceptance remains refused by D5's dated settlement. Witness
+registration is complete in `fed2b9d779` and both witnesses passed on
+deployed Containers and R2. D13's boot-window fix (`c0181b5eb`) and the G3
+subshell fix (`9ae255d17`) pass their local red/green checks; three subsequent
+platform-admission refusals prevented their full cloud confirmation. C3's
+one-object-attempt requirement remains red. The bounded C3 and 2 GiB figures
+are storage evidence, not full strategy admission. Earlier controls follow.
 
 The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
 `ad8a2346b`, image digest `d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0`)
