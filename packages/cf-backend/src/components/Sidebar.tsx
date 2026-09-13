@@ -162,6 +162,10 @@ export default function Sidebar() {
     ? sectionMatch.params.agentId
     : undefined;
 
+  // The home route IS the new-workspace form; offering the button that opens
+  // it inside the page that is it would be a control that does nothing.
+  const onHome = useMatch({ path: "/", end: true }) !== null;
+
   const navigate = useNavigate();
 
   const {
@@ -255,20 +259,22 @@ export default function Sidebar() {
       </div>
 
       {/* New workspace — the outlined control the mock draws, into the
-          mission-first screen (the home route). */}
-      <div className="px-3.5 pb-1.5">
-        <Button
-          type="button"
-          variant="secondary"
-          size="base"
-          onClick={() => navigate("/")}
-          className="!h-10 w-full justify-center"
-          icon={<PlusIcon size={15} weight="bold" />}
-        >
-          New workspace
-        </Button>
-      </div>
-
+          mission-first screen (the home route). Absent there: the page the
+          button opens is already mounted. */}
+      {!onHome && (
+        <div className="px-3.5 pb-1.5">
+          <Button
+            type="button"
+            variant="secondary"
+            size="base"
+            onClick={() => navigate("/")}
+            className="!h-10 w-full justify-center"
+            icon={<PlusIcon size={15} weight="bold" />}
+          >
+            New workspace
+          </Button>
+        </div>
+      )}
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto pt-2 pb-3">
         <div className="px-5 pb-2 pt-4 p-eyebrow">

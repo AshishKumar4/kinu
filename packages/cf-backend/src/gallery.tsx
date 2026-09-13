@@ -6001,7 +6001,15 @@ async function mount() {
   }
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
-    node = <div className="h-screen p-bg p-text"><HomePage /></div>;
+    // The real chrome, not the page alone: the sidebar's own route logic
+    // decides what it renders at "/", and photographing the page without the
+    // rail would pass a sidebar the app never shows.
+    node = (
+      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
+      </div>
+    );
   } else node = <All />;
 
   if (frame in EXPLORATION_FRAMES) {
