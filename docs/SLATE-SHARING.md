@@ -53,22 +53,21 @@ is a bearer capability. Today a leaked slate preview URL is already a public
 live share with every declared binding: no consent step, no disclaimer, no
 per-viewer limit, no audit row, and revocation means unexposing the port.
 
-**URL durability.** Routing is by Durable Object name; the workspace name is
-in the label for exactly that reason (`nimbus-route.ts:10-15`). Past that,
-the two slate homes differ:
+**URL durability.** Routing is by Durable Object name (`nimbus-route.ts:10-15`).
+Kinu currently routes its two slate configurations differently:
 
 - A Worker slate is a Nimbus resident. Its port capability is persisted with
   an owner string and restored when the same slate re-registers
   (`workspace-host.ts:345-358`, `@nimbus-sh/worker/dist/session/port-capability.js`).
-  The process itself does not survive eviction: nothing restarts residents on
-  wake, and the refresh path walks an in-memory map (`workspace-host.ts:286-292`,
+  Kinu's embedded host omits Nimbus's resident recovery, and its refresh path
+  walks an in-memory map (`workspace-host.ts:286-292`,
   `host.ts:172-180`). A visit after eviction gets 410
   `RECYCLED_WORKSPACE_PREVIEW` until my UI opens the slate again
   (`workspace-host.ts:378-395`). Ports are allocated from an in-memory counter
   unless `slate.port` is declared (`host.ts:47-49,345`), so with two slates the
   URL bytes can change after eviction.
-- A Vite app is not a Nimbus resident. `slate.runtime: "node"` selects the
-  sandbox container (`project.ts:52-58`; `docs/EXECUTION-LAYER-SPEC.md`,
+- Kinu directs `slate.runtime: "node"` projects to the sandbox container
+  (`project.ts:52-58`; `docs/EXECUTION-LAYER-SPEC.md`,
   "Slate preview home"); the resident host refuses it (`host.ts:320`). Its URL
   is `<port>-<sandbox>-<token>.<suffix>`, the token is stored and re-exposed on
   recycle byte for byte, and a supervised process restarts after container
@@ -76,9 +75,18 @@ the two slate homes differ:
   idle days and is refreshed past day 15 by any authenticated observation
   (`core/src/preview/preview-exposures.ts:71-75`).
 
-Neither URL is valid forever. Forever takes a slate-owned route that boots the
-slate on demand from durable state, which is the share route in section 5,
-plus, for node slates, an exposure record the share route itself refreshes.
+This is a Kinu integration limit, not a Nimbus runtime limit. Nimbus supports
+Vite, Node-compatible execution and Worker applications; its resident runtime
+adapters also support Python and Ruby. Nimbus's own retained port capabilities
+have no TTL. The 30-day expiry above belongs to Kinu's sandbox edge records.
+
+Durability and sharing are separate changes. The recommended durability repair
+composes Nimbus's process recovery over the existing workspace and retains
+logical service, port and capability ownership. A valid route asks that
+supervisor to ensure readiness; it must not become a second supervisor.
+Saved application data survives recovery; arbitrary heap and socket state
+needs a separate checkpoint contract. Sharing still requires section 5's
+authorization policy.
 
 ## 2. Research
 
