@@ -5711,6 +5711,7 @@ export abstract class ActorAgent extends Think<Env> {
         // last, over the set that holds every other tool, and wraps it with
         // the clamp and the effect claim the registry declares for it.
         executeTools: ({ native }) => this.getExecuteToolsFactory(mode, profileKey).toolFor(native),
+        craftedToolExecute: null,
         // The turn's cumulative bulk budget lives on the accumulator, so the
         // cached toolset holds a stable reference across turns and the reset
         // rides the turn's own accounting.

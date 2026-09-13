@@ -85,11 +85,8 @@ import { createFileTool } from './file-tool';
 import { TurnFileLedger } from './file-ledger';
 import { TurnContextBudget } from '../context-budget';
 import { isMcpToolKey } from './mcp-naming';
-import { isReservedCraftToolName } from '../craft/in-episode';
-import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor';
-import { filterByEffectiveScore } from '../craft/ema';
+import { selectInjectableCraftedTools, type CraftedToolExecute, type CraftedToolExecuteFn } from './crafted-executor';
 import { attributeCraftedFailure } from '../craft/attribution';
-import { craftedToolDescription } from './sandbox-contract';
 import { DEFAULT_CONFIG } from '../config';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
@@ -98,7 +95,7 @@ import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
 import type { PlanEdit, SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } from '../obs/index';
+import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
 // The admitted-set filter beside the sets it narrows (heads/types.ts). That
 // module holds no runtime import, so this edge cannot close a ring.
 import { keepBuiltins } from '../heads/types';
@@ -147,15 +144,13 @@ export interface BuiltinToolDeps {
   /**
    * Platform-correct crafted-tool executor factory.
    *
-   * - CF adapter supplies a LOADER-backed implementation that spawns a child
-   *   Worker per tool via `env.LOADER.get(toolName, factory)`. Modules are
-   *   compiled by workerd, sidestepping V8's codegen ban.
+   * - null declares sandbox-side compilation: CF injects the shared source
+   *   selection into its Worker Loader prelude, without a host-side callable.
    * - CLI adapter supplies a Node-eval implementation (Node/Bun permits
    *   codegen).
-   * - Absent: crafted tools are skipped silently (warn). Kept as an escape
-   *   hatch for test runtimes / in-memory fixtures that don't wire an adapter.
+   * - Omitted: no crafted executor, for minimal test runtimes.
    */
-  craftedToolExecute?: CraftedToolExecute;
+  craftedToolExecute?: CraftedToolExecute | null;
   /**
    * A ready `execute_tools` entry for a CONFINED surface (a head, a swarm
    * node): those are built from this factory directly and finish their surface
@@ -278,20 +273,8 @@ function buildCraftedToolSetFromExecute(
   surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
 ) {
   const out: CraftedToolSet = {};
-  let list;
 
-  try {
-    list = rt.craftStore.list();
-  } catch (error) {
-    diagnostics.event('craft.list_unreadable', { error: renderThrownChain({ cause: error }) });
-
-    return out;
-  }
-
-  // Single injection policy — shared with the CF preamble path.
-  const scorePassing = new Set(
-    filterByEffectiveScore(rt.storage.sql, list, minScore).map((t) => t.name),
-  );
+  const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, minScore);
 
   // Relevance filter (Voyager / Tool-Search style): when the agent has many
   // crafted tools, stuffing them all into every turn wastes context and hurts
@@ -323,25 +306,8 @@ function buildCraftedToolSetFromExecute(
   }
 
   for (const t of list) {
-    if (!t.code || t.code.startsWith('//')) continue;
-
-    if (isReservedCraftToolName(t.name)) {
-      diagnostics.failure(
-        CRAFT_TOOL_SKIPPED,
-        toKinuError({
-          doing: 'compile a crafted tool',
-          cause: new KinuError('bad_input', `Crafted tool "${t.name}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools`),
-          otherwise: 'bad_input',
-        }),
-        { tool: t.name },
-      );
-      continue;
-    }
-
     if (relevantNames && !relevantNames.has(t.name)) continue;
-
-    if (!scorePassing.has(t.name)) continue;
-    const description = craftedToolDescription(t.name, t.description);
+    const description = t.description;
 
     try {
       const execute = factory({ name: t.name, description, code: t.code });

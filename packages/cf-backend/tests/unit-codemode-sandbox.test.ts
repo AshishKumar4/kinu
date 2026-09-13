@@ -10,13 +10,13 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import type { CraftedTool, CraftStore, JsonValue } from "@kinu.run/core";
-import { craftFailureMarker } from "@kinu.run/core";
+import { craftFailureMarker, selectInjectableCraftedTools } from "@kinu.run/core";
 import { createTestSql, scratchDir } from "@kinu.run/test-utils";
 import { initCraftedToolsTables } from "@kinu.run/agent-utils/stores";
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "../src/codemode-node-shim";
 // @cloudflare/codemode (the DWE import) needs the workerd-only module, which
 // the preload's boundary stub serves.
-import { selectInjectableCraftedTools, renderToolsPrelude } from "../src/codemode-sandbox";
+import { renderToolsPrelude } from "../src/codemode-sandbox";
 
 const shimDir = scratchDir("shim");
 

@@ -884,6 +884,7 @@ export class OrchestratorAgent extends ActorAgent {
         turnId: () => turn.input.id,
       },
       executeTools: ({ native }) => factory.toolFor(native),
+      craftedToolExecute: null,
       agents,
       // This actor's own semantic index and its own keyed world model — the
       // rows are `actor_id`-scoped, so a hire's `remember` cannot overwrite

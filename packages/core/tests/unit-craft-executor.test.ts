@@ -14,10 +14,12 @@ import { createTestRuntime } from './helpers';
 import {
   buildActorTools,
   craftFailureMarker,
+  selectInjectableCraftedTools,
   type ActorToolsetDeps,
   type CraftedToolSet,
   type ExecuteToolsBuilder,
   type CraftedToolExecute,
+  type CraftedToolSource,
   type JsonValue,
 } from '../src/index';
 import { tool, jsonSchema } from 'ai';
@@ -75,6 +77,52 @@ function requiredCraftedTool(tools: CraftedToolSet, name: string) {
 }
 
 describe('crafted-tool execution integration', () => {
+  test('host and sandbox compilers receive the same eligible names, normalized source and descriptions', async () => {
+    const { rt } = createTestRuntime();
+
+    for (const [name, code] of [
+      ['healthy', '  async () => 1  '], ['run', 'async () => 2'],
+      ['mcp_shadow', 'async () => 3'], ['empty', '   '], ['comment', '  // disabled'],
+      ['retired', 'async () => 4'],
+    ] as const) {
+      rt.craftStore.create({ name, code, description: '', params: null, scope: 'local' });
+    }
+
+    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'retired'`;
+    const compiled: CraftedToolSource[] = [];
+
+    const tools = actorTools(rt, {
+      craftedToolExecute: (source) => {
+        compiled.push(source);
+
+        return async () => null;
+      },
+      executeTools: createTestExecBuilder(async (crafted) => Object.keys(crafted).join(',')),
+    });
+
+    const execute = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const result = v.parse(ExecuteResultSchema, await execute({ code: 'list crafted tools' }));
+    expect(result.result).toBe('healthy');
+    expect(compiled).toEqual(selectInjectableCraftedTools(rt.craftStore, rt.storage.sql));
+    expect(compiled).toEqual([{ name: 'healthy', code: 'async () => 1', description: 'Crafted tool: healthy' }]);
+  });
+
+  test('both compilation paths report an unreadable store instead of silently removing all crafted tools', async () => {
+    const { rt } = createTestRuntime();
+    rt.craftStore.list = () => { throw new Error('crafted store unavailable'); };
+
+    const tools = actorTools(rt, {
+      craftedToolExecute: createTestCraftedExecute(),
+      executeTools: createTestExecBuilder(async (crafted) => Object.keys(crafted).join(',')),
+    });
+
+    expect(() => selectInjectableCraftedTools(rt.craftStore, rt.storage.sql)).toThrow('crafted store unavailable');
+    const execute = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const result = v.parse(ExecuteResultSchema, await execute({ code: 'list unavailable crafted tools' }));
+    expect(result.error).toBe('crafted store unavailable');
+    expect(result.result).toBeUndefined();
+  });
+
   test('tools.<name>(arg) round-trips a stored tool', async () => {
     const { rt } = createTestRuntime();
 

@@ -786,6 +786,7 @@ export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer
 
 export {
   toCraftedToolSource,
+  selectInjectableCraftedTools,
   type CraftedToolExecute,
   type CraftedToolExecuteFn,
   type CraftedToolSource,
