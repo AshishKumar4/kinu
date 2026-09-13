@@ -32,9 +32,11 @@ describe('inline shell approval', () => {
       expect(screen.frame()).toContain('Executor: laptop');
       expect(screen.frame()).toContain('Privilege escalation');
       await screen.mockInput.typeText('zzz');
+      await screen.mockInput.pasteBracketedText('blocked paste');
       screen.mockInput.pressKey('l', { ctrl: true });
       await screen.renderOnce();
       expect(screen.frame()).not.toContain('zzz');
+      expect(screen.frame()).not.toContain('blocked paste');
       expect(screen.frame()).not.toContain('Select model');
       expect(sent).toEqual([]);
       screen.mockInput.pressKey(key);

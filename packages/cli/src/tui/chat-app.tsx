@@ -80,6 +80,7 @@ import {
 } from './overlays';
 import { useDeviceConnectPrompt } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
+import { useComposerPaste } from './use-composer-paste';
 import { composerHelp } from './help-view';
 import { estimateContextTokens } from './context-status';
 import { useStreamingBuffer } from './streaming-buffer';
@@ -201,6 +202,7 @@ function ChatScene({
   readHub,
 }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
+  const rendererInstance = useRenderer();
   const { colors, definition: activeTheme } = useTuiTheme();
   const { keybindings, preferences, updatePreferences } = useTuiProduct();
   const sceneWidth = sceneWidthFor(width, preferences.wideSidebarOpen);
@@ -392,6 +394,11 @@ function ChatScene({
   const addError = useCallback((failure: CaughtFailure) => {
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
+
+  const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
+
+  const expandPastes = useComposerPaste({ renderer: rendererInstance, input: inputRef,
+    enabled: inputShouldFocusRef, limitBytes: client.inlineAttachmentLimitBytes, note: pasteNote });
 
   // ── Live assistant text segments — the key to chronological interleaving.
   // Streamed text-deltas flow into a `live` assistant message that sits at its
@@ -1472,7 +1479,6 @@ function ChatScene({
 
 
   // Auto-copy selected text to clipboard (OSC 52) on mouse release.
-  const rendererInstance = useRenderer();
   useEffect(() => {
     if (!rendererInstance?.root) return;
     let copied = false;
@@ -1703,7 +1709,7 @@ function ChatScene({
       const text = inputRef.current?.plainText ?? '';
 
       if (text !== '') {
-        rememberPrompt(text);
+        rememberPrompt(expandPastes(text));
         setInputText('');
 
         return;
@@ -1716,13 +1722,13 @@ function ChatScene({
     if (actionId === 'conversation.branch') {
       key.preventDefault();
 
-      return runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
+      return runInputEffects(dispatchInput({ type: 'branch', draft: expandPastes(inputRef.current?.plainText ?? '') }));
     }
 
     if (actionId === 'queue.add') {
       key.preventDefault();
 
-      return runInputEffects(dispatchInput({ type: 'queue', text: inputRef.current?.plainText ?? '' }));
+      return runInputEffects(dispatchInput({ type: 'queue', text: expandPastes(inputRef.current?.plainText ?? '') }));
     }
 
     if (actionId === 'queue.edit-last') {
@@ -1758,8 +1764,8 @@ function ChatScene({
     if (!value.trim()) return;
     setInputText('');
 
-    return handleSubmit(value);
-  }, [handleSubmit, overlayOpen, setInputText]);
+    return handleSubmit(expandPastes(value));
+  }, [expandPastes, handleSubmit, overlayOpen, setInputText]);
 
   const commandHints = !settingsOpen && !themePickerOpen && !commandPalette && !modelPicker && hubView === null
     && !changelogView && !takesView && !inputState.walkbackOpen && !navigationOpen
