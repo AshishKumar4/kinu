@@ -35,21 +35,24 @@ import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 // drift both files' headers forbid. Measured: taking the gate from `capability`
 // drops five modules from this object's graph, and the workerd fixture asserts
 // their absence so the header stops being the only thing holding the line.
-import { requireControl, type ControlCapability, type ControlGrade, type PresentedCaller } from './capability';
-import type { ControlPlaneSql } from './sql';
-import * as store from './store';
+import {
+  requireControl,
+  type ControlCapability, type ControlGrade, type PresentedCaller,
+} from '@kinu.run/core/control-plane';
+import * as cpStore from '@kinu.run/core/control-plane/store';
 import type {
-  AuditOutcome, AuditSettlement, ControlAuditRow, ControlFeedbackRow, ControlOverview,
-  ControlUserRow, ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
-} from './store';
+  AuditDraft, AuditOutcome, AuditSettlement, ControlAuditRow, ControlOverview,
+  ControlUserRow, ControlWorkspaceRow, ControlPlaneSql,
+  RosterWorkspace, UserObservation, WorkspaceFilter, WorkspaceObservation,
+} from '@kinu.run/core/control-plane';
+import * as store from './store';
+import type { ControlFeedbackRow } from './store';
 
 
 export type {
   AuditOutcome, AuditSettlement, ControlAuditRow, ControlFeedbackRow, ControlOverview,
   ControlUserRow, ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
 };
-
-export { AUDIT_OUTCOMES, CONTROL_PAGE_DEFAULT, CONTROL_PAGE_MAX } from './store';
 
 export class ControlPlaneDO extends DurableObject<Env> {
   private readonly store: ControlPlaneSql;
@@ -61,7 +64,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     // `sql.exec` does not yield, so there is nothing to gate, and anything this
     // object's init awaited would stall every later request on it —
     // `tests/workerd/do-init-gate.test.ts` measures exactly that.
-    store.initControlPlaneSchema(this.store);
+    cpStore.initControlPlaneSchema(this.store);
     // A Durable Object is a DIFFERENT ISOLATE from the Worker's fetch handler,
     // with its own module scope, so the sink installed in `server.ts` is not
     // installed here. Without this line every audit row's `control_plane.*`
@@ -86,24 +89,24 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
   async observeUser(caller: PresentedCaller, observation: UserObservation): Promise<void> {
     await this.gate(caller, 'index.observe');
-    store.observeUser(this.store, observation);
+    cpStore.observeUser(this.store, observation);
   }
 
   async observeWorkspace(caller: PresentedCaller, observation: WorkspaceObservation): Promise<void> {
     await this.gate(caller, 'index.workspace');
-    store.observeWorkspace(this.store, observation);
+    cpStore.observeWorkspace(this.store, observation);
   }
   /** Records activity. The use feed only knows the slug, so it claims no title. */
   async touchWorkspace(caller: PresentedCaller, observation: WorkspaceObservation): Promise<void> {
     await this.gate(caller, 'index.workspace');
-    store.touchWorkspace(this.store, observation);
+    cpStore.touchWorkspace(this.store, observation);
   }
 
   async forgetWorkspace(
     caller: PresentedCaller, target: { userId: string; name: string; at?: number },
   ): Promise<void> {
     await this.gate(caller, 'index.forget');
-    store.forgetWorkspace(this.store, target);
+    cpStore.forgetWorkspace(this.store, target);
   }
 
   /**
@@ -128,7 +131,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
   ): Promise<{ present: number; tombstoned: number }> {
     await this.gate(caller, 'index.reconcile');
 
-    return store.replaceUserWorkspaces(this.store, userId, live);
+    return cpStore.replaceUserWorkspaces(this.store, userId, live);
   }
 
   /* ── Reads (grade: admin) ──────────────────────────────────────────────── */
@@ -136,29 +139,29 @@ export class ControlPlaneDO extends DurableObject<Env> {
   async overview(caller: PresentedCaller): Promise<ControlOverview> {
     await this.gate(caller, 'overview.read');
 
-    return store.overview(this.store);
+    return cpStore.overview(this.store);
   }
 
   async listUsers(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlUserRow>> {
     await this.gate(caller, 'users.read');
 
-    return store.listUsers(this.store, request);
+    return cpStore.listUsers(this.store, request);
   }
 
   async getUser(caller: PresentedCaller, userId: string): Promise<ControlUserRow | null> {
     await this.gate(caller, 'users.read');
 
-    return store.getUser(this.store, userId);
+    return cpStore.getUser(this.store, userId);
   }
 
   async listWorkspaces(
     caller: PresentedCaller,
     request: PageRequest = {},
-    filter: store.WorkspaceFilter = {},
+    filter: WorkspaceFilter = {},
   ): Promise<Page<ControlWorkspaceRow>> {
     await this.gate(caller, 'workspaces.read');
 
-    return store.listWorkspaces(this.store, request, filter);
+    return cpStore.listWorkspaces(this.store, request, filter);
   }
 
   async listFeedback(
@@ -172,7 +175,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
   async listAudit(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlAuditRow>> {
     await this.gate(caller, 'audit.read');
 
-    return store.listAudit(this.store, request);
+    return cpStore.listAudit(this.store, request);
   }
 
   /** Attempts whose outcome was never recorded, newest first. The one class of
@@ -181,7 +184,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
   async listPendingAudit(caller: PresentedCaller, limit?: number): Promise<ControlAuditRow[]> {
     await this.gate(caller, 'audit.read');
 
-    return store.listPendingAudit(this.store, limit);
+    return cpStore.listPendingAudit(this.store, limit);
   }
 
   /* ── The audit log's only writers (grade: admin) ────────────────────────── */
@@ -202,10 +205,10 @@ export class ControlPlaneDO extends DurableObject<Env> {
    */
   async recordAudit(
     caller: PresentedCaller,
-    entry: store.AuditDraft & OperationMarker,
+    entry: AuditDraft & OperationMarker,
   ): Promise<ControlAuditRow> {
     await this.gate(caller, 'audit.write');
-    const row = store.appendAudit(this.store, entry);
+    const row = cpStore.appendAudit(this.store, entry);
     this.publish(row, entry);
 
     return row;
@@ -224,7 +227,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     settlement: { id: string; outcome: AuditSettlement; detail: string } & OperationMarker,
   ): Promise<ControlAuditRow> {
     await this.gate(caller, 'audit.write');
-    const row = store.settleAudit(this.store, settlement);
+    const row = cpStore.settleAudit(this.store, settlement);
 
     if (row === null) {
       throw new Error(`no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);

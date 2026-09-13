@@ -1,4 +1,6 @@
-import { DEFAULT_WORKERS_AI_MODEL_ID, type ModelInfo, type ReasoningEffort } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_ID } from './workers-ai';
+import type { ModelInfo } from './types';
+import type { ReasoningEffort } from './reasoning-effort';
 
 // Prefix-cache pricing (verified 2026-08-15 against the account model catalog;
 // affinity behavior was separately confirmed with live two-shot probes):

@@ -1,75 +1,18 @@
 /**
- * The metrics panel's data, assembled from queries this file does not write.
+ * The metrics panel's orchestration: pick the window, resolve a workspace
+ * filter to the digest the dataset is indexed by, hand the batch to the
+ * transport.
  *
- * THE SEAM, and why it is here rather than inlined into the route: the analytics
- * WRITER owns the slot layout, so the reader must not restate a column position.
- * `controlPlaneMetricsQueries` builds the SQL from the same frozen schema objects
- * `writeDataPoint` is fed from, which makes a slot rename a type error on the
- * writer's side instead of a column of zeros on this one. Every aggregate it
- * emits is `_sample_interval`-weighted, because Analytics Engine downsamples per
- * index value at volume and an unweighted `COUNT()` under-reports by exactly the
- * sample rate — worst precisely for the busiest workspace.
- *
- * This file therefore does four things and no more: pick the window, name the
- * deployment's own datasets, resolve a workspace filter to the digest the
- * dataset is indexed by, and hand the batch to the transport.
+ * The window policy and the request/response shapes live in
+ * `@kinu.run/core/control-plane`; the query builder and the digest live in
+ * `../analytics/` until that lane joins core.
  */
 import { analyticsDigest } from '@kinu.run/core/analytics';
 import { controlPlaneMetricsQueries } from '@kinu.run/core/analytics';
 import {
-  analyticsMissingSettings, clearAnalyticsCache, runAnalyticsBatch,
-  type AnalyticsPanels, type AnalyticsSqlEnv,
-} from './analytics-sql';
-
-/**
- * Windows an operator may ask for.
- *
- * A closed set rather than a free number: the window goes into a SQL `INTERVAL`
- * and the results are cached per window, so an open range is both an injection
- * surface and a cache with one entry per distinct hour anybody ever typed.
- */
-const WINDOWS = [1, 6, 24, 72, 168, 720] as const;
-
-/** Nearest allowed window at or above the request, falling back to the widest.
- *  Rounding UP rather than rejecting: an operator asking for 12 hours wants a
- *  day, not an error. */
-function resolveWindow(hours: number): number {
-  return WINDOWS.find((candidate) => candidate >= hours) ?? WINDOWS[WINDOWS.length - 1];
-}
-
-/** What the query builder is asked for. `workspaceDigest` is absent, never
- *  empty, when no workspace filter applies. */
-interface MetricsQueryRequest {
-  sinceHours: number;
-  datasetSuffix: string;
-  workspaceDigest?: string;
-}
-
-export interface MetricsRequest {
-  hours: number;
-  /** A workspace NAME. Digested here, because the dataset is indexed by digest
-   *  and the raw name is deliberately unrecoverable from analytics — a workspace
-   *  name is mission-derived, and therefore user text. */
-  workspace?: string;
-  /**
-   * Ignore the batch cache and re-run the queries.
-   *
-   * The view's refresh button is the one caller: a dashboard whose refresh
-   * answered from the same thirty-second-old batch would look broken while being
-   * correct, and "correct" is not what an operator pressing refresh is asking
-   * for.
-   */
-  forceRefresh?: boolean;
-}
-
-export interface ControlMetrics {
-  /** The window actually measured, after clamping. Reported so a panel labels
-   *  itself with the window it got rather than the one it asked for. */
-  windowHours: number;
-  /** Which required settings are absent. Empty when analytics is configured. */
-  missing: readonly string[];
-  panels: AnalyticsPanels;
-}
+  analyticsMissingSettings, clearAnalyticsCache, resolveWindow, runAnalyticsBatch,
+  type AnalyticsSqlEnv, type ControlMetrics, type MetricsQueryRequest, type MetricsRequest,
+} from '@kinu.run/core/control-plane';
 
 /**
  * Read the metrics panels.
@@ -109,6 +52,3 @@ export async function controlPlaneMetrics(
 
   return { windowHours, missing, panels: await runAnalyticsBatch(env, queries) };
 }
-
-/** The windows the view offers, so the picker and the clamp are one list. */
-export const METRICS_WINDOWS: readonly number[] = WINDOWS;

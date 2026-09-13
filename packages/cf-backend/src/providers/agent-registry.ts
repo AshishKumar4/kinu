@@ -24,7 +24,7 @@ import {
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai';
 import { createMyGatewayProvider } from './my-gateway';
-import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from './ai-gateway';
+import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import type { CredentialSummary } from '../user/user-do';
 import type { UserCaller } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';

@@ -18,7 +18,7 @@ import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo, ProviderDeps } from '@kinu.run/core';
 import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '@kinu.run/core';
-import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
+import { createCloudflareAIFetch, mapGatewayError } from '@kinu.run/core';
 import { toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 

@@ -21,8 +21,8 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { streamText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage, type JsonObject } from '@kinu.run/core';
-import { repairSseCachedUsage } from '../src/providers/stream-usage-repair';
-import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-fetch';
+import { repairSseCachedUsage } from '@kinu.run/core';
+import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 
 const ID = 'id-1783943808747';

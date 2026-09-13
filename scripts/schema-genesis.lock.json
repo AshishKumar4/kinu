@@ -215,7 +215,7 @@
     "rev",
     "synced_rev"
   ],
-  "cp_audit@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_audit@packages/core/src/control-plane/store.ts": [
     "id",
     "at",
     "actor_email",
@@ -226,7 +226,7 @@
     "outcome",
     "detail"
   ],
-  "cp_feedback@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_feedback@packages/core/src/control-plane/store.ts": [
     "id",
     "created_at",
     "user_id",
@@ -239,14 +239,14 @@
     "bytes",
     "user_agent"
   ],
-  "cp_users@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_users@packages/core/src/control-plane/store.ts": [
     "user_id",
     "email",
     "display_name",
     "first_seen_at",
     "last_seen_at"
   ],
-  "cp_workspaces@packages/cf-backend/src/control-plane/store.ts": [
+  "cp_workspaces@packages/core/src/control-plane/store.ts": [
     "user_id",
     "name",
     "display_name",

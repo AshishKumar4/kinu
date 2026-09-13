@@ -8,7 +8,7 @@ import { normalizeReplayForDestination } from '../../../packages/core/src/prompt
 import { createWorkersTracer } from '../../../packages/cf-backend/src/obs/cf-tracer';
 import { KinuSandboxExecutor, renderToolsPrelude } from '../../../packages/cf-backend/src/codemode-sandbox';
 import { codemodeEgress } from '../../../packages/cf-backend/src/codemode-egress';
-import { createDirectWorkersAIFetch } from '../../../packages/cf-backend/src/providers/direct-workers-ai-fetch';
+import { createDirectWorkersAIFetch } from '../../../packages/core/src/providers/direct-workers-ai-fetch';
 import type { OrchestratorAgent } from '../../../packages/cf-backend/src/orchestrator';
 
 export { CodemodeEgress } from '../../../packages/cf-backend/src/codemode-egress';

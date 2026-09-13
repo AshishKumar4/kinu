@@ -20,8 +20,9 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { AuthIdentity } from '../src/auth/session';
 import type { AccessIdentity } from '../src/control-plane/access-gate';
-import * as store from '../src/control-plane/store';
-import type { ControlCapability, PresentedCaller } from '../src/control-plane/capability';
+import * as store from '@kinu.run/core/control-plane';
+import * as feedbackStore from '../src/control-plane/store';
+import type { ControlCapability, PresentedCaller } from '@kinu.run/core/control-plane';
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -33,7 +34,7 @@ mockAgentsSdk();
 // after the mock is registered.
 const { handleControlRequest: routeControlRequest } = await import('../src/control-plane/routes');
 
-const { requireControl } = await import('../src/control-plane/capability');
+const { requireControl } = await import('@kinu.run/core/control-plane');
 
 /** The bindings the route reads. Named for its role rather than its structure:
  *  it is the environment these routes run in. */
@@ -156,7 +157,7 @@ function harness(options: World = {}): Harness {
     async listFeedback(caller: PresentedCaller, request = {}) {
       await gate(caller, 'feedback.read');
 
-      return store.listFeedback(sql, request);
+      return feedbackStore.listFeedback(sql, request);
     },
     async listAudit(caller: PresentedCaller, request = {}) {
       await gate(caller, 'audit.read');
