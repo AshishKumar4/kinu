@@ -33,6 +33,7 @@ import { resolve } from 'node:path';
 import { workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, type RunEvent } from '../../packages/core/src/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
+import { firstRunTurnSettlement } from './turn-settlement';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -100,7 +101,6 @@ describe(SUITE, () => {
 
         for (const spelling of SPELLINGS) {
           const draft = `${spelling.marker} reply with only OK`;
-          const runsBefore = (await session.runEvents()).filter((event) => event.type === 'run_end').length;
 
           // The keystrokes a person makes, each after the screen fact a person
           // would wait for. The driver reads the SCREEN — the cell grid the
@@ -151,7 +151,7 @@ describe(SUITE, () => {
           // a reply or a recorded failure, so the spend this case records is
           // that turn's rather than a zero read too early, and a turn the
           // deployment accepted and never answered is a miss with its reason.
-          const outcome = landed ? await turnSettled(session, spelling.marker, runsBefore) : null;
+          const outcome = landed ? await turnSettled(session, spelling.marker) : null;
           const screen = `Screen as the run left it: ${JSON.stringify(run.screen)}`;
           subgoals.push({
             what: spelling.what,
@@ -198,10 +198,8 @@ async function turnLanded(
 }
 
 /**
- * How the turn carrying `marker` ended: an assistant row after the user row,
- * or a `run_end` the deployment recorded past the `runsBefore` it had when the
- * keystroke went in. No deadline of its own: the turn ends when the
- * deployment says it ended, and the tier's wall bounds a run that never does.
+ * Await the marked run's own terminal event and reply. Genesis and other
+ * queued turns cannot stand in for it. No elapsed deadline on inference.
  */
 async function turnSettled(
   session: {
@@ -209,18 +207,15 @@ async function turnSettled(
     runEvents(): Promise<readonly RunEvent[]>;
   },
   marker: string,
-  runsBefore: number,
 ): Promise<'replied' | { ended: string }> {
   for (;;) {
     const history = await session.history();
+    const outcome = firstRunTurnSettlement(await session.runEvents(), marker);
+
+    if (outcome !== 'pending' && outcome !== 'replied') return outcome;
     const user = history.findIndex((row) => row.role === 'user' && row.text.includes(marker));
 
-    if (user >= 0 && history.slice(user + 1).some((row) => row.role === 'assistant')) return 'replied';
-    const end = (await session.runEvents()).filter((event) => event.type === 'run_end')[runsBefore];
-
-    if (end !== undefined && end.type === 'run_end') {
-      return { ended: `${end.reason ?? 'ended'}${end.error === undefined ? '' : `: ${end.error}`}` };
-    }
+    if (outcome === 'replied' && user >= 0 && history.slice(user + 1).some((row) => row.role === 'assistant')) return 'replied';
 
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, Math.floor(LANDING_MS / LANDING_PROBES));

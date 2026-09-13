@@ -143,6 +143,10 @@ describe(SUITE, () => {
           held.browser = browser;
           const clicked = await approveThroughTheButton(browser, PLAN, session.workspace);
 
+          // The RPC/browser work can finish before genesis makes its first
+          // model call. Drain through an explicit turn before collecting spend.
+          await session.prompt('The approval checks are finished. Reply with only OK. Do not run commands or use tools.');
+
           return [
             {
               what: 'parked',
