@@ -116,9 +116,10 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     // The pin runs, returns 404, and does so ahead of the ownership claim and
     // the partyserver route — so no privileged code runs on a foreign path.
     const pin = src.indexOf('if (isForeignAgentNamespacePath(url.pathname)) {');
-    const claim = src.indexOf('ensureAgentOwnership(env, identity, agentName)');
+    const claim = src.indexOf('claimOwnedWorkspace(env, identity.userId, agentName)');
     const route = src.indexOf('routeAgentRequest(reqWithId, env)');
     expect(pin).toBeGreaterThan(-1);
+    expect(claim).toBeGreaterThan(-1);
     expect(src).toContain("return err(404, 'Not found');");
     expect(pin).toBeLessThan(claim);
     expect(claim).toBeLessThan(route);
