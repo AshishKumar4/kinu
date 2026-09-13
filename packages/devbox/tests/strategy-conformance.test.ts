@@ -1503,7 +1503,7 @@ describe('explicit collapse paths', () => {
       const expected = await arm.workspace.snapshot();
       expectCommitted(await arm.storage().checkpoint('tick'), 'the next checkpoint');
       const nextBase = (await arm.declaredPayload()).find((object) => object.names.includes('base'))?.key;
-      expect(nextBase === base).toBe(profile === 'chunked');
+      expect(nextBase === base).toBe(profile !== 'full-upper');
       expect((await wake(arm)).kind).toBe('attached');
       await expectTreeExact(arm, expected, 'after the next checkpoint restore');
     });

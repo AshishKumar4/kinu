@@ -66,6 +66,7 @@ const OP = {
   truncate: new RegExp(String.raw`^truncate -s (\d+) ${Q}$`),
   manifest: new RegExp(String.raw`^printf %s ${Q} \| base64 -d > ${Q}$`),
   cat: new RegExp(String.raw`^cat ${Q} 2>/dev/null$`),
+  base64: new RegExp(String.raw`^base64 ${Q}$`),
 };
 
 /**
@@ -212,6 +213,16 @@ class DeltaShell {
     if ((m = OP.manifest.exec(line)) !== null) return this.#manifest(unquote(m[1]!), unquote(m[2]!));
 
     if ((m = OP.cat.exec(line)) !== null) return this.#cat(unquote(m[1]!));
+
+    if ((m = OP.base64.exec(line)) !== null) {
+      const path = m[1];
+
+      if (path === undefined) throw new Error('base64 needs a path');
+      const node = this.disk.node(unquote(path));
+
+      return node?.kind === 'file' ? this.#say(Buffer.from(bytesOf(node)).toString('base64')) : 1;
+    }
+
     throw new Error(`the delta shell emulates no such operation: ${line.slice(0, 120)}`);
   }
 

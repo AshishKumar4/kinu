@@ -77,6 +77,8 @@ import {
   parseDeltaBlockHashes,
   parseDeltaProbe,
   planDeltaPublication,
+  mergeDeltaPublication,
+  readDeltaIndex,
 } from './chunked-delta';
 import type { StoragePhase } from './durability/contracts';
 import { describeThrown as describe, findMount } from './lifecycle';
@@ -1120,10 +1122,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   ): Promise<DeltaManifest | null> => {
     const cat = await ports.exec(`# devbox-manifest-v1\ncat ${shellPath(`${deltaLayer}/${DELTA_MANIFEST_NAME}`)} 2>/dev/null`);
     let manifest: DeltaManifest | null = null;
+    let refusedVersion = false;
 
     if (cat.exitCode === 0 && cat.stdout.trim() !== '') {
       try {
-        const read = v.safeParse(DeltaManifestSchema, JSON.parse(cat.stdout));
+        const json: unknown = JSON.parse(cat.stdout);
+        const version = v.safeParse(v.object({ v: v.number() }), json);
+        refusedVersion = version.success && version.output.v !== 2;
+        const read = v.safeParse(DeltaManifestSchema, json);
 
         if (read.success) manifest = read.output;
       } catch (error) {
@@ -1134,26 +1140,31 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
+    if (refusedVersion) await layerFailed('delta', { cause: new Error('unsupported delta manifest version; reset deployment required') });
+
     if (manifest === null && generation.deltaFormat === 'chunked') {
       await layerFailed('delta', { cause: new Error('the record names a chunked delta whose mount serves no manifest') });
     }
 
     if (manifest === null) return null;
 
+    return manifest;
+  };
+
+  const readSidecarIndexes = async (manifest: DeltaManifest, deltaLayer: string): Promise<Map<string, Uint8Array>> => {
+    const indexes = new Map<string, Uint8Array>();
+
     for (const file of manifest.files) {
-      if (file.kind !== 'chunked') continue;
-      let last = -1;
+      if (file.kind !== 'chunked' || indexes.has(file.over.index)) continue;
+      const result = await ports.exec(`# devbox-index-v2\nbase64 ${shellPath(`${deltaLayer}/.devbox-delta/${file.over.index}`)}`);
 
-      for (const override of file.over) {
-        if (override.o % DELTA_BLOCK_BYTES !== 0 || override.o >= file.s || override.o <= last) {
-          await layerFailed('delta', { cause: new Error(`the delta manifest misplaces an override of ${file.p} at ${override.o}`) });
-        }
-
-        last = override.o;
-      }
+      if (result.exitCode !== 0) throw new Error(`delta index could not be read: ${result.stderr}`);
+      const bytes = Buffer.from(result.stdout.trim(), 'base64');
+      readDeltaIndex(file.over, file.s, bytes);
+      indexes.set(file.over.index, bytes);
     }
 
-    return manifest;
+    return indexes;
   };
 
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
@@ -1281,7 +1292,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (manifest === null) {
         lowerLayers.unshift(deltaLayer);
       } else {
-        sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
+        sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR,
+          indexes: await readSidecarIndexes(manifest, deltaLayer) });
 
         try {
           await runOpsBatched('materializing the delta into the upper', sidecar.pre);
@@ -1695,8 +1707,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * ONLY WHOLE OBJECT: the package is one squashfs, so the object count per
    * checkpoint stays at one whatever the changed set holds.
    */
-  const stageChunkedDelta = async (chainId: string, storeHeld: boolean): Promise<ChainLayer | null> => {
+  const stageChunkedDelta = async (chainId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<ChainLayer | null> => {
     const fallback = (why: string): null => {
+      if (retained !== undefined) throw new Error(`refusing to lose the retained delta: ${why}`);
       ports.log(`${DEVBOX_WORKDIR} chain ${chainId}: archiving the whole upper because ${why}`);
 
       return null;
@@ -1787,7 +1800,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
-    const plan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
+    const upperPlan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
+    const sideDir = deltaLayerMountPoint(chainId);
+
+    const plan = retained === undefined ? upperPlan
+      : mergeDeltaPublication(upperPlan, retained, await readSidecarIndexes(retained, sideDir), sideDir);
+
     const pkgDir = `${stageRoot}/pkg`;
 
     try {
@@ -2002,7 +2020,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // CHUNKED FIRST: changed extents plus a per-file map in one object; a
       // host that cannot stage one archives the whole upper exactly as before
       // (`stageChunkedDelta` answers null and says why).
-      const chunked = await stageChunkedDelta(chainId, storeHeld);
+      const mounted = deltaLayerServed(await shell.readMounts(), chainId);
+
+      const retained = mounted && previous.deltaFormat === 'chunked'
+        ? await readSidecarManifest(deltaLayerMountPoint(chainId), previous, async (_layer, thrown) => {
+          throw new Error('retained delta is unreadable', thrown);
+        }) : null;
+
+      const chunked = await stageChunkedDelta(chainId, storeHeld, retained ?? undefined);
       deltaFormat = chunked === null ? undefined : 'chunked';
       layer = chunked ?? await stageAndPut(
         deltaObjectKey(root, chainId), upperDir, ports.archiveExcludes(), storeHeld,
@@ -2035,7 +2060,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // THIS UPPER *IS* THE DELTA JUST PUBLISHED, so the stamp says so where the
     // next attach reads it. A base or a rebase stamps nothing: its generation
     // has no delta object, and the next attach resets the upper.
-    if (!fresh && committed.delta !== undefined) {
+    if (!fresh && committed.delta !== undefined && !deltaLayerServed(await shell.readMounts(), chainId)) {
       await stampSeededUpper(chainId, committed.delta);
     }
 
@@ -2153,7 +2178,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       try {
         // COLLAPSE RATHER THAN APPEND while a delta is served as a layer
         // (header, "What the composition costs").
-        return await commitChain(state, version, layered || shouldRebase(state, kind), mark, kind);
+        return await commitChain(state, version, (layered && state.deltaFormat !== 'chunked') || shouldRebase(state, kind), mark, kind);
       } catch (error) {
         return await commitFailed(state, { cause: error });
       }

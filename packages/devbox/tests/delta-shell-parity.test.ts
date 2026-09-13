@@ -36,6 +36,7 @@ import {
   type DeltaProbeEntry,
 } from '../src/chunked-delta';
 import { deltaCommand, type ShellReply } from './support/delta-shell';
+import { readDeltaIndex } from '../src/chunked-delta';
 import { ContainerDisk } from './support/strategy-machine';
 import {
   compareTrees,
@@ -282,7 +283,8 @@ describe('the delta shell against bash', () => {
     // The plan itself: two changed blocks and one hole in the big file, the
     // grown file whole-overridden past its base, the file over a directory.
     const big = fromBash.manifest.files.find((file) => file.p === 'vol/big.bin');
-    expect(big?.kind === 'chunked' ? big.over.map((o) => [o.o / DELTA_BLOCK_BYTES, o.src]) : null).toEqual([[2, 'chunk'], [4, 'hole'], [7, 'chunk']]);
+    const index = big?.kind === 'chunked' ? fromBash.indexes.get(big.over.index) : undefined;
+    expect(big?.kind === 'chunked' && index !== undefined ? readDeltaIndex(big.over, big.s, index).map((o) => [o.o / DELTA_BLOCK_BYTES, o.src]) : null).toEqual([[2, 'chunk'], [4, 'hole'], [7, 'chunk']]);
     expect(fromBash.manifest.treplace).toEqual(['was-a-dir']);
     expect(fromBash.manifest.links).toEqual([['link-one.bin', 'link-two.bin']]);
     expect(fromBash.manifest.dirs.map((row) => row.p)).toEqual(['empty', 'new', 'vol']);
@@ -305,7 +307,7 @@ describe('the delta shell against bash', () => {
 
   test('the materialize leaves the same upper, and it is the editor\'s', () => {
     const ops = buildDeltaMaterializeOps(plan.manifest, {
-      sideDir: real.pkg, upperDir: real.upper2, lowerBase: real.base, mergedDir: real.upper2,
+      sideDir: real.pkg, upperDir: real.upper2, lowerBase: real.base, mergedDir: real.upper2, indexes: plan.indexes,
     });
 
     for (const phase of [ops.pre, ops.post]) {

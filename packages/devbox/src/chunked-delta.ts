@@ -64,10 +64,11 @@
 
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
+import { buildDeltaIndex, DELTA_BLOCK_BYTES, DELTA_INDEX_PAGE_BYTES, DeltaIndexRefSchema, lookupDeltaIndex, type DeltaIndexRef, type DeltaOverride } from './delta-index';
 
 /** Bytes per delta block. Matches the 16 KiB nominal chunk the conformance
  *  cells budget against. */
-export const DELTA_BLOCK_BYTES = 16 * 1024;
+export { DELTA_BLOCK_BYTES } from './delta-index';
 
 /** Files below this size travel whole: a block map would cost more than
  *  their bytes. */
@@ -107,25 +108,19 @@ function ancestorDirs(path: string): string[] {
 
 const Count = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
-const Hex64 = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
-
 const RelPath = v.pipe(
   v.string(),
   v.minLength(1),
-  v.check((path) => !path.startsWith('/') && !path.split('/').includes('..'),
+  v.maxLength(4095),
+  v.check((path) => !path.includes('\0') && path.split('/').every(part => part !== '' && part !== '.' && part !== '..' && Buffer.byteLength(part) <= 255),
     'a delta path is relative and stays inside the tree'),
 );
-
-const OverrideSchema = v.variant('src', [
-  v.object({ src: v.literal('chunk'), o: Count, d: Hex64 }),
-  v.object({ src: v.literal('hole'), o: Count }),
-]);
 
 const FileSchema = v.variant('kind', [
   v.object({ kind: v.literal('whole'), p: RelPath, s: Count }),
   v.object({
     kind: v.literal('chunked'), p: RelPath, s: Count, mode: Count, uid: Count, gid: Count,
-    over: v.array(OverrideSchema),
+    over: DeltaIndexRefSchema,
   }),
 ]);
 
@@ -136,7 +131,7 @@ const DirSchema = v.object({ p: RelPath, mode: Count, uid: Count, gid: Count });
  *  ancestor directories with attributes; `treplace` carries paths whose kind
  *  crossed the dir/non-dir boundary and must be removed before planting. */
 export const DeltaManifestSchema = v.object({
-  v: v.literal(1),
+  v: v.literal(2),
   files: v.array(FileSchema),
   dirs: v.array(DirSchema),
   deleted: v.array(RelPath),
@@ -446,7 +441,9 @@ export interface DeltaPlanInput {
 export interface DeltaPlan {
   readonly manifest: DeltaManifest;
   /** Content digests to extract, each with the upper path and block to read. */
-  readonly chunks: ReadonlyMap<string, { path: string; block: number }>;
+  readonly chunks: ReadonlyMap<string, { path: string; block: number; source?: string }>;
+  readonly indexes: ReadonlyMap<string, Uint8Array>;
+  readonly retainedFiles?: ReadonlyMap<string, string>;
 }
 
 /** Which probe paths the driver must block-hash: big regular files with one
@@ -470,6 +467,7 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   const treplace: string[] = [];
   const links: string[][] = [];
   const chunks = new Map<string, { path: string; block: number }>();
+  const indexes = new Map<string, Uint8Array>();
   const linkGroups = new Map<number, string[]>();
   const hashIndex = new Map(input.hashFiles.map((path, index) => [path, index]));
 
@@ -517,7 +515,7 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
 
     let upperHoles = 0;
     const added: string[] = [];
-    const over: Extract<DeltaManifestFile, { kind: 'chunked' }>['over'] = [];
+    const over: DeltaOverride[] = [];
 
     for (let block = 0; block < blockCount; block += 1) {
       const offset = block * DELTA_BLOCK_BYTES;
@@ -549,16 +547,15 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
       files.push({ kind: 'whole', p: entry.path, s: entry.size });
 
       for (const digest of added) {
-        const shared = files.some((file) => file.kind === 'chunked'
-          && file.over.some((o) => o.src === 'chunk' && o.d === digest));
-
-        if (!shared) chunks.delete(digest);
+        chunks.delete(digest);
       }
 
       continue;
     }
 
-    files.push({ kind: 'chunked', p: entry.path, s: entry.size, mode: entry.mode, uid: entry.uid, gid: entry.gid, over });
+    const indexFile = buildDeltaIndex(over, entry.size);
+    indexes.set(indexFile.ref.index, indexFile.bytes);
+    files.push({ kind: 'chunked', p: entry.path, s: entry.size, mode: entry.mode, uid: entry.uid, gid: entry.gid, over: indexFile.ref });
   }
 
   for (const group of linkGroups.values()) {
@@ -583,12 +580,76 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   treplace.sort();
   links.sort((a, b) => (a[0]! < b[0]! ? -1 : 1));
 
-  return { manifest: { v: 1, files, dirs, deleted, treplace, links }, chunks };
+  return { manifest: { v: 2, files, dirs, deleted, treplace, links }, chunks, indexes };
 }
 
 /** Base64 of the manifest JSON: data, never shell syntax. */
 function encodeDeltaManifest(manifest: DeltaManifest): string {
   return Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
+}
+
+/** Publication may enumerate a retained index. The block server never does. */
+export function readDeltaIndex(ref: DeltaIndexRef, size: number, bytes: Uint8Array): DeltaOverride[] {
+  if (bytes.byteLength !== ref.count * DELTA_INDEX_PAGE_BYTES || createHash('sha256').update(bytes).digest('hex') !== ref.index) {
+    throw new Error('corrupt delta index file');
+  }
+
+  const out: DeltaOverride[] = [];
+  let previous = -1;
+
+  for (let rank = 0; rank < ref.count; rank += 1) {
+    const at = Number(Buffer.from(bytes.subarray(rank * DELTA_INDEX_PAGE_BYTES)).readBigUInt64LE());
+
+    if (!Number.isSafeInteger(at) || at % DELTA_BLOCK_BYTES !== 0 || at >= size || at <= previous) throw new Error('invalid delta index offset');
+    const entry = lookupDeltaIndex(ref, size, at, (offset, length) => bytes.subarray(offset, offset + length));
+
+    if (entry === null) throw new Error('unreachable delta index entry');
+    out.push(entry);
+    previous = at;
+  }
+
+  if (ref.count === 0) lookupDeltaIndex(ref, size, 0, () => bytes);
+
+  return out;
+}
+
+/** The upper replaces names, not the retained delta's unrelated records.
+ * This operates on changed metadata only; no merged-tree walk or rebase. */
+export function mergeDeltaPublication(plan: DeltaPlan, retained: DeltaManifest,
+  indexes: ReadonlyMap<string, Uint8Array>, sideDir: string): DeltaPlan {
+  const next = plan.manifest;
+  const erased = [...next.deleted, ...next.files.map(file => file.p)];
+  const replaced = new Set([...next.files.map(file => file.p), ...next.dirs.map(dir => dir.p)]);
+  const removed = (path: string): boolean => replaced.has(path) || ancestorDirs(path).some(parent => erased.includes(parent)) || next.deleted.includes(path);
+  const kept = retained.files.filter(file => !removed(file.p));
+  const chunks = new Map(plan.chunks);
+  const mergedIndexes = new Map(plan.indexes);
+  const retainedFiles = new Map<string, string>();
+
+  for (const file of kept) {
+    if (file.kind === 'whole') { retainedFiles.set(file.p, `${sideDir}/${DELTA_TREE_DIR}/${file.p}`); continue; }
+
+    const bytes = indexes.get(file.over.index);
+
+    if (bytes === undefined) throw new Error(`missing retained index for ${file.p}`);
+    mergedIndexes.set(file.over.index, bytes);
+
+    for (const entry of readDeltaIndex(file.over, file.s, bytes)) {
+      if (entry.src === 'chunk' && !chunks.has(entry.d)) {
+        chunks.set(entry.d, { path: file.p, block: entry.o / DELTA_BLOCK_BYTES, source: `${sideDir}/${DELTA_CHUNK_DIR}/${entry.d}` });
+      }
+    }
+  }
+
+  const files = [...kept, ...next.files].sort((a, b) => a.p.localeCompare(b.p));
+  const paths = new Set(files.map(file => file.p));
+  const links = retained.links.map(group => group.filter(path => paths.has(path) && !removed(path))).filter(group => group.length > 1);
+
+  return { manifest: { v: 2, files,
+    dirs: [...retained.dirs.filter(dir => !removed(dir.p)), ...next.dirs].sort((a, b) => a.p.localeCompare(b.p)),
+    deleted: [...new Set([...retained.deleted.filter(path => !removed(path)), ...next.deleted])].sort(),
+    treplace: [...new Set([...retained.treplace.filter(path => paths.has(path)), ...next.treplace])].sort(),
+    links: [...links, ...next.links] }, chunks, indexes: mergedIndexes, retainedFiles };
 }
 
 /** Where the stage lives. */
@@ -616,12 +677,21 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
     const first = linkFirst.get(file.p);
     ops.push(first !== undefined
       ? `ln ${shellPath(`${treeDir}/${first}`)} ${shellPath(`${treeDir}/${file.p}`)}`
-      : `cp -a ${shellPath(`${layout.upperDir}/${file.p}`)} ${shellPath(`${treeDir}/${file.p}`)}`);
+      : `cp -a ${shellPath(plan.retainedFiles?.get(file.p) ?? `${layout.upperDir}/${file.p}`)} ${shellPath(`${treeDir}/${file.p}`)}`);
   }
 
   for (const [digest, chunk] of [...plan.chunks].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    if (chunk.source !== undefined) {
+      ops.push(`cp -a ${shellPath(chunk.source)} ${shellPath(`${chunkDir}/${digest}`)}`);
+      continue;
+    }
+
     ops.push(`dd if=${shellPath(`${layout.upperDir}/${chunk.path}`)} of=${shellPath(`${chunkDir}/${digest}`)} `
       + `bs=${DELTA_BLOCK_BYTES} skip=${chunk.block} count=1 2>/dev/null`);
+  }
+
+  for (const [digest, bytes] of plan.indexes) {
+    ops.push(`printf %s ${shellPath(Buffer.from(bytes).toString('base64'))} | base64 -d > ${shellPath(`${layout.pkgDir}/.devbox-delta/${digest}`)}`);
   }
 
   ops.push(`printf %s ${shellPath(encodeDeltaManifest(plan.manifest))} | base64 -d > ${shellPath(`${layout.pkgDir}/${DELTA_MANIFEST_NAME}`)}`);
@@ -635,6 +705,7 @@ export interface DeltaMaterializeLayout {
   readonly upperDir: string;
   readonly lowerBase: string;
   readonly mergedDir: string;
+  readonly indexes: ReadonlyMap<string, Uint8Array>;
 }
 
 /** The two materialize phases: `pre` fills the upper before the overlay
@@ -690,7 +761,11 @@ export function buildDeltaMaterializeOps(manifest: DeltaManifest, layout: DeltaM
     if (file.kind === 'whole') return [`cp -a ${shellPath(`${sideTree}/${file.p}`)} ${shellPath(dest)}`];
     const ops = [`cp ${shellPath(`${layout.lowerBase}/${file.p}`)} ${shellPath(dest)} 2>/dev/null || : > ${shellPath(dest)}`];
 
-    for (const override of file.over) {
+    const index = layout.indexes.get(file.over.index);
+
+    if (index === undefined) throw new Error(`missing index of ${file.p}`);
+
+    for (const override of readDeltaIndex(file.over, file.s, index)) {
       const source = override.src === 'chunk' ? shellPath(`${sideChunks}/${override.d}`) : '/dev/zero';
       ops.push(`dd if=${source} of=${shellPath(dest)} bs=${DELTA_BLOCK_BYTES} seek=${override.o / DELTA_BLOCK_BYTES} count=1 conv=notrunc 2>/dev/null`);
     }

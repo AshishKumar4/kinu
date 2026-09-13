@@ -42,7 +42,7 @@ const MARKER: FileObservation = {
 const WITNESSED_FACTS: ControlWitnessFacts = {
   chunkedAbsorption: {
     markerPath: 'witness.txt', markerDigest: 'a'.repeat(64),
-    manifest: { v: 1, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
+    manifest: { v: 2, files: [{ kind: 'whole', p: 'witness.txt', s: 7 }], dirs: [], deleted: [], treplace: [], links: [] },
     manifestRead: { ok: true, exitCode: 0 },
     markerInMerged: MARKER, markerInUpper: { ...MARKER, path: '/var/tmp/devbox/upper/witness.txt' },
     sidecarMounted: false, mounts: { ok: true, exitCode: 0 }, before: 'chain-7', after: 'chain-7',
