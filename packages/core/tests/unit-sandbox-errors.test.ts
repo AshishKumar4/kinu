@@ -18,6 +18,50 @@
 import { describe, test, expect } from 'bun:test';
 import { explainNativeToolReferenceError } from '../src/execution/sandbox-errors';
 import { BUILTIN_TOOLS, TOOL_REACH } from '../src/tools/registry';
+import { branchableToolCall, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
+import { codemodeFunction } from '../src/tools/sandbox-contract';
+import { censusToolFailures } from '../src/read-models/tool-failures';
+import { KinuError } from '../src/obs';
+
+test('a host rejection resolves to the same discriminated refusal as a native failure', async () => {
+  const broken = branchableToolCall(async () => { throw new Error('host disconnected'); });
+  expect(await broken).toEqual({ success: false, reason: null, error: 'host disconnected' });
+  const refused = branchableToolCall(async () => { throw new KinuError('unavailable', 'file plane offline'); });
+  expect(await refused).toEqual({ success: false, reason: 'unavailable', error: 'file plane offline' });
+});
+
+test('recovered host failures retain each binding in the census without failing the program', async () => {
+  const output = await withCodemodeProgram(async () => {
+    const file = codemodeFunction('tools', 'file', async () => { throw new KinuError('unavailable', 'offline'); });
+    const command = codemodeFunction('workspace', 'exec', async () => ({ reason: 'io', error: 'failed', execution: { exitCode: 1 } }));
+    const answers = await Promise.all([file({}), command('check')]);
+    expect(answers).toEqual([
+      { success: false, reason: 'unavailable', error: 'offline' },
+      { success: false, reason: 'io', error: 'failed', execution: { exitCode: 1 } },
+    ]);
+
+    return { result: 'recovered' };
+  });
+
+  const outcome = successfulToolOutcome('execute_tools', output);
+  expect(outcome.success).toBe(true);
+  const census = censusToolFailures([{ type: 'tool_call_end', runId: 'run', eventIndex: 0, timestamp: new Date(0).toISOString(), name: 'execute_tools', toolCallId: 'call', outcome }]);
+  expect(census.byKey).toEqual([['file·unavailable', 1], ['run·exit_1', 1]]);
+});
+
+test('throwing the failure value propagates its native reason and a malformed program remains a ReferenceError', async () => {
+  let error: unknown;
+
+  try {
+    await withCodemodeProgram(async () => {
+      const file = codemodeFunction('tools', 'file', async () => { throw new KinuError('denied', 'blocked'); });
+      throw await file({ action: 'write' });
+    });
+  } catch (cause) { error = cause; }
+
+  expect(failedToolOutcome({ cause: error })).toMatchObject({ success: false, reason: 'denied', failures: [{ tool: 'file', action: 'write', reason: 'denied' }] });
+  await expect(withCodemodeProgram(async () => { throw new ReferenceError('run is not defined'); })).rejects.toBeInstanceOf(ReferenceError);
+});
 
 describe('explainNativeToolReferenceError', () => {
   test('every native tool is pointed at tools.<name>, and at the namespace its reach declares', () => {

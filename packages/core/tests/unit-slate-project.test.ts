@@ -29,3 +29,26 @@ test('binding declarations constrain each capability plane without inherited obj
   await expect(call('NOTES', 'read_note', [null])).rejects.toMatchObject({ code: 'bad_input' });
   expect(await call('PEER', 'count')).toEqual({ kind: 'app', id: 'other', method: 'count', args: [], chain: ['notes'] });
 });
+
+test('tool bindings accept native JSON input and projection bindings retain codemode members', () => {
+  const project = parseSlateProject({ main: 'server.js', slate: { bindings: {
+    FILE: { kind: 'tool', name: 'file' },
+    WEB: { kind: 'web', members: ['fetch'] },
+    MEMORY: { kind: 'memory' },
+    TASKS: { kind: 'tasks' },
+  } } });
+
+  const call = (name: string, member: string, args: JsonValue[] = []) => routeSlateBindingCall({
+    id: 'app', project, name, request: { member, args, invocation: null }, chain: [],
+  });
+
+  expect(call('FILE', 'call', [{ action: 'read', path: 'note' }])).toEqual({ kind: 'tool', name: 'file', input: { action: 'read', path: 'note' } });
+  expect(() => call('FILE', 'read', [{}])).toThrow('offers call(input)');
+  expect(() => call('FILE', 'call', [1])).toThrow('one JSON object');
+  expect(() => call('FILE', 'call', [{}, {}])).toThrow('one JSON object');
+  expect(call('WEB', 'fetch', ['https://example.test'])).toEqual({ kind: 'codemode', namespace: 'web', member: 'fetch', args: ['https://example.test'] });
+  expect(() => call('WEB', 'search', ['x'])).toThrow('does not offer');
+  expect(call('MEMORY', 'recall', ['key'])).toMatchObject({ kind: 'codemode', namespace: 'memory', member: 'recall' });
+  expect(call('TASKS', 'list')).toMatchObject({ kind: 'codemode', namespace: 'tasks', member: 'list' });
+  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { AGENT: { kind: 'agent' } } } })).toThrow('slate.bindings.AGENT.kind');
+});

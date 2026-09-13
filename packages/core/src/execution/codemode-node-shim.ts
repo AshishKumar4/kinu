@@ -258,7 +258,7 @@ export function createFetch(failureHeader) {
   };
 }
 
-export function defineCrafted(name, factory) {
+export function defineCrafted(name, factory, reportFailure) {
   // The factory is async so a stored body may await at its top level, which
   // means it answers a promise: the source is evaluated once, on the first
   // call, and the settled value is what every later call runs. A body that
@@ -278,12 +278,24 @@ export function defineCrafted(name, factory) {
     return impl;
   };
   return async (...args) => {
-    loaded ??= load();
-    const impl = await loaded;
     try {
+      loaded ??= load();
+      const impl = await loaded;
       return await impl(...args);
     } catch (cause) {
-      throw new Error('[crafted:' + name + '] ' + (cause && cause.message ? cause.message : String(cause)), { cause });
+      const marker = '[crafted:' + name + ']';
+      const error = cause instanceof Error && cause.message.startsWith(marker)
+        ? cause : new Error(marker + ' ' + (cause && cause.message ? cause.message : String(cause)), { cause });
+      if (reportFailure === undefined) throw error;
+      let code = null;
+      let link = cause;
+      const seen = new Set();
+      while (link && !seen.has(link)) {
+        seen.add(link);
+        if (typeof link.code === 'string') code ??= link.code;
+        link = link.cause;
+      }
+      return reportFailure({ message: error.message, name: cause && typeof cause.name === 'string' ? cause.name : 'Error', code });
     }
   };
 }

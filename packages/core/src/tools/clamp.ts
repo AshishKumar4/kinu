@@ -19,6 +19,7 @@ import { nanoid } from '../utils/nanoid';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { diagnostics, renderThrownChain } from '../obs/index';
+import { successfulToolOutcome } from './outcome';
 
 /** Workspace VFS directory full outputs are offloaded to. */
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
@@ -148,10 +149,16 @@ export function withClampedToolResult(
 
   return {
     ...toolEntry,
-    execute: async (input, options) => clampSerializedToolResult(
-      { output: await execute(input, options) },
-      opts,
-    ),
+    execute: async (input, options) => {
+      const output = await execute(input, options);
+      const clamped = await clampSerializedToolResult({ output }, opts);
+      const outcome = successfulToolOutcome(opts.producer ?? '', output);
+      const text = v.safeParse(v.string(), clamped);
+
+      return text.success && outcome.failures !== undefined
+        ? { result: text.output, failures: outcome.failures }
+        : clamped;
+    },
   };
 }
 

@@ -19,6 +19,7 @@ import { TurnContextBudget } from '../src/context-budget';
 import { toolExecute } from '@kinu.run/test-utils';
 import type { JsonValue } from '../src/utils/json';
 import type { CraftedTool } from '../src/types/craft';
+import { callCodemodeMember } from '../src/tools/sandbox-contract';
 
 const ToolSummarySchema = v.object({
   name: v.string(),
@@ -55,6 +56,15 @@ function buildExec(rt: ReturnType<typeof createTestRuntime>['rt'], slate?: Inlin
 }
 
 describe('workspace provider (InlineExecutor)', () => {
+  test('invalid file and memory arguments are classified binding values, never refusal-shaped text', async () => {
+    const { rt } = createTestRuntime();
+    const provider = buildExec(rt);
+
+    for (const name of ['readFile', 'searchMemory', 'saveNote']) {
+      expect(await callCodemodeMember([provider], 'workspace', name, [null])).toMatchObject({ success: false, reason: 'bad_input' });
+    }
+  });
+
   test('listTools returns an array (not a string)', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
@@ -258,6 +268,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     // branches on `reason` to tell "read it first" from a genuine IO failure,
     // and the declared codemode type promises it.
     expect(await exec.tools.writeFile.execute('victim.txt', 'destroyed blind')).toEqual({
+      success: false,
       error: expect.stringContaining('has not been read here yet'),
       reason: 'unread',
     });

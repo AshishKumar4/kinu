@@ -29,11 +29,12 @@ import type {
   ExecutorProvider,
   JsonValue,
 } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
   renderExecuteToolsDescription, renderToolsDeclaration,
+  codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
 import { tool, jsonSchema } from 'ai';
 import { createRequire } from 'node:module';
@@ -109,7 +110,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
         required: ['code'],
       }),
-      execute: async (args, options) => {
+      execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
         // `console` is shadowed by a capturing stand-in: this builder runs the
         // model's code in-process, so a real console.* would write straight to
@@ -119,7 +120,6 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         // stays clean. Declared out here so the catch below can return partial
         // output produced before a throw.
         const logs: string[] = [];
-        const pendingCalls: Promise<void>[] = [];
 
         const capture: Console['log'] = (...values) => {
           logs.push(values.map((value) => formatLogArg({ value })).join(' '));
@@ -133,13 +133,13 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const toolBindings: Record<string, CodemodeExecute | CraftedExecute> = {};
 
           for (const [name, entry] of Object.entries(nativeBindings)) {
-            toolBindings[name] = (...toolArgs: unknown[]) => containRejection(() => entry.execute(...toolArgs), pendingCalls);
+            toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
           // Resolved here, not at construction: the CraftStore is read for
           // THIS call, so a tool the model crafted a step ago is callable now.
           for (const [name, entry] of Object.entries(surface.craftedTools())) {
-            toolBindings[name] = (arg: JsonValue) => containRejection(() => entry.execute(arg), pendingCalls);
+            toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async (...toolArgs) => entry.execute(decodeJsonValue({ value: toolArgs[0] ?? {} })));
           }
 
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
@@ -148,10 +148,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
             const nsp: Record<string, CodemodeExecute> = {};
 
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = (...toolArgs) => containRejection(
-                () => t.execute(...toolArgs, context),
-                pendingCalls,
-              );
+              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...toolArgs, context));
             }
 
             providerBindings[p.name] = nsp;
@@ -197,10 +194,8 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           // into an actionable correction, same as the CF codemode sandbox.
           const message = explainNativeToolReferenceError(renderThrownChain({ cause: error }));
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
-        } finally {
-          await Promise.allSettled(pendingCalls);
         }
-      },
+      }),
     });
   };
 }
@@ -227,45 +222,6 @@ function adaptExecutorProvider(
     types: provider.types,
     positionalArgs: provider.positionalArgs,
   };
-}
-
-/**
- * Every binding the sandbox exposes, kept inside the executing tool's completion
- * boundary.
- *
- * The code inside `execute_tools` is written by the model, and its most common
- * slip is a missing `await`. A floated call that then rejects — a VFS ENOENT,
- * a shell failure — must not surface as an unhandled rejection after the tool
- * returned. The execute call therefore owns an observer for every binding until
- * all of them settle. It records a failure to stderr rather than the captured
- * `logs`: the model may already have continued after its omitted `await`, and a
- * write that never landed must not read like one that did.
- *
- * The original call is still returned. Code that does await sees its real
- * rejection, while the observer makes an omitted await safe and lets the
- * enclosing execute action wait for the actual work rather than detach it.
- */
-function containRejection<T>(run: () => Promise<T>, pendingCalls: Promise<void>[]): Promise<T> {
-  let call: Promise<T>;
-
-  try {
-    call = run();
-  } catch (cause) {
-    call = Promise.reject(cause);
-  }
-
-  pendingCalls.push((async () => {
-    try {
-      await call;
-    } catch (cause) {
-      diagnostics.failure(
-        'executor.unawaited_call_rejected',
-        toKinuError({ doing: 'running a tool call the model left unawaited', cause, otherwise: 'io' }),
-      );
-    }
-  })());
-
-  return call;
 }
 
 /** One console argument → its captured-log string, matching how console

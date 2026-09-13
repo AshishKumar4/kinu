@@ -40,6 +40,7 @@ import { FAILURE_WITHOUT_ERROR, type RunEvent } from '../events/types';
 import { JsonObjectSchema } from '../utils/json';
 import { CODE_IS_REFUSAL, ERROR_CODES } from '../obs/index';
 import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
+import type { BindingFailure } from '../types/tool-outcome';
 
 /**
  * The reason vocabulary a tool writes onto its own result: every `ErrorCode`,
@@ -191,6 +192,9 @@ export interface ToolFailure {
 export function classifyToolFailure(
   row: Extract<RunEvent, { type: 'tool_call_end' }>,
 ): ToolFailure | null {
+  const inner = row.outcome?.failures?.[0];
+
+  if (inner !== undefined) return classifyBindingFailure(inner);
   const args = v.safeParse(JsonObjectSchema, row.args);
   const action = args.success ? v.safeParse(v.string(), args.output.action) : null;
   const base = { tool: row.name, action: action?.success ? action.output : null };
@@ -210,6 +214,16 @@ export function classifyToolFailure(
   }
 
   return { ...base, ...attribute(outcome.reason ?? 'unclassified') };
+}
+
+function classifyBindingFailure(failure: BindingFailure): ToolFailure {
+  const exit = failure.execution?.exitCode;
+
+  const reason = exit !== undefined && exit !== 0
+    ? EXEC_REASON_BY_EXIT.get(exit) ?? 'exit_' + String(exit)
+    : failure.reason ?? 'unclassified';
+
+  return { tool: failure.tool, action: failure.action, ...attribute(reason) };
 }
 
 /**
@@ -263,6 +277,11 @@ export function censusToolFailures(
   const failures: ToolFailure[] = [];
 
   for (const row of rows) {
+    if (row.outcome?.failures?.length) {
+      failures.push(...row.outcome.failures.map(classifyBindingFailure));
+      continue;
+    }
+
     const failure = classifyToolFailure(row);
 
     if (failure) failures.push(failure);

@@ -12,9 +12,10 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, decodeJsonValue, failedToolOutcome, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
-import { generateText, stepCountIs } from 'ai';
+import { generateText, stepCountIs, tool, jsonSchema } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { codemodeEgress } from '../../src/codemode-egress';
@@ -52,6 +53,7 @@ function toolsProvider(crafted: Array<{ name: string; code: string; description:
   return {
     name: 'tools',
     fns: {
+      ...Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute])),
       file: async (...args: unknown[]) => ({ echoed: decodeJsonValue({ value: args[0] }) }),
     },
     prelude: renderToolsPrelude(crafted, { workspace: 'probe' }),
@@ -172,7 +174,7 @@ describe('the execute_tools sandbox under workerd', () => {
     const program = [
       '// One broken tool must not take the sandbox down',
       'let failure = null;',
-      'try { await tools.broken(); } catch (e) { failure = e.message; }',
+      'const refused = await tools.broken(); if (refused.success === false) failure = refused.error;',
       'return { fine: await tools.fine(), failure };',
     ].join('\n');
 
@@ -197,7 +199,7 @@ describe('the execute_tools sandbox under workerd', () => {
     const program = [
       '// An awaited definition is callable; a value is a named failure',
       'let failure = null;',
-      'try { await tools.value(); } catch (e) { failure = e.message; }',
+      'const refused = await tools.value(); if (refused.success === false) failure = refused.error;',
       'return { waited: await tools.waited(5), failure };',
     ].join('\n');
 
@@ -220,9 +222,34 @@ describe('the execute_tools sandbox under workerd', () => {
       [toolsProvider([]), stateProvider, workspace],
     );
 
-    expect(failed.result).toBeUndefined();
-    expect(failed.error).toContain('workspace.readFile: ');
-    expect(failed.error).toContain('ENOENT');
+    expect(failed.error).toBeUndefined();
+    expect(failed.result).toEqual({ success: false, reason: null, error: 'ENOENT: no such file: absent.md' });
+  });
+
+  test('host rejections and native refusals use one value; recovery and propagation keep their binding census', async () => {
+    const native = nativeToolFunctions({ file: tool({
+      inputSchema: jsonSchema<{ action: string }>({ type: 'object' }),
+      execute: async (): Promise<string> => { throw new KinuError('unavailable', 'file plane offline'); },
+    }) });
+
+    const providers = [{ name: 'tools', fns: Object.fromEntries(Object.entries(native).map(([name, entry]) => [name, entry.execute])) }];
+    const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
+    const recovered = await run('const failure = await tools.file({action:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
+    expect(recovered.result).toBe('unavailable');
+    expect(successfulToolOutcome('execute_tools', recovered)).toEqual({ success: true, failures: [
+      { success: false, tool: 'file', action: 'read', reason: 'unavailable', error: 'file plane offline' },
+    ] });
+
+    for (const code of ['return await tools.file({action:"read"});', 'throw await tools.file({action:"read"});']) {
+      let caught: unknown;
+
+      try { await run(code); } catch (cause) { caught = cause; }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect(failedToolOutcome({ cause: caught })).toMatchObject({ success: false, reason: 'unavailable', failures: [
+        { tool: 'file', action: 'read', reason: 'unavailable' },
+      ] });
+    }
   });
 
   test('fetch is absent without egress and reaches the network stack through the loopback entrypoint', async () => {
