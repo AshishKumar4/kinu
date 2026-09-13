@@ -38,10 +38,13 @@ export function createWorkersAIProvider(
       reasoningEfforts: WORKERS_AI_REASONING_EFFORTS,
     }),
     createModel(modelId, deps): LanguageModel {
+      const requestHeaders = opts.sessionAffinity ? { 'x-session-affinity': opts.sessionAffinity } : undefined;
+
       if (developmentBinding) {
         return createOpenAICompatible({
           name: 'workers-ai',
           baseURL: 'https://kinu-direct-workers-ai.invalid',
+          headers: requestHeaders,
           fetch: createDirectWorkersAIFetch(developmentBinding),
         }).chatModel(modelId);
       }
@@ -56,7 +59,7 @@ export function createWorkersAIProvider(
         missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
         // Replica pinning for the server-side prefix cache — without this
         // header same-agent turns route randomly and the cache never hits.
-        requestHeaders: opts.sessionAffinity ? { 'x-session-affinity': opts.sessionAffinity } : undefined,
+        requestHeaders,
       });
 
       return createOpenAICompatible({
