@@ -239,10 +239,6 @@ export function useInspectorLayout(input: {
   const pendingDecisionRef = useRef<InspectorTarget | null>(null);
   // The group has committed a layout at least once, so imperative writes land.
   const groupMeasuredRef = useRef(false);
-  // The desktop/mobile mode the measurement flag belongs to: the group's key
-  // follows the mode, so each swap remounts it and the next emission is a
-  // fresh announcement again.
-  const groupModeRef = useRef(desktopPanels);
 
   const persistWidth = useCallback((nextWidth: number) => {
     if (account === null || !widePanels) return;
@@ -284,14 +280,6 @@ export function useInspectorLayout(input: {
   // the user already made wins outright. The signal open is a
   // once-per-workspace latch; a stored choice ends the policy's say entirely.
   useLayoutEffect(() => {
-    // The group's key follows the desktop/mobile mode: each swap remounts
-    // it, so measurement and the parked slot belong to the previous tree.
-    if (groupModeRef.current !== desktopPanels) {
-      groupModeRef.current = desktopPanels;
-      groupMeasuredRef.current = false;
-      pendingDecisionRef.current = null;
-    }
-
     if (!desktopPanels || !widePanels || userDecidedRef.current === workspace) return;
 
     const target = readDecision(account, workspace,
@@ -509,6 +497,23 @@ export function useInspectorLayout(input: {
     }
     : { id: INSPECTOR_PANEL_ID, minSize: "0%", defaultSize: mobileDefault };
 
+  // The group element's own ref: when the element itself changes, the
+  // previous tree's measurement and parked decision die with it, before the
+  // new tree's first layout announcement — ref callbacks run in the
+  // commit's mutation phase, ahead of every layout effect including the
+  // library's own commit. Detaches reset nothing: the ref pair of a
+  // re-attachment passes through null, and only a genuinely different
+  // element means a new tree.
+  const groupRef = useCallback((element: HTMLDivElement | null) => {
+    if (element === null) return;
+
+    if (element === groupElementRef.current) return;
+
+    groupElementRef.current = element;
+    groupMeasuredRef.current = false;
+    pendingDecisionRef.current = null;
+  }, []);
+
   const groupProps: InspectorGroupProps = {
     // The group applies the decided mount layout in its own first pass — an
     // imperative collapse could be clobbered by that pass, this cannot.
@@ -516,7 +521,7 @@ export function useInspectorLayout(input: {
       ? { [CHAT_PANEL_ID]: 1, [INSPECTOR_PANEL_ID]: 0 }
       : undefined,
     onLayoutChanged,
-    elementRef: (element: HTMLDivElement | null) => { groupElementRef.current = element; },
+    elementRef: groupRef,
   };
 
   const separatorProps: InspectorSeparatorProps = {

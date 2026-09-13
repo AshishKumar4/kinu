@@ -2864,4 +2864,90 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   }, 240_000);
+
+  test('the first divider drag after a remount persists its width and choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '340');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
+      }, { timeout: 10_000 });
+
+      // A full remount: the restored tree's announcement is its own, so the
+      // drag below is the first commit anyone could mistake — it must read
+      // as the user's and persist, with no warmup commit in between.
+      await page.setViewport({ width: 600, height: 900 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+
+      // Quiesce the fresh tree so the coordinates below are live. The
+      // inspector is the trailing panel — dragging the separator right
+      // narrows it from 340 to its 280 floor.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+      const separator = await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      const box = await separator!.boundingBox();
+      const x = box!.x + box!.width / 2;
+      const y = box!.y + box!.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 60, y, { steps: 4 });
+
+      // The held drag must move pixels: a drag the library never hears
+      // moves nothing, and must fail loudly here — never silently
+      // downstream as a classification result. Live recompute applies
+      // styles without committing, so this proves engagement while the
+      // release commit is still to come.
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) !== 340, { timeout: 5000 });
+      await page.mouse.up();
+
+      // Settle, then assert: whatever the drag commit classified, every
+      // commit it schedules (including a policy write-back) has landed —
+      // the settled width plus the stored values pin the classification.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBe(280);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('280');
+      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
+
+      await page.close();
+    });
+  }, 240_000);
 });
