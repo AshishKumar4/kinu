@@ -36,7 +36,7 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/cf-backend/src/components/background-event.ts",
+      "file": "packages/core/src/read-models/background-event.ts",
       "kind": "hand-parser",
       "owner": "parseDrainedEvents",
       "sourceSha256": "d652e1a8f8b03c0d4f5b6adf9dc82952e1debe51146dba4df70333123263beb7",

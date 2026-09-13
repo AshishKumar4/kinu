@@ -8,8 +8,9 @@
  * untrusted markup, and a file read that was clipped must not be written back.
  */
 import * as v from "valibot";
-import { inlineFileType, type DirEntry } from "@kinu.run/core";
-import { tolerate } from "@kinu.run/core/obs";
+import { inlineFileType } from './file-types';
+import type { DirEntry } from './files';
+import { tolerate } from '../obs/index';
 
 /** The executor whose file view is the composite plane — the workspace tree
  *  extended by the mount table. The drive browses THROUGH it, always. */

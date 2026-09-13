@@ -3,7 +3,7 @@
 // presented as provider token attribution.
 import { describe, test, expect } from "bun:test";
 import type { ContextComposition, ContextSegment } from "@kinu.run/core";
-import { breakdownView, shareOfMeasured } from "../src/components/surfaces/activity-breakdown";
+import { breakdownView, shareOfMeasured } from "@kinu.run/core";
 
 const seg = (plane: ContextSegment["plane"], label: string, chars: number, items = 1): ContextSegment =>
   ({ plane, label, chars, items });

@@ -21,7 +21,7 @@ import { MarkdownContent, CodeBlock } from "./shared";
 import {
   PLANE, FileWriteConflict, fileTextEditable, putFileBytes, sandboxedHtml, textRenderOf, viewerKindOf,
   type FileText, type TextRender,
-} from "./files-plane";
+} from "@kinu.run/core";
 
 export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createPlanAnnotationSaveQueue } from "../src/components/surfaces/plan-annotation-save";
+import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 
 describe("plan annotation save queue", () => {
   test("serializes replacement writes so an older snapshot cannot land last", async () => {

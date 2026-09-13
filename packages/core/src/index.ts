@@ -2162,3 +2162,43 @@ export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
 // Rendered from the preset table in the same module, so a surface reading this cannot
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
+
+export {
+  currentTakeIndex, takeChipLabel, cycleTakeIndex, hasComparableTakes,
+} from './read-models/alternate-takes';
+
+export {
+  classifyProgrammaticTurn, messageSignalId, isSteeredMessage, applySignalCard,
+  parseSignalCardEvent, parseDrainedEvents, eventVariantLabel, eventSourceLabel,
+  metadataBroadcastEvent,
+  type ClassifiedProgrammaticTurn, type SignalCard, type DrainedEvent,
+} from './read-models/background-event';
+
+export {
+  appendHeadDelta, retireHeadDelta, stepAsMessage, deltaAsMessage, NO_HEAD_DELTAS,
+  type HeadDelta, type HeadDeltaKind, type HeadDeltas,
+} from './read-models/head-chat';
+
+export { liveTail, type LiveTail } from './read-models/message-live-tail';
+
+export {
+  breakdownView, shareOfMeasured,
+  type BreakdownRow, type BreakdownPlane, type BreakdownView,
+} from './read-models/activity-breakdown';
+
+export {
+  PLANE, viewerKindOf, FileWriteConflict, textRenderOf, fileTextEditable,
+  entryRevision, nextTreeCache, sandboxedHtml, putFileBytes,
+  type FileText, type ViewerKind, type TextRender, type CachedDir,
+} from './read-models/files-plane';
+
+export {
+  createPlanAnnotationSaveQueue, type PlanAnnotationSaveQueue,
+} from './plans/plan-annotation-save';
+
+export {
+  swarmResolutionOf, swarmAxisRows, fanInArity, fanInVertices, nodeRationales,
+  runRefusal, runLiveness, formatEvidenceValue,
+  type SwarmAxis, type SwarmAxisRow, type SwarmResolution, type RunRefusal,
+  type RunLevel, type RunLiveness,
+} from './read-models/swarm-resolution';
