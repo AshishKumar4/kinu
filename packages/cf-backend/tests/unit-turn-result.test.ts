@@ -35,6 +35,18 @@ function render(parts: Part[], isStreaming = false): string {
   return renderToStaticMarkup(createElement(MessageView, { message, isLast: true, isStreaming }));
 }
 
+/** Parse buttons so commented-out markup cannot satisfy the assertions. */
+async function buttonAttributes(html: string, state: 'failed' | 'running'): Promise<ReadonlyMap<string, string>[]> {
+  const rows: Map<string, string>[] = [];
+
+  await new HTMLRewriter()
+    .on(`button[data-tool-state="${state}"]`, { element(el) { rows.push(new Map(el.attributes)); } })
+    .transform(new Response(html))
+    .text();
+
+  return rows;
+}
+
 describe('MessageView transcript order', () => {
   test.each([false, true])('reasoning, tool, reasoning, text stay in part order (streaming=%s)', (streaming) => {
     const html = render([
@@ -52,7 +64,7 @@ describe('MessageView transcript order', () => {
     expect(html).not.toContain('data-turn-result');
   });
 
-  test('a failed read stays collapsed, muted and in its original position', () => {
+  test('a failed read stays collapsed, muted and in its original position', async () => {
     const html = render([
       text('Reading the migration.'),
       tool('a', 'file', { action: 'read', path: 'before.sql' }),
@@ -60,11 +72,11 @@ describe('MessageView transcript order', () => {
       tool('c', 'file', { action: 'read', path: 'after.sql' }),
     ]);
 
-    const row = html.match(/<button[^>]*data-tool-state="failed"[^>]*>/)?.[0];
+    const rows = await buttonAttributes(html, 'failed');
 
-    expect(row).toBeDefined();
-    expect(row).toContain('aria-expanded="false"');
-    expect(row).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.get('aria-expanded')).toBe('false');
+    expect(rows[0]?.get('class')).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
     expect(html.indexOf('before.sql')).toBeLessThan(html.indexOf('missing.sql'));
     expect(html.indexOf('missing.sql')).toBeLessThan(html.indexOf('after.sql'));
     expect(html).toContain('Failed');
@@ -185,18 +197,34 @@ describe('MessageView tool prominence', () => {
     expect(html).not.toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
   });
 
-  test('an in-flight read keeps its own prominent running row', () => {
+  test('an in-flight read keeps its own prominent running row', async () => {
     const html = render([
       tool('a', 'file', { action: 'read' }),
       tool('b', 'file', { action: 'read' }),
       tool('running', 'file', { action: 'read' }, 'input-available'),
     ], true);
 
-    const row = html.match(/<button[^>]*data-tool-state="running"[^>]*>/)?.[0];
+    const rows = await buttonAttributes(html, 'running');
 
-    expect(row).toContain('data-tool-effect="read"');
-    expect(row).toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.get('data-tool-effect')).toBe('read');
+    expect(rows[0]?.get('class')).toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
     expect(html).toContain('data-tool-count="2"');
+  });
+});
+
+describe('buttonAttributes', () => {
+  test('a commented-out button is not selected, whatever the quote style or attribute order', async () => {
+    const html = '<!-- <button data-tool-state="failed" aria-expanded="true" class="decoy"> -->'
+      + '<button class=\'live\' data-tool-effect=\'read\' data-tool-state=\'failed\' aria-expanded=\'false\'>x</button>';
+
+    const rows = await buttonAttributes(html, 'failed');
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.get('aria-expanded')).toBe('false');
+    expect(rows[0]?.get('class')).toBe('live');
+    expect(rows[0]?.get('data-tool-effect')).toBe('read');
+    await expect(buttonAttributes(html, 'running')).resolves.toHaveLength(0);
   });
 });
 
