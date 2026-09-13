@@ -45,7 +45,7 @@ import {
 } from "./agent-routing";
 import { handlePcRequest } from "./pc-handler";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
+import { handleRunEventsRequest, handleWorkspaceEventRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "./health-route";
 import { handleClientErrorRequest } from "./client-error/route";
@@ -699,15 +699,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // route never re-proves ownership.
     const agent = claim.agent;
 
-    const overviewResp = await handleWorkspaceOverviewRequest(
-      reqWithId, () => agent.getWorkspaceOverview(),
-    );
+    const eventsResp = await handleWorkspaceEventRequest(reqWithId, [
+      (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
+      (req) => handleRunEventsRequest(req, env),
+    ]);
 
-    if (overviewResp) return overviewResp;
-
-    const runEventsResp = await handleRunEventsRequest(reqWithId, env);
-
-    if (runEventsResp) return runEventsResp;
+    if (eventsResp) return eventsResp;
     // EventsHub authenticated routes: /triggers, /events
     const hubResp = await handleHubRequest(reqWithId, env, agentName);
 

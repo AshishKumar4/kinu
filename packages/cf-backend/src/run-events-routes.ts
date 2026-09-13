@@ -317,3 +317,20 @@ export async function handleWorkspaceOverviewRequest(
   }
 }
 
+/** First-match dispatch over the workspace-scoped handlers this module
+ *  exports: each is tried in the order the caller composes, the first
+ *  non-null Response wins, and no match answers null so route() tries the
+ *  next family. */
+export async function handleWorkspaceEventRequest(
+  request: Request,
+  handlers: readonly ((request: Request) => Promise<Response | null>)[],
+): Promise<Response | null> {
+  for (const handler of handlers) {
+    const response = await handler(request);
+
+    if (response !== null) return response;
+  }
+
+  return null;
+}
+

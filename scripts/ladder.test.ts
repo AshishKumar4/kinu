@@ -203,6 +203,7 @@ describe('the ladder measures something', () => {
     // the glob gained or lost. Naming the set makes a new bench suite a
     // deliberate edit here rather than a silently absorbed number.
     expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
+      'scripts/bench-c3-overwrite-cell.test.ts',
       'scripts/bench-corpus-gate.test.ts',
       'scripts/bench-devbox-decision.test.ts',
       'scripts/bench-devbox-workerd.test.ts',
