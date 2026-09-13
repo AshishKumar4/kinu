@@ -28,10 +28,6 @@ const root = new URL('..', import.meta.url).pathname;
 
 const GATE = 'client-graph';
 
-/** The module entry each html document declares, `/src/…` relative to the
- *  package. One per document, and a document declaring none is fatal: the
- *  entry set is the walk's denominator, and a page vite serves with no module
- *  script is not a page this tree has. */
 /** The browser entries, DERIVED from the html documents rather than listed:
  *  `index.html` is the signed-in app, `landing.html` the public landing (served
  *  at `/` for a visitor with no session), `gallery.html` the signed-in
