@@ -1,5 +1,6 @@
 # Machine-checked by check-traceability.mjs. The Lean models are maintained
 # by hand; a theorem proves its statement only inside the named abstract model.
+# Safety/Execution/MCTS/Evolution/Exploration source audit: backend-parity 21d0f5ae7.
 edition: 1.0.0
 formalScope: abstract-model-only
 requirements:
@@ -190,8 +191,8 @@ requirements:
       - Kinu.Safety.CapabilitySafety.spawnsubagent_not_grantable
       - Kinu.Safety.CapabilitySafety.networkfetch_not_grantable
     tsRefs:
-      - packages/core/src/types/primitives.ts#VFS.exists
-      - packages/core/src/tools/builtins.ts#WebToolInput.action
+      - packages/core/src/safety/approval-gate.ts#reviewCommand
+      - packages/core/src/safety/deferred-approval.ts#DeferredApprovalQueue
     remainingEvidence:
       - These are constructor-shape witnesses rather than a proof of the deployed sandbox boundary
       - Production has no matching Op or grantableOps taxonomy and provider tools can have transitive effects
@@ -648,10 +649,10 @@ requirements:
       - Kinu.Exploration.Isolation.dropping_the_frame_condition_breaks_isolation
       - Kinu.Exploration.Isolation.agent_node_step_is_representable
     tsRefs:
-      - packages/cf-backend/src/actor-hosting.ts#createWorkspaceActorHost
+      - packages/core/src/strategy/node-workspace.ts#facetHomeProvisioner
       - packages/core/src/types/swarm.ts#SWARM_UNITS
     remainingEvidence:
-      - This requirement deliberately proves NO agent-node isolation property; unit:'trajectory' is blocked on per-node workspace isolation which does not exist
+      - This requirement does not prove the current private-home uid/mode isolation; facetHomeProvisioner now supplies that boundary for answer nodes on both backends, but the abstract model is not refined from it
       - An agent-node region needs a new action with a fresh provably-disjoint storage id per node and its own preservation proof
       - PR-MCTS-003's caveat that branch postconditions are hand-asserted rather than refined applies here unchanged
   PR-DISCRIM-003:
@@ -716,7 +717,7 @@ requirements:
       - packages/core/src/strategy/records.ts#NO_LIMIT
       - packages/core/src/types/objective.ts#InstancedObjective
     remainingEvidence:
-      - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
+      - Current recordExploration performs SELECT and UPDATE synchronously with no intervening await; the sequential model does not prove SQL atomicity or scheduling against external writers
       - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here
   PR-ARCHIVE-002:
     statement: Archive admission keeps a cell's occupants pairwise at least the novelty floor apart over every finite write sequence, which bounds their similarity and provably does not bound their number.
@@ -750,7 +751,7 @@ requirements:
       - packages/core/src/strategy/archive.ts#ArchiveCell
       - packages/core/src/strategy/records.ts#cellOccupants
     remainingEvidence:
-      - archive.ts:32-39 states that the admission test bounds a cell's POPULATION; separated_cells_are_unboundedly_large refutes that, so the absence of an eviction rule is unjustified and the cell is unbounded in mutually-novel members
+      - The archive header now acknowledges the counterexample: separation bounds similarity, not population, and mutually novel members remain unbounded
       - cellOccupants carries no LIMIT, so admission is a linear read of a cell this requirement proves unbounded, and that cost is recorded rather than modelled
       - The novelty floor is caller-supplied per invocation and no preset declares one, so every theorem here is quantified over a number the specification refuses to invent
       - The distance function is a parameter, so an inverted noveltyDistance satisfies every theorem here and only a mutation reaches it
@@ -837,67 +838,85 @@ requirements:
       - The re-verifier is a parameter, so a verifier that lies satisfies every theorem here and no gate ordering reaches it
       - Declared dependency edges (rule 1, dependency-unsettled) are not modelled in Rebase, so safety for a member depending on a skipped one is proved only for assumed-base dependence, not for named edges
   PR-DEVBOX-001:
-    statement: Snapshot-chain attach mounts at most two layers and moves no payload bytes so its cost never mentions the tree size, while a periodic checkpoint uploads exactly the cumulative changed-set bytes that remain after configured excludes and never more than the whole set.
-    status: by-construction-witness
+    statement: A chunked tick accounts for whole-file fallbacks or changed nonzero blocks plus manifest records, while attach reads changed manifest records and eagerly copies full changed-file bases plus delta payload.
+    status: proved-in-abstract-model
     theorems:
       - Kinu.Storage.SnapshotChain.layers_le_two
-      - Kinu.Storage.SnapshotChain.chain_attach_mounts_its_layers
+      - Kinu.Storage.SnapshotChain.small_file_travels_whole
+      - Kinu.Storage.SnapshotChain.sparse_file_travels_whole
+      - Kinu.Storage.SnapshotChain.unavailable_hashes_travel_whole
+      - Kinu.Storage.SnapshotChain.chunked_file_publishes_blocks_and_record
+      - Kinu.Storage.SnapshotChain.chain_tick_is_sum_of_file_publications
+      - Kinu.Storage.SnapshotChain.chain_tick_append
+      - Kinu.Storage.SnapshotChain.identical_upper_republishes_same_blocks
+      - Kinu.Storage.SnapshotChain.deduplicated_stage_le_file_sum
+      - Kinu.Storage.SnapshotChain.unavailable_chunking_uses_full_upper
+      - Kinu.Storage.SnapshotChain.c3_overwrite_touches_at_most_five_blocks
+      - Kinu.Storage.SnapshotChain.c3_aligned_overwrite_touches_four_blocks
+      - Kinu.Storage.SnapshotChain.c3_uses_chunked_publication
+      - Kinu.Storage.SnapshotChain.c3_publication_bound
+      - Kinu.Storage.SnapshotChain.c3_wire_bound
+      - Kinu.Storage.SnapshotChain.c3_is_strictly_cheaper_than_whole_file
+      - Kinu.Storage.SnapshotChain.chain_attach_layer_setup
+      - Kinu.Storage.SnapshotChain.chain_attach_reads_manifest
+      - Kinu.Storage.SnapshotChain.chain_attach_materializes_base_plus_delta
       - Kinu.Storage.SnapshotChain.chain_attach_independent_of_n
       - Kinu.Storage.SnapshotChain.chain_attach_independent_of_pending
-      - Kinu.Storage.SnapshotChain.attach_seed_is_the_committed_delta
-      - Kinu.Storage.SnapshotChain.attach_seed_absent_without_delta
-      - Kinu.Storage.SnapshotChain.a_pending_seed_would_differ
+      - Kinu.Storage.SnapshotChain.attach_without_delta_materializes_nothing
+      - Kinu.Storage.SnapshotChain.chunked_restore_copies_full_base
+      - Kinu.Storage.SnapshotChain.c3_attach_copies_the_whole_64mib_base
+      - Kinu.Storage.SnapshotChain.attach_materialization_has_no_constant_bound
       - Kinu.Storage.SnapshotChain.extract_attach_is_linear_in_n
-      - Kinu.Storage.SnapshotChain.the_changed_set_can_reach_the_whole_tree
-      - Kinu.Storage.SnapshotChain.chain_tick_uploads_unexcluded_bytes
-      - Kinu.Storage.SnapshotChain.chain_tick_upper_bound
-      - Kinu.Storage.SnapshotChain.chain_tick_exact_after_excludes
-      - Kinu.Storage.SnapshotChain.a_pending_only_tick_would_be_strictly_cheaper
       - Kinu.Storage.SnapshotChain.first_base_uploads_unexcluded_bytes
       - Kinu.Storage.SnapshotChain.first_base_upper_bound
       - Kinu.Storage.SnapshotChain.unchanged_tick_uploads_nothing
     tsRefs:
-      - packages/devbox/src/snapshot-chain.ts#SnapshotChainPorts
-      - packages/devbox/src/snapshot-chain.ts#baseObjectKey
-      - packages/devbox/src/snapshot-chain.ts#CHAIN_STORE_MOUNT
-      - packages/devbox/src/snapshot-chain.ts#CHAIN_EXCLUDES
-      - packages/devbox/src/storage.ts#CheckpointOutcome
+      - packages/devbox/src/chunked-delta.ts#DELTA_BLOCK_BYTES
+      - packages/devbox/src/chunked-delta.ts#DELTA_WHOLE_FILE_THRESHOLD
+      - packages/devbox/src/chunked-delta.ts#DELTA_SPARSE_WHOLE_FRACTION
+      - packages/devbox/src/chunked-delta.ts#planDeltaPublication
+      - packages/devbox/src/chunked-delta.ts#buildDeltaStageOps
+      - packages/devbox/src/chunked-delta.ts#buildDeltaMaterializeOps
+      - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
+      - packages/devbox/bench/witness-files.ts#C3_WORKLOAD
+      - packages/devbox/bench/witness-files.ts#C3_BYTES_BOUND
     remainingEvidence:
-      - The tick bound is c minus excluded bytes rather than O(p), so a box whose pending change is far smaller than its cumulative unexcluded changed-set pays that set on every commit; no theorem weakens it into a pending-shaped bound
-      - Uploaded bytes are modelled as the upper directory's size while the real archive is squashfs-compressed, so the constant relating the two is the deployed bench's and not this model's
-      - Lean proves the complexity class of the modelled algorithm and says nothing about wall-clock, request latency or the container-start budget the attach must fit inside
-      - Extraction-mode attach is linear in the tree and is proved so rather than excluded, but which hosts take that path is a deployment fact outside the model
-      - Independence from the tree size names which parameter a cost reads and never claims the cost is small: the changed-set is not bounded away from the tree, because a box is born over an empty lower and archives its base only at the first checkpoint, so a fresh workspace accumulates everything written since birth into the delta
+      - The per-file publication sum rounds final blocks up and precedes blob and inode deduplication; zero overrides carry records but no uploaded chunk
+      - C3's strict 196608 wire bound requires explicit record and encoding budgets; arbitrary paths and squashfs compression or framing are not proved here and remain bench obligations
+      - The upper is compared against the base, not the last tick; unchanged cumulative dirty blocks can be republished and no pending-only complexity claim is made
+      - Hosts that cannot stage a chunked package fall back to the whole upper, and the first base and extraction modes still process whole trees
+      - Attach M includes override and metadata records, while its base copy term can equal the entire tree for one tiny edit; constant mount count is not constant byte work
+      - R2 classB counts layer probes only, not demand-driven FUSE GETs; actual network traffic and elapsed time remain measured by the bench
   PR-DEVBOX-002:
-    statement: A snapshot-chain rebase fires only at a quiesce once the cumulative delta has outgrown k times the base, its linear fold then amortizes to fewer than one plus one over k uploaded bytes per changed byte, a tick past that ratio still uploads the unexcluded cumulative delta, and every stored generation is either referenced or named so the unconditional sweep drains it without a listing.
+    statement: Rebase compares stored delta and base bytes only at quiesce, ticks retain chunked publication, and generation retention covers the current generation plus one proven fallback and named orphans.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Storage.SnapshotChain.tick_never_rebases
       - Kinu.Storage.SnapshotChain.rebase_requires_the_delta_to_outgrow_k_base
       - Kinu.Storage.SnapshotChain.rebase_amortizes_at_a_quiesce
-      - Kinu.Storage.SnapshotChain.a_tick_past_the_ratio_still_uploads_unexcluded_delta
-      - Kinu.Storage.SnapshotChain.referenced_generations_le_two
-      - Kinu.Storage.SnapshotChain.fresh_is_bounded
-      - Kinu.Storage.SnapshotChain.genStep_preserves_bound
-      - Kinu.Storage.SnapshotChain.stored_is_bounded_by_the_named_orphans
-      - Kinu.Storage.SnapshotChain.a_rebase_names_one_generation
-      - Kinu.Storage.SnapshotChain.a_completed_sweep_leaves_one_generation
-      - Kinu.Storage.SnapshotChain.a_partial_sweep_is_re_runnable
-      - Kinu.Storage.SnapshotChain.without_a_sweep_the_population_grows
+      - Kinu.Storage.SnapshotChain.a_tick_past_the_ratio_still_publishes_changed_blocks
+      - Kinu.Storage.SnapshotChain.retained_generations_le_two
+      - Kinu.Storage.SnapshotChain.fresh_retention_is_bounded
+      - Kinu.Storage.SnapshotChain.genStep_preserves_retention_bound
+      - Kinu.Storage.SnapshotChain.stored_is_bounded_by_current_fallback_and_orphans
+      - Kinu.Storage.SnapshotChain.first_rebase_retains_a_fallback
+      - Kinu.Storage.SnapshotChain.further_rebase_names_one_generation
+      - Kinu.Storage.SnapshotChain.proven_attach_retires_the_fallback
+      - Kinu.Storage.SnapshotChain.a_completed_sweep_leaves_current_and_fallback
+      - Kinu.Storage.SnapshotChain.a_partial_sweep_preserves_retained_generations
+      - Kinu.Storage.SnapshotChain.without_a_sweep_current_fallback_and_orphans_grow
     tsRefs:
       - packages/devbox/src/snapshot-chain.ts#REBASE_DELTA_RATIO
       - packages/devbox/src/snapshot-chain.ts#shouldRebase
       - packages/devbox/src/snapshot-chain.ts#supersedeGeneration
       - packages/devbox/src/snapshot-chain.ts#snapshotChainStorage
-      - packages/devbox/src/snapshot-chain.ts#CHAIN_EXCLUDES
       - packages/devbox/src/storage.ts#CheckpointKind
     remainingEvidence:
-      - The amortization is stated with the rebase predicate itself as its hypothesis, so it holds at a quiesce and is silent between two of them; a tick past the ratio provably still uploads the whole cumulative set, which makes the honest bound per-box-lifetime with a quiesce boundary rather than per-checkpoint
-      - REBASE_DELTA_RATIO is derived from a break-even argument and not measured, so the k every theorem quantifies over has no production value behind it yet
-      - The sweep runs on a successful commit, so a box that rebases and then never commits again keeps both the recorded ids and the bytes; without_a_sweep_the_population_grows states that residual, and the bytes are reclaimable rather than lost because the record still names them
-      - The earlier revision of this requirement proved the stored count UNBOUNDED, which was true of the code before the orphan list existed; that theorem is deleted rather than kept, because a theorem whose failure mode has been removed from the code cannot fail and would read as coverage
-      - The sweep is proved complete against the recorded ids, not against the store: whether the three object keys per generation are the only bytes a generation owns is a key-layout fact outside the model
-      - The hypothesis that the merged view is at most base plus delta assumes every delta byte is new, which compression and overwritten paths can only make truer but which nothing here measures
+      - Amortization is conditional on merged archive bytes being at most stored base plus delta bytes; chunking and compression do not establish that premise
+      - The ratio is shipped as one and was measured for whole-delta publication; its firing rate under chunked publication remains unmeasured
+      - A completed sweep retains the current generation and any proven fallback; only successful attach releases the fallback into the orphan list
+      - The model covers atomic record transitions and named cleanup, not interrupted object PUTs before record publication or crashes within one storage operation
+      - Named generations can accumulate until a successful commit sweeps them; reference retention alone does not impose a global stored-byte cap
   PR-DEVBOX-005:
     statement: After a completed checkpoint, snapshot-chain crash loss is exactly the writes accepted since that tick. Removing snapshot-chain's cannot-decide-commits gate leaves the window open under any finite cadence of skipped ticks.
     status: proved-in-abstract-model
