@@ -312,7 +312,7 @@
     "cancel_claim",
     "cancel_outcome"
   ],
-  "driver_lease@packages/cli-backend/src/agent-host/driver-lease.ts": [
+  "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id",
     "pid",
     "token",

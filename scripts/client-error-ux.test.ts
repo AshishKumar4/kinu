@@ -33,7 +33,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from './gallery-harness';
-import { CLIENT_ERROR_ENDPOINT, CLIENT_ERROR_MAX_REQUEST_BYTES } from '../packages/cf-backend/src/client-error/contract';
+import { CLIENT_ERROR_ENDPOINT, CLIENT_ERROR_MAX_REQUEST_BYTES } from '@kinu.run/core';
 
 const HEALTH = '/api/health';
 

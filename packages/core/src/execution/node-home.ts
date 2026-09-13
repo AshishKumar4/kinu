@@ -15,7 +15,7 @@
  * the execution wrapper that makes a session act as one facet.
  */
 
-import type { NimbusSandboxHandle } from '@kinu.run/core';
+import { type NimbusSandboxHandle } from './nimbus';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 
 /**

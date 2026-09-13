@@ -19,7 +19,7 @@ import {
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { createHubDeviceTransport } from '../src/device-transport';
+import { createHubDeviceTransport } from '@kinu.run/core';
 
 const WORKSPACE = 'workspace-a';
 

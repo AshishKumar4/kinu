@@ -13,7 +13,7 @@ import type { CraftedTool, CraftStore, JsonValue } from "@kinu.run/core";
 import { craftFailureMarker, selectInjectableCraftedTools } from "@kinu.run/core";
 import { createTestSql, scratchDir } from "@kinu.run/test-utils";
 import { initCraftedToolsTables } from "@kinu.run/agent-utils/stores";
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "../src/codemode-node-shim";
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "@kinu.run/core";
 // @cloudflare/codemode (the DWE import) needs the workerd-only module, which
 // the preload's boundary stub serves.
 import { renderToolsPrelude } from "../src/codemode-sandbox";

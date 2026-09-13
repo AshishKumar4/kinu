@@ -18,17 +18,14 @@ import {
   fitClientErrorReport,
   stackFrames,
   type ClientErrorReport,
-} from './contract';
-import { routeTemplateOf, type ReportedRoute } from '../app-routes';
-import { pageDeployedBuildSha } from '@kinu.run/core';
+} from "./client-error-contract";
+import type { ReportedRoute } from './app-routes';
 
 /**
  * What the PAGE contributes to a report, as opposed to what the error does.
  *
- * Both are read at the I/O boundary in {@link reportRenderFailure}, which keeps
- * {@link renderFailureReport} a pure function of its inputs — the claim worth
- * testing about it is "nothing but these fields ever leaves", and a builder that
- * reaches for `location` itself cannot be asked that question directly.
+ * The rendering adapter supplies both; report shaping never reads location
+ * or a deployment identity from ambient browser state.
  */
 export interface PageIdentity {
   /** The build this page LOADED, or null when it could not be identified. */
@@ -107,11 +104,10 @@ function renderFailureReport(
  * arrives late. A send that never settles is left to the document's own
  * lifetime, which is exactly what `keepalive` is for.
  */
-export async function reportRenderFailure(error: Error, componentStack: string): Promise<void> {
-  const report = renderFailureReport(error, componentStack, {
-    release: await pageDeployedBuildSha(),
-    route: routeTemplateOf(location.pathname),
-  });
+export async function reportRenderFailure(
+  error: Error, componentStack: string, page: PageIdentity,
+): Promise<void> {
+  const report = renderFailureReport(error, componentStack, page);
 
   try {
     await fetch(CLIENT_ERROR_ENDPOINT, {

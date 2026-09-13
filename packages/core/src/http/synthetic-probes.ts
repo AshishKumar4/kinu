@@ -23,10 +23,10 @@
  * a re-read of an open incident look like news.
  */
 
-import { CLI_DIST_PATHS } from '@kinu.run/core';
-import { sha256Hex } from '@kinu.run/core';
+import { CLI_DIST_PATHS } from './deployed-assets';
+import { sha256Hex } from '../safety/argument-digest';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain } from '../obs/index';
 
 const BuildStampSchema = v.looseObject({
   sha: v.optional(v.string()),

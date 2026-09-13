@@ -7,7 +7,7 @@ import SettingsPage from "./pages/SettingsPage";
 import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { APP_ROUTES } from "./app-routes";
+import { APP_ROUTES } from "@kinu.run/core";
 import { lazyRoute } from "./lazy-route";
 import { Loader } from "@cloudflare/kumo";
 

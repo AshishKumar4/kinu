@@ -14,9 +14,9 @@
  */
 
 import { DurableObject } from 'cloudflare:workers';
-import { EmailOutbox } from '../email/outbox';
+import { EmailOutbox } from '@kinu.run/core';
 import { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorRunResult } from './incidents';
-import { runSyntheticProbes } from './probes';
+import { runSyntheticProbes } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 

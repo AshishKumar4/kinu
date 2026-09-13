@@ -17,8 +17,8 @@
 
 import { argumentDigest, type SqlExec } from '@kinu.run/core';
 import { sendOwnerEmail } from '../email/outbound';
-import type { EmailOutbox } from '../email/outbox';
-import type { ProbeOutcome } from './probes';
+import type { EmailOutbox } from '@kinu.run/core';
+import type { ProbeOutcome } from '@kinu.run/core';
 import * as v from 'valibot';
 
 /** The From identity of alert mail. A dot is not legal in a workspace name, so

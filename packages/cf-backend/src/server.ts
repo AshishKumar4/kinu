@@ -42,12 +42,12 @@ import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath, hostedActorRoute,
-} from "./agent-routing";
-import { handlePcRequest } from "./pc-handler";
+} from "@kinu.run/core";
+import { handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
 import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
-import { handleHealthRequest } from "./health-route";
+import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
 import { handleCliRequest } from "./cli/routes";

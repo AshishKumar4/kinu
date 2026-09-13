@@ -31,7 +31,7 @@ import {
   DriverLeaseHold,
   type DriverKind,
   type LeaseProcess,
-} from '../src/agent-host/driver-lease';
+} from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../src/runtime';
 import { leaseHolder } from './driver-lease-probe';
 

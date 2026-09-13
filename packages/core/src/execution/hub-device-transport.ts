@@ -10,19 +10,20 @@
  * the hub rejects when no device is connected, and each call's outcome
  * re-seeds the snapshot.
  */
-import {
-  WORKSPACE_HAS_NO_OWNER,
-  isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId,
-  JsonValueSchema, shellQuote,
-  type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
-} from '@kinu.run/core';
-import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventName } from '@kinu.run/core/obs';
+import { WORKSPACE_HAS_NO_OWNER, isDeviceAmbiguityError, isDeviceNotConnectedError, nextDeviceRequestId } from './device-tunnel';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { shellQuote } from '../utils/shell';
+import { type DeviceCheckpointHint } from '../checkpoints/types';
+import { type DeviceStatus } from './device-status';
+import { type DeviceTransport } from './device-tunnel-executor';
+import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventName } from "../obs/index";
 import * as v from 'valibot';
-import type { UserCaller } from '@kinu.run/core';
+import { type UserCaller } from '../safety/workspace-capability';
 
 
-/** How long the cached device-status snapshot stays fresh before status()
- *  kicks a background re-check against the user hub. */
+/** How long the runtime status cache stays fresh before a hub re-check.
+ *  Independent of DEVICE_ROSTER_POLL_MS: tool admission reads this cache;
+ *  roster polling refreshes a visible account list, not runtime authority. */
 const DEVICE_STATUS_TTL_MS = 5_000;
 
 /**

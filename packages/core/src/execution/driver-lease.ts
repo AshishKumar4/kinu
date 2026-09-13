@@ -55,17 +55,8 @@
  * only one that proves exclusion — does it through `tests/driver-lease-probe.ts`
  * rather than through a surface production never asks for.
  */
-import { KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
-import * as v from 'valibot';
-import type { RawSqlExec, SqlExecutor } from '@kinu.run/core';
-
-/**
- * What a failed `process.kill(pid, 0)` carries. Only `code` matters: it is the
- * sole fact that distinguishes "no such process" from "alive but not mine to
- * signal", and every other answer must fall through to a real failure rather
- * than be guessed at.
- */
-const ProcessSignalFailureSchema = v.looseObject({ code: v.optional(v.string()) });
+import { KinuError, refusalOf, type Refusal } from "../obs/index";
+import { type RawSqlExec, type SqlExecutor } from '../types/primitives';
 
 /** One row, one conversation: the lease is per workspace database. */
 const LEASE_ROW_ID = 'local';
@@ -111,38 +102,6 @@ export interface LeaseProcess {
   isAlive(pid: number): boolean;
 }
 
-/**
- * The real seam. ESRCH is the only answer that means "gone": EPERM is a live
- * process this user may not signal, and reading that as dead would let a
- * daemon take the lease from a live owner it merely cannot see.
- */
-const OS_LEASE_PROCESS: LeaseProcess = {
-  pid: process.pid,
-  isAlive(pid: number): boolean {
-    try {
-      process.kill(pid, 0);
-
-      return true;
-    } catch (error) {
-      // The signal's own failure is the I/O boundary here, so the errno is
-      // PARSED rather than narrowed by shape: `code` is the whole contract this
-      // decision rests on, and an error that carries none must not read as a
-      // dead process.
-      const errno = v.safeParse(ProcessSignalFailureSchema, error);
-      const code = errno.success ? errno.output.code : undefined;
-
-      if (code === 'ESRCH') return false;
-
-      if (code === 'EPERM') return true;
-      throw toKinuError({
-        doing: `test whether process ${String(pid)} is still running`,
-        cause: error,
-        otherwise: 'unavailable',
-      });
-    }
-  },
-};
-
 /** A lease that was not granted, and who has it. Named because it travels on
  *  its own: a driver that stood down reports the holder to whoever asked. */
 export interface DriverLeaseRefusal {
@@ -158,7 +117,7 @@ export interface DriverLeaseDeps {
   /** DDL channel, so a database that never ran the workspace schema still
    *  gets the table on first use — a branch worker or a fixture. */
   readonly execRaw: RawSqlExec;
-  readonly proc?: LeaseProcess;
+  readonly proc: LeaseProcess;
 }
 
 interface LeaseRow {
@@ -200,7 +159,7 @@ function acquireDriverLease(
   deps: DriverLeaseDeps,
   kind: DriverKind,
 ): DriverLeaseResult {
-  const proc = deps.proc ?? OS_LEASE_PROCESS;
+  const proc = deps.proc;
   initDriverLeaseTable(deps.execRaw);
   const current = readRow(deps.sql);
   const token = crypto.randomUUID();

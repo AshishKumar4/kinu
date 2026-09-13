@@ -7,6 +7,7 @@ import { applyWorkspaceTitle, persistAutoTitle, canonicalConversationId, getEvol
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
+  OS_LEASE_PROCESS,
   makeExecRaw,
   makeSql,
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
@@ -297,7 +298,7 @@ export class LocalAgentClient implements AgentClient {
     // Built BEFORE the session, because createAgentSession installs it as the
     // session's driver gate.
     this.driverLease = new DriverLeaseHold(
-      { sql: makeSql(deps.db), execRaw: makeExecRaw(deps.db) },
+      { sql: makeSql(deps.db), execRaw: makeExecRaw(deps.db), proc: OS_LEASE_PROCESS },
       'interactive',
     );
     this.session = this.createAgentSession();

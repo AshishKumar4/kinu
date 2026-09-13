@@ -116,7 +116,7 @@ export async function mintAccessToken(
   }
 
   const token = `pta_${userId}_${nanoid(44)}`;
-  const tokenHash = await sha256Hex(token);
+  const tokenHash = sha256Hex(token);
   const createdAt = Date.now();
   sql.exec(
     `INSERT INTO user_access_tokens (token_hash, name, scopes, created_at) VALUES (?, ?, ?, ?)`,
@@ -134,7 +134,7 @@ export async function verifyAccessToken(sql: SqlExec, token: string): Promise<Ac
   const userId = parseAccessTokenUserId(token);
 
   if (!userId) return { ok: false, error: 'malformed token' };
-  const tokenHash = await sha256Hex(token);
+  const tokenHash = sha256Hex(token);
 
   const row = v.parse(v.optional(v.object({ scopes: v.string(), revoked_at: v.nullable(v.number()) })), sql.exec(
     `SELECT scopes, revoked_at FROM user_access_tokens WHERE token_hash = ? LIMIT 1`,

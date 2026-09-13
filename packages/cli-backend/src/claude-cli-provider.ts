@@ -15,7 +15,7 @@ import { classify, diagnostics, KinuError, renderThrownChain, tolerate } from '@
 import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps, Usage } from '@kinu.run/core';
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as v from 'valibot';
-import { readAllOutcome } from './spawned-output';
+import { readAllOutcome } from '@kinu.run/core';
 
 export const CLAUDE_CLI_PROVIDER_ID = 'claude';
 

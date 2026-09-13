@@ -29,9 +29,9 @@ import {
   fitClientErrorReport,
   type ClientErrorReport,
   type ReleaseMatch,
-} from '../src/client-error/contract';
-import { reportRenderFailure } from '../src/client-error/report';
-import { APP_ROUTES, routeTemplateOf } from '../src/app-routes';
+} from '@kinu.run/core';
+import { pageDeployedBuildSha, reportRenderFailure } from '@kinu.run/core';
+import { APP_ROUTES, routeTemplateOf } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -406,7 +406,10 @@ describe('the payload the browser builds', () => {
 
   /** One caught render error through the production send, parsed back. */
   async function posted(error: Error, componentStack: string): Promise<ClientErrorReport> {
-    await reportRenderFailure(error, componentStack);
+    await reportRenderFailure(error, componentStack, {
+      release: await pageDeployedBuildSha(),
+      route: routeTemplateOf(location.pathname),
+    });
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toBe(CLIENT_ERROR_ENDPOINT);
 

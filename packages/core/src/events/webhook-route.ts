@@ -47,8 +47,9 @@
  * be addressed at all.
  */
 
-import { hmacSha256Hex, isUlid, timingSafeEqual } from '@kinu.run/core';
-import { isWorkspaceName } from '@kinu.run/core';
+import { hmacSha256Hex, timingSafeEqual } from '../utils/crypto';
+import { isUlid } from './hub/ulid';
+import { isWorkspaceName } from '../identity/naming';
 
 /** Domain separation, versioned in the label AND in the URL segment, so a
  *  future v2 shape can never be verified by the v1 derivation. */

@@ -4,7 +4,7 @@
  * Both ends import this module. One spelling names each method and each
  * envelope, and both sides parse what they receive against it.
  */
-import { BranchExplorationSchema, BranchReflectionSchema } from '@kinu.run/core';
+import { BranchExplorationSchema, BranchReflectionSchema } from '../mcts/engine';
 import * as v from 'valibot';
 
 /** The one call that asks a branch for a candidate approach. */

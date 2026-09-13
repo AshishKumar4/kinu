@@ -71,7 +71,7 @@ import {
 	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,
 	type ExplorerSelection,
 } from "@kinu.run/core";
-import { scoreBand } from "@/components/ui/score-bar";
+import { scoreBand } from '@kinu.run/core';
 
 /** One search's band on the canvas. */
 export interface SwarmTreeRegion {

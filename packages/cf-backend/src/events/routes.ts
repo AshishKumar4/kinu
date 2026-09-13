@@ -38,7 +38,7 @@ import { decodeJsonWire } from '@kinu.run/core';
 import {
   matchWebhookDeliveryPath, verifyWebhookRoute, webhookRouteSecret,
   WEBHOOK_ROUTE_UNAVAILABLE, type SignedWebhookRoute,
-} from './webhook-route';
+} from '@kinu.run/core';
 import * as v from 'valibot';
 import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 

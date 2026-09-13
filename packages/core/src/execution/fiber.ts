@@ -13,8 +13,10 @@
  * `fibers` DDL belongs to core's identity/schema.ts — one owner per table.
  */
 
-import { decodeJsonValue, parseJsonValue } from '@kinu.run/core';
-import type { ActorHandle, Schedule, FiberCtx, JsonValue, SqlExecutor } from '@kinu.run/core';
+import { decodeJsonValue, parseJsonValue } from '../utils/json';
+import { type ActorHandle } from '../identity/actor-handle';
+import { type Schedule, type FiberCtx, type SqlExecutor } from '../types/primitives';
+import { type JsonValue } from '../utils/json';
 
 export interface OrphanedFiber {
   id: string;
@@ -22,7 +24,7 @@ export interface OrphanedFiber {
   snapshot: JsonValue | null;
 }
 
-export function createLinuxFiber(sql: SqlExecutor, actor: ActorHandle): Schedule['fiber'] {
+export function createSqlFiber(sql: SqlExecutor, actor: ActorHandle): Schedule['fiber'] {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
 

@@ -22,17 +22,28 @@
  * per-drain context.
  */
 
-import { argumentDigest, scheduledOutbox, type Outbox, type SqlExec } from '@kinu.run/core';
+import { argumentDigest } from '../safety/argument-digest';
+import { scheduledOutbox, type Outbox } from './outbox';
+import { type SqlExec } from '../types/primitives';
 import * as v from 'valibot';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from "../obs/index";
 
-/** A rendered outbound message — exactly the `send_email` binding's payload. */
+interface EmailAddress {
+  name: string;
+  email: string;
+}
+
+/** A rendered outbound message. Transport receipts do not replace its stable Message-ID. */
 export interface OutboundEmailMessage {
   from: string | EmailAddress;
   to: string | EmailAddress | (string | EmailAddress)[];
   subject: string;
   text: string;
   headers?: Record<string, string>;
+}
+
+interface EmailSender {
+  send(message: OutboundEmailMessage): Promise<{ messageId: string }>;
 }
 
 export type OutboundSendResult =
@@ -54,7 +65,7 @@ const RETRY_BASE_MS = 30_000;
 const MESSAGE_ID_HEADER = 'Message-ID';
 
 export class EmailOutbox {
-  private readonly outbox: Outbox<OutboundEmailMessage, SendEmail>;
+  private readonly outbox: Outbox<OutboundEmailMessage, EmailSender>;
 
   /** `scheduleRetry` arms the host's timer for a backed-off re-drive. Without
    *  it the outbox has no scheduler of its own and a failed send only retries
@@ -62,7 +73,7 @@ export class EmailOutbox {
    *  Object arming is a storage write, and an unawaited one is cancelled
    *  silently on reset (`do.wait_until.no_op`). */
   constructor(sql: SqlExec, scheduleRetry: (at: number) => Promise<void> = async () => {}) {
-    this.outbox = scheduledOutbox<OutboundEmailMessage, SendEmail>(sql, 'email', {
+    this.outbox = scheduledOutbox<OutboundEmailMessage, EmailSender>(sql, 'email', {
       maxAttempts: MAX_SEND_ATTEMPTS,
       baseMs: RETRY_BASE_MS,
       schedule: scheduleRetry,
@@ -100,7 +111,7 @@ export class EmailOutbox {
    *  Message-ID, sends once, and reconciles status. A key already `sent`
    *  returns `deduped` without touching the binding. */
   async send(
-    binding: SendEmail,
+    binding: EmailSender,
     key: string,
     message: OutboundEmailMessage,
     now: number,
@@ -134,7 +145,7 @@ export class EmailOutbox {
   /** Alarm-swept reconciliation: re-drive every due `pending` intent. Each
    *  re-drive carries the original Message-ID, so a duplicate is deduped
    *  downstream rather than delivered twice. Returns the count re-driven. */
-  async reconcile(binding: SendEmail, now: number): Promise<number> {
+  async reconcile(binding: EmailSender, now: number): Promise<number> {
     const { sent, retried, deadLettered } = await this.outbox.drain(now, { context: binding });
 
     return sent + retried + deadLettered;

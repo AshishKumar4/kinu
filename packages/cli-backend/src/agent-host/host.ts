@@ -100,10 +100,11 @@ import {
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
 } from '../actor-identity';
+import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold,
   type DriverKind, type DriverLeaseHolder,
-} from './driver-lease';
+} from '@kinu.run/core';
 import {
   LocalAgentSession,
   createLocalOrchestration,
@@ -684,7 +685,7 @@ export class LocalAgentHost {
 
     return {
       dbPath, db, host, directory, runtimes, orchestrations, driving: 0,
-      hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db) }, this.driverKind),
+      hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
 

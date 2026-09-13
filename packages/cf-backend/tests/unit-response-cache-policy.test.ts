@@ -12,7 +12,7 @@
 import { describe, expect, test } from 'bun:test';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { handleUserRequest } from '../src/user/routes';
-import { handleHealthRequest } from '../src/health-route';
+import { handleHealthRequest } from '@kinu.run/core';
 import { PRIVATE_NO_STORE } from '@kinu.run/core';
 import { err, json } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';

@@ -32,7 +32,7 @@ import {
   type CraftedToolSource,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from './codemode-node-shim';
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
 import { EGRESS_FAILURE_HEADER } from './codemode-egress';
 
 /** Codemode's resolved provider shape. */
