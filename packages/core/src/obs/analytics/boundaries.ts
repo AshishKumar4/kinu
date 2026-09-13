@@ -119,7 +119,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'email.outbox',
     family: 'error',
     event: 'email.outbox_send_failed',
-    site: 'packages/cf-backend/src/email/outbox.ts',
+    site: 'packages/core/src/events/email-outbox.ts',
     mechanism: 'diagnostics',
     emitter: 'failure',
     means: 'One send attempt on a queued outbound message failed and was backed '

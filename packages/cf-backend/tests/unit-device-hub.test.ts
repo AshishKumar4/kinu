@@ -301,7 +301,7 @@ describe('/pc/connect upgrade wiring', () => {
   const read = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
 
   test('the worker forwards the upgrade Request to the UserDO instead of passing a WebSocket over RPC', () => {
-    const pcHandler = read('src/pc-handler.ts');
+    const pcHandler = read('../core/src/http/pc-ingress.ts');
     // WebSockets are not RPC-serializable in workerd — this exact pattern
     // 500'd every daemon connect in production.
     expect(pcHandler).not.toContain('attachDeviceSocket');

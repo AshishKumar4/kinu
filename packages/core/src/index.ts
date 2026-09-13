@@ -2359,6 +2359,7 @@ export {
 } from './providers/workers-ai-provider';
 
 export {
+  scoreBand,
   type ExplorerSelection,
   cleanNodeLabel,
   clipToWidth,
@@ -2485,3 +2486,125 @@ export {
   sandboxIdForWorkspace,
   isKinuSandboxId,
 } from './preview/sandbox-id';
+
+export {
+  extractOrchestratorAgentName,
+  extractTicketOrchestratorAgentName,
+  isForeignAgentNamespacePath,
+  hostedActorRoute,
+} from './http/agent-routing';
+
+export {
+  APP_ROUTES,
+  type ReportedRoute,
+  REPORTED_ROUTES,
+  routeTemplateOf,
+} from './read-models/app-routes';
+
+export {
+  CLIENT_ERROR_ENDPOINT,
+  CLIENT_RENDER_FAILED,
+  CLIENT_ERROR_MAX_REQUEST_BYTES,
+  STACK_FRAME,
+  COMPONENT_STACK_FRAME,
+  stackFrames,
+  ClientErrorReportSchema,
+  type ClientErrorReport,
+  fitClientErrorReport,
+  type ReleaseMatch,
+} from './read-models/client-error-contract';
+
+export {
+  type PageIdentity,
+  reportRenderFailure,
+} from './read-models/client-error-report';
+
+export {
+  KINU_NODE_MODULE_NAME,
+  KINU_NODE_MODULE_SOURCE,
+} from './execution/codemode-node-shim';
+
+export {
+  type DeviceHubClient,
+  type DeviceRpcOptions,
+  type HubDeviceTransportOpts,
+  createHubDeviceTransport,
+} from './execution/hub-device-transport';
+
+export {
+  type OutboundEmailMessage,
+  type OutboundSendResult,
+  EmailOutbox,
+} from './events/email-outbox';
+
+export {
+  type WebhookRouteEnv,
+  WEBHOOK_ROUTE_UNAVAILABLE,
+  webhookRouteSecret,
+  type WebhookRouteIdentity,
+  type WebhookRouteMatch,
+  type SignedWebhookRoute,
+  webhookRoutePath,
+  matchWebhookDeliveryPath,
+  verifyWebhookRoute,
+} from './events/webhook-route';
+
+export {
+  handleHealthRequest,
+} from './http/health-route';
+
+export {
+  adaptMemory,
+  backfillMemoryVectors,
+} from './memory/vector-sync';
+
+export {
+  type ProbeOutcome,
+  type ProbeDeps,
+  runSyntheticProbes,
+} from './http/synthetic-probes';
+
+export {
+  type HostedNodeHome,
+  withHostedNodeExecution,
+} from './execution/node-home';
+
+export {
+  type PcUserStub,
+  type PcUserNamespace,
+  type PcIngressEnv,
+  handlePcRequest,
+} from './http/pc-ingress';
+
+export {
+  type DriverKind,
+  type DriverLeaseHolder,
+  type LeaseProcess,
+  type DriverLeaseRefusal,
+  type DriverLeaseDeps,
+  DriverLeaseHold,
+} from './execution/driver-lease';
+
+export {
+  BRANCH_EXPLORE,
+  BRANCH_REFLECT,
+  BRANCH_READY,
+  BRANCH_METHODS,
+  BranchCallSchema,
+  BranchReplySchema,
+  BranchCallAttributionSchema,
+  type BranchCall,
+  type BranchReply,
+  type BranchMethod,
+  type BranchCallReply,
+} from './protocol/branch';
+
+export {
+  type OrphanedFiber,
+  createSqlFiber,
+  detectOrphanedFibers,
+} from './execution/fiber';
+
+export {
+  readAllOutcome,
+} from './utils/spawned-output';

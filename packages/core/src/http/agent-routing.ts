@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
+import { ORCHESTRATOR_AGENT_SLUG } from '../cloud-wire';
 
 /**
  * The `/agents/*` transport boundary — the single policy for which requests may

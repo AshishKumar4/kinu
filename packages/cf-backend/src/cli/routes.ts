@@ -11,7 +11,7 @@ import {
 import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
-import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '../events/webhook-route';
+import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '@kinu.run/core';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,

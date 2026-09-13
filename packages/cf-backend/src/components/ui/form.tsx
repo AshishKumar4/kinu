@@ -4,6 +4,7 @@
  * Buttons are not here: the filled action is `ui/FilledButton`, and quiet
  * buttons are Kumo's.
  */
+import type * as React from 'react';
 
 export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
   + " border border-[var(--c-input-border)] bg-[var(--c-surface)]"

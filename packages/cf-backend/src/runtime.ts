@@ -55,10 +55,10 @@ import {
   type VectorStore,
 } from "@kinu.run/core";
 import type { SandboxHandle } from "@kinu.run/core";
-import { withHostedNodeExecution } from './node-home';
-import type { HostedNodeHome } from './node-home';
+import { withHostedNodeExecution } from '@kinu.run/core';
+import type { HostedNodeHome } from '@kinu.run/core';
 
-export { withHostedNodeExecution, type HostedNodeHome } from './node-home';
+export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
@@ -76,7 +76,7 @@ import {
   createHubDeviceTransport,
   type DeviceHubClient,
   type HubDeviceTransportOpts,
-} from "./device-transport";
+} from "@kinu.run/core";
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry,
@@ -84,7 +84,7 @@ import {
   type UserCredentialSource,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
-import { adaptMemory, backfillMemoryVectors } from "./memory-sync";
+import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
 import {
   agentAffinityKey, normalizeUsage,
 } from "@kinu.run/core";

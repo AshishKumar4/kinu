@@ -5,7 +5,7 @@ import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
-} from '../src/agent-routing';
+} from '@kinu.run/core';
 import { deriveUserId } from '../src/auth/store';
 
 /**

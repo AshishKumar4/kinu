@@ -74,14 +74,14 @@ describe('auth and desktop security invariants', () => {
   test('dashboard and PC install paths do not expose KINU_TOKEN setup commands', () => {
     const userRoutes = source('src/user/routes.ts');
     const cliRoutes = source('src/cli/routes.ts');
-    const pcHandler = source('src/pc-handler.ts');
+    const pcHandler = source('../core/src/http/pc-ingress.ts');
     expect(userRoutes).not.toContain('KINU_TOKEN=');
     expect(cliRoutes).not.toContain('KINU_TOKEN=');
     expect(pcHandler).not.toContain('KINU_TOKEN=');
   });
 
   test('desktop WebSocket uses short-lived tickets instead of raw device tokens in the URL', () => {
-    const pcHandler = source('src/pc-handler.ts');
+    const pcHandler = source('../core/src/http/pc-ingress.ts');
     expect(pcHandler).toContain('/pc/connect-ticket');
     expect(pcHandler).toContain('ticket=');
     expect(pcHandler).not.toContain('&token=');
@@ -552,7 +552,7 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
   test('Cloudflare Access is never a browser session', () => {
     const access = source('src/auth/session.ts');
     const wrangler = source('wrangler.jsonc');
-    const health = source('src/health-route.ts');
+    const health = source('../core/src/http/health-route.ts');
     expect(access).not.toContain('readAccessToken');
     expect(access).not.toContain('verifyAccessJwt');
     expect(access).not.toContain('CF_Authorization');

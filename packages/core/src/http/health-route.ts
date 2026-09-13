@@ -9,11 +9,16 @@
 // cheerfully true. (A `vite dev` server has no stamp either, correctly: it
 // cannot serve the CLI downloads.)
 
-import { BUILTIN_TOOLS, NAMED_SWARM_PRESETS, ORCHESTRATOR_AGENT_SLUG, SWARM_PRESETS } from '@kinu.run/core';
-import { readBuildStamp } from '@kinu.run/core';
+import { BUILTIN_TOOLS } from '../tools/registry';
+import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../types/swarm';
+import { ORCHESTRATOR_AGENT_SLUG } from '../cloud-wire';
+import { readBuildStamp } from './deployed-assets';
 
 
-export async function handleHealthRequest(request: Request, env: Env): Promise<Response | null> {
+export async function handleHealthRequest(
+  request: Request,
+  env: Parameters<typeof readBuildStamp>[0],
+): Promise<Response | null> {
   const url = new URL(request.url);
 
   if (url.pathname !== '/api/health') return null;

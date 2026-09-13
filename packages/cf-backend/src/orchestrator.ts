@@ -55,7 +55,7 @@ import type { ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
-} from "./events/webhook-route";
+} from "@kinu.run/core";
 import { getSandbox } from "@cloudflare/sandbox";
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
@@ -256,7 +256,7 @@ import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
   sendInboundEmailReceipt, sendOwnerEmail,
 } from "./email/outbound";
-import { EmailOutbox } from "./email/outbox";
+import { EmailOutbox } from "@kinu.run/core";
 import {
   FIBER_RECOVERY_MAX_AGE_MS, SWEEP_MAX_ROWS, dispatchRecoveredNotice, type RecoveredNotice,
 } from "./fiber-recovery";

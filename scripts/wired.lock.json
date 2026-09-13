@@ -23,7 +23,7 @@
   "packages/cf-backend/src/lazy-route.tsx#loadRouteChunk (unreached-export)",
   "packages/core/src/read-models/fork-tree-rows.ts#MctsRow.branch_agent_key (unsupplied-field)",
   "packages/core/src/read-models/fork-tree-rows.ts#MctsRow.msg_id (unsupplied-field)",
-  "packages/cli-backend/src/branch-protocol.ts#BRANCH_METHODS (unreached-export)",
+  "packages/core/src/protocol/branch.ts#BRANCH_METHODS (unreached-export)",
   "packages/cli-backend/src/cgroup-limits.ts#readCgroupLimits (unreached-export)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.base (unsupplied-field)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.gitBin (unsupplied-field)",

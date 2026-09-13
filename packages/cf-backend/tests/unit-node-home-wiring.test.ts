@@ -44,7 +44,7 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import { withHostedNodeExecution, type HostedNodeHome } from '../src/node-home';
+import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 const databases: Database[] = [];
 

@@ -20,7 +20,7 @@ import {
   type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore,
 } from '@kinu.run/core';
 import { agentEmailAddress } from './inbound';
-import type { EmailOutbox, OutboundEmailMessage } from './outbox';
+import type { EmailOutbox, OutboundEmailMessage } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 

@@ -24,7 +24,7 @@ export { createSandboxedExecutor } from './executor';
 
 export { hostToolchainCapabilities } from './host-toolchain';
 
-export { createLinuxFiber, detectOrphanedFibers } from './fiber';
+export { createSqlFiber, detectOrphanedFibers } from '@kinu.run/core';
 
 export { createBranchSpawner } from './branch-process';
 
@@ -59,6 +59,8 @@ export {
   type DriverLeaseRefusal,
   type LeaseProcess,
 } from './agent-host';
+
+export { OS_LEASE_PROCESS } from './agent-host/lease-process';
 
 export {
   createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,

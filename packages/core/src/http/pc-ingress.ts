@@ -22,15 +22,11 @@
  * rather than cryptographic route verification, and what that leaves open.
  */
 
-import { DEVICE_CONNECT_PATH } from "@kinu.run/core";
-import { json, readBounded } from "@kinu.run/core";
-import {
-  ownerCaller,
-  type OwnerCapabilityEnv,
-  type UserCaller,
-} from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain } from "@kinu.run/core/obs";
-import { ingressAdmitted, ingressDenied, peerIp } from "@kinu.run/core";
+import { DEVICE_CONNECT_PATH } from '../cloud-wire';
+import { json, readBounded } from './http';
+import { ownerCaller, type OwnerCapabilityEnv, type UserCaller } from '../safety/workspace-capability';
+import { diagnostics, KinuError, renderThrownChain } from "../obs/index";
+import { ingressAdmitted, ingressDenied, peerIp } from './ingress-budget';
 import type { KvStore } from "@kinu.run/agent-utils";
 import * as v from "valibot";
 

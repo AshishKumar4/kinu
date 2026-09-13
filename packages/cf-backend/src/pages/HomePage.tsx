@@ -10,7 +10,7 @@ import {
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
-import { APP_ROUTES } from "@/app-routes";
+import { APP_ROUTES } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";

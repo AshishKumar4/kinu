@@ -9,7 +9,7 @@ import {
   createHubDeviceTransport,
   type DeviceHubClient,
   type DeviceRpcOptions,
-} from '../src/device-transport';
+} from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;

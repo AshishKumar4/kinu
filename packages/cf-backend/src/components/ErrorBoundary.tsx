@@ -18,7 +18,7 @@
  */
 
 import { Component, type ReactNode, type ErrorInfo } from "react";
-import { reportRenderFailure } from "@/client-error/report";
+import { pageDeployedBuildSha, reportRenderFailure, routeTemplateOf } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 
 interface Props {
@@ -69,7 +69,10 @@ export class ErrorBoundary extends Component<Props, State> {
       try {
         // The fallback is already on screen — React set this boundary's state
         // before calling here — and this owner holds the report through settlement.
-        await reportRenderFailure(error, info.componentStack ?? "");
+        await reportRenderFailure(error, info.componentStack ?? "", {
+          release: await pageDeployedBuildSha(),
+          route: routeTemplateOf(location.pathname),
+        });
       } catch (cause) {
         // The only rejection left is a defect in the reporter itself (its fetch
         // catch rethrows non-transport failures on purpose). Swallowing it here

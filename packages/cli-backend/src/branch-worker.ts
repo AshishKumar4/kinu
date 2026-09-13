@@ -35,7 +35,7 @@ import {
   BRANCH_EXPLORE, BRANCH_READY, BRANCH_REFLECT,
   BranchCallSchema, BranchCallAttributionSchema,
   type BranchReply,
-} from './branch-protocol';
+} from '@kinu.run/core';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver';
 import { createFileCodexAuthStore } from './codex-auth-store';
 import { LocalActorProcessBootstrapSchema } from './actor-identity';

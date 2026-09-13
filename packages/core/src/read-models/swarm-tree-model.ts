@@ -7,6 +7,11 @@
  */
 import { type ForkNode } from '../protocol';
 
+/** One score ladder for bar grades and swarm-node fills. */
+export function scoreBand(value: number): 'success' | 'warning' | 'danger' {
+  return value >= 0.7 ? 'success' : value >= 0.4 ? 'warning' : 'danger';
+}
+
 /**
  * Which node, in which search, the reader is inspecting.
  *
