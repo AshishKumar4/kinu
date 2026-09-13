@@ -1,12 +1,3 @@
-/**
- * The mission-first home screen — the mock's NEW WORKSPACE view.
- *
- * One question in the product's serif voice, one card that answers it (the
- * mission, which seeds SOUL.md and titles the workspace), and two quiet cards
- * beside it: setup links, recent workspaces. The title is derived
- * automatically — a deterministic provisional from the mission, replaced by a
- * generated title moments later — so there is no name field to fill in.
- */
 import { type FormEvent, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -15,11 +6,11 @@ import { KinuMark } from "@/components/ui/KinuLogo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   CONNECT_AI_MESSAGE,
-  MISSION_HELP,
   MISSION_LABEL,
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
+import { APP_ROUTES } from "@/app-routes";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 
 export default function HomePage() {
@@ -47,7 +38,7 @@ export default function HomePage() {
           </div>
           {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
           <h1 className="font-serif text-[clamp(38px,4vw,46px)] font-medium leading-[1.12] tracking-[-.015em] p-text">
-            What is this workspace for?
+            What do you wanna work on?
           </h1>
         </header>
 
@@ -67,10 +58,10 @@ export default function HomePage() {
                 }
               }}
               placeholder={MISSION_PLACEHOLDER}
-              rows={6}
+              rows={4}
               autoFocus
               disabled={busy}
-              className="block min-h-[168px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
+              className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
             />
           </div>
           {hasModels === false && (
@@ -81,10 +72,7 @@ export default function HomePage() {
           {err && (
             <div className="mx-6 mb-4 rounded-md px-3 py-2 text-xs p-notice-danger">{err}</div>
           )}
-          <div className="flex flex-col items-start gap-4 px-6 pb-5 sm:flex-row sm:items-center sm:justify-between">
-            <p className="max-w-[390px] p-meta p-text-4">
-              {MISSION_HELP}
-            </p>
+          <div className="flex items-center justify-end px-6 pb-5">
             <FilledButton
               type="submit"
               disabled={busy || !mission.trim() || hasModels === false}
@@ -99,8 +87,11 @@ export default function HomePage() {
         <aside className="order-3 min-w-0 lg:order-none">
           <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
             <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
-            <Link to="/user/settings" className="block py-[5px] p-t-control p-accent">
-              Model providers →
+            <Link to={APP_ROUTES.userSettings} className="block py-[5px] p-t-control p-accent">
+              Connect providers →
+            </Link>
+            <Link to={APP_ROUTES.userMcp} className="block py-[5px] p-t-control p-accent">
+              Add MCP servers →
             </Link>
             <a href="/install" className="block py-[5px] p-t-control p-accent">
               Install the CLI →
