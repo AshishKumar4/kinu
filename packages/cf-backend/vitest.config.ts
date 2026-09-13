@@ -48,6 +48,7 @@ import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
+import { promptText } from './vite-prompt-text';
 
 /**
  * `@callable()` is a TC39 standard decorator, and Vite 8 transforms TypeScript
@@ -150,6 +151,7 @@ let forbiddenEgressHits = 0;
 
 export default defineConfig({
   plugins: [
+    promptText(),
     standardDecorators(),
     cloudflareTest({
       main: './tests/workerd/worker.ts',

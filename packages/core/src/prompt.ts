@@ -57,6 +57,7 @@ import {
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
+import { CRAFTED_TOOL_NAMESPACE } from './tools/sandbox-contract';
 
 export type { TurnProvenance, WorkMode } from './types/turn';
 
@@ -285,7 +286,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
   if (hasTool(tools, 'execute_tools')) {
-    parts.push(render(CODE_EXECUTION_SECTION, {}));
+    parts.push(render(CODE_EXECUTION_SECTION, { craftedNamespace: CRAFTED_TOOL_NAMESPACE }));
   }
 
   if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {

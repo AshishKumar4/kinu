@@ -28,9 +28,10 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { buildSystemPromptSync } from '../src/prompt';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
-import { templateContract } from '../src/prompting/template';
+import { definePromptSection, templateContract } from '../src/prompting/template';
 import { PROMPT_MATRIX } from './fixtures/prompt-surface-matrix';
 import { createTestRuntime } from '@kinu.run/test-utils';
 
@@ -81,6 +82,14 @@ function movedCharacters(baseline: string, mutated: string): string[] {
 }
 
 describe('every registered section reaches a rendered prompt', () => {
+  test('the Markdown extraction preserves every rendered byte of the surface matrix', () => {
+    const hashes = Object.fromEntries(PROMPT_MATRIX.map(({ name, opts }) => [
+      name, createHash('sha256').update(buildSystemPromptSync(rt, opts)).digest('hex'),
+    ]));
+
+    expect(hashes).toMatchSnapshot();
+  });
+
   test('all eleven sections reach a surface that enables them', () => {
     for (const section of PROMPT_SECTIONS) {
       const prompt = buildSystemPromptSync(rt, (section.id === 'role/profile' ? ROLE : FULL).opts);
@@ -177,6 +186,24 @@ describe('the prompt stays inside its byte budget', () => {
 });
 
 describe('PROMPT_SECTIONS — the addressing scheme', () => {
+  test('file prose and its typed declaration must use exactly the same slots and flags', () => {
+    const declaration = '{{value}}{{#if enabled}}{{/if}}';
+    const source = '## File{{#if enabled}}: {{value}}{{else}}off{{/if}}';
+    const section = definePromptSection('fixture/file', declaration, source);
+    expect(section.render({ value: 'ready', enabled: true })).toBe('## File: ready');
+    expect(section.render({ value: 'ready', enabled: false })).toBe('## Fileoff');
+
+    for (const invalid of [
+      source + '{{undeclared}}',
+      source.replace('{{value}}', 'literal'),
+      source + '{{#if undeclared}}{{/if}}',
+      source.replace('{{#if enabled}}: {{value}}{{else}}off{{/if}}', '{{value}}'),
+      source.replace('{{value}}', '{{#if value}}{{/if}}'),
+    ]) {
+      expect(() => definePromptSection('fixture/file', declaration, invalid)).toThrow('differs from declaration');
+    }
+  });
+
   test('eleven sections, unique ids, every one a real template', () => {
     expect(PROMPT_SECTIONS).toHaveLength(11);
     expect(new Set(PROMPT_SECTIONS.map((s) => s.id)).size).toBe(11);

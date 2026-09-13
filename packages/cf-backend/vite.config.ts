@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import agents from "agents/vite";
 import { defineConfig } from "vite";
+import { promptText } from './vite-prompt-text';
 
 /**
  * The Nimbus session worker loads its runtime artifacts — the node shims
@@ -85,7 +86,7 @@ const workerSourceMaps = {
 };
 
 export default defineConfig({
-  plugins: [stubClientNodeBuiltins, workerSourceMaps, agents(), react(), cloudflare(), tailwindcss()],
+  plugins: [promptText(), stubClientNodeBuiltins, workerSourceMaps, agents(), react(), cloudflare(), tailwindcss()],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
   // builtin; excluded, it serves as source and the resolveId hook reaches it.
   // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field

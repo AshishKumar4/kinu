@@ -1,0 +1,1 @@
+- **sandbox.*** / `runtime: "sandbox"`: a full Linux container with its own CPU, memory and disk. It handles heavier installs, longer-running processes, large clones and builds, bulk data, and user-visible port-listening apps. It provisions on first use. The moment a job outgrows the workspace, move it here.
