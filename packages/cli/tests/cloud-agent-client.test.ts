@@ -5,6 +5,7 @@ import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonArraySchema, JsonObjectSchema, parseJsonObject,
+  ChatHistoryEntrySchema, restoredRows,
   type JsonObject, type JsonValue,
 } from '@kinu.run/core';
 import { CloudAgentClient } from '../src/cloud-agent-client';
@@ -20,7 +21,7 @@ interface MockAgentServer {
   connectUrls: URL[];
   rpcRequests: Array<{ method: string; args: JsonValue[] }>;
   /** Rows served from /api/cli/workspaces/:name/messages (the DO chat projection). */
-  chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
+  chatMessages: Array<{ id: string; role: string; content: string; createdAt: number; metadata?: JsonObject }>;
   socket(): ServerWebSocket<unknown>;
   reply(frame: JsonObject): void;
   close(): Promise<void>;
@@ -215,6 +216,37 @@ function responseChunk(id: string, chunk: JsonObject, done = false) {
 }
 
 describe('CloudAgentClient protocol', () => {
+  test('paged history retains the same event metadata as the browser transcript', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const metadata = { kinuEvent: 'background_job', jobId: 'job-1', audit: { source: 'runtime' } };
+    const row = { id: 'event-1', role: 'system', content: 'The job completed.', createdAt: 1, metadata };
+    mock.chatMessages.push(row,
+      { id: 'user-2', role: 'user', content: 'continue', createdAt: 2 },
+      { id: 'assistant-3', role: 'assistant', content: 'done', createdAt: 3 });
+
+    try {
+      const history = await client.history();
+      expect(history.map((message) => message.id)).toEqual(['event-1', 'user-2', 'assistant-3']);
+      expect(history[0]?.metadata).toEqual(metadata);
+      expect(restoredRows([v.parse(ChatHistoryEntrySchema, row)])[0]?.metadata).toEqual(history[0]?.metadata);
+    } finally {
+      await client.close();
+    }
+  });
+
+  test('history rejects an empty row identity, matching the browser admission rule', async () => {
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    mock.chatMessages.push({ id: '', role: 'user', content: 'unaddressable', createdAt: 1 });
+
+    try {
+      await expect(client.history()).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  });
+
   test('reasoning effort reads and writes through the agent RPC seam', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);

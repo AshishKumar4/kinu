@@ -6,7 +6,7 @@
   "asymmetry ArchiveExportOptions.files#absent-in-cli",
 
 
-  "asymmetry ChatHistoryEntry.metadata#absent-in-cli",
+
   "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli",
 
 

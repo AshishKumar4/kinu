@@ -141,6 +141,7 @@ export interface AgentTranscriptMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool_call' | 'tool_result';
   content: string;
+  metadata?: JsonObject;
   toolName?: string;
   args?: string;
   success?: boolean;
