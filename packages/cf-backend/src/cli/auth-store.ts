@@ -13,7 +13,7 @@ import { randomToken, sha256Hex } from '../lib/crypto';
 import { readKvJson, writeKvJson, type KvStore } from '../lib/kv';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
-import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
+import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import * as v from 'valibot';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only

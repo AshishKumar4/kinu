@@ -1,15 +1,8 @@
 [
-
   "asymmetry AgentsSwarmDeps.announceHeadActivity#absent-in-cli",
   "asymmetry AgentsSwarmDeps.reportNodeDelta#absent-in-cli",
   "asymmetry AgentsSwarmDeps.runtimeForNodeWorkspace#absent-in-cf",
-
-
-
-
   "asymmetry HeadInferenceDeps.reportDelta#absent-in-cli",
-
-
   "movable packages/cf-backend/src/agent-routing.ts",
   "movable packages/cf-backend/src/app-routes.ts",
   "movable packages/cf-backend/src/cli/access-token-store.ts",
@@ -80,12 +73,6 @@
   "movable packages/cf-backend/src/providers/workers-ai-catalog.ts",
   "movable packages/cf-backend/src/providers/workers-ai.ts",
   "movable packages/cf-backend/src/user/credential-headers.ts",
-  "movable packages/cf-backend/src/user/device-hub.ts",
-  "movable packages/cf-backend/src/user/device-inflight.ts",
-  "movable packages/cf-backend/src/user/device-terminal.ts",
-  "movable packages/cf-backend/src/user/egress-vault.ts",
-  "movable packages/cf-backend/src/user/schema.ts",
-  "movable packages/cf-backend/src/user/workspace-capability.ts",
   "movable packages/cli-backend/src/agent-host/driver-lease.ts",
   "movable packages/cli-backend/src/branch-protocol.ts",
   "movable packages/cli-backend/src/craft-executor.ts",

@@ -7,7 +7,7 @@ import { handleUserRequest } from '../src/user/routes';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import { halfBornOrchestratorHarness, HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import type { PresentedCaller } from '../src/control-plane/capability';
 import type { AuthIdentity } from '../src/auth/session';
 

@@ -17,7 +17,7 @@ import { recordFeedback, type ControlPlaneEnv } from '../control-plane/feedback-
 import { retryTransientDO } from '../lib/do-rpc';
 import type { UserDO } from '../user/user-do';
 import { isWorkspaceName } from '@kinu.run/core';
-import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability';
+import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { FEEDBACK_SCREENSHOT_TYPE } from './contract';
 import { routeFeedback, type WorkspaceAttribution } from './submit';
 

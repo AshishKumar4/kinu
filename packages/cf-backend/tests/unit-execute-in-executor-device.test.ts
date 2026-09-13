@@ -15,7 +15,7 @@ import {
   createTestUserDO, provisionTestWorkspace, testOwner,
   type DeviceFrame, type FakeDaemon, type TestUserDO,
 } from './helpers/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import { createHubDeviceTransport } from '../src/device-transport';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';

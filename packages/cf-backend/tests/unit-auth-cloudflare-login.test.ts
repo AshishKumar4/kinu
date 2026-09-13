@@ -12,7 +12,7 @@ import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv, type FakeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 

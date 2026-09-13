@@ -18,7 +18,7 @@ import {
 } from '@kinu.run/core';
 import { KinuError, diagnostics, renderThrownChain, toKinuError, type LogEventName } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import type { UserCaller } from './user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 
 /** How long the cached device-status snapshot stays fresh before status()

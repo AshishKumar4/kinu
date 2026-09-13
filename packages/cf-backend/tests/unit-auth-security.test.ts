@@ -22,7 +22,7 @@ import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';
 import { makeKv } from './helpers/kv';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 
 const root = join(import.meta.dir, '..');
 
@@ -91,7 +91,7 @@ describe('auth and desktop security invariants', () => {
   test('CLI agent websocket uses scoped tickets and has no local-turn HTTP bridge', () => {
     const server = source('src/server.ts');
     const cliRoutes = source('src/cli/routes.ts');
-    const userSchema = source('src/user/schema.ts');
+    const userSchema = source('../core/src/state/user-schema.ts');
     const orchestrator = source('src/orchestrator.ts');
     expect(cliRoutes).toContain('/connect-ticket');
     expect(userSchema).toContain('cli_agent_connect_tickets');

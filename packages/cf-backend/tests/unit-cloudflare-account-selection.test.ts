@@ -17,7 +17,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, testOwner } from './h
 import { CLOUDFLARE_OAUTH_CRED_KEY } from '../src/lib/cloudflare-oauth';
 import { handleUserRequest } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
-import type { UserCaller } from '../src/user/workspace-capability';
+import type { UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const AccountStatusSchema = v.object({

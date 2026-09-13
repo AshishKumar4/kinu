@@ -34,7 +34,7 @@ import { renderThrownChain, toKinuError, type ErrorCode } from '@kinu.run/core/o
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { ownerCaller } from '../user/workspace-capability';
+import { ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { unindexWorkspace } from './index-feed';
 import type { ControlPlaneEnv } from './stub';

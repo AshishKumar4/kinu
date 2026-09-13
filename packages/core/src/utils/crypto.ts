@@ -28,3 +28,4 @@ export async function hmacSha256Hex(secret: string, message: string): Promise<st
 
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
+

@@ -97,8 +97,8 @@ import {
   toKinuError,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './schema';
 import {
+  initUserTables, PROFILE_CATALOG_CONFIG_KEY,
   CapabilityDeniedError,
   armCapabilityReconcile,
   clearCapabilityReconcile,
@@ -112,21 +112,20 @@ import {
   type UserCaller,
   type WorkspaceCapability,
   type ResolvedCaller,
-} from './workspace-capability';
-import { DeviceSocketHub, deviceIdFromSocket } from './device-hub';
-import { DeviceTerminalHub, terminalFromSocket } from './device-terminal';
-import {
+  DeviceSocketHub, deviceIdFromSocket,
+  DeviceTerminalHub, terminalFromSocket,
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
-} from './device-inflight';
-import { credentialToHeaders, codexAccessTokenExpiring, validateCredential, validateCredentialKey, validateWorkspaceName, createCredentialCipher, type CredentialCipher } from '@kinu.run/core';
-import { isModelInferenceCredentialKey } from './credential-headers';
-import {
+  credentialToHeaders, codexAccessTokenExpiring,
+  validateCredential, validateCredentialKey, validateWorkspaceName,
+  createCredentialCipher, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
-} from './egress-vault';
+} from '@kinu.run/core';
+import { initAccessTokenTable } from '../cli/access-token-store';
+import { isModelInferenceCredentialKey } from './credential-headers';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { resolveWorkspaceTitle } from '../lib/agent-naming';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -744,6 +743,7 @@ export class UserDO extends Agent<Env> {
   private ensureInit(): void {
     if (this._initialized) return;
     initUserTables(this.ctx.storage.sql);
+    initAccessTokenTable(this.ctx.storage.sql);
     this._inflight.releaseAbandonedClaims();
     this._initialized = true;
   }

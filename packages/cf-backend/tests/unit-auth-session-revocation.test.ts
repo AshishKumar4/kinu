@@ -17,7 +17,7 @@ import {
 } from '../src/auth/session';
 import { handleAuthRequest } from '../src/auth/routes';
 import type { KvStore } from '../src/lib/kv';
-import { OwnerCapabilityUnavailableError } from '../src/user/workspace-capability';
+import { OwnerCapabilityUnavailableError } from '@kinu.run/core';
 import { sha256Hex } from '../src/lib/crypto';
 import type { UserDO } from '../src/user/user-do';
 import {

@@ -26,7 +26,7 @@ import {
   type TestUserDO,
 } from './helpers/user-do';
 import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
-import { CapabilityDeniedError, type UserCaller } from '../src/user/workspace-capability';
+import { CapabilityDeniedError, type UserCaller } from '@kinu.run/core';
 import {
   cliBearerConnectionTag,
   cliBearerFromTags,

@@ -74,6 +74,22 @@ export {
   type DeviceCancelResult,
 } from './device-tunnel';
 
+export {
+  DeviceSocketHub, deviceIdFromSocket,
+  type DeviceSocket, type DeviceSocketCtx,
+} from './device-hub';
+
+export {
+  DeviceRequestLedger, initDeviceInflightTable,
+  type ClaimedDeviceRequest, type SweptDeviceRequest,
+  type DeviceCancelOutcome, type DeviceTransferOutcome,
+} from './device-inflight';
+
+export {
+  DeviceTerminalHub, terminalFromSocket,
+  type TerminalHolder,
+} from './device-terminal';
+
 // Reusable Nimbus adapter. Cloudflare composes the session as its authoritative
 // workspace; the standalone factory remains available to other backends.
 export {

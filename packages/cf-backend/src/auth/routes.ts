@@ -22,7 +22,7 @@ import {
 import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
-import { ownerCaller } from '../user/workspace-capability';
+import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const CloudflareUserEnvelopeSchema = v.object({

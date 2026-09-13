@@ -347,7 +347,6 @@
   "packages/core/src/release/sql-store.ts#ReleaseStoreOptions.id (unsupplied-field)",
   "packages/core/src/release/sql-store.ts#ReleaseStoreOptions.now (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#APPROVAL_DENIED (unreached-export)",
-
   "packages/core/src/safety/approval-gate.ts#ShellApprovalPolicy.remember (unsupplied-field)",
   "packages/core/src/safety/approval-gate.ts#approvalGrants (unreached-export)",
   "packages/core/src/safety/approval-gate.ts#grantsAreSubset (unreached-export)",
@@ -359,7 +358,7 @@
   "packages/core/src/safety/deferred-approval.ts#queuedActionMessage (unreached-export)",
   "packages/core/src/safety/device-consent.ts#DEVICE_CONSENT_TIMEOUT_MS (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#EGRESS_EXECUTOR (unreached-export)",
-  "packages/core/src/safety/egress-gate.ts#EGRESS_PLACEHOLDER_PREFIX (unreached-export)",
+  "packages/core/src/safety/egress-gate.ts#EGRESS_PLACEHOLDER_BYTES (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#egressBindingAction (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#egressHostMatches (unreached-export)",
   "packages/core/src/safety/egress-gate.ts#egressSecretRule (unreached-export)",

@@ -13,7 +13,7 @@ import {
 } from './store';
 import type { KvStore } from '../lib/kv';
 import type { UserDO } from '../user/user-do';
-import type { OwnerCapabilityEnv } from '../user/workspace-capability';
+import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import type { AccessTokenScope } from '../cli/access-token-store';
 
 export const SESSION_COOKIE_NAME = '__Host-kinu_session';

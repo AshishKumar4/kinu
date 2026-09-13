@@ -48,7 +48,7 @@ import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { controlPlaneMetricsQueries } from '@kinu.run/core/analytics';
 import { reportAdminDenial, type AdminDenial } from '../src/control-plane/admin-caller';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
-import { requireTier, type OwnerCapabilityEnv } from '../src/user/workspace-capability';
+import { requireTier, type OwnerCapabilityEnv } from '@kinu.run/core';
 
 /** One captured data point, in the platform's own shape. */
 interface Captured {
