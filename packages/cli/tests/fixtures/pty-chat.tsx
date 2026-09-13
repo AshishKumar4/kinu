@@ -29,6 +29,25 @@ const agent = fakeClient({
   send: async (input) => {
     if (process.env.KINU_PTY_SENT_FILE) writeFileSync(process.env.KINU_PTY_SENT_FILE, JSON.stringify(input));
     agent.emit({ type: 'turn-start', kind: 'user', text: '' });
+
+    if (process.env.KINU_PTY_FILE_EDIT === '1') {
+      // The event stream the local backend sends for one file edit — the
+      // card under test reconstructs the hunk from the call's own args.
+      agent.emit({
+        type: 'tool-call', toolName: 'file', toolCallId: 'call-1',
+        args: {
+          action: 'edit',
+          path: 'src/state.ts',
+          edits: [{ old_text: 'export const ready = false;', new_text: 'export const ready = true;' }],
+        },
+      });
+      agent.emit({
+        type: 'tool-result', toolName: 'file', toolCallId: 'call-1',
+        result: JSON.stringify({ ok: true, path: 'src/state.ts', applied: [{ line: 12, removed_lines: 1, added_lines: 1 }] }),
+        success: true,
+      });
+    }
+
     agent.emit({ type: 'text-delta', delta: REPLY });
     agent.emit({ type: 'turn-end', turn: TURN });
 
