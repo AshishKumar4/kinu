@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, sqlExec,
 } from './helpers/user-do';
-import { createCredentialCipher } from '../src/user/credential-envelope';
+import { createCredentialCipher } from '@kinu.run/core';
 import { ownerCaller } from '../src/user/workspace-capability';
 
 /** The owner capability of a deployment whose key has been rotated. */

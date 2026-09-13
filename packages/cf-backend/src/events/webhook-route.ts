@@ -48,7 +48,7 @@
  */
 
 import { hmacSha256Hex, isUlid, timingSafeEqual } from '@kinu.run/core';
-import { isWorkspaceName } from '../user/validate';
+import { isWorkspaceName } from '@kinu.run/core';
 
 /** Domain separation, versioned in the label AND in the URL segment, so a
  *  future v2 shape can never be verified by the v1 derivation. */

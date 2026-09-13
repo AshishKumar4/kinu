@@ -119,9 +119,8 @@ import {
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
 } from './device-inflight';
-import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers';
-import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate';
-import { createCredentialCipher, type CredentialCipher } from './credential-envelope';
+import { credentialToHeaders, codexAccessTokenExpiring, validateCredential, validateCredentialKey, validateWorkspaceName, createCredentialCipher, type CredentialCipher } from '@kinu.run/core';
+import { isModelInferenceCredentialKey } from './credential-headers';
 import {
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
   revokeEgressSecret, rewrapEgressSecrets,
@@ -4182,7 +4181,7 @@ export class UserDO extends Agent<Env> {
       const refreshToken = cred.refreshToken;
 
       if (!refreshToken) return null;
-      const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
+      const needRefresh = opts?.forceRefresh || codexAccessTokenExpiring(cred.accessToken);
 
       if (needRefresh) {
         const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });

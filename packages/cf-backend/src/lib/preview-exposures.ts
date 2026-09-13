@@ -51,7 +51,7 @@
  */
 
 import * as v from 'valibot';
-import { isWorkspaceName } from '../user/validate';
+import { isWorkspaceName } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
 import { sha256Hex } from './crypto';
 import { readKvJson, writeKvJson, type KvStore } from './kv';

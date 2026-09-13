@@ -36,7 +36,7 @@
  * secret cannot store a credential at all. A secret store whose key is
  * optional is a plaintext store with extra steps.
  */
-import { hmacSha256Hex } from '@kinu.run/core';
+import { hmacSha256Hex } from '../utils/crypto';
 
 const ENVELOPE_PREFIX = 'pce1.';
 
