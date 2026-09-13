@@ -7,6 +7,7 @@
 // dropped for one backend — fails here rather than in whichever agent noticed
 // its context had gone quiet.
 import { describe, test, expect } from 'bun:test';
+import { jsonSchema, tool, type ToolSet } from 'ai';
 import { createTestActors, createTestRuntime } from '@kinu.run/test-utils';
 import { createInlineCraftStore } from '../src/identity/inline-primitives';
 import { collectDynamicContext, type DynamicContextInput } from '../src/state/dynamic-context';
@@ -21,6 +22,7 @@ import type {
 } from '../src/prompting/volatile-context';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
+import { withCraftedToolDeclarations } from '../src/tools/sandbox-contract';
 
 interface Fixture {
   readonly rt: AgentRuntime;
@@ -48,7 +50,7 @@ function setup(): Fixture {
 
 interface Overrides {
   readonly profile?: DynamicContextInput['profile'];
-  readonly craftedTools?: DynamicContextInput['craftedTools'];
+  readonly tools?: ToolSet;
   readonly memoryTail?: string;
   readonly missingCapabilities?: readonly MissingCapability[];
   /** The backend-only planes, as the source callbacks a backend supplies. */
@@ -60,7 +62,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
   return collectDynamicContext({
     rt: o.rt, stores,
     profile: over.profile ?? { workMode: 'build', allowedTools: [] },
-    craftedTools: over.craftedTools,
+    tools: over.tools ?? {},
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
     subordinateDelegates: over.subordinateDelegates,
@@ -68,7 +70,7 @@ function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.store
   });
 }
 
-test('a workspace craft is not advertised when no callable resolver was supplied', () => {
+test('a workspace craft is not advertised without an installed callable reader', () => {
   const o = setup();
   o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input', params: null, scope: 'local' });
 
@@ -85,10 +87,35 @@ test('the current actor profile supplies mode and actual plan-submission reach t
     workMode: 'plan', availableTools: ['file', 'submit_plan'], activeSkills: [],
   });
 
-  expect(collect(o, { profile }).mode).toEqual({ workMode: 'plan', planSubmission: true });
-  expect(collect(o, { profile: { ...profile, workMode: 'build', allowedTools: ['file'] } }).mode)
+  const tools = { submit_plan: tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'submitted' }) };
+
+  expect(collect(o, { profile, tools }).mode).toEqual({ workMode: 'plan', planSubmission: true });
+  expect(collect(o, { profile }).mode).toEqual({ workMode: 'plan', planSubmission: false });
+  expect(collect(o, { profile: { ...profile, workMode: 'build' } }).mode)
+    .toEqual({ workMode: 'build', planSubmission: false });
+  expect(collect(o, { profile: { ...profile, allowedTools: ['file'] }, tools }).mode)
+    .toEqual({ workMode: 'plan', planSubmission: false });
+  expect(collect(o, { profile: { ...profile, workMode: 'build', allowedTools: ['file'] }, tools }).mode)
     .toEqual({ workMode: 'build', planSubmission: false });
   expect(collect(o).mode).toEqual({ workMode: 'build', planSubmission: false });
+});
+
+test('crafted declarations follow the installed sandbox reader and the bound grant', () => {
+  const o = setup();
+  const profile: DynamicContextInput['profile'] = { workMode: 'build', allowedTools: ['execute_tools'] };
+  let declarations = [{ name: 'live_echo', description: 'Initial implementation' }];
+
+  const tools = { execute_tools: withCraftedToolDeclarations(
+    tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'executed' }),
+    () => declarations,
+  ) };
+
+  expect(collect(o, { profile, tools }).craftedTools).toEqual(declarations);
+  declarations = [{ name: 'live_echo', description: 'Updated implementation' }];
+  expect(collect(o, { profile, tools }).craftedTools).toEqual(declarations);
+  expect(collect(o, { profile, tools: {} }).craftedTools ?? []).toEqual([]);
+  expect(collect(o, { profile: { ...profile, allowedTools: [] }, tools }).craftedTools ?? []).toEqual([]);
+  expect(collect(o, { profile: { ...profile, workMode: 'plan' }, tools }).craftedTools ?? []).toEqual([]);
 });
 
 describe('the four store-backed planes are the reading actor\'s own', () => {

@@ -153,7 +153,7 @@ import {
   observeDevicePresence,
   // The stores every agent has, built once from its one SQL handle, and the
   // one binding of the live per-step planes to them.
-  createAgentStores, type AgentConfigStore, collectDynamicContext, craftedToolDeclarations, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, collectDynamicContext, subordinateDelegatesOf,
   type SqlExecutor,
   // The agents tool's shared swarm substrate
   agentsActionsFor,
@@ -6140,6 +6140,8 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    this._turnDynamicSnapshot = null;
+
     return runOperationProfile(null, async () => {
       this._turnProgram = null;
       ctx.signal?.throwIfAborted();
@@ -6626,7 +6628,7 @@ export abstract class ActorAgent extends Think<Env> {
       rt: this.rt,
       stores: this.stores,
       profile,
-      craftedTools: () => craftedToolDeclarations(tools, profile),
+      tools,
       memoryTail,
       missingCapabilities: [
         ...this._mcpUnavailable,

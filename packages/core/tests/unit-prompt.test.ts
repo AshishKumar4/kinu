@@ -1318,9 +1318,10 @@ describe('buildSystemPromptSync', () => {
             } });
 
             history.push({ role: 'user', content: 'Try the requested file operation.' });
+            const callableTools = toolsInWorkMode(profile.workMode, tools);
 
-            for await (const event of runChat({ model, system, history, tools: toolsInWorkMode(profile.workMode, tools),
-              dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, memoryTail: undefined, missingCapabilities: [] }) },
+            for await (const event of runChat({ model, system, history, tools: callableTools,
+              dynamicContext: { ledger, snapshot: () => collectDynamicContext({ rt: subject, stores, profile, tools: callableTools, memoryTail: undefined, missingCapabilities: [] }) },
             })) {
               if (event.type === 'done') history.push(...event.responseMessages);
             }
