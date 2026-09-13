@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { RunEvent } from '../../packages/core/src/index';
-import { firstRunTurnSettlement } from './turn-settlement';
+import { firstRunTurnEvents, firstRunTurnSettlement } from './turn-settlement';
 
 const stamp = { timestamp: '2026-09-13T11:22:21.235Z', eventIndex: 0 };
 
@@ -14,6 +14,17 @@ const events: RunEvent[] = [
 
 test('a prior completed run cannot settle the LF turn still running on production', () => {
   expect(firstRunTurnSettlement(events, 'KINU-FIRST-RUN-LF')).toBe('pending');
+});
+
+test('genesis tools do not count as tools called by the explicit listing ask', () => {
+  const own: RunEvent[] = [
+    { ...stamp, runId: 'genesis', type: 'tool_call_end', name: 'file', toolCallId: 'g', durationMs: 1 },
+    { ...stamp, runId: 'list', type: 'run_start', agentId: 'root', userMessage: 'List every tool' },
+  ];
+
+  expect(firstRunTurnEvents(own, 'List every tool').filter((event) => event.type === 'tool_call_end')).toHaveLength(0);
+  own.push({ ...stamp, runId: 'list', type: 'tool_call_end', name: 'file', toolCallId: 'l', durationMs: 1 });
+  expect(firstRunTurnEvents(own, 'List every tool').filter((event) => event.type === 'tool_call_end')).toHaveLength(1);
 });
 
 test('an assistant from another run cannot answer the selected turn', () => {

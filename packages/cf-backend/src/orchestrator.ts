@@ -2607,7 +2607,7 @@ export class OrchestratorAgent extends ActorAgent {
     const {
       drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
       outputContinuation,
-    } = this.settleTurnEvents(result);
+    } = await this.settleTurnEvents(result);
 
     // The run is sealed here, and the name it was sealed with comes back rather
     // than being classified again below for the roster: one turn, one reading of

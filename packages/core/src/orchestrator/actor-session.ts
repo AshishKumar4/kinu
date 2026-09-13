@@ -270,16 +270,9 @@ export class ActorSession {
   }): void {
     if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'a delegated input must belong to a preparing turn');
     const claims = this.options.claims;
-    const working = claims.working.active();
-
-    if (working !== null) this.messages.splice(0, this.messages.length, ...working.messages);
-
-    // startTurn can have persisted the opening revision before admit wrote the
-    // claim. Both records identify the delivery; neither compares task text.
-    if (claims.read(lease.turnId) !== null || working?.turnId === lease.turnId) return;
-
-    if (working === null && this.messages.length === 0 && claims.latestTurn() === null) this.messages.push(...input.birthContext);
-    this.messages.push(...input.messages);
+    const fallback = this.messages.length === 0 && claims.latestTurn() === null ? input.birthContext : this.messages;
+    const history = claims.historyForInput(lease.turnId, input.messages, fallback);
+    this.messages.splice(0, this.messages.length, ...history);
   }
 
   appendInput(lease: ActorTurnLease, message: ModelMessage): void {
