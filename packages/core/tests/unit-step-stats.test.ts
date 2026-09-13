@@ -59,6 +59,17 @@ describe('the cache hit rate, through summarizeSteps', () => {
 });
 
 describe('summarizeSteps', () => {
+  test('p99 uses nearest rank over the same reported sample as p95', () => {
+    const samples = Array.from({ length: 100 }, (_, index) => step({ input: 100, cacheRead: index + 1 }));
+    const { cacheHit } = summarizeSteps(samples, { windowLimit: 100 });
+
+    expect(cacheHit.p95).toBe(0.95);
+    expect(cacheHit.p99).toBe(0.99);
+    expect(summarizeSteps([step({ input: 100, cacheRead: 30 })], { windowLimit: 100 }).cacheHit.p99).toBe(0.3);
+    expect(summarizeSteps([step({ input: 100 })], { windowLimit: 100 }).cacheHit.p99).toBeNull();
+    expect(summarizeSteps([], { windowLimit: 100 }).cacheHit.p99).toBeNull();
+  });
+
   test('sums the provider-reported tokens verbatim', () => {
     const t = summarizeSteps([
       step({ input: 100, cacheRead: 50, output: 10, reasoning: 5 }),
