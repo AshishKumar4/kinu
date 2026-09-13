@@ -15,11 +15,12 @@
 // slash is exactly the wire `author/model` id (e.g. `openai/gpt-4.1`).
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo, ProviderDeps } from '@kinu.run/core';
-import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@kinu.run/core';
-import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '@kinu.run/core';
-import { createCloudflareAIFetch, mapGatewayError } from '@kinu.run/core';
-import { toKinuError } from '@kinu.run/core/obs';
+import { type ModelProvider, type ModelInfo, type ProviderDeps } from './types';
+import { authCacheKey, cloneModelInfos } from './util';
+import { listModelsDevProviderModels } from './models-dev';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from './cloudflare-oauth';
+import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch';
+import { toKinuError } from "../obs/index";
 import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';

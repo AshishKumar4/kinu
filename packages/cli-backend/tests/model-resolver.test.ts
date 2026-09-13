@@ -314,6 +314,32 @@ function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
 }
 
 describe('createLocalModelResolver — signed in (cloud proxy)', () => {
+  test('shares menu row admission, capability union and provider failure preservation', async () => {
+    const resolver = createLocalModelResolver({
+      llm: proxyLLMConfig(),
+      credentials: {},
+      cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
+      fetch: asFetchFunction(async (input) => String(input).endsWith('/api/cli/models')
+        ? Response.json({
+          models: [
+            { spec: DEFAULT_WORKERS_AI_MODEL_SPEC, provider: 'workers-ai', capabilities: ['tools', 'invented'], reasoningEfforts: ['low'] },
+            null,
+            { spec: DEFAULT_WORKERS_AI_MODEL_SPEC, provider: 'workers-ai', capabilities: ['vision', 'tools'] },
+          ],
+          failures: [{ provider: ' my-gateway ', reason: ' account unavailable ' }, null],
+        })
+        : Response.json({ credentials: [] })),
+    });
+
+    const { models } = await resolver.listModels();
+    const workersAI = models.filter((model) => model.provider === 'workers-ai');
+    expect(workersAI).toHaveLength(1);
+    expect(workersAI[0]?.capabilities).toEqual(['tools', 'vision']);
+    expect(workersAI[0]?.reasoningEfforts).toEqual(['low']);
+    const providers = await resolver.listProviders();
+    expect(providers.find((provider) => provider.id === 'my-gateway')?.unavailableReason).toBe('account unavailable');
+  });
+
   test('lists workers-ai and my-gateway models from the server menu with metadata', async () => {
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(),

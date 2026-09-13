@@ -24,7 +24,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { diagnostics } from '@kinu.run/core/obs';
 import type { Page, PageRequest } from '@kinu.run/core';
-import type { FeedbackRecord } from '../feedback/contract';
+import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 // `./capability`, never `./admin-caller`. The two modules answer different
@@ -45,8 +45,8 @@ import type {
   ControlUserRow, ControlWorkspaceRow, ControlPlaneSql,
   RosterWorkspace, UserObservation, WorkspaceFilter, WorkspaceObservation,
 } from '@kinu.run/core/control-plane';
-import * as store from './store';
-import type { ControlFeedbackRow } from './store';
+import * as store from '@kinu.run/core/control-plane';
+import type { ControlFeedbackRow } from '@kinu.run/core/control-plane';
 
 
 export type {

@@ -73,12 +73,12 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
         };
       }
 
-      if (activeTurns === 0 && state.queue.length > 0) {
-        const [next, ...rest] = state.queue;
+      const [next, ...rest] = state.queue;
 
+      if (activeTurns === 0 && next !== undefined) {
         return {
           state: { ...state, activeTurns, queue: rest },
-          effects: [{ kind: 'send-queued', text: next! }],
+          effects: [{ kind: 'send-queued', text: next }],
         };
       }
 
@@ -193,11 +193,13 @@ export function reduceInput(state: InputState, event: InputMachineEvent): InputT
     }
 
     case 'backspace': {
-      if (event.draft !== '' || state.queue.length === 0) return { state, effects: [] };
+      const last = state.queue.at(-1);
+
+      if (event.draft !== '' || last === undefined) return { state, effects: [] };
 
       return {
         state: { ...state, queue: state.queue.slice(0, -1) },
-        effects: [{ kind: 'set-input', text: state.queue.at(-1)! }],
+        effects: [{ kind: 'set-input', text: last }],
       };
     }
 

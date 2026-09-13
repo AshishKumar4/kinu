@@ -10,8 +10,9 @@
  * (never thrown) so they survive the Worker→DO RPC boundary with their
  * meaning intact; thrown errors are real infra failures.
  */
-import { nanoid, type SqlExec } from '@kinu.run/core';
-import { sha256Hex } from '@kinu.run/core';
+import { nanoid } from '../utils/nanoid';
+import { type SqlExec } from '../types/primitives';
+import { sha256Hex } from '../safety/argument-digest';
 import * as v from 'valibot';
 
 // The scope vocabulary carries no back-compat aliases by design — pre-production,

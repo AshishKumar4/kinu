@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 
 import type { AgentClient, AgentClientStatus } from '../src/agent-client';
-import type { AgentModelMenu } from '../src/model-catalog';
+import type { AgentModelMenu } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction } from '@kinu.run/core';
 

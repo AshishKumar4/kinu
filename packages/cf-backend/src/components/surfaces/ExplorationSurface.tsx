@@ -32,7 +32,7 @@ import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core"
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusDot } from "@/components/NodeTranscript";
 import type { HeadDeltas } from "@kinu.run/core";
-import { cleanNodeLabel, type ExplorerSelection } from "@/components/swarm-tree-model";
+import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
 import type { ForkNode, Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";

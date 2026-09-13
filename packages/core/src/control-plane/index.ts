@@ -4,9 +4,7 @@
  *
  * Pure folds over a caller-supplied SQL handle plus the capability gate every
  * ControlPlaneDO method calls first. The Durable Object keeps what only it can
- * hold: the gate's enforcement point and the storage handle. The feedback
- * slice stays in `cf-backend/src/control-plane/store.ts` until the feedback
- * contract joins core.
+ * hold: the gate's enforcement point and the storage handle.
  */
 export type { ControlPlaneSql, ControlPlaneSqlRow, ControlPlaneSqlValue } from './sql';
 
@@ -16,7 +14,6 @@ export {
   CONTROL_PAGE_MAX,
   MalformedCursorError,
   appendAudit,
-  clampPage,
   forgetWorkspace,
   getUser,
   initControlPlaneSchema,
@@ -30,11 +27,10 @@ export {
   settleAudit,
   overview,
   touchWorkspace,
-  anchor,
-  clampText,
-  readAnchor,
-  run,
-  select,
+  recordFeedback,
+  listFeedback,
+  type ControlFeedbackRow,
+  type FeedbackWritten,
   type AuditDraft,
   type AuditOutcome,
   type AuditSettlement,
@@ -74,8 +70,7 @@ export {
 
 export {
   METRICS_WINDOWS,
-  resolveWindow,
+  controlPlaneMetrics,
   type ControlMetrics,
-  type MetricsQueryRequest,
   type MetricsRequest,
 } from './metrics';

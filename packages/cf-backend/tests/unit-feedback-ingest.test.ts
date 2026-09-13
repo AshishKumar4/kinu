@@ -23,7 +23,7 @@ import {
   FEEDBACK_MAX_SCREENSHOT_BYTES,
   FEEDBACK_MAX_USER_AGENT_CHARS,
   type FeedbackRecord,
-} from '../src/feedback/contract';
+} from '@kinu.run/core';
 
 const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-7' };
 

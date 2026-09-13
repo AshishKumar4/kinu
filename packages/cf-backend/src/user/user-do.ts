@@ -34,7 +34,7 @@ import {
   type AccessTokenMint,
   type AccessTokenRecord,
   type AccessTokenScope,
-} from "../cli/access-token-store";
+} from "@kinu.run/core";
 import type { MCPClientManager } from "agents/mcp/client";
 import {
   DurableObjectOAuthClientProvider,
@@ -124,8 +124,8 @@ import {
   type EgressInjectionResult, type EgressSecretSummary, type EgressVaultDeps,
   type PutEgressSecretInput,
 } from '@kinu.run/core';
-import { initAccessTokenTable } from '../cli/access-token-store';
-import { isModelInferenceCredentialKey } from './credential-headers';
+import { initAccessTokenTable } from '@kinu.run/core';
+import { isModelInferenceCredentialKey } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { resolveWorkspaceTitle } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';

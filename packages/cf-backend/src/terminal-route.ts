@@ -37,7 +37,7 @@ import { err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
-import { sandboxIdForWorkspace } from "./lib/preview-exposures";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
 
 /**
  * The PTY entry points the SDK's client proxy adds around the container stub.

@@ -15,7 +15,7 @@ import {
   revokeWorkspaceCapability,
   type WorkspaceCapability,
 } from '@kinu.run/core';
-import { isModelInferenceCredentialKey } from '../src/user/credential-headers';
+import { isModelInferenceCredentialKey } from '@kinu.run/core';
 import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do';
 
 function setup() {

@@ -1,4 +1,4 @@
-import { shellQuote } from '@kinu.run/core';
+import { shellQuote } from '../utils/shell';
 
 export interface CliInstallCommandOptions {
   origin: string;

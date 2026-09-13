@@ -12,7 +12,7 @@ import type { UserDO } from '../user/user-do';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store';
+import { parseAccessTokenUserId, type AccessTokenScope } from '@kinu.run/core';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import * as v from 'valibot';
 

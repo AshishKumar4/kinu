@@ -29,7 +29,7 @@ import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
-import { isKinuSandboxId } from "./lib/preview-exposures";
+import { isKinuSandboxId } from "@kinu.run/core";
 import { sandboxPreviewExposed } from "@kinu.run/core";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
 import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";

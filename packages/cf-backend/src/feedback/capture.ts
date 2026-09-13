@@ -27,7 +27,7 @@ import {
   FEEDBACK_OMIT_ATTR,
   FEEDBACK_REDACT_ATTR,
   FEEDBACK_SCREENSHOT_TYPE,
-} from './contract';
+} from '@kinu.run/core';
 
 /** Opaque near-black, so a blocked-out field reads as deliberately removed in
  *  both themes rather than as a rendering failure. */

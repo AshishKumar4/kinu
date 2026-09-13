@@ -14,7 +14,7 @@
 
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@kinu.run/core';
-import { EMPTY_MODEL_MENU } from './model-catalog';
+import { EMPTY_MODEL_MENU } from '@kinu.run/core';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client';
 import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments';
@@ -34,7 +34,7 @@ import {
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { clipText } from './tui/format';
+import { clipText } from '@kinu.run/core';
 
 export interface ChatLoopOpts {
   client: AgentClient;

@@ -24,7 +24,7 @@ import type { UserDO } from './user-do';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { createUserDOAuthResolver } from '../providers/agent-registry';
-import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway';
+import { MY_GATEWAY_PROVIDER_ID } from '@kinu.run/core';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { listAvailableModels } from './available-models';
 import { json } from '@kinu.run/core';

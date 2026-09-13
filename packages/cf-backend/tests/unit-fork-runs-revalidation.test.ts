@@ -22,7 +22,7 @@ import {
   hasActiveForkWork, selectForkRun, forkParamRows, unexplainedForkRoots,
 } from '../src/components/surfaces/fork-runs';
 import { explorationForkTree } from '@kinu.run/core';
-import { isCompeted, principalVariation, maxVisits } from '../src/components/swarm-tree-model';
+import { isCompeted, principalVariation, maxVisits } from '@kinu.run/core';
 
 function summary(over: Partial<ForkRunSummary> = {}): ForkRunSummary {
   return {

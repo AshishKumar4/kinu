@@ -1051,7 +1051,7 @@
     "created_at",
     "evidence"
   ],
-  "user_access_tokens@packages/cf-backend/src/cli/access-token-store.ts": [
+  "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash",
     "name",
     "scopes",

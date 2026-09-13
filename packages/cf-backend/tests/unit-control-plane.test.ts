@@ -22,7 +22,7 @@ import {
 } from '../src/control-plane/admin-caller';
 import { requireControl } from '@kinu.run/core/control-plane';
 import * as store from '@kinu.run/core/control-plane';
-import * as feedbackStore from '../src/control-plane/store';
+import * as feedbackStore from '@kinu.run/core/control-plane';
 import { MalformedCursorError } from '@kinu.run/core/control-plane';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './helpers/agents-sdk';

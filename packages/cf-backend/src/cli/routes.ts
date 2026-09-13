@@ -16,10 +16,10 @@ import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
 } from './auth-store';
-import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store';
+import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from '@kinu.run/core';
 import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate';
-import { buildCliInstallCommand } from './install-command';
-import { bunResolutionShell, cliPlatformShell } from './bun-runtime';
+import { buildCliInstallCommand } from '@kinu.run/core';
+import { bunResolutionShell, cliPlatformShell } from '@kinu.run/core';
 import { listAvailableModels } from '../user/available-models';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { handleUserAIProxyRequest } from '../user/ai-proxy';

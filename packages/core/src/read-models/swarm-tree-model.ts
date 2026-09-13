@@ -5,7 +5,7 @@
  * label says) are testable without a DOM, and so the two surfaces that render
  * this tree share one copy of them.
  */
-import type { ForkNode } from "@kinu.run/core";
+import { type ForkNode } from '../protocol';
 
 /**
  * Which node, in which search, the reader is inspecting.
@@ -103,7 +103,9 @@ export function principalVariation(root: ForkNode): Set<string> {
 	let node = root;
 
 	while (node.children.length > 0) {
-		let best = node.children[0]!;
+		let best = node.children[0];
+
+		if (best === undefined) break;
 
 		for (const child of node.children) {
 			const cv = child.visits ?? 0, bv = best.visits ?? 0;

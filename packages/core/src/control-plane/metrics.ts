@@ -1,13 +1,10 @@
-/**
- * The metrics panel's window policy and request/response shapes.
- *
- * The orchestration (`controlPlaneMetrics`: pick the window, resolve a
- * workspace filter to the digest the dataset is indexed by, hand the batch to
- * the transport) stays in `cf-backend/src/control-plane/metrics.ts` until the
- * analytics query builder joins core; it imports this module rather than
- * restating the policy.
- */
-import type { AnalyticsPanels } from './analytics-sql';
+/** Operator metrics: admitted windows and privacy-preserving query execution. */
+import {
+  analyticsMissingSettings, clearAnalyticsCache, runAnalyticsBatch,
+  type AnalyticsPanels, type AnalyticsSqlEnv,
+} from './analytics-sql';
+import { analyticsDigest } from '../obs/analytics/privacy';
+import { controlPlaneMetricsQueries } from '../obs/analytics/query';
 
 /**
  * Windows an operator may ask for.
@@ -20,19 +17,14 @@ const WINDOWS = [1, 6, 24, 72, 168, 720] as const;
 
 /** Nearest allowed window at or above the request, falling back to the widest.
  *  Rounding UP rather than rejecting: an operator asking for 12 hours wants a
- *  day, not an error. Shared with the cf-backend orchestration. */
-export function resolveWindow(hours: number): number {
+ *  day, not an error. */
+function resolveWindow(hours: number): number {
   return WINDOWS.find((candidate) => candidate >= hours) ?? WINDOWS[WINDOWS.length - 1];
 }
 
 /** What the query builder is asked for. `workspaceDigest` is absent, never
- *  empty, when no workspace filter applies. Shared with the analytics lane's
- *  `controlPlaneMetricsQueries` signature once it joins core. */
-export interface MetricsQueryRequest {
-  sinceHours: number;
-  datasetSuffix: string;
-  workspaceDigest?: string;
-}
+ *  empty, when no workspace filter applies. */
+type MetricsQueryRequest = Parameters<typeof controlPlaneMetricsQueries>[0];
 
 export interface MetricsRequest {
   hours: number;
@@ -62,3 +54,39 @@ export interface ControlMetrics {
 
 /** The windows the view offers, so the picker and the clamp are one list. */
 export const METRICS_WINDOWS: readonly number[] = WINDOWS;
+
+/**
+ * Read the metrics panels.
+ *
+ * With analytics unconfigured this answers with the missing setting names and no
+ * panels, which is a state the view renders as a sentence. It is deliberately
+ * NOT an error: a deployment that has not minted an analytics token is working,
+ * and a 500 there would send an operator looking for an outage.
+ */
+export async function controlPlaneMetrics(
+  env: AnalyticsSqlEnv,
+  request: MetricsRequest,
+): Promise<ControlMetrics> {
+  const windowHours = resolveWindow(request.hours);
+  const missing = analyticsMissingSettings(env);
+
+  if (missing.length > 0) return { windowHours, missing, panels: {} };
+
+  const workspace = request.workspace?.trim();
+
+  // Built in two statements rather than with a conditional spread: an unset
+  // filter must leave the property ABSENT, and `analyticsDigest('')` returns ''
+  // rather than a hash, so a spread that guessed would send an empty digest and
+  // silently match nothing.
+  const ask: MetricsQueryRequest = {
+    sinceHours: windowHours,
+    datasetSuffix: env.ANALYTICS_DATASET_SUFFIX ?? '',
+  };
+
+  if (workspace) ask.workspaceDigest = analyticsDigest(workspace);
+  const queries = new Map(Object.entries(controlPlaneMetricsQueries(ask)));
+
+  if (request.forceRefresh === true) clearAnalyticsCache();
+
+  return { windowHours, missing, panels: await runAnalyticsBatch(env, queries) };
+}

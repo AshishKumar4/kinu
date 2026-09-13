@@ -91,7 +91,7 @@ export function previewSuffixMetaName(): string {
 }
 
 function browserPreviewHostSuffix(): string | null {
-  if (document === undefined) return null;
+  if (!('document' in globalThis) || document === undefined) return null;
   const configured = document.querySelector(`meta[name="${PREVIEW_SUFFIX_META}"]`)?.content;
 
   return previewHostSuffix({ PREVIEW_HOST_SUFFIX: configured });

@@ -70,7 +70,7 @@ import {
 	ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits,
 	NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor,
 	type ExplorerSelection,
-} from "./swarm-tree-model";
+} from "@kinu.run/core";
 import { scoreBand } from "@/components/ui/score-bar";
 
 /** One search's band on the canvas. */

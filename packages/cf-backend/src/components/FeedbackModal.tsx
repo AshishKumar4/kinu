@@ -43,7 +43,7 @@ import {
   FEEDBACK_MAX_SCREENSHOT_BYTES,
   FEEDBACK_OMIT_ATTR,
   FEEDBACK_SCREENSHOT_TYPE,
-} from "@/feedback/contract";
+} from "@kinu.run/core";
 
 /** What `POST /api/feedback` answers with, either way. Both fields optional
  *  because exactly one arrives, and a body from anything other than the
