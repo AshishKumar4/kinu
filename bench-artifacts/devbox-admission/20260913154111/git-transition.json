@@ -1,0 +1,220 @@
+{
+  "before": {
+    "label": "git/1/2: before",
+    "at": 1789314828928,
+    "state": {
+      "extractionAllowed": false,
+      "storePrefix": "boxes/f40bd6cf79e1f247fb4e5a815a9c8f4e1d8a164a5e7d48138edb177198f20386/",
+      "state": {
+        "restoration": "attached",
+        "running": true,
+        "lastAttach": {
+          "kind": "attached",
+          "detail": "chain 0468ef05-16d5-4943-a1fe-451bb9c8448f 71458816B base"
+        },
+        "bootId": "9365300f-62ac-4c52-9f16-7904ab80b15e",
+        "chain": {
+          "base": {
+            "bytes": 71458816,
+            "objectVersion": "7e5f648fe21b29766e99220d2196a498",
+            "id": "0468ef05-16d5-4943-a1fe-451bb9c8448f"
+          },
+          "delta": {
+            "bytes": 68849664,
+            "objectVersion": "7e5f64869f0261c5026b749a738098f0",
+            "id": "01eb29aa-d532-4a8f-a4f1-d256b9b7f829"
+          },
+          "mode": "chain",
+          "rev": 18,
+          "deltaFormat": "chunked",
+          "at": 1789314825841,
+          "changeVersion": "watch-1-1789314290237:15088",
+          "upperMark": "f0006fe6d929dbc3ab9f49f31a1b726f65c1ee19a5b00d1b4e8d9ba06eb272fa",
+          "retiredDeltas": []
+        },
+        "incidents": {
+          "total": 5,
+          "undelivered": 0
+        },
+        "strategy": "snapshot-chain",
+        "durable": true,
+        "ready": true,
+        "lastInteractionAt": 1789314766063,
+        "quietSince": 1789314826526,
+        "lastTick": {
+          "running": true,
+          "ping": "ok",
+          "armedNext": true,
+          "decision": "hold",
+          "at": 1789314826813
+        },
+        "replacedCount": 3,
+        "supervised": [],
+        "ports": []
+      },
+      "ok": true,
+      "strategy": "snapshot-chain",
+      "box": "ab-snapshot-chain-20260913154111",
+      "ms": 11
+    },
+    "incidents": {
+      "ok": true,
+      "incidents": [
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314094719,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314101109,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314107315,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314139819,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Container request aborted.: The container is not listening in the TCP address 10.0.0.1:3000",
+          "at": 1789314170838,
+          "attempts": 1,
+          "delivered": true
+        }
+      ],
+      "strategy": "snapshot-chain",
+      "box": "ab-snapshot-chain-20260913154111",
+      "ms": 10
+    },
+    "errors": []
+  },
+  "after": {
+    "label": "git/1/2: after",
+    "at": 1789314947174,
+    "state": {
+      "extractionAllowed": false,
+      "storePrefix": "boxes/f40bd6cf79e1f247fb4e5a815a9c8f4e1d8a164a5e7d48138edb177198f20386/",
+      "state": {
+        "restoration": "unstarted",
+        "running": false,
+        "unready": "no restoration has run for this container yet",
+        "lastAttach": {
+          "kind": "attached",
+          "detail": "chain 0468ef05-16d5-4943-a1fe-451bb9c8448f 71458816B base"
+        },
+        "bootId": "9365300f-62ac-4c52-9f16-7904ab80b15e",
+        "chain": {
+          "base": {
+            "bytes": 71458816,
+            "objectVersion": "7e5f648fe21b29766e99220d2196a498",
+            "id": "0468ef05-16d5-4943-a1fe-451bb9c8448f"
+          },
+          "delta": {
+            "bytes": 81932288,
+            "objectVersion": "7e5f6484dfb93fea313e597f2a00ca14",
+            "id": "c29aa132-a2e7-47bb-b6e7-1d2729864de8"
+          },
+          "mode": "chain",
+          "rev": 19,
+          "deltaFormat": "chunked",
+          "at": 1789314942505,
+          "changeVersion": "watch-1-1789314290237:24986",
+          "upperMark": "2d41af4a1aef478180575527b0ab027e2f6b24c254feded4eab0b13ff9923d05",
+          "retiredDeltas": []
+        },
+        "incidents": {
+          "total": 5,
+          "undelivered": 0
+        },
+        "strategy": "snapshot-chain",
+        "durable": true,
+        "ready": false,
+        "lastInteractionAt": 1789314849063,
+        "quietSince": 1789314826526,
+        "lastTick": {
+          "running": false,
+          "ping": "skipped",
+          "armedNext": true,
+          "at": 1789314945634
+        },
+        "replacedCount": 3,
+        "supervised": [],
+        "ports": []
+      },
+      "ok": true,
+      "strategy": "snapshot-chain",
+      "box": "ab-snapshot-chain-20260913154111",
+      "ms": 79
+    },
+    "incidents": {
+      "ok": true,
+      "incidents": [
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314094719,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314101109,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314107315,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Aborted waiting for container to start as we received a cancellation signal: The operation was aborted",
+          "at": 1789314139819,
+          "attempts": 1,
+          "delivered": true
+        },
+        {
+          "stage": "attach",
+          "reason": "[unclassified → retry] Container request aborted.: The container is not listening in the TCP address 10.0.0.1:3000",
+          "at": 1789314170838,
+          "attempts": 1,
+          "delivered": true
+        }
+      ],
+      "strategy": "snapshot-chain",
+      "box": "ab-snapshot-chain-20260913154111",
+      "ms": 9
+    },
+    "errors": []
+  },
+  "checkpoint": {
+    "ok": true,
+    "outcome": {
+      "kind": "committed",
+      "bytes": 153391104,
+      "movedBytes": 81932288
+    },
+    "ms": 94080,
+    "state": "done",
+    "token": "checkpoint-7c1c81f2-f55e-46a9-b8cb-cfdb218ff2b6",
+    "kind": "tick"
+  }
+}
