@@ -1,10 +1,10 @@
 // Reading back the agent's own running commentary.
-import { describe, test, expect, spyOn } from 'bun:test';
+import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initAllTables, readActivityLog, writeActivityLog } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
-import { diagnostics } from '../src/obs/index';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 
 function setup() {
   const db = new Database(':memory:');
@@ -25,17 +25,19 @@ function setup() {
 
 describe('readActivityLog', () => {
   test('a failed writer source is reported without failing the caller or disclosing its detail', () => {
-    const failure = spyOn(diagnostics, 'failure');
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
 
     try {
       expect(() => writeActivityLog(() => { throw new Error('actor unavailable'); }, {
         event: 'first_chunk', detail: 'private workspace text', elapsedMs: 0, createdAt: 1000,
       })).not.toThrow();
-      expect(failure.mock.calls[0]?.[0]).toBe('activity_log.write_failed');
-      expect(failure.mock.calls[0]?.[2]).toEqual({ source: 'first_chunk' });
     } finally {
-      failure.mockRestore();
+      restore();
     }
+
+    expect(log.emitted[0]?.event).toBe('activity_log.write_failed');
+    expect(log.emitted[0]?.fields).toEqual({ source: 'first_chunk' });
   });
 
   test('returns the newest entries, oldest first', () => {

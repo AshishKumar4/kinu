@@ -241,7 +241,7 @@ describe('CloudAgentClient protocol', () => {
     mock.chatMessages.push({ id: '', role: 'user', content: 'unaddressable', createdAt: 1 });
 
     try {
-      await expect(client.history()).rejects.toThrow();
+      await expect(client.history()).rejects.toThrow('Invalid length: Expected !0 but received 0');
     } finally {
       await client.close();
     }
