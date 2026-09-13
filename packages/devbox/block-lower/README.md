@@ -42,6 +42,11 @@ All source paths resolve beneath anchored directory descriptors with no symlink
 following. Namespace conflicts, hostile names and unsupported metadata fail
 before the mount; an absent source chunk never becomes base fallback.
 
+Namespace tables are byte-radix trees: each branching table has at most 256
+entries, and path lengths are platform-bounded. Startup does not sort an
+unbounded set of names or depend on hash-table collision behaviour. It visits
+only the manifest's M+H records and constructs their ancestor directories.
+
 ## Concurrency and overlay semantics
 
 `fuser::mount2` runs one request loop. A request finishes before the next request

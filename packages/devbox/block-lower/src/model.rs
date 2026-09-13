@@ -1,6 +1,6 @@
 use crate::index::{invalid, IndexRef};
+use crate::namespace::{DirectoryEntries, NameSet, PathMap};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashSet};
 use std::io;
 
 #[derive(Clone, Deserialize)]
@@ -66,8 +66,8 @@ impl Manifest {
         if self.v != 2 {
             return Err(invalid("unsupported manifest version"));
         }
-        let mut names = HashSet::new();
-        let mut nondirs = HashSet::new();
+        let mut names = NameSet::new();
+        let mut nondirs = NameSet::new();
         for record in &self.files {
             let path = record.path();
             if !path_valid(path) || !names.insert(path) {
@@ -99,20 +99,20 @@ impl Manifest {
             }
             nondirs.insert(path);
         }
-        for path in &names {
+        for path in names.iter() {
             if ancestors(path).any(|parent| nondirs.contains(parent)) {
                 return Err(invalid("file or deletion has children"));
             }
         }
-        let whole: HashSet<_> = self
+        let whole: NameSet<'_> = self
             .files
             .iter()
             .filter_map(|r| match r {
-                Record::Whole { p, .. } => Some(p),
+                Record::Whole { p, .. } => Some(p.as_str()),
                 _ => None,
             })
             .collect();
-        let mut linked = HashSet::new();
+        let mut linked = NameSet::new();
         for group in &self.links {
             if group.len() < 2 {
                 return Err(invalid("short hardlink group"));
@@ -123,8 +123,8 @@ impl Manifest {
                 }
             }
         }
-        let deleted: HashSet<_> = self.deleted.iter().map(String::as_str).collect();
-        let mut replaced = HashSet::new();
+        let deleted: NameSet<'_> = self.deleted.iter().map(String::as_str).collect();
+        let mut replaced = NameSet::new();
         for path in &self.treplace {
             if !nondirs.contains(path.as_str())
                 || deleted.contains(path.as_str())
@@ -146,7 +146,7 @@ pub struct Inode {
     pub uid: u32,
     pub gid: u32,
     pub index: Option<IndexRef>,
-    pub children: BTreeMap<String, u64>,
+    pub children: DirectoryEntries,
 }
 
 /// Only chunked inodes and their ancestor directories enter this table.
@@ -161,11 +161,12 @@ pub fn inodes(manifest: &Manifest) -> io::Result<Vec<Inode>> {
         uid: 0,
         gid: 0,
         index: None,
-        children: BTreeMap::new(),
+        children: DirectoryEntries::new(),
     };
     let mut rows = vec![root];
-    let mut ids = BTreeMap::from([(String::new(), 1)]);
-    let attrs: BTreeMap<_, _> = manifest
+    let mut ids = PathMap::new();
+    ids.insert("", 1);
+    let attrs: PathMap<_> = manifest
         .dirs
         .iter()
         .map(|dir| (dir.p.as_str(), dir))
@@ -201,7 +202,7 @@ pub fn inodes(manifest: &Manifest) -> io::Result<Vec<Inode>> {
                     uid: *uid,
                     gid: *gid,
                     index: Some(over.clone()),
-                    children: BTreeMap::new(),
+                    children: DirectoryEntries::new(),
                 }
             } else {
                 Inode {
@@ -212,14 +213,14 @@ pub fn inodes(manifest: &Manifest) -> io::Result<Vec<Inode>> {
                     uid: dir.map_or(0, |d| d.uid),
                     gid: dir.map_or(0, |d| d.gid),
                     index: None,
-                    children: BTreeMap::new(),
+                    children: DirectoryEntries::new(),
                 }
             };
             rows[usize::try_from(parent_id - 1).map_err(|_| invalid("inode id"))?]
                 .children
                 .insert(name.to_owned(), id);
             rows.push(row);
-            ids.insert(path.to_owned(), id);
+            ids.insert(path, id);
         }
     }
     Ok(rows)
