@@ -272,8 +272,9 @@ async function drive(
   await page.goto(`${origin}/workspace/${encodeURIComponent(workspace)}`, {
     waitUntil: 'domcontentloaded', timeout: PAINT_MS,
   });
-  await page.waitForSelector('button[aria-label="Work"]', { visible: true, timeout: PAINT_MS });
-  await page.click('button[aria-label="Work"]');
+  // The tab exists offscreen while the inspector opens. The locator waits
+  // for stable click geometry; CSS visibility alone does not establish it.
+  await page.locator('button[aria-label="Work"]').setTimeout(PAINT_MS).click();
   // A selector that never appears is this case's finding, not an error to
   // propagate: "the parked card never rendered" is a product answer and the
   // subgoal below states it. Anything that is NOT the wait expiring — a closed
