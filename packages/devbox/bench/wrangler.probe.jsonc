@@ -1,0 +1,66 @@
+// ONSTART PROBE CONFIG. The ONLY config that deploys probe-worker.ts. Never
+// referenced by any bench or product deploy path: it names its own Worker,
+// its own Durable Object namespaces, and its own container app, so a probe
+// campaign cannot share state with a benchmark run or leave rows in one.
+//
+// Everything that could change the measurement is pinned to the bench's own
+// value: same account, same compatibility date and flags, same container
+// image and instance shape as SnapshotChainBox (the probe compares admission
+// shapes, not instance sizes), same SANDBOX_TRANSPORT (rpc — the only
+// transport the product path uses).
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "kinu-devbox-onstart-probe",
+  "account_id": "f44999d1ddda7012e9a87729eba250f1",
+  "main": "probe-worker.ts",
+
+  // Same floor as the bench config: `ctx.exports` (how the Sandbox object
+  // reaches `ContainerProxy`) does not exist before 2025-12-01.
+  "compatibility_date": "2025-12-01",
+  // `nodejs_compat` for the same reason the bench sets it. A different runtime
+  // is a different measurement.
+  "compatibility_flags": ["nodejs_compat"],
+
+  "workers_dev": true,
+
+  // On, so a run that cannot explain itself has its logs queryable — the same
+  // reason the bench enables it. The five measured resets were read out of
+  // these logs.
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      // P1: the timer-vs-storage gate question on a plain DO — no container,
+      // no image, no bench coupling.
+      { "class_name": "GateProbe", "name": "GateProbe" },
+      // P2: one minimal exec inside the SDK's own onStart block, under both
+      // admission shapes. Its own class so onStart runs ONLY the probe.
+      { "class_name": "OnStartExecProbe", "name": "OnStartExecProbe" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GateProbe", "OnStartExecProbe"]
+    }
+  ],
+
+  // The probe container is the arm's container: identical image tag (which
+  // MUST equal the @cloudflare/sandbox version in package.json), vCPU, memory
+  // and disk, so admission timing compares shapes rather than sizes.
+  "containers": [
+    {
+      "class_name": "OnStartExecProbe",
+      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "max_instances": 1,
+      "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
+    }
+  ],
+
+  // REQUIRED, and pinned to the product's own value: `rpc` is the only
+  // transport the product path uses, and the probe measures that path.
+  "vars": {
+    "SANDBOX_TRANSPORT": "rpc"
+  }
+}
