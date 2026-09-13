@@ -1,0 +1,27 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/contract-cache-hit.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+{"event":"workers_ai.direct_stream_first_byte","fields":{"model":"@cf/moonshotai/kimi-k2.6","ms":1,"bytes":602}}
+{"event":"workers_ai.direct_stream_first_byte","fields":{"model":"@cf/moonshotai/kimi-k2.6","ms":1,"bytes":603}}
+{"event":"workers_ai.direct_stream_first_byte","fields":{"model":"@cf/moonshotai/kimi-k2.6","ms":1,"bytes":518}}
+661 |     const entry = CACHING_PROVIDERS.find((candidate) => candidate.label === 'workers-ai');
+662 |     if (entry === undefined) throw new Error('missing Workers AI case');
+663 |     const { mock } = await driveTurn(entry);
+664 |     expect(mock.requests).toHaveLength(3);
+665 |     for (const request of mock.requests) {
+666 |       expect(request.headers['x-session-affinity']).toBe(SESSION_KEY);
+                                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "kinu-cache-hit-gate"
+Received: undefined
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/core/tests/contract-cache-hit.test.ts:666:53)
+(fail) a stable prefix reads back as a nonzero cache hit > the actual Workers AI provider routes every binding step to its conversation replica [19.91ms]
+
+ 0 pass
+ 5 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [162.00ms]
