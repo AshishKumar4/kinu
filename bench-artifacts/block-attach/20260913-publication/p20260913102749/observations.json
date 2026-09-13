@@ -1,0 +1,331 @@
+{
+  "runId": "p20260913102749",
+  "source": {
+    "commit": "13433573602f8043ef1806299fdd638f43efd9e7",
+    "dirtyDigest": "sha256:da0188c65e6ef069b4e75b1fa345f4d3f1c9551cabb96d8b260fbd9e548dec3f"
+  },
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
+  "hypotheses": [
+    {
+      "rank": 1,
+      "candidate": "intercepted PUT stream or bench meter stalls",
+      "prediction": "small direct PUT and multipart windows expose which boundary stops; same bytes old image separate image from Worker"
+    },
+    {
+      "rank": 2,
+      "candidate": "s3fs multipart timeout",
+      "prediction": "failed part errors recur near configured 30s silence, not total object duration"
+    },
+    {
+      "rank": 3,
+      "candidate": "bucket/credential config drift",
+      "prediction": "normalized old/current configs differ at bucket binding or mount options; all PUT sizes fail with authorization error"
+    },
+    {
+      "rank": 4,
+      "candidate": "multipart size handling",
+      "prediction": "4MiB succeeds and multipart-sized archives fail before completion; sparse tiny archive counters contradict it"
+    },
+    {
+      "rank": 5,
+      "candidate": "new image FUSE or archive-path contention",
+      "prediction": "same 64MiB fails only on new image; local s3fs/MinIO reproduction fails with new tools"
+    }
+  ],
+  "steps": [
+    {
+      "step": "startup",
+      "at": "2026-09-13T10:28:35.662Z",
+      "value": {
+        "attach": {
+          "kind": "empty",
+          "detail": "no chain recorded; an empty overlay is attached"
+        },
+        "state": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/64fdfd009b2f4ef611fef2b0d7e2b3a97d80447b9ace095ed3d6e0fa2fcfdd12/",
+          "state": {
+            "restoration": "attached",
+            "running": true,
+            "lastAttach": {
+              "kind": "empty",
+              "detail": "no chain recorded; an empty overlay is attached"
+            },
+            "bootId": "49629148-b4f4-48f4-9505-2e3278ac0829",
+            "chain": null,
+            "incidents": {
+              "total": 7,
+              "undelivered": 4
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": true,
+            "lastInteractionAt": 1789295310313,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-p20260913102749",
+          "ms": 208
+        },
+        "redrives": 8,
+        "ms": 37786,
+        "startedAt": 1789295277876
+      }
+    },
+    {
+      "step": "mount-and-processes",
+      "at": "2026-09-13T10:29:05.670Z",
+      "value": {
+        "ok": false,
+        "ms": 29989,
+        "error": "A call to blockConcurrencyWhile() in a Durable Object waited for too long. The call was canceled and the Durable Object was reset.",
+        "strategy": "snapshot-chain",
+        "box": "ab-snapshot-chain-p20260913102749"
+      }
+    },
+    {
+      "step": "writer",
+      "at": "2026-09-13T10:29:06.598Z",
+      "value": {
+        "ok": true,
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": "",
+        "ms": 908
+      }
+    },
+    {
+      "step": "window-open",
+      "at": "2026-09-13T10:29:06.928Z",
+      "value": {
+        "ok": true,
+        "window": {
+          "schema": "devbox-publication-window/1",
+          "token": "p20260913102749-publication",
+          "prefix": "boxes/64fdfd009b2f4ef611fef2b0d7e2b3a97d80447b9ace095ed3d6e0fa2fcfdd12/",
+          "openedAt": 1789295346829,
+          "closedAt": null,
+          "attempts": []
+        }
+      }
+    },
+    {
+      "step": "ops-before",
+      "at": "2026-09-13T10:29:07.715Z",
+      "value": {
+        "ok": true,
+        "calls": {},
+        "classA": 0,
+        "classB": 0,
+        "classFree": 0,
+        "total": 0,
+        "bytes": {}
+      }
+    },
+    {
+      "step": "baseline",
+      "at": "2026-09-13T10:29:13.343Z",
+      "value": {
+        "ok": true,
+        "outcome": {
+          "kind": "committed",
+          "bytes": 4198400,
+          "movedBytes": 4198400
+        },
+        "ms": 4983,
+        "state": "done",
+        "token": "checkpoint-81648d2d-d223-4e88-b044-6d4230ccb3a8",
+        "kind": "quiesce"
+      }
+    },
+    {
+      "step": "window-close",
+      "at": "2026-09-13T10:29:13.409Z",
+      "value": {
+        "ok": true,
+        "window": {
+          "schema": "devbox-publication-window/1",
+          "token": "p20260913102749-publication",
+          "prefix": "boxes/64fdfd009b2f4ef611fef2b0d7e2b3a97d80447b9ace095ed3d6e0fa2fcfdd12/",
+          "openedAt": 1789295346829,
+          "closedAt": 1789295353362,
+          "attempts": [
+            {
+              "id": "73ffaee4-3581-445b-83bf-5669af7a01b5",
+              "key": "boxes/64fdfd009b2f4ef611fef2b0d7e2b3a97d80447b9ace095ed3d6e0fa2fcfdd12/backups/bc703f9d-defd-4093-9cdf-928da4e16766/",
+              "operation": "put",
+              "uploadId": null,
+              "startedAt": 1789295349086,
+              "finishedAt": 1789295349250,
+              "bytes": 0,
+              "observedBytes": 0,
+              "outcome": "returned",
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "d12c04b4-5f9b-4368-a7ae-a62b01e03311",
+              "key": "boxes/64fdfd009b2f4ef611fef2b0d7e2b3a97d80447b9ace095ed3d6e0fa2fcfdd12/backups/bc703f9d-defd-4093-9cdf-928da4e16766/data.sqsh",
+              "operation": "put",
+              "uploadId": null,
+              "startedAt": 1789295349852,
+              "finishedAt": 1789295350001,
+              "bytes": 0,
+              "observedBytes": 0,
+              "outcome": "returned",
+              "error": null,
+              "bodyError": null
+            },
+            {
+              "id": "08771b25-2999-4802-9ea9-b55097fa041f",
+              "key": "boxes/64fdfd009b2f4ef611fef2b0d7e2b3a97d80447b9ace095ed3d6e0fa2fcfdd12/backups/bc703f9d-defd-4093-9cdf-928da4e16766/data.sqsh",
+              "operation": "put",
+              "uploadId": null,
+              "startedAt": 1789295350079,
+              "finishedAt": 1789295350573,
+              "bytes": 4198400,
+              "observedBytes": 4198400,
+              "outcome": "returned",
+              "error": null,
+              "bodyError": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "step": "ops-after",
+      "at": "2026-09-13T10:29:14.240Z",
+      "value": {
+        "ok": true,
+        "calls": {
+          "head": 1
+        },
+        "classA": 0,
+        "classB": 1,
+        "classFree": 0,
+        "total": 1,
+        "bytes": {}
+      }
+    },
+    {
+      "step": "after",
+      "at": "2026-09-13T10:29:14.309Z",
+      "value": {
+        "ok": true,
+        "exitCode": 0,
+        "stdout": "  292 s3fs BACKUP_BUCKET /backups -o passwd_file=/tmp/.passwd-s3fs-8167b306-c3c8-4ccd-9feb-8d81dae0b987,stat_cache_expire=60,enable_noobj_cache,multipart_size=5,nomixupload,connect_timeout=10,readwrite_timeout=30,retries=3,use_path_request_style,url=http://r2.internal,ahbe_conf=/tmp/.s3fs-ahbe-c2f65de0-8f3c-4b66-ab9f-f5390445ae83.conf\n  446 sed -n /s3fs/p",
+        "stderr": "stat: cannot statx '/var/tmp/devbox/stage/layer.sqsh': No such file or directory",
+        "ms": 51
+      }
+    },
+    {
+      "step": "box-teardown",
+      "at": "2026-09-13T10:29:14.821Z",
+      "value": [
+        "live teardown pass 1 ab-snapshot-chain-p20260913102749: delete: The number of keys in the request must be between 1 and 1000 inclusive. (10027)",
+        "live teardown pass 2 ab-snapshot-chain-p20260913102749: delete: The number of keys in the request must be between 1 and 1000 inclusive. (10027)"
+      ]
+    },
+    {
+      "step": "worker-delete",
+      "at": "2026-09-13T10:29:18.667Z",
+      "value": [
+        "worker: deleted or absent",
+        "kinu-devbox-bench-p20260913102749-snapshot-chain-snapshotchainbox: absent"
+      ]
+    },
+    {
+      "step": "container-delete",
+      "at": "2026-09-13T10:29:20.144Z",
+      "value": [
+        "absent"
+      ]
+    },
+    {
+      "step": "residue",
+      "at": "2026-09-13T10:29:21.419Z",
+      "value": {
+        "objects": 1,
+        "uploads": 0
+      }
+    },
+    {
+      "step": "teardown",
+      "at": "2026-09-13T10:29:24.967Z",
+      "value": {
+        "manifest": {
+          "schema": "storage-matrix/teardown@1",
+          "runId": "p20260913102749",
+          "createdAt": "2026-09-13T10:27:49.787Z",
+          "updatedAt": "2026-09-13T10:29:24.967Z",
+          "entries": [
+            {
+              "kind": "worker",
+              "name": "kinu-devbox-bench-p20260913102749-snapshot-chain",
+              "detail": "snapshot-chain fixture Worker",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "container-app",
+              "name": "kinu-devbox-bench-p20260913102749-snapshot-chain-snapshotchainbox",
+              "detail": "snapshot-chain container application",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "r2-bucket",
+              "name": "kinu-devbox-bench-p20260913102749-snapshot-chain",
+              "detail": "dedicated snapshot-chain bucket",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "do-state",
+              "name": "ab-snapshot-chain-p20260913102749",
+              "detail": "per-arm durable box state",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "alarm",
+              "name": "ab-snapshot-chain-p20260913102749",
+              "detail": "per-arm durable alarm",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "mount",
+              "name": "ab-snapshot-chain-p20260913102749",
+              "detail": "per-arm mounted workspace",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            },
+            {
+              "kind": "local-path",
+              "name": "/tmp/kinu-devbox-bench-p20260913102749",
+              "detail": "generated Wrangler config directory",
+              "done": true,
+              "attempts": 1,
+              "lastError": null
+            }
+          ],
+          "counters": {},
+          "kept": false
+        },
+        "failures": []
+      }
+    }
+  ],
+  "workerVersion": "95d1132a-8a34-4d81-a8b6-e8b294b7b308"
+}

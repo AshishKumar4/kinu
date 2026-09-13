@@ -1,0 +1,36 @@
+{
+  "runId": "p20260913101729",
+  "source": {
+    "commit": "13433573602f8043ef1806299fdd638f43efd9e7",
+    "dirtyDigest": "clean"
+  },
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
+  "hypotheses": [
+    {
+      "rank": 1,
+      "candidate": "intercepted PUT stream or bench meter stalls",
+      "prediction": "small direct PUT and multipart windows expose which boundary stops; same bytes old image separate image from Worker"
+    },
+    {
+      "rank": 2,
+      "candidate": "s3fs multipart timeout",
+      "prediction": "failed part errors recur near configured 30s silence, not total object duration"
+    },
+    {
+      "rank": 3,
+      "candidate": "bucket/credential config drift",
+      "prediction": "normalized old/current configs differ at bucket binding or mount options; all PUT sizes fail with authorization error"
+    },
+    {
+      "rank": 4,
+      "candidate": "multipart size handling",
+      "prediction": "4MiB succeeds and multipart-sized archives fail before completion; sparse tiny archive counters contradict it"
+    },
+    {
+      "rank": 5,
+      "candidate": "new image FUSE or archive-path contention",
+      "prediction": "same 64MiB fails only on new image; local s3fs/MinIO reproduction fails with new tools"
+    }
+  ],
+  "steps": []
+}
