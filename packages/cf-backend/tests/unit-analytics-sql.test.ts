@@ -21,7 +21,7 @@ import {
 
 import {
   clearAnalyticsCache, runAnalyticsBatch, type AnalyticsSqlEnv,
-} from '../src/control-plane/analytics-sql';
+} from '@kinu.run/core/control-plane';
 
 const CONFIGURED: AnalyticsSqlEnv = {
   CLOUDFLARE_ACCOUNT_ID: 'acct',
