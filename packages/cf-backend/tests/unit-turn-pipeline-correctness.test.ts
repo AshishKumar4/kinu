@@ -257,33 +257,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(request.filter((message) => message.role === 'assistant')).toEqual([reply]);
   });
 
-  test.each([
-    ['every-tool', 'List every tool you can call right now, one per line, names only, nothing else.'],
-    ['slate', 'Create the hello slate and start its preview.'],
-    ['codemode-craft', 'Build a digit-sum tool, use it on 4827516390 and reply with the result.'],
-  ])('a queued %s ask follows the genesis answer in the model request', async (_case, ask) => {
-    const { agent } = orchestratorHarness();
-    const genesis: ModelMessage = { role: 'user', content: 'Read your standing brief and ask what to do first.' };
-    const queued: ModelMessage = { role: 'user', content: ask };
-    const answer: ModelMessage = { role: 'assistant', content: 'What should I do first?' };
-
-    const turn = (messages: ModelMessage[]) => ({
-      system: 'sys', messages, tools: {} satisfies ToolSet, model: 'harness-model',
-      continuation: false, body: {},
-    });
-
-    await agent.beforeTurn(turn([genesis]));
-    await agent.onChatResponse({
-      message: { id: 'genesis-answer', role: 'assistant', parts: [{ type: 'text', text: 'What should I do first?' }] },
-      requestId: 'genesis-request', continuation: false, status: 'completed',
-    });
-    // Think persists a websocket ask before its queue slot. The running
-    // genesis turn appends its answer afterward (live 1c1eb6967, 2026-09-13).
-    const config = await agent.beforeTurn(turn([genesis, queued, answer]));
-
-    expect(config?.messages).toEqual([genesis, answer, queued]);
-  });
-
   test('a managed context edit reaches the hosted request and retained trial together', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;

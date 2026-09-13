@@ -44,23 +44,6 @@ import type { CountableRequest, InputTokenCount } from '../providers/input-token
 import type { ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
 
-/** A queued user input can be persisted before the preceding turn's answer.
- * Keep that answer in history, but present the new turn's input after it.
- * A recovery continuation intentionally ends at the assistant checkpoint. */
-export function orderUserTurnMessages(history: readonly ModelMessage[], continuation: boolean): readonly ModelMessage[] {
-  if (continuation || history.at(-1)?.role !== 'assistant') return history;
-
-  for (let index = history.length - 2; index >= 0; index--) {
-    const input = history[index];
-
-    if (input.role === 'user') {
-      return [...history.slice(0, index), ...history.slice(index + 1), input];
-    }
-  }
-
-  return history;
-}
-
 export interface TurnContextInput {
   system: string;
   /** The durable conversation history. Never mutated. */
