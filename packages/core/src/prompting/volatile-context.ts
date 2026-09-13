@@ -62,6 +62,7 @@ import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types';
 import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
+import { renderToolsDeclaration, type CraftedDeclaration } from '../tools/sandbox-contract';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -113,6 +114,8 @@ export interface ActiveRoster<T> {
  *  List fields are rendered most-relevant-first and capped, with an honest
  *  count of what was elided — callers order them, the renderer bounds them. */
 export interface DynamicContext {
+  /** Live callable additions; native tool definitions remain byte-stable. */
+  craftedTools?: readonly CraftedDeclaration[];
   /** Rendered recent-facts block (renderFactsBlock output). */
   factsBlock?: string;
   /** Bounded MEMORY.md tail (newest lessons/reflections). */
@@ -195,6 +198,7 @@ function flattenTaskList(
  *  how a backend journals a head run or registers a job is not this layer's
  *  business, only that it can be asked. */
 export interface DynamicContextSources {
+  readonly craftedTools?: readonly CraftedDeclaration[];
   /** The turn's rendered recent-facts block (renderFactsForTurn output). */
   readonly factsBlock: string | undefined;
   /** The turn's MEMORY.md tail — read once per turn, behind the only await in
@@ -247,6 +251,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
 
   const context: DynamicContext = {
+    craftedTools: sources.craftedTools,
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
     executors: sources.executors,
@@ -575,6 +580,10 @@ const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
  */
 export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   const sections: Array<string | null> = [];
+
+  if (ctx.craftedTools && ctx.craftedTools.length > 0) {
+    sections.push(`## Crafted tools available through execute_tools\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
+  }
 
   const facts = ctx.factsBlock?.trim();
 

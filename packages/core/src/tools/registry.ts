@@ -976,7 +976,7 @@ export function renderExecuteToolsDescription(typeBlock: string, substrate: Sand
   return [
     BUILTIN_TOOL_DESCRIPTIONS.execute_tools,
     SANDBOX_FACTS[substrate],
-    'Every tool you can call natively is `tools.<name>(input)` here with the same input object, and every tool you crafted with `workspace.createTool` is `tools.<name>(...)` too — the declaration below lists both. Variables do not survive between programs; `state.set`/`state.get` do.',
+    'Every native tool is `tools.<name>(input)` here with the same input object. Tools saved with `workspace.createTool` are callable as `tools.<name>(...)`; their current declarations are in dynamic_context. The declaration below lists the native tools. Variables do not survive between programs; `state.set`/`state.get` do.',
     'Start every program with exactly one `//` comment on the first nonblank line. State the operation and target in plain language, for example `// Read package.json to inspect its scripts`. The interface shows this line to the user as the call intent.',
     `Namespaces bound in this sandbox:\n${typeBlock}`,
   ].join('\n\n');

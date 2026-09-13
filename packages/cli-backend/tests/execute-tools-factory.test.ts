@@ -9,7 +9,7 @@ import { jsonSchema, tool } from 'ai';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
 import { scratchDir, toolExecute } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
-import { inWorkMode, successfulToolOutcome } from '@kinu.run/core';
+import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock } from '@kinu.run/core';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +29,19 @@ function makeTool(): ExecuteTool {
 }
 
 describe('createNodeExecuteToolFactory — console capture + implicit return', () => {
+  test('saving a crafted tool preserves the native description and makes the next call usable', async () => {
+    let crafted: CraftedToolSet = {};
+    const factory = createNodeExecuteToolFactory();
+    const surface = { native: {}, craftedTools: () => crafted, providers: [] };
+    const first = factory(surface);
+    crafted = { cache_echo: { description: 'Return the supplied text', execute: async (text) => text } };
+    const next = factory(surface);
+
+    expect(next.description).toBe(first.description);
+    expect(await toolExecute<{ code: string }, ExecuteToolResult>(next)({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }))
+      .toEqual({ result: 'CACHE_ECHO_OK' });
+  });
+
   test('console output is captured and returned as logs, not written to stdout', async () => {
     const out = await makeTool()({
       code: 'const a = "hello";\nconsole.log(a, 42);\nconsole.log({ x: 1 });',
@@ -309,7 +322,7 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
     expect(seen).toEqual(['ls']);
   });
 
-  test('the declaration lists the native tools and the crafted tools, and never the sandbox itself', () => {
+  test('native declarations stay in the tool and crafted declarations ride the live ledger', () => {
     const built = createNodeExecuteToolFactory()({
       native: surfaceWith(async () => ''),
       craftedTools: () => ({ double: { description: 'Doubles a number', execute: async () => 2 } }),
@@ -318,7 +331,9 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
 
     expect(built.description).toContain('export declare const tools: {');
     expect(built.description).toContain('run(input: { command: string }): Promise<unknown>;');
-    expect(built.description).toContain('double(...args: unknown[]): Promise<unknown>;');
+    expect(built.description).not.toContain('double(...args: unknown[]): Promise<unknown>;');
+    expect(renderDynamicContextBlock({ craftedTools: [{ name: 'double', description: 'Doubles a number' }] }))
+      .toContain('double(...args: unknown[]): Promise<unknown>;');
     expect(built.description).not.toContain('execute_tools(input');
   });
 

@@ -1,0 +1,64 @@
+{
+  "turnId": "405f8f86-ae8d-4711-afc2-41c233da97a1",
+  "revision": 2,
+  "epoch": 1,
+  "stepIndex": 1,
+  "workingRevision": 1,
+  "digest": "fc9f99fb7bfbcc85d55db940dc433a464de47a46c8f9c6a570f0f86e17ab4e01",
+  "messageCount": 4,
+  "request": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Use execute_tools and workspace.createTool to save a crafted tool named cache_echo that takes a text argument and returns that same text. Read the available declaration and use its actual signature. Do not invoke the saved tool yet. Reply SAVED after saving it."
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "<dynamic_context fingerprint=\"bb2ca80c7bbd7b03\">\nLive system state from the Kinu runtime. It is not conversation, and the user did not write it. A later dynamic_context block supersedes every earlier one.\n\n## Execution status\nLive availability for the runtimes described in the system prompt, and what each one declares it can run:\n- workspace: ready on demand, runs: javascript, typescript, shell, npm, git, fs_shared, net_outbound, net_inbound, process_spawn, process_long, process_signal\n- sandbox: ready on demand, files at /sandbox, runs: javascript, typescript, native_binary, shell, npm, git, fs_owned, net_outbound, net_inbound, process_spawn, process_long\n\n## Your user's machines (the `laptop` runtime)\nOne machine is connected: `laptop` calls reach it with no `device` needed.\n- kinu-first-run-beta (linux): registered, offline. The user can reconnect it with `kinu connect`\n- kinu-first-run-alpha (linux): registered, offline. The user can reconnect it with `kinu connect`\n</dynamic_context>"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "reasoning",
+          "text": "The user wants me to save a crafted tool named `cache_echo` that takes a text argument and returns that same text. I should read the available declaration (workspace.createTool) and use its actual signature: `workspace.createTool(name, description, code)`.\n\nThe tool should take a text argument and return that same text. Let me write the code carefully. The crafted tool will be callable as `tools.cache_echo(args)` on the next execute_tools call.\n\nThe signature is:\n```\nfunction createTool(\n    name: string, description: string, code: string\n): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | ({ ok: false } & Refusal)>\n```\n\nSo I need to provide name, description, and code. The code is presumably a function body or module. Let me think about what the code should look like. Typically crafted tools are code that receives args. I don't know the exact calling convention, but a common one is a function that takes an input object. Since the description says \"takes a text argument and returns that same text\", I'll write code that handles an input with a text property, and also handles a plain string.\n\nLet me write something robust:\n\n```js\nasync (args) => {\n  const text = typeof args === 'string' ? args : args?.text;\n  return text;\n}\n```\n\nOr maybe the code is an expression that gets wrapped. Let me write a function-style implementation. A common convention: the code should be a function that accepts the input. Let me be safe and handle multiple shapes:\n\n```js\nfunction (input) {\n  if (typeof input === 'string') return input;\n  if (input && typeof input === 'object' && 'text' in input) return input.text;\n  return '';\n}\n```\n\nHmm, but I need to match whatever the runtime expects. Since I can't easily verify, I'll write it as an async arrow function or a named export. The safest common convention for these crafted tools is code that evaluates to a function taking args. Let me write:\n\n```js\nasync (input) => {\n  if (typeof input === 'string') return input;\n  if (input && typeof input === 'object') {\n    if (typeof input.text === 'string') return input.text;\n    if (Object.keys(input).length === 1) return Object.values(input)[0];\n  }\n  return String(input ?? '');\n}\n```\n\nThat takes a text argument (either `{text: \"...\"}` or a plain string) and returns the same text.\n\nI should use execute_tools to call workspace.createTool. Then reply \"SAVED\". I must not invoke the saved tool.\n\nLet me write the code parameter as a string. I'll keep it clean and robust."
+        },
+        {
+          "type": "tool-call",
+          "toolCallId": "kinu-i-1",
+          "toolName": "execute_tools",
+          "input": {
+            "code": "// Save a crafted tool named cache_echo that returns the text it is given\nconst result = await workspace.createTool(\n  'cache_echo',\n  'Echo tool: takes a text argument and returns that same text.',\n  `async (input) => {\n  if (typeof input === 'string') return input;\n  if (input && typeof input === 'object') {\n    if (typeof input.text === 'string') return input.text;\n    if (Object.keys(input).length === 1) return Object.values(input)[0];\n  }\n  return String(input == null ? '' : input);\n}`\n);\nconsole.log(JSON.stringify(result));\nreturn result;"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "content": [
+        {
+          "type": "tool-result",
+          "toolCallId": "kinu-i-1",
+          "toolName": "execute_tools",
+          "output": {
+            "type": "json",
+            "value": {
+              "result": {
+                "ok": true,
+                "name": "cache_echo",
+                "action": "created"
+              },
+              "logs": [
+                "{\"ok\":true,\"name\":\"cache_echo\",\"action\":\"created\"}"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

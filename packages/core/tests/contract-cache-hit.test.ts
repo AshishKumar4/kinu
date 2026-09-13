@@ -50,6 +50,7 @@ import {
   createAnthropicProvider, createOpenAIProvider, createCodexProvider,
   createOpenRouterProvider, createOpenAICompatProvider,
   createWorkersAIProvider,
+  DynamicContextLedger, type DynamicContext,
   markLastToolForAnthropicCache,
   TurnAccumulator, ExtensionHost,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
@@ -554,7 +555,7 @@ interface TurnResult {
  *  BEFORE deciding what the usage line reports. */
 async function driveTurn(
   entry: ProviderCase,
-  opts: { decoy?: boolean; extension?: KinuExtension } = {},
+  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext } = {},
 ): Promise<TurnResult> {
   const oracle = new PrefixCacheOracle();
 
@@ -586,6 +587,7 @@ async function driveTurn(
     tools: chatTools(),
     stopWhen: stepCountIs(5),
     extensions,
+    dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic } : undefined,
     cache: { providerId: entry.providerId, modelId: entry.modelId, sessionKey: SESSION_KEY },
   })) {
     if (event.type === 'step-finish') {
@@ -657,6 +659,24 @@ const BLIND_SPOTS = [
 ];
 
 describe('a stable prefix reads back as a nonzero cache hit', () => {
+  test('a tool crafted during the conversation appends its declaration behind the cached prefix', async () => {
+    for (const entry of CACHING_PROVIDERS) {
+      let step = 0;
+
+      const { mock, steps } = await driveTurn(entry, { dynamic: () => {
+        step++;
+
+        return step === 1 ? { factsBlock: 'The workspace is ready.' }
+          : { factsBlock: 'The workspace is ready.', craftedTools: [{ name: 'cache_echo', description: 'Return the supplied text' }] };
+      } });
+
+      expect(requestAt(mock, 0).body).not.toContain('cache_echo');
+      expect(requestAt(mock, 1).body).toContain('cache_echo');
+      expect(steps[1]?.cacheRead ?? 0).toBeGreaterThan(0);
+      expect(steps[2]?.cacheRead ?? 0).toBeGreaterThan(0);
+    }
+  });
+
   test('the actual Workers AI provider routes every binding step to its conversation replica', async () => {
     const entry = CACHING_PROVIDERS.find((candidate) => candidate.label === 'workers-ai');
 

@@ -1,0 +1,31 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/cli-backend/tests/execute-tools-factory.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+35 |     const surface = { native: {}, craftedTools: () => crafted, providers: [] };
+36 |     const first = factory(surface);
+37 |     crafted = { cache_echo: { description: 'Return the supplied text', execute: async (text) => text } };
+38 |     const next = factory(surface);
+39 | 
+40 |     expect(next.description).toBe(first.description);
+                                  ^
+error: expect(received).toBe(expected)
+
+@@ -14,3 +14,4 @@
+  export declare const tools: {
+- 
++   /** Return the supplied text (crafted by you) */
++   cache_echo(...args: unknown[]): Promise<unknown>;
+  };
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/cli-backend/tests/execute-tools-factory.test.ts:40:30)
+(fail) createNodeExecuteToolFactory — console capture + implicit return > saving a crafted tool preserves the native description and makes the next call usable [0.57ms]
+
+ 0 pass
+ 21 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [156.00ms]
