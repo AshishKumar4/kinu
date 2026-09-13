@@ -99,11 +99,9 @@ const SAME_SIZE = `${INCUMBENT.slice(0, -6)}ASKED.`;
 
 const LONGER = `${INCUMBENT}\nAn extra sentence that makes this candidate strictly longer than the incumbent.`;
 
-describe('the eleven sections are the GEPA targets', () => {
-  test('all eleven are registered, and nothing else is', () => {
-    // Every addressable section is optimizable; the role profile is the tenth,
-    // and the workspace-instructions rule the eleventh.
-    expect(PROMPT_SECTION_TARGETS).toHaveLength(11);
+describe('the system sections are the GEPA targets', () => {
+  test('the eleven base and seven lead sections are registered, and nothing else is', () => {
+    expect(PROMPT_SECTION_TARGETS).toHaveLength(18);
     expect(PROMPT_SECTION_TARGETS.map((s) => s.id).sort())
       .toEqual(PROMPT_SECTIONS.map((s) => s.id).sort());
   });

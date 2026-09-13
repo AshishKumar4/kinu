@@ -13,7 +13,7 @@
  * what it is. They moved here with the prose they explain; the comments in
  * `prompt.ts` are now only about the branch conditions the builder computes.
  *
- * `PROMPT_SECTIONS` at the foot is the eleven-section index the GEPA bridge reads
+ * `PROMPT_SECTIONS` at the foot is the section index the GEPA bridge reads
  * (`evolution/gepa/section-bridge.ts`). A template that is not in it is a line or
  * a fragment, not a section, and is not separately evolvable.
  */
@@ -40,6 +40,16 @@ import backgroundWorkSection from "../prompts/background-work-section.md" with {
 import verificationSection from "../prompts/verification-section.md" with { type: 'text' };
 import outputFormatSection from "../prompts/output-format-section.md" with { type: 'text' };
 import workspaceInstructionsSection from "../prompts/workspace-instructions-section.md" with { type: 'text' };
+// Lead/worker doctrine adapted from AshishKumar4/oh-my-pi c6a7d56cc6,
+// fusion-lead/direct-edit-reminder and agents/sidekick (MIT-licensed sources:
+// opencode-fusion and OpenHands; upstream THIRD-PARTY-NOTICES.txt).
+import leadResponsibility from '../prompts/lead-responsibility.md' with { type: 'text' };
+import leadBrief from '../prompts/lead-brief.md' with { type: 'text' };
+import leadParallel from '../prompts/lead-parallel.md' with { type: 'text' };
+import leadReview from '../prompts/lead-review.md' with { type: 'text' };
+import leadInterruptions from '../prompts/lead-interruptions.md' with { type: 'text' };
+import leadDelivery from '../prompts/lead-delivery.md' with { type: 'text' };
+import leadDirectEdit from '../prompts/lead-direct-edit.md' with { type: 'text' };
 import { definePromptSection, type PromptSection } from './template';
 
 /**
@@ -356,6 +366,22 @@ export const WORKSPACE_INSTRUCTIONS_SECTION = definePromptSection(
  * needs is the id and the source. Rendering still goes through the concrete
  * export, so every call site keeps its exact typed slots.
  */
+// Separate rule families remain evolvable under GEPA's unchanged 4,800-byte
+// section ceiling. Only the root actor with a wired hire action renders these.
+export const LEAD_RESPONSIBILITY = definePromptSection('lead/responsibility', '', leadResponsibility.trimEnd());
+
+export const LEAD_BRIEF = definePromptSection('lead/brief', '', leadBrief.trimEnd());
+
+export const LEAD_PARALLEL = definePromptSection('lead/parallel', '', leadParallel.trimEnd());
+
+export const LEAD_REVIEW = definePromptSection('lead/review', '', leadReview.trimEnd());
+
+export const LEAD_INTERRUPTION = definePromptSection('lead/interruptions', '', leadInterruptions.trimEnd());
+
+export const LEAD_DELIVERY = definePromptSection('lead/delivery', '', leadDelivery.trimEnd());
+
+export const LEAD_DIRECT_EDIT = definePromptSection('lead/direct-edit', '', leadDirectEdit.trimEnd());
+
 export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   OPERATING_GUIDANCE,
   ROLE_SECTION,
@@ -368,6 +394,13 @@ export const PROMPT_SECTIONS: readonly PromptSection<string>[] = [
   VERIFICATION_SECTION,
   OUTPUT_FORMAT_SECTION,
   WORKSPACE_INSTRUCTIONS_SECTION,
+  LEAD_RESPONSIBILITY,
+  LEAD_BRIEF,
+  LEAD_PARALLEL,
+  LEAD_REVIEW,
+  LEAD_INTERRUPTION,
+  LEAD_DELIVERY,
+  LEAD_DIRECT_EDIT,
 ];
 
 /** A promoted replacement per section id, resolved by the backend before the

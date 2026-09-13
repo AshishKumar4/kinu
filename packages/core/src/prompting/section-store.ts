@@ -1,6 +1,6 @@
 /**
  * Evolved prompt sections: propose, trial, promote — the `scaffold/modify.ts` +
- * `scaffold/shadow.ts` discipline, applied to the eleven addressable sections.
+ * `scaffold/shadow.ts` discipline, applied to every addressable section.
  * Nothing here renders anything. `buildSystemPromptSync` reads
  * {@link activePromptSectionOverrides} once per activation, exactly as it reads
  * the soul, and a section with no promoted row renders its built-in template.
