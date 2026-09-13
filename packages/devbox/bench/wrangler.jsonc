@@ -76,7 +76,7 @@
   "containers": [
     {
       "class_name": "SnapshotChainBox",
-      "image": "docker.io/cloudflare/sandbox:0.12.8",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:352192e7ba8b93090234812daeac18a88cea35b94b96de3b73d2d4f8037b432c",
       "max_instances": 1,
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
     }

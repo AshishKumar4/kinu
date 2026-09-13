@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-13",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:352192e7ba8b93090234812daeac18a88cea35b94b96de3b73d2d4f8037b432c",
+  "digest": "sha256:352192e7ba8b93090234812daeac18a88cea35b94b96de3b73d2d4f8037b432c",
+  "sandboxVersion": "0.12.8",
+  "sandbox": "docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f",
+  "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
+  "squashfuse": {
+    "url": "https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz",
+    "sha256": "42d4dfd17ed186745117cfd427023eb81effff3832bab09067823492b6b982e7",
+    "driver": "low-level, unmodified upstream"
+  },
+  "binaries": {
+    "devbox-block-lower": "6481bed6c599ecec7d6d307ce56ec43124492d6be3146b0fe564c62fa2e71cab",
+    "devbox-squashfuse": "7a3e37d78e4357c8b79fb443fec8267b99d0624410c180b9b7a1d46130bad33e"
+  },
+  "files": {
+    "Dockerfile": "7791e61ae27e1106340f31b8f59505fd560192229a8799f578121f1796774b2d",
+    "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
+    "src/index.rs": "c4f632c9f0cfcbc54d84194814bdf1d5cfcba5fa170f2599c06e2f02f349c130",
+    "src/main.rs": "9720e1b62ef14f987315595a2b26a7e9513303bd6327a58f9886eb58867785ae",
+    "src/model.rs": "02103c2f09b6c57735b5282dbaddbc156ee955927416821492cd03f17c4d6b83",
+    "src/storage.rs": "4a37c4d0187fcf0aa094958c24de13873c798de27ec9f8648a6d584931701666"
+  }
+}
