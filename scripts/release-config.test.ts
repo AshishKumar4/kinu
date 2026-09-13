@@ -78,23 +78,21 @@ const LEAN_VERIFY = '.github/workflows/lean-verify.yml';
  * The sandbox container image every environment runs, declared ONCE.
  *
  * `version` is the `@cloudflare/sandbox` release whose container the SDK expects,
- * held below against the dependency that actually ships. `digest` is what the
- * registry answered for that version's tag on 2026-08-27:
- *
- *   curl -sI -H "Authorization: Bearer <docker.io pull token>" \
- *     -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
- *     https://registry-1.docker.io/v2/cloudflare/sandbox/manifests/0.12.8
- *   docker-content-digest: sha256:822501de…
+ * held below against the dependency that actually ships. The image itself is the
+ * block layer built on that upstream base: `packages/devbox/block-lower/Dockerfile`
+ * compiles `devbox-block-lower` and `devbox-squashfuse` into the upstream
+ * `docker.io/cloudflare/sandbox@sha256:822501de…` base and the result is pushed
+ * to this account's registry, so `digest` is the pushed manifest's digest — the
+ * same sha256 both wrangler blocks carry — rather than a tag resolution.
  *
  * wrangler.jsonc repeats the reference once per environment because a JSONC file
  * cannot import a constant. This is the declaration those two are held to, so a
- * version bump edits this record and both config blocks and nothing else. The
- * same command re-resolves the digest for a new version.
+ * version bump edits this record and both config blocks and nothing else.
  */
 const SANDBOX_IMAGE = {
-  repository: 'docker.io/cloudflare/sandbox',
+  repository: 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer',
   version: '0.12.8',
-  digest: 'sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f',
+  digest: 'sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e',
 } as const;
 
 const PINNED_IMAGE = `${SANDBOX_IMAGE.repository}@${SANDBOX_IMAGE.digest}`;
