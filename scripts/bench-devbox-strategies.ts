@@ -5105,9 +5105,6 @@ export async function measureLiveC3(
     if (row.baselineCheckpoint.ok !== true || row.baselineCheckpoint.outcome?.kind !== 'committed') throw new Error('the C3 baseline checkpoint did not commit');
     observe(row);
 
-    row.overwriteCommand = await execInBox(fixture, box, `bun ${harness}/witness-files.ts overwrite /workspace`);
-
-    if (row.overwriteCommand.ok !== true || row.overwriteCommand.exitCode !== 0) throw new Error('the C3 overwrite writer did not complete');
     round.accounting.beforeOps = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
     windowAttempted = true;
     const opened = await call(fixture, 'POST', `/publication-window/open?box=${box}&token=${encodeURIComponent(token)}`, PublicationWindowReplySchema);
@@ -5116,6 +5113,10 @@ export async function measureLiveC3(
     if (opened.ok !== true || opened.window?.token !== token || opened.window.prefix !== row.prefix || opened.window.closedAt !== null) {
       throw new Error(`the C3 PUT window did not open: ${opened.error ?? 'no matching receipt'}`);
     }
+
+    row.overwriteCommand = await execInBox(fixture, box, `bun ${harness}/witness-files.ts overwrite /workspace`);
+
+    if (row.overwriteCommand.ok !== true || row.overwriteCommand.exitCode !== 0) throw new Error('the C3 overwrite writer did not complete');
 
     try {
       round.checkpoint = await checkpointOperation(fixture, box, 'quiesce', 'C3 overwrite');

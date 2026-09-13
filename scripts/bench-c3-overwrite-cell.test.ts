@@ -104,7 +104,7 @@ for (const field of ['preparation', 'cleanup', 'initialObservations', 'restorati
   });
 }
 
-test('the live producer brackets only the overwrite checkpoint and verifies after a cold start', async () => {
+async function driverC3Proof(publishDuringOverwrite: boolean) {
   const real = globalThis.fetch;
   const events: string[] = [];
   const installed: string[] = [];
@@ -114,6 +114,15 @@ test('the live producer brackets only the overwrite checkpoint and verifies afte
   let kind = 'empty';
   let puts = 0;
   let window: PublicationWindow | null = null;
+
+  const publish = (): void => {
+    puts++;
+
+    if (window !== null && window.closedAt === null) window.attempts.push({
+      id: `put-${puts}`, key: 'boxes/test/delta.sqsh', operation: 'put', uploadId: null,
+      startedAt: Date.now(), finishedAt: Date.now(), bytes: 65_536, observedBytes: 65_536, outcome: 'returned', error: null, bodyError: null,
+    });
+  };
 
   const answer = async (input: Parameters<typeof real>[0], init?: Parameters<typeof real>[1]) => {
     const url = new URL(String(input));
@@ -146,7 +155,11 @@ test('the live producer brackets only the overwrite checkpoint and verifies afte
 
       if (command.includes(' baseline /workspace')) events.push('baseline-write');
 
-      if (command.includes(' overwrite /workspace')) events.push('overwrite-write');
+      if (command.includes(' overwrite /workspace')) {
+        events.push('overwrite-write');
+
+        if (publishDuringOverwrite) publish();
+      }
 
       if (command.includes(' read ')) {
         events.push('file-read');
@@ -158,13 +171,8 @@ test('the live producer brackets only the overwrite checkpoint and verifies afte
     }
 
     if (url.pathname === '/checkpoint') {
-      puts++;
+      publish();
       events.push('checkpoint');
-
-      if (window !== null && window.closedAt === null) window.attempts.push({
-        id: 'overwrite', key: 'boxes/test/delta.sqsh', operation: 'put', uploadId: null,
-        startedAt: Date.now(), finishedAt: Date.now(), bytes: 65_536, observedBytes: 65_536, outcome: 'returned', error: null, bodyError: null,
-      });
 
       return Response.json({ ok: true, token: `cp-${puts}`, state: 'pending' });
     }
@@ -200,12 +208,27 @@ test('the live producer brackets only the overwrite checkpoint and verifies afte
 
     if (identity === null) throw new Error('fixture identity is missing');
     const row = await measureLiveC3({ origin: 'https://bench.invalid', token: 'test', identity }, 'box', 'test-run', null);
-    expect(evaluateLiveC3(row)).toMatchObject({ admitted: true, correctness: 'passed', objectsPut: 1, bytesPut: 65_536 });
-    expect(events).toEqual(['destroy', 'create', 'baseline-write', 'checkpoint', 'overwrite-write', 'open', 'checkpoint', 'close', 'destroy', 'wake', 'file-read']);
-    expect(installed.every((path) => path.startsWith('/tmp/kinu-c3-'))).toBe(true);
-    expect(row.rounds[0]?.checkpoint?.outcome?.movedBytes).toBe(999_999);
-    expect(row.rounds[0]?.published.transport.putUploadBytes).toBe(65_536);
+
+    return { row, events, installed };
   } finally {
     globalThis.fetch = real;
   }
+}
+
+test('the live producer brackets the isolated edit and checkpoint, then verifies cold', async () => {
+  const { row, events, installed } = await driverC3Proof(false);
+  expect(evaluateLiveC3(row)).toMatchObject({ admitted: true, correctness: 'passed', objectsPut: 1, bytesPut: 65_536 });
+  expect(events).toEqual(['destroy', 'create', 'baseline-write', 'checkpoint', 'open', 'overwrite-write', 'checkpoint', 'close', 'destroy', 'wake', 'file-read']);
+  expect(installed.every((path) => path.startsWith('/tmp/kinu-c3-'))).toBe(true);
+  expect(row.rounds[0]?.checkpoint?.outcome?.movedBytes).toBe(999_999);
+  expect(row.rounds[0]?.published.transport.putUploadBytes).toBe(65_536);
+});
+
+test('a publication during the C3 overwrite is counted and refuses the one-object claim', async () => {
+  const { row } = await driverC3Proof(true);
+  expect(row.rounds[0]?.accounting.window?.attempts).toHaveLength(2);
+  expect(row.rounds[0]?.published.transport).toEqual({ puts: 2, putUploadBytes: 131_072 });
+  const verdict = evaluateLiveC3(row);
+  expect(verdict).toMatchObject({ admitted: false, correctness: 'passed', objectsPut: 2, bytesPut: 131_072 });
+  expect(verdict.errors).toContain('C3 must publish exactly 1 object attempt');
 });
