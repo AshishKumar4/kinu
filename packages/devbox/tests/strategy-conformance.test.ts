@@ -1499,7 +1499,7 @@ describe('explicit collapse paths', () => {
     await arm.workspace.write('delta', 'delta bytes');
     expectCommitted(await arm.storage().checkpoint('tick'), 'delta');
     expect((await wake(arm)).kind).toBe('attached');
-    const block = [...arm.disk().mounts].find(([, mount]) => mount.fstype === 'fuse.devbox-block');
+    const block = [...arm.disk().mounts].find(([, mount]) => mount.source.startsWith('devbox-block:'));
 
     if (block === undefined) throw new Error('composed lower missing');
     arm.disk().unmount(block[0]);
@@ -1547,6 +1547,25 @@ describe('explicit collapse paths', () => {
       expect(nextBase === base).toBe(profile !== 'full-upper');
       expect((await wake(arm)).kind).toBe('attached');
       await expectTreeExact(arm, expected, 'after the next checkpoint restore');
+    });
+  }
+
+  for (const fault of ['type', 'generation'] as const) {
+    test(`a composed lower with the wrong ${fault} cannot publish readiness`, async () => {
+      const arm = CONFORMANCE_ARMS['snapshot-chain']();
+      await attach(arm);
+      await arm.workspace.write('base', 'base bytes');
+      expectCommitted(await arm.storage().checkpoint('quiesce'), 'base');
+      await arm.workspace.write('new', 'new bytes');
+      expectCommitted(await arm.storage().checkpoint('tick'), 'delta');
+      expect((await wake(arm)).kind).toBe('attached');
+      const block = [...arm.disk().mounts].find(([, mount]) => mount.source.startsWith('devbox-block:'));
+
+      if (block === undefined) throw new Error('composed lower missing');
+      const [path, mounted] = block;
+      arm.disk().mount(path, fault === 'type' ? { ...mounted, fstype: 'tmpfs' }
+        : { ...mounted, source: `${mounted.source.slice(0, mounted.source.lastIndexOf(':'))}:obsolete-runtime` });
+      await expect(attach(arm)).rejects.toThrow(fault === 'type' ? 'composed lower mounts' : 'generation mismatch');
     });
   }
 });
