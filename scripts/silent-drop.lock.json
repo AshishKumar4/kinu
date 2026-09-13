@@ -18,8 +18,6 @@
   "logged_default/wire packages/cli/src/commands/setup.ts#setupCommand",
   "logged_default/wire packages/cli/src/tui/home-app.tsx#openModelPicker",
   "logged_default/wire packages/cli/src/version-check.ts#runStartupUpdateCheck",
-  "logged_default/wire packages/compaction/src/extension.ts#complete",
-  "logged_default/wire packages/compaction/src/extension.ts#upgradePrefixSummary",
   "logged_default/wire packages/core/src/events/hub/content-spill.ts#spillEventContent",
   "logged_default/wire packages/core/src/evolution/engine.ts#runReplayEval",
   "logged_default/wire packages/core/src/evolution/session-window.ts#append",

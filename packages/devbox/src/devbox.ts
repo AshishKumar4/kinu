@@ -1457,16 +1457,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         },
       });
     } catch (cause) {
-      if (!this.#owns(generation)) {
+      // A superseded admission is not a failure to tolerate but a newer claim
+      // on this generation — the catch only observes it, so this branch
+      // logs and falls off the end rather than yielding out of the catch.
+      if (this.#owns(generation)) {
+        const failure = classifyRecovery({ cause });
+        await this.#record('attach', `[${failure} → retry] ${describe({ cause })}`);
+
+        if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, 1);
+      } else {
         console.error(`[devbox] superseded admission refused: ${describe({ cause })}`);
-
-        return;
       }
-
-      const failure = classifyRecovery({ cause });
-      await this.#record('attach', `[${failure} → retry] ${describe({ cause })}`);
-
-      if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, 1);
     }
   }
 

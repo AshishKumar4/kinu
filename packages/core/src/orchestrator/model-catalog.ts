@@ -29,7 +29,7 @@ import { contextWindowForModel } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { classifyErrorCode, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 
 /**
  * The one spelling of the model the next turn actually runs on.
@@ -147,6 +147,15 @@ export class ModelCatalogSession {
 
       return info;
     } catch (cause) {
+      // The failure this catch tolerates is the catalog being unreachable —
+      // a transport condition, never a fault in the lookup itself. Anything
+      // with a real signature (denied, bad input, cancelled, oom) is not
+      // "unavailable" and propagates rather than masquerading as an empty
+      // catalog.
+      const reason = classifyErrorCode({ cause });
+
+      if (reason !== null && reason !== 'unavailable' && reason !== 'io' && reason !== 'timeout') throw cause;
+
       // Nothing to propagate to: reads never block, while the cache retains this
       // lookup until it settles. The static fallbacks stay authoritative, but an
       // empty catalog is otherwise indistinguishable from a priced one that

@@ -175,15 +175,10 @@ function watchSseTerminal(body: ReadableStream<Uint8Array>): ReadableStream<Uint
       if (terminal) {
         // Cancel first: a rejection must reach the consumer's error path,
         // which closing first would mask — a closed stream swallows the
-        // pull's throw and the broken pipe reads as success.
-        try {
-          await cancelUpstream();
-        } catch (cause) {
-          controller.error(cause);
-
-          return;
-        }
-
+        // pull's throw and the broken pipe reads as success. Letting it
+        // throw out of `pull` errors the stream with that cause, which is
+        // what `controller.error` did by hand.
+        await cancelUpstream();
         controller.close();
       }
     },
