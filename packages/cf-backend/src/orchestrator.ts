@@ -225,6 +225,7 @@ import {
   type WorkMode,
   resolveModelRoute,
   WORKSPACE_RUN_ID,
+  buildWorkspaceOverview, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
 } from "@kinu.run/core";
@@ -5408,6 +5409,42 @@ export class OrchestratorAgent extends ActorAgent {
       status, tools, memoryContent, executors, executorOutputs, lastActiveExecutor, activePlan,
       tabPresence, slates, pendingSteers: this.pendingSteerRuns(), branchRuns,
     };
+  }
+
+  /**
+   * The home card's one read: needs-you count, activity, updates, last run —
+   * folded from the same read models the workspace surface asks, so the card
+   * never drifts from what the workspace itself would show.
+   *
+   * Sized for a roster row: the run line is {@link RunEventRecorder.latestRunHeader},
+   * two payloads at most rather than a summary fold; the in-flight answer comes
+   * from `hosted`, never `acquire` — a status read that started a turn would
+   * make visiting the home page run work. Host-owned like `listPendingActions`
+   * (rpc-gate marks it interactive), and a failed read propagates rather than
+   * zeroing, since "needs nothing" is the one false answer the card must not give.
+   */
+  @callable() async getWorkspaceOverview(): Promise<WorkspaceOverview> {
+    const [pendingActions, pendingConsents, activePlan] = await Promise.all([
+      this.listPendingActions(),
+      this.listPendingConsents(),
+      this.getActivePlanReview(),
+    ]);
+
+    const hostedBusy = this.actorHost().list()
+      .some((reference) => this.actorHost().hosted(reference)?.session.inFlight === true);
+
+    const header = this.eventRecorder.latestRunHeader();
+
+    return buildWorkspaceOverview({
+      observedAt: Date.now(),
+      working: this._inFlight || hostedBusy,
+      unfinished: this.owedWorkExists(),
+      pendingActions,
+      pendingConsents,
+      activePlan,
+      scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
+      latestRun: header === null ? null : { status: header.status, task: header.userMessage },
+    });
   }
 
   @callable() async executeInExecutor(executorId: string, command: string, device?: string) {

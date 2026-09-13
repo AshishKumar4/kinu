@@ -426,6 +426,92 @@ function deviceConnectFixture(path: string, method: string): Response | null {
   return null;
 }
 
+/* Home-card overview fixture. Five rows, five states the card exists to show:
+   a decision waiting, a live turn, a sealed completed run, durable unfinished
+   work, and a quiet idle row. A gate rewrites a row's answer with
+   `gallery:overview` ({name, outcome}) — `{kind:'status'}` answers it with
+   that HTTP status, so "unavailable" and "last-known after a refresh failure"
+   are reachable without leaving the page. `?overflowRoster=1` adds a sixth
+   workspace the cards must never ask about: the page shows five. */
+const OVERVIEW_BODIES = v.parse(JsonObjectSchema, {
+  "checkout-fixes": {
+    observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
+    latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
+  },
+  "perf-audit": {
+    observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: null, task: "Profile the landing bundle and split the vendor chunk" },
+  },
+  "email-triage": {
+    observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: true,
+    latestRun: { status: "completed", task: "Sort this week's receipts into the ledger" },
+  },
+  "design-sys": {
+    observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: "error", task: "Regenerate the token sheet from the palette spec" },
+  },
+  "handwrought-walnut-4166c321": {
+    observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: null,
+  },
+});
+
+/** One card's next answer, tagged so the body/status branch reads a domain
+ *  word rather than a representation check. */
+type OverviewOutcome =
+  | { readonly kind: "body"; readonly body: JsonValue }
+  | { readonly kind: "status"; readonly status: number };
+
+const OverviewOutcomeSchema = v.union([
+  v.object({ kind: v.literal("status"), status: v.number() }),
+  v.object({ kind: v.literal("body"), body: JsonValueSchema }),
+]);
+
+const OverviewCommandSchema = v.object({ name: v.string(), outcome: OverviewOutcomeSchema });
+
+const overviewOutcomes = new Map<string, OverviewOutcome>(
+  Object.entries(OVERVIEW_BODIES).map(([name, body]) => [name, { kind: "body", body }]),
+);
+
+// `?overviewErrors=name1,name2` seeds a card's failure before it asks, so a
+// gate does not have to race the mount reads to photograph "unavailable".
+for (const name of (new URLSearchParams(location.search).get("overviewErrors") ?? "").split(",")) {
+  if (name.trim() !== "") overviewOutcomes.set(name.trim(), { kind: "status", status: 503 });
+}
+
+const OVERFLOW_ROSTER = new URLSearchParams(location.search).get("overflowRoster") === "1";
+
+window.addEventListener("gallery:overview", (event: Event) => {
+  // The event is the gate's own CustomEvent; the detail is still parsed at
+  // the boundary because nothing typechecks across a dispatch.
+  const detail = event instanceof CustomEvent ? v.safeParse(OverviewCommandSchema, event.detail) : null;
+
+  if (detail?.success !== true) return;
+
+  overviewOutcomes.set(detail.output.name, detail.output.outcome);
+});
+
+function workspaceOverviewFixture(path: string): Response | null {
+  const match = path.match(/^\/api\/workspaces\/([^/]+)\/overview$/);
+
+  if (match === null) return null;
+
+  const name = decodeURIComponent(match[1]!);
+  // Which names the page actually asked for, in order — the evidence that only
+  // the displayed cards are fetched. On the document, where a gate already
+  // reads `galleryRosterReads`.
+  const asked = document.documentElement.dataset.galleryOverviewRequests;
+  document.documentElement.dataset.galleryOverviewRequests = asked === undefined ? name : `${asked} ${name}`;
+
+  const outcome = overviewOutcomes.get(name);
+
+  if (outcome === undefined) return fixtureJson({ error: "gallery has no overview fixture for this name" }, 404);
+
+  if (outcome.kind === "status") return fixtureJson({ error: `overview fixture answers ${outcome.status}` }, outcome.status);
+
+  return fixtureJson(outcome.body);
+}
+
 const STUB = new Map(Object.entries(STUB_DATA));
 
 /** KINU-060 gallery transport control. Every real WorkspaceRosterProvider
@@ -477,10 +563,28 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return rosterAuthorityHold.promise.then((held) => held.clone());
   }
 
+  if (OVERFLOW_ROSTER && path === "/api/user/workspaces" && method === "GET") {
+    const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
+
+    return Promise.resolve(fixtureJson({
+      entries: [...roster.entries, {
+        name: "sixth-unseen", displayName: "A sixth workspace", createdAt: NOW - 864e5,
+        lastVisited: NOW - 864e5, archivedAt: null,
+      }],
+      total: roster.entries.length + 1,
+    }));
+  }
+
   const response = STUB.get(path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
+  }
+
+  if (path.startsWith("/api/workspaces/") && method === "GET") {
+    const overview = workspaceOverviewFixture(path);
+
+    if (overview !== null) return Promise.resolve(overview);
   }
 
   // The two `/api/` prefixes a browser gate answers for itself. The feedback
