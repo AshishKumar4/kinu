@@ -17,7 +17,7 @@ import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox';
 import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents';
 import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '../src/monitor/probes';
-import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
+import { CLI_DIST_PATHS } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
 
 // ── A site to probe ──────────────────────────────────────────────

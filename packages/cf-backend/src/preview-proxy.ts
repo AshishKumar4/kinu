@@ -27,7 +27,7 @@
 
 import { getSandbox, proxyToSandbox } from "@cloudflare/sandbox";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
-import { escapeHtml } from "./lib/http";
+import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "./lib/preview-origin";
 import { isKinuSandboxId, sandboxPreviewExposed } from "./lib/preview-exposures";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";

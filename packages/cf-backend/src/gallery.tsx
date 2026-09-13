@@ -101,10 +101,10 @@ import {
   TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
-import { KINU_MARK, MARK_IDS, mark } from "@/lib/public-shell";
+import { KINU_MARK, MARK_IDS, mark } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
-} from "@/lib/public-pages";
+} from "@kinu.run/core";
 import Sidebar from "@/components/Sidebar";
 import Layout from "@/components/layout";
 import { ModelPicker } from "@/components/ModelPicker";

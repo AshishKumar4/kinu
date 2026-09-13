@@ -26,7 +26,7 @@ import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { bunResolutionShell } from '../src/cli/bun-runtime';
-import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
+import { CLI_DIST_PATHS } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 

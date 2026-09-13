@@ -28,7 +28,7 @@ import { jsrpcStub } from './helpers/jsrpc-stub';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
-import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '../src/lib/http';
+import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '@kinu.run/core';
 
 // The gate's own resolver of the shipped SDK copy, loaded rather than repeated:
 // `bun run gate:egress-interception` and this test must read one copy, and two

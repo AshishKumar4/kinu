@@ -23,7 +23,7 @@
  * a re-read of an open incident look like news.
  */
 
-import { CLI_DIST_PATHS } from '../lib/deployed-assets';
+import { CLI_DIST_PATHS } from '@kinu.run/core';
 import { sha256Hex } from '@kinu.run/core';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';

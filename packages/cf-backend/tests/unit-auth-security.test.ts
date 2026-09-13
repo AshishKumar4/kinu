@@ -15,7 +15,7 @@ import {
 } from '../src/lib/cloudflare-oauth';
 import { buildCliInstallCommand } from '../src/cli/install-command';
 import { handleCliRequest } from '../src/cli/routes';
-import { escapeHtml } from '../src/lib/http';
+import { escapeHtml } from '@kinu.run/core';
 import { sanitizeReturnTo } from '../src/auth/store';
 import { handleAuthRequest } from '../src/auth/routes';
 import { OAUTH_STATE_COOKIE_NAME } from '../src/auth/session';

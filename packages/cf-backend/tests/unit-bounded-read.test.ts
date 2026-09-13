@@ -15,7 +15,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
-import { readBounded, readBoundedStream } from '../src/lib/http';
+import { readBounded, readBoundedStream } from '@kinu.run/core';
 
 /**
  * `duplex: 'half'` is REQUIRED by the runtime whenever a Request body is a

@@ -34,7 +34,7 @@
 
 import type { AuthIdentity } from '../auth/session';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
-import { err, json, readBounded } from '../lib/http';
+import { err, json, readBounded } from '@kinu.run/core';
 import { sanitizePng, type PngFault } from './png';
 import {
   feedbackRouteFamily,
@@ -212,12 +212,19 @@ const UNREADABLE_FORM = 'Could not read the feedback form.';
 async function parseMultipart(
   url: string,
   contentType: string,
-  bytes: Uint8Array<ArrayBuffer>,
+  bytes: Uint8Array,
 ): Promise<FormData | KinuError> {
+  // `RequestInit.body` takes an exact `Uint8Array<ArrayBuffer>`, and core's
+  // `readBounded` can only promise the `ArrayBufferLike` flavor its own lib
+  // names — so copy once into a precisely-backed buffer. Bounded by `limit`
+  // upstream, so the copy is bounded too.
+  const exact = new Uint8Array(bytes.byteLength);
+  exact.set(bytes);
+
   const carrier = new Request(url, {
     method: 'POST',
     headers: { 'content-type': contentType },
-    body: bytes,
+    body: exact,
   });
 
   try {

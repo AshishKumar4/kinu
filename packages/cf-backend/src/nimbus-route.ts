@@ -44,7 +44,7 @@ import { previewHostSuffix } from './lib/preview-origin';
 import { timingSafeEqual } from '@kinu.run/core';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from './lib/nimbus-preview-host';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
-import { reoriginateRequest } from './lib/http';
+import { reoriginateRequest } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
 
 const HKDF_SALT = 'kinu.workspace-preview.salt';

@@ -1,9 +1,11 @@
-// Shared HTTP helpers for cf-backend route modules — one home instead of a
+// Shared HTTP helpers for the backend route modules — one home instead of a
 // per-route-file clone of json/err/safeJson/escapeHtml/readBounded, plus the
 // one policy for rebuilding an inbound request for an upstream.
-import { inlineFileType, projectJsonValue } from '@kinu.run/core';
-import { KinuError, toKinuError, tolerateAsync } from '@kinu.run/core/obs';
+import { inlineFileType } from '../read-models/file-types';
+import { projectJsonValue } from '../utils/json';
+import { KinuError, toKinuError, tolerateAsync } from '../obs/index';
 import { PRIVATE_NO_STORE } from './security-headers';
+import { copyHeaders } from '../providers/util';
 import * as v from 'valibot';
 
 /**
@@ -22,7 +24,7 @@ import * as v from 'valibot';
  * OUT, so the default is the safe direction.
  */
 export function json<Body>(body: Body, init: ResponseInit = {}): Response {
-  const headers = new Headers(init.headers);
+  const headers = copyHeaders(init.headers);
   headers.set('content-type', 'application/json');
 
   if (!headers.has('cache-control')) headers.set('cache-control', PRIVATE_NO_STORE);
@@ -113,7 +115,7 @@ export async function readBoundedStream(
 export async function readBounded(
   request: Request,
   limit: number,
-): Promise<Uint8Array<ArrayBuffer> | 'too_large' | KinuError> {
+): Promise<Uint8Array | 'too_large' | KinuError> {
   const chunks: Uint8Array[] = [];
   let total = 0;
 
@@ -238,7 +240,7 @@ export function kinuUserAgent(callerUserAgent: string | null): string {
 export function reoriginateRequest(
   request: Request,
   target: string,
-  init: { headers: Headers; redirect: RequestRedirect },
+  init: { headers: Headers; redirect: Request['redirect'] },
 ): Request {
   // `duplex` is absent from the Workers `RequestInit` type and required by the
   // fetch specification whenever the body is a stream. workerd accepts the

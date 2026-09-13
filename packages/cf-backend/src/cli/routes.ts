@@ -3,12 +3,12 @@ import type { AuthIdentity } from '../auth/session';
 import {
   AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
 } from '../auth/session';
-import { publicHtmlHeaders } from '../lib/security-headers';
-import { approvalDocument, installDocument } from '../lib/public-pages';
+import { publicHtmlHeaders } from '@kinu.run/core';
+import { approvalDocument, installDocument } from '@kinu.run/core';
 import {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
-} from '../lib/deployed-assets';
-import { err, escapeHtml, json, safeJson } from '../lib/http';
+} from '@kinu.run/core';
+import { err, escapeHtml, json, safeJson } from '@kinu.run/core';
 import { randomToken } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import { webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE } from '../events/webhook-route';

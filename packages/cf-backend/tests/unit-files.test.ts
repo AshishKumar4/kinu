@@ -7,7 +7,7 @@ import {
 } from "@kinu.run/core";
 import { setDiagnosticsSink } from "@kinu.run/core/obs";
 import { asFetchFunction } from "@kinu.run/core";
-import { fileResponseHeaders } from "../src/lib/http";
+import { fileResponseHeaders } from "@kinu.run/core";
 import {
   entryRevision, fileTextEditable, nextTreeCache, putFileBytes, sandboxedHtml,
   textRenderOf, viewerKindOf,
