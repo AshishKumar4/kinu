@@ -3290,6 +3290,10 @@ export abstract class ActorAgent extends Think<Env> {
     return reviewRecordedTurn({
       snapshot,
       llm: this.rt.advisorLlm,
+      workspace: {
+        vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
+        limits: async () => this.modelCatalog.contextFor((await this.modelForSource('advisor')).spec),
+      },
       govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: false,
       deliver: (signal) => this.orch.signals.deliver(signal),

@@ -23,7 +23,9 @@
  */
 
 import * as v from 'valibot';
-import type { LLM, SqlExecutor } from '../types/primitives';
+import type { LLM, SqlExecutor, VFS } from '../types/primitives';
+import { admitAgentsMd, renderInstructionOmission } from '../prompting/agents-md';
+import type { ModelWindow } from '../prompting/step-prune';
 import type { ActorHandle } from '../identity/actor-handle';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { AgentSignal, SignalOutcome } from '../types/signals';
@@ -391,7 +393,9 @@ function renderToolCall(call: ToolCallRecord): string {
  * told `agents` went unused, and the likeliest note was one instructing the
  * agent to delegate — which it had just done, five times, unsuccessfully.
  */
-export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly string[] = []): string {
+export function buildAdvisorPrompt(
+  turn: CompletedTurn, reachable: readonly string[] = [], guidance = '',
+): string {
   const tools = turn.toolCalls.length === 0
     ? '  (none)'
     : turn.toolCalls.map(renderToolCall).join('\n');
@@ -439,6 +443,7 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
     'do not ask for reassurance.',
     '',
     'Silence is the normal answer. Most turns are fine.',
+    ...(guidance === '' ? [] : ['', '## What this workspace asks its advisor to watch for', '', guidance]),
     '',
     `The request:\n"${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"`,
     '',
@@ -541,8 +546,9 @@ export async function reviewCompletedTurn(deps: {
   readonly turn: CompletedTurn;
   /** Capability names the turn actually ran with. See {@link buildAdvisorPrompt}. */
   readonly reachable?: readonly string[];
+  readonly guidance?: string;
 }): Promise<AdvisorNote | null> {
-  const raw = await deps.llm.complete(buildAdvisorPrompt(deps.turn, deps.reachable ?? []));
+  const raw = await deps.llm.complete(buildAdvisorPrompt(deps.turn, deps.reachable ?? [], deps.guidance));
 
   return parseAdvisorReply(raw);
 }
@@ -579,6 +585,7 @@ interface AdvisorLaneDeps {
   /** Capability names the turn ran with, so the missed-capability class is
    *  checkable rather than speculative. Empty when the caller cannot say. */
   readonly reachable: readonly string[];
+  readonly guidance: string;
   /** Speak the note. The caller supplies its own SignalDelivery. */
   readonly deliver: (signal: AgentSignal) => Promise<SignalOutcome>;
   /** Record the note on the audit stream (EvolutionEngine.recordAdvisorNote).
@@ -587,6 +594,8 @@ interface AdvisorLaneDeps {
    *  that forgot to pass it would write a note no scorer can read while looking
    *  exactly like one that works. */
   readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
+  readonly actor?: ActorHandle;
+  readonly parent?: (signal: AgentSignal) => Promise<SignalOutcome>;
 }
 
 /**
@@ -618,6 +627,7 @@ export const AdvisorRecoverySnapshotSchema = v.object({
   reachable: v.array(v.string()),
   minSeverity: v.picklist(ADVISOR_SEVERITIES),
   recent: v.array(v.string()),
+  model: v.optional(v.string()),
 });
 
 export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
@@ -635,7 +645,7 @@ export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapsh
  */
 async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition | null> {
   const note = await reviewCompletedTurn({
-    llm: deps.llm, turn: deps.turn, reachable: deps.reachable,
+    llm: deps.llm, turn: deps.turn, reachable: deps.reachable, guidance: deps.guidance,
   });
 
   if (note === null) return null;
@@ -668,9 +678,14 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   // durable id, because a fabricated key would collide two different turns.
   const keyed: AgentSignal = deps.turn.turnId === undefined || deps.turn.turnId === ''
     ? signal
-    : { ...signal, idempotencyKey: `advisor:${deps.turn.turnId}` };
+    : { ...signal, idempotencyKey: deps.actor === undefined
+      ? `advisor:${deps.turn.turnId}` : `advisor:${deps.actor.actorId}:${deps.turn.turnId}` };
 
   await deps.deliver(keyed);
+
+  if (note.severity === 'blocker' && deps.actor !== undefined && deps.parent !== undefined) {
+    await deps.parent({ ...keyed, text: `[Actor ${deps.actor.name}]\n${keyed.text}` });
+  }
 
   return 'deliver';
 }
@@ -744,6 +759,27 @@ export function markAdvisorLaneStarted(
  * throws; an unclassified one is definitive without being classified — one
  * attempt, one report, no advice — since retrying it would be a guess.
  */
+export interface AdvisorWorkspace {
+  readonly vfs: VFS;
+  readonly limits: () => Promise<ModelWindow>;
+}
+
+/** Optional workspace guidance is admitted before its bytes are read. */
+async function workspaceAdvisorGuidance(workspace: AdvisorWorkspace | undefined): Promise<string> {
+  if (workspace === undefined) return '';
+  const path = 'ADVISOR.md';
+  const stat = await workspace.vfs.stat(path);
+
+  if (stat === null || stat.isDir) return '';
+  const admission = admitAgentsMd([{ path, bytes: stat.size }], await workspace.limits());
+
+  if (admission.referenced.length > 0) return renderInstructionOmission(admission.referenced, path);
+  const raw = await workspace.vfs.readFile(path, { encoding: 'utf8' });
+  const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+
+  return text.trim();
+}
+
 export async function reviewRecordedTurn(deps: {
   readonly snapshot: AdvisorRecoverySnapshot;
   readonly llm: LLM | undefined;
@@ -751,6 +787,9 @@ export async function reviewRecordedTurn(deps: {
   readonly gateOpen: boolean;
   readonly deliver: AdvisorLaneDeps['deliver'];
   readonly record: AdvisorLaneDeps['record'];
+  readonly workspace?: AdvisorWorkspace;
+  readonly actor?: ActorHandle;
+  readonly parent?: AdvisorLaneDeps['parent'];
 }): Promise<AdvisorDisposition | null> {
   const { snapshot, llm } = deps;
 
@@ -767,8 +806,11 @@ export async function reviewRecordedTurn(deps: {
         recent: snapshot.recent,
         gateOpen: deps.gateOpen,
         reachable: snapshot.reachable,
+        guidance: await workspaceAdvisorGuidance(deps.workspace),
         deliver: deps.deliver,
         record: deps.record,
+        actor: deps.actor,
+        parent: deps.parent,
       });
     } catch (cause) {
       const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });
