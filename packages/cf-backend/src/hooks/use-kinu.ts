@@ -900,7 +900,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // accent badge on the strip, so the badge can never say something the queue
   // does not show. Host-owned: see the RPC's note on VIEW_DATA_SOURCES.
   const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
-  // Whether the gated right-pane tabs (Releases, Exploration) have content.
+  // Whether the gated right-pane tabs (Releases, Swarms) have content.
   // Seeded by the snapshot, refreshed with the live cycle; a fresh workspace
   // starts with neither tab until its first release change or search run.
   const [tabPresence, setTabPresence] = useState<TabPresence>({ releases: false, explorations: false });
@@ -2221,7 +2221,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** Re-read the queue — what Work's decide calls so a decided row leaves
      *  the list the same moment its box unticks, not on the next poll. */
     refreshPendingActions,
-    /** Whether the gated tabs (Releases, Exploration) have content. */
+    /** Whether the gated tabs (Releases, Swarms) have content. */
     tabPresence,
     /** Agent-authored Slates, as tabs, with their per-id remount counters. */
     slates,
