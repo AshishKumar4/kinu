@@ -4868,11 +4868,10 @@ export class LocalAgentSession implements BackendHost {
       // the same-named native tools (tools/memory-tool.ts, tools/tasks-
       // tool.ts); `this.taskList` is the SAME TaskListStore instance the
       // dynamic-context snapshot reads.
-      // No vectorStore: Vectorize hybrid search is CF-only, same as the
-      // native `memory` tool's wiring below (search stays FTS5-only here).
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
         actor: this.rt.actor,
+        vectorStore: null,
       })),
       createTasksCodemodeProvider(
         this.taskList,
@@ -5132,6 +5131,7 @@ export class LocalAgentSession implements BackendHost {
       fileLedger: this.actorSession.orchestrator.acc.files,
       escalations: this.actorSession.orchestrator.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
+      vectorStore: null,
       executeTools: (surface) => {
         // Narrowed by the SAME set the native surface is narrowed by, so a role
         // cannot lose a tool natively and keep it through the sandbox — as a

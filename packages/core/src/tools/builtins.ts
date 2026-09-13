@@ -170,9 +170,10 @@ export interface BuiltinToolDeps {
    * Optional Vectorize-backed VectorStore for semantic memory recall.
    * When provided, memory.search does hybrid retrieval (FTS5 + Vectorize via
    * RRF) instead of FTS5-only. Falls back gracefully when not provided OR
-   * when the underlying binding is unavailable.
+   * when the underlying binding is unavailable. null explicitly declares a
+   * backend without a semantic index; the result reports lexical-only coverage.
    */
-  vectorStore?: import('../memory/vector-store').VectorStore;
+  vectorStore?: import('../memory/vector-store').VectorStore | null;
   /** agent_facts world model. When provided, the `memory` tool also exposes
    *  the keyed-fact actions (remember / recall / forget). */
   facts?: import('../memory/facts').FactsStore;
