@@ -2950,4 +2950,88 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   }, 240_000);
+
+  test('the first keyboard resize after a remount persists its width and choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '400');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 400;
+      }, { timeout: 10_000 });
+
+      await page.setViewport({ width: 600, height: 900 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+
+      // Quiesce the fresh tree, then focus the separator that is actually
+      // mounted and press: the library reads only key and currentTarget,
+      // but a press delivered while focus still sits on the detached old
+      // element reaches no handler — that is a fixture outcome, not a
+      // product one. One ArrowRight step is five percentage points,
+      // landing the 400px inspector near 328 — off the seed, inside
+      // bounds, exactly the user's.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>('[data-separator]')?.focus();
+      });
+      await page.keyboard.press('ArrowRight');
+
+      // The keypress must move pixels within a bound: a press the library
+      // never hears is a dead tree and fails loudly here.
+      await page.waitForFunction(() => Math.round(
+        document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+      ) < 340, { timeout: 5000 });
+
+      // Settle, then assert: whatever the keypress commit classified, every
+      // commit it schedules (including a policy write-back) has landed.
+      await page.waitForFunction(() => {
+        const widths = () => Math.round(
+          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
+        );
+
+        const first = widths();
+
+        return new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      // Fractional shares round differently across read paths, so the
+      // committed width can differ a pixel from the rect read; a stored
+      // width off the seed proves the commit was claimed as the user's.
+      expect(state.width).toBeGreaterThanOrEqual(320);
+      expect(state.width).toBeLessThanOrEqual(335);
+      expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeGreaterThanOrEqual(320);
+      expect(Number(state.stored['kinu.inspector.ashish@example.com'])).toBeLessThanOrEqual(335);
+      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('1');
+
+      await page.close();
+    });
+  }, 240_000);
 });

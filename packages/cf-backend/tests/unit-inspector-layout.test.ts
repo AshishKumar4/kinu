@@ -283,15 +283,17 @@ describe('the persisted layout, through the page hook', () => {
     // account key to write under.
     expect(store).toEqual({});
 
-    // A stored value in no shape the reader accepts is absent, not a width —
-    // the column falls under the first-visit policy: it settles collapsed
-    // and writes nothing back.
+    // A stored value in no shape the reader accepts is absent, not a
+    // width — the column falls under the first-visit policy: it settles
+    // collapsed and writes nothing back. The legacy `<width>:<collapsed>`
+    // form is one such value: under the reset it is invalid, never
+    // migrated to its width half.
 
     const malformedStub = panelStub(340);
 
     const malformed = mount({
       account: 'a@b',
-      storedWidth: 'not-a-width',
+      storedWidth: '340:0',
       steps: [(layout, controls) => {
         layout.panelRef.current = malformedStub.handle;
         controls.flush();
@@ -305,7 +307,7 @@ describe('the persisted layout, through the page hook', () => {
     expect(malformedStub.state.collapsed).toBe(true);
     expect(store).toEqual({
       'kinu.inspector.account': 'a@b',
-      'kinu.inspector.a@b': 'not-a-width',
+      'kinu.inspector.a@b': '340:0',
     });
   });
   test('a write reads back: width and collapsed survive the string form', () => {
