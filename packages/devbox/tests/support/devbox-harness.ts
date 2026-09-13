@@ -232,6 +232,13 @@ export function fakeStorage(): FakeStorage {
    *  instead of silently overwriting the first. Sequential flows never trip it. */
   const keyVersions = new Map<string, number>();
 
+  const takeWriteFault = (key: string): Error | undefined => {
+    const fault = faults[key];
+    faults[key] = undefined;
+
+    return fault;
+  };
+
   // SAFETY: `DurableObjectStorage` declares the platform's whole storage API,
   // of which the methods under test reach exactly these five; the rest is
   // alarms and SQL beyond the one statement modelled below, which no line of
@@ -250,11 +257,9 @@ export function fakeStorage(): FakeStorage {
       return rows.get(key);
     },
     put: (key: string, value: StoredValue): Promise<void> => {
-      const fault = faults[key];
+      const fault = takeWriteFault(key);
 
       if (fault !== undefined) {
-        faults[key] = undefined;
-
         return Promise.reject(fault);
       }
 
@@ -294,6 +299,9 @@ export function fakeStorage(): FakeStorage {
           return removed.has(key) ? undefined : staged.get(key) ?? rows.get(key);
         },
         put: async (key: string, value: StoredValue): Promise<void> => {
+          const fault = takeWriteFault(key);
+
+          if (fault !== undefined) throw fault;
           observe(key);
           removed.delete(key);
           staged.set(key, value);
@@ -1379,27 +1387,12 @@ export class FakeSandbox {
     this.running.running = true;
 
     if (!wasRunning) this.containerStarts += 1;
-      // THE INIT GATE, modelled where the SDK really opens it. `container.js`
-      // runs this hook inside `ctx.blockConcurrencyWhile`, so for as long as it
-      // is held the runtime delivers NO event to the object — and no timer
-      // either, which is why the shipped hook reaches no container from here.
-      // The promise is published so a test can deliver a request the way the
-      // platform does (see {@link deliver}) instead of calling straight into a
-      // method the platform would still be holding back.
-      // OPENED WHEN THE HOOK SETTLES, however it settled — a rejection there is
-      // the platform resetting the object, and a request the runtime held back
-      // is released either way. So the marker is resolved in the `finally`
-      // rather than derived from the hook's promise: a rejection handler here
-      // would turn a failed activation into the same value a successful one
-      // produces, and the fake would be answering for something it did not see.
-      //
-      // RUN ON EVERY `start()`, NOT ONLY ON A REAL ONE, because that is what the
-      // SDK does: `container.js:583` opens the block and calls the hook whether
-      // or not `startContainerIfNotRunning` started anything, and
-      // `startAndWaitForPorts` does the same after `setHealthy()`. Measured on
-      // deployed probe `gp0902011918`, where the hook was re-entered 37 ms into
-      // a restore's first exec. A fake that skipped it could not hold the
-      // property that a re-entered hook fences nothing.
+    const fault = this.startFaultAfterRunning;
+    this.startFaultAfterRunning = undefined;
+
+    if (fault !== undefined) throw fault;
+    // The SDK awaits onStart inside its block on every start request.
+    // Incoming requests wait on initGate; timers and awaited I/O can complete.
     const opened = Promise.withResolvers<void>();
     this.initGate = opened.promise;
 
@@ -1410,26 +1403,10 @@ export class FakeSandbox {
       opened.resolve();
     }
 
-    const fault = this.startFaultAfterRunning;
-    this.startFaultAfterRunning = undefined;
-
-    if (fault !== undefined) throw fault;
   }
 
-  /**
-   * The SDK's app-port wait, and why the box never admits through it. Like the
-   * platform, this refuses a requested port nothing listens on — and a port the
-   * box has not restored yet answers nothing, so admitting a fresh box through
-   * here refuses where admitting it through `start()` succeeds. That refusal
-   * is the fidelity the bench proof bought: a fake whose port wait always
-   * passed could not hold the shape production depends on, which is admission
-   * on the instance with every per-port proof inside the restore.
-   *
-   * A dark port refuses AFTER the instance starts but BEFORE the hook runs —
-   * the wait guards it — so the container is up, nothing restored, and the
-   * hook never ran. A port with a listener delegates to `start()`, which runs
-   * the hook inline the way the SDK runs it inside its block.
-   */
+  /** Prove the Sandbox control listener or a requested application port
+   * before opening onStart. Only app listeners depend on restored workloads. */
   async startAndWaitForPorts(...args: unknown[]): Promise<void> {
     // The app ports this call waits on, in every shape the SDK accepts: a bare
     // port, a list, or the options object carrying `ports`. Decoded here, at
@@ -1438,9 +1415,14 @@ export class FakeSandbox {
     const single = v.safeParse(v.number(), args[0]);
     const list = v.safeParse(v.array(v.number()), args[0]);
 
-    const options = v.safeParse(
-      v.object({ ports: v.union([v.number(), v.array(v.number())]) }), args[0],
-    );
+    const options = v.safeParse(v.object({
+      ports: v.union([v.number(), v.array(v.number())]),
+      cancellationOptions: v.optional(v.object({
+        instanceGetTimeoutMS: v.optional(v.number()),
+        waitInterval: v.optional(v.number()),
+        abort: v.optional(v.instance(AbortSignal)),
+      })),
+    }), args[0]);
 
     const decoded = single.success ? single.output
       : list.success ? list.output
@@ -1450,7 +1432,8 @@ export class FakeSandbox {
     const wanted: readonly number[] = decoded === undefined ? []
       : Array.isArray(decoded) ? decoded : [decoded];
 
-    const dark = wanted.filter((port) => !this.listening.has(port));
+    // Port 3000 is the Sandbox control listener, not a restored application.
+    const dark = wanted.filter((port) => port !== this.defaultPort && !this.listening.has(port));
 
     if (dark.length > 0) {
       const wasRunning = this.running.running;
@@ -1462,7 +1445,14 @@ export class FakeSandbox {
       );
     }
 
-    await this.start();
+    const cancellation = options.success ? options.output.cancellationOptions : undefined;
+    const interval = cancellation?.waitInterval ?? 100;
+    await FakeSandbox.prototype.start.call(this, undefined, {
+      portToCheck: this.defaultPort,
+      retries: Math.ceil((cancellation?.instanceGetTimeoutMS ?? 30_000) / interval),
+      waitInterval: interval,
+      signal: cancellation?.abort,
+    });
   }
 
   stops = 0;
@@ -1590,10 +1580,8 @@ export interface Harness<Box> {
  * `id` is the Durable Object identity, defaulting to {@link TEST_BOX_ID} so a
  * test that does not care which box it addresses shares one. Pass `deriveBoxId`
  * output to model production, where the identity derives from strategy and name.
- * `container.running` starts true, so the readiness gate drives the restoration
- * rather than starting a container: an ephemeral box — no store — attaches
- * nothing, which is a real state and the one that keeps these tests about the
- * lifecycle rather than about a strategy.
+ * A fresh fixture starts stopped. Tests modelling a running but unsettled
+ * instance set running explicitly; readiness refuses it until the hook runs.
  */
 export function harness<Box>(
   Box: new (state: BoxState, env: TestEnv) => Box,
@@ -1627,6 +1615,8 @@ export function harness<Box>(
   // Defined after construction because the class reads `ctx.container` only at
   // call time, and the fake owns the handle it flips on stop and destroy.
   Object.defineProperty(state, 'container', { value: container.running, configurable: true });
+
+  container.running.running = false;
 
   return { box, container, rows: storage.rows, storage };
 }

@@ -100,7 +100,11 @@ describe('a stale attempt\'s stamp exec does not write the successor\'s containe
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
     const reading = gate();
-    storage.gateOn(BOOT_ID_KEY, reading);
+    // The stamp has already captured the old id and observed its absence.
+    // Park the next durable read so resumption cannot adopt the successor's
+    // id instead of exercising the pre-exec ownership fence.
+    rows.set(BOOT_ID_KEY, 'retired-boot');
+    storage.gateOn('devbox:replaced-count', reading);
     const stale = box.devboxStartup();
     await reading.reached;
 
@@ -115,7 +119,7 @@ describe('a stale attempt\'s stamp exec does not write the successor\'s containe
     // stale mint and the repair that follows it are the two this fence refuses.
     expect(stamps(harnessed.container)).toEqual([`printf %s ${durable} > ${BOOT_ID_PATH}`]);
     expect(harnessed.container.bootId).toBe(durable);
-    expect((await box.devboxState()).replacedCount).toBe(0);
+    expect((await box.devboxState()).replacedCount).toBe(1);
     expect((await box.devboxState()).ready).toBe(true);
   });
 });

@@ -288,7 +288,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
     const { box, container } = harness(TestBox);
     await container.stop();
 
-    await expect(box.startAndWaitForPorts({ ports: 3000 })).rejects.toThrow('never answered');
+    await expect(box.startAndWaitForPorts({ ports: 8080 })).rejects.toThrow('never answered');
     expect(container.execs).toEqual([]);
     expect((await box.devboxState()).restoration).toBe('unstarted');
   });
@@ -354,7 +354,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
       starts: container.containerStarts,
       stamps: container.execs.filter(command => command.includes(STAMP_COMMAND)).length,
       ready: (await box.devboxState()).ready,
-    }).toEqual({ starts: 1, stamps: 2, ready: true });
+    }).toEqual({ starts: 2, stamps: 2, ready: true });
   });
 
 
@@ -450,7 +450,7 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     await successor;
     const armsBefore = armed(container);
     settling.release();
-    await expect(stale).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    await stale; // The hook recorded no stale failure; the successor owns admission.
     expect(incidents(rows)).toEqual([]);
     expect(armed(container)).toBe(armsBefore);
     expect(ladder(rows)).toBeUndefined();
@@ -729,6 +729,8 @@ describe('one container identity is retried, then replaced, then refused', () =>
     rows.set(RECOVERY_KEY, seeded('retry'));
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    expect(container.destroys).toBe(0);
+    await box.devboxStartup();
     expect(container.destroys).toBe(1);
     // The stage is persisted BEFORE the destruction, so a failure that strikes
     // while `replace` is current is terminal instead of the second turn of a
@@ -857,7 +859,7 @@ describe('one container identity is retried, then replaced, then refused', () =>
     const armsAfterSuccess = armed(container);
 
     settling.release();
-    await expect(stale).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    await stale; // The hook recorded no stale failure; the successor owns admission.
 
     // Zero rows changed: no stage came back.
     expect(rows.has(RECOVERY_KEY)).toBe(false);
@@ -876,11 +878,13 @@ describe('one container identity is retried, then replaced, then refused', () =>
     rows.set(RECOVERY_KEY, seeded('retry'));
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     container.destroyFault = new Error('the container did not answer the signal');
+    await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    expect(container.destroys).toBe(0);
     await expect(box.devboxStartup()).rejects.toThrow('did not answer the signal');
     expect(container.running.running).toBe(true);
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('could not be destroyed') });
-    expect(container.containerStarts).toBe(0);
+    expect(container.containerStarts).toBe(1);
   });
 
   test('a destroyed identity is replaced by the next operation, not left refusing', async () => {
@@ -892,11 +896,12 @@ describe('one container identity is retried, then replaced, then refused', () =>
     rows.set(RECOVERY_KEY, seeded('retry'));
     failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
     await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    await box.devboxStartup();
     expect(container.running.running).toBe(false);
     // A caller arrives. `resolveReadiness` starts a container, its drive turns the
     // generation over, and this attach lands.
     await box.resolveReadiness();
-    expect(container.containerStarts).toBe(1);
+    expect(container.containerStarts).toBe(2);
     expect((await box.devboxState()).ready).toBe(true);
     // The success is what clears the ladder.
     expect(rows.has(RECOVERY_KEY)).toBe(false);
@@ -949,7 +954,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     container.scheduleRows.length = 0;
   };
 
-  test('the next operation drives the attach when no row is left to deliver it', async () => {
+  test('the next operation re-arms the only coordinator when its retry row was lost', async () => {
     // The deployed shape: a box failed its attach with
     // OPERATION_INTERRUPTED, the taxonomy answered `stale-owner → retry`, and
     // the ONE schedule row that answer armed was the only thing that could
@@ -961,14 +966,18 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     failAttempt(harnessed, 'OPERATION_INTERRUPTED');
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
     expect({ armed: armed(container), destroys: container.destroys, stamps: stamps(container) })
-      .toEqual({ armed: 1, destroys: 0, stamps: 0 });
+      .toEqual({ armed: 1, destroys: 0, stamps: 1 });
 
     loseTheArmedRow(container);
 
+    await expect(box.exec('ls')).rejects.toThrow('not ready');
+    expect(armed(container)).toBe(1);
+    expect(stamps(container)).toBe(1);
+    await box.devboxStartup();
     const result = await box.exec('ls');
 
     expect({ exitCode: result.exitCode, stamps: stamps(container) })
-      .toEqual({ exitCode: 0, stamps: 1 });
+      .toEqual({ exitCode: 0, stamps: 2 });
     expect((await box.devboxState()).restoration).toBe('attached');
     // The attach that landed is what clears the ladder row.
     expect(rows.has(RECOVERY_KEY)).toBe(false);
@@ -984,10 +993,10 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
 
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('A retry is already under way') });
+      { message: expect.stringContaining('A startup is armed') });
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('stale-owner → retry') });
-    expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 0 });
+    expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 1 });
   });
 
   test('a terminal class is never re-driven, and its refusal names the repair', async () => {
@@ -1004,7 +1013,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
       { message: expect.stringContaining('exhausted → refuse') });
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('terminal: call attachNow()') });
-    expect(stamps(container)).toBe(0);
+    expect(stamps(container)).toBe(1);
   });
 
   test('an idle box with no caller gets its lost retry armed by the state poll', async () => {
@@ -1141,7 +1150,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       slow.release();
     });
 
-  test('a boot stamp that outruns its allowance leaves the box attached and unready',
+  test('an initial boot stamp that exceeds the hook budget leaves the box unattached',
     async () => {
       // The last phase, and the one furthest from the attach that opened the
       // bound. It is a step like the others: reported, never replaced.
@@ -1150,13 +1159,16 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const slow = gate();
       container.stampGate = slow;
       const attempt = box.devboxStartup();
+      const rejected = expect(attempt).rejects.toThrow('[abandoned → replace]');
       await slow.reached;
-      await attempt;
+      await rejected;
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
       expect(state.ready).toBe(false);
-      expect(state.unready).toBe('the boot id stamp is still pending');
-      expect(rows.has(RECOVERY_KEY)).toBe(false);
+      expect(state.restoration).toBe('unattached');
+      expect(rows.has(RECOVERY_KEY)).toBe(true);
+      await box.devboxStartup();
+      expect(container.destroys).toBe(1);
       slow.release();
     });
 
@@ -1171,6 +1183,8 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       rows.set(RECOVERY_KEY, { owner: PREVIOUS, stage: 'retry' });
       failAttempt(harnessed, 'RPC_TRANSPORT_ERROR');
       await expect(box.devboxStartup()).rejects.toThrow('RPC_TRANSPORT_ERROR');
+      expect(container.destroys).toBe(0);
+      await box.devboxStartup();
       expect(container.destroys).toBe(1);
       expect(container.running.running).toBe(false);
       expect(ladder(rows)?.stage).toBe('replace');
@@ -1227,21 +1241,22 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     await expect(fixture.box.devboxStartup()).rejects.toThrow('UNKNOWN_ERROR');
   });
 
-  test('a faulted container step really leaves the box attached and unready', async () => {
+  test('a faulted initial boot stamp leaves the box unattached and unready', async () => {
     // The other half of the split, proved on the fake: a container fault after
     // the attach must NOT reject the attempt.
     fixture.container.stampFaults.push(new Error('the stamp refused'));
-    await fixture.box.devboxStartup();
+    await expect(fixture.box.devboxStartup()).rejects.toThrow('the stamp refused');
     const state = await fixture.box.devboxState();
-    expect({ ready: state.ready, unready: state.unready })
-      .toEqual({ ready: false, unready: 'the boot id stamp failed' });
+    expect(state.restoration).toBe('unattached');
+    expect(state.ready).toBe(false);
+    expect(state.unready).toContain('the stamp refused');
     expect(fixture.container.destroys).toBe(0);
   });
 
-  test('a terminal boot stamp failure is retried by the explicit attached repair', async () => {
+  test('an initial boot stamp failure is retried through the explicit start coordinator', async () => {
     fixture.container.stampFaults.push(new Error('the stamp refused'));
-    await fixture.box.devboxStartup();
-    expect((await fixture.box.devboxState()).unready).toBe('the boot id stamp failed');
+    await expect(fixture.box.devboxStartup()).rejects.toThrow('the stamp refused');
+    expect((await fixture.box.devboxState()).unready).toContain('the stamp refused');
 
     await fixture.box.attachNow();
     expect((await fixture.box.devboxState()).ready).toBe(true);
@@ -1275,7 +1290,7 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     // start had already armed. An inert attempt may not ADD to it.
     const armedBeforeSettling = armed(fixture.container);
     settling.release();
-    await expect(attempt).rejects.toThrow('RPC_TRANSPORT_ERROR');
+    await attempt;
     expect(fixture.rows.get(RECOVERY_KEY)).toEqual({ owner: 'another-attempt' });
     expect(armed(fixture.container)).toBe(armedBeforeSettling);
     expect(incidents(fixture.rows)).toEqual([]);

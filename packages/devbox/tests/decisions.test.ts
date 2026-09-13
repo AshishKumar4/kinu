@@ -522,7 +522,7 @@ describe('incident retry schedule', () => {
 describe('readiness is per container, not per Durable Object', () => {
   test('the startup callback turns the lifecycle over before admitting a stopped container', () => {
     const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
-    const startup = source.slice(source.indexOf('async #drive('));
+    const startup = source.slice(source.indexOf('async #startContainer('));
     const body = startup.slice(0, startup.indexOf('\n  }'));
     expect(body).toContain('this.#invalidateGeneration();');
     // Admitted through `start()` on the instance: the patched SDK marks healthy
@@ -530,11 +530,14 @@ describe('readiness is per container, not per Durable Object', () => {
     // container — and no app port is waited on, because the restore starts the
     // app. An app-port wait here would hold the restore behind work it has not
     // done yet.
-    expect(body).toContain('await this.start(undefined, {');
-    const invalidate = source.slice(source.indexOf('#invalidateGeneration(): void {'));
+    const admission = source.slice(source.indexOf('async #admitControlListener('));
+    const admitting = admission.slice(0, admission.indexOf('\n  }'));
+    expect(admitting).toContain('await this.startAndWaitForPorts({');
+    expect(admitting).toContain('ports: this.defaultPort');
+    const invalidate = source.slice(source.indexOf('  #invalidateGeneration('));
     const reset = invalidate.slice(0, invalidate.indexOf('\n  }'));
     expect(reset).toContain('this.#generation += 1;');
-    expect(reset).toContain('this.#startup = undefined;');
+    expect(reset).toContain('this.#startup = recoveryFlight === undefined');
     expect(reset).toContain("this.#restoration = { phase: 'unstarted' };");
   });
 });
@@ -660,14 +663,14 @@ describe('every self-re-arming schedule needs a first link', () => {
     expect({
       total: armSites(source),
       onStart: armSites(bodyOf('async #armContainerSchedules(')),
-      startupAdmission: armSites(bodyOf('async #drive(')),
+      startupAdmission: armSites(bodyOf('async #admitControlListener(')),
       startupRetry: armSites(bodyOf('async #recover(')),
-      startupUnclassified: armSites(bodyOf('async #startupAttempt(')),
+      hookFailure: armSites(bodyOf('async #runStartHook(')),
       onKick: armSites(bodyOf('async kickStartup(')),
       onRecord: armSites(bodyOf('async #record(')),
       guard: armSites(bodyOf('async #scheduled(')),
     }).toEqual({
-      total: 8, onStart: 2, startupAdmission: 1, startupRetry: 1, startupUnclassified: 1,
+      total: 7, onStart: 2, startupAdmission: 1, startupRetry: 1, hookFailure: 0,
       onKick: 1, onRecord: 1, guard: 1,
     });
     // And the ONE re-arm is reachable only from the action that means "ask this
@@ -707,7 +710,9 @@ describe('every self-re-arming schedule needs a first link', () => {
     // copy of that comparison is how the two would drift.
     expect(heartbeat).toContain('#containerWasReplaced()');
     expect(bodyOf('async #containerWasReplaced(')).toContain('#readBootId()');
-    expect(heartbeat).toContain("this.#drive('schedule')");
+    expect(heartbeat).toContain('this.kickStartup()');
+    expect(heartbeat).not.toContain('this.#restoreNow(');
+    expect(heartbeat).not.toContain('this.#startContainer(');
     // The COUNTER lives where the evidence is, not where it is noticed. Every
     // restoration passes through the stamp, whether the container-start hook or
     // a heartbeat drove it. Counting only in the heartbeat under-reported the
@@ -738,7 +743,9 @@ describe('every self-re-arming schedule needs a first link', () => {
     // Re-attach through the ordinary restoration, so the recovery ladder and the
     // strategy's own residue handling are the ones that run.
     expect(heal).toContain('this.#invalidateGeneration();');
-    expect(heal).toContain("await this.#drive('request');");
+    expect(heal).toContain('await this.kickStartup();');
+    expect(heal).toContain('throw new Error(');
+    expect(heal).not.toContain('this.#restoreNow(');
   });
 
   test('keepAlive is never enabled, because it kills the alarm chain', () => {
