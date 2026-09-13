@@ -27,9 +27,9 @@
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
 import {
-  filterByEffectiveScore, explainNativeToolReferenceError, parsesAsExpression,
+  explainNativeToolReferenceError, parsesAsExpression,
   NO_TIMER_DEADLINE_MS, bindTaskPlan,
-  type CraftStore, type SqlExecutor,
+  type CraftedToolSource,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from './codemode-node-shim';
@@ -39,31 +39,6 @@ import { EGRESS_FAILURE_HEADER } from './codemode-egress';
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
 
 type ResolvedProvider = Extract<DynamicProviderInput, object[]>[number];
-
-export interface InjectableCraftedTool {
-  readonly name: string;
-  readonly code: string;
-  readonly description: string;
-}
-
-/**
- * Select the crafted tools eligible for injection: non-empty, non-comment
- * code, passing the SAME effective-score policy core's tool builder applies
- * (filterByEffectiveScore) — one policy, two call sites. Reads the CraftStore
- * fresh so mid-turn-saved tools are visible to the NEXT execute_tools call.
- */
-export function selectInjectableCraftedTools(
-  craftStore: Pick<CraftStore, 'list'>,
-  sql: SqlExecutor,
-): InjectableCraftedTool[] {
-  const rows = craftStore.list().map((row) => ({
-    name: row.name,
-    code: (row.code ?? '').trim(),
-    description: row.description ?? '',
-  })).filter((row) => row.name && row.code && !row.code.startsWith('//'));
-
-  return filterByEffectiveScore(sql, rows);
-}
 
 /** What the sandbox prelude needs to know about the actor it runs for. */
 export interface SandboxIdentity {
@@ -78,7 +53,7 @@ export interface SandboxIdentity {
  * per provider, so a namespace this actor does not wire is an unresolved
  * identifier, and `typeof` is the one read of such a name that does not throw.
  */
-export function renderToolsPrelude(crafted: readonly InjectableCraftedTool[], identity: SandboxIdentity): string {
+export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identity: SandboxIdentity): string {
   const definitions = crafted.map((entry) => {
     const parseError = parsesAsExpression(entry.code);
 
