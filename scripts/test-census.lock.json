@@ -1,6 +1,14 @@
 {
-  "measured": "d9db63b67: 989 test files, 889 runnable suites, 12041 tests, 33 runners, 61 non-public product members",
+  "measured": "df350c5eb: 990 test files, 890 runnable suites, 12060 tests, 33 runners, 61 non-public product members",
   "entries": [
+    {
+      "key": "internal_mock :: packages/core/tests/unit-activity-log.test.ts :: a failed writer source is reported without failing the caller or disclosing its detail :: spy on an internal object",
+      "count": 1
+    },
+    {
+      "key": "internal_mock :: packages/core/tests/unit-deferred-approval.test.ts :: a failed consumption audit is reported without changing an executed command into a refusal :: spy on an internal object",
+      "count": 1
+    },
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
       "count": 1
@@ -119,10 +127,6 @@
     },
     {
       "key": "mirror :: packages/devbox/tests/lifecycle-generation.test.ts :: a caller does not JOIN a superseded attempt, it starts the new generation's :: declared mirror",
-      "count": 1
-    },
-    {
-      "key": "mirror :: packages/devbox/tests/restore-after-start.test.ts :: T8: the settled phase is durable — a fresh activation over the running container adopts it :: declared mirror",
       "count": 1
     },
     {
@@ -823,6 +827,10 @@
     },
     {
       "key": "tautology_suspect :: packages/cf-backend/tests/unit-user-mcp.test.ts :: a bigger window admits more of the same catalog :: expected side computed by the code under test",
+      "count": 1
+    },
+    {
+      "key": "tautology_suspect :: packages/cli/tests/cloud-agent-client.test.ts :: history rejects an empty row identity, matching the browser admission rule :: weak-only test",
       "count": 1
     },
     {

@@ -81,7 +81,7 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
     }).toEqual({ stamps: 1, replacedCount: 1, tickSawReplacement: false, ready: true });
   });
 
-  test('the beat still re-drives an ATTACHED box whose instance was replaced', async () => {
+  test('the beat refuses replacement and arms the hook coordinator without restoring', async () => {
     // The other direction: the detector is not disabled, it is scoped. A box
     // that settled on one instance and finds another underneath it is the
     // case the heartbeat exists for.
@@ -92,6 +92,11 @@ describe('a heartbeat landing inside a restoration leaves that restoration alone
 
     await box.devboxHeartbeat();
 
+    const observed = await box.devboxState();
+    expect(observed.ready).toBe(false);
+    expect(observed.lastTick?.replaced).toBe(true);
+    expect(container.execs.filter(command => command.includes(STAMP_COMMAND))).toHaveLength(1);
+    await box.devboxStartup();
     const state = await box.devboxState();
     expect({
       stamps: container.execs.filter((command) => command.includes(STAMP_COMMAND)).length,

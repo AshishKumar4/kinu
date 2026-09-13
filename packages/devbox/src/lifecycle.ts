@@ -36,26 +36,9 @@ export interface DevboxPolicy {
    *  schedule ticks at. Both are this one number: a tick that fires early
    *  (a container restart re-arms the schedule) must not double-commit. */
   readonly checkpointIntervalMs: number;
-  /**
-   * Budget for the WHOLE restoration: attach, workload restart, listener proof,
-   * port exposure and boot stamping.
-   *
-   * THE RESTORATION RUNS ON A DELIVERED FRAME — the `devboxStartup` row or a
-   * readiness request — never inside the container-start hook's
-   * `blockConcurrencyWhile`, where no Durable Object timer is delivered until
-   * the block releases and the platform cancels the block by RESETTING the
-   * object at `do.block_concurrency.cancel_ms`. On a delivered frame the
-   * timer IS delivered, so the budget is RACED ({@link racedRestoreSteps}):
-   * every step runs against its allowance, and a step that outruns one is
-   * ABANDONED with a classified reason. The default still sits below the
-   * platform's cap — see `KinuSandbox.policy`, which derives it from the
-   * platform catalog rather than retyping it — so a request that opened the
-   * restore is not held past what the platform would allow an activation.
-   *
-   * IT COVERS EVERY PHASE, not just the attach. Wrapping `attach()` alone leaves
-   * the phases after it unbounded while every caller waits in the readiness
-   * gate.
-   */
+  /** Whole onStart restore budget: identity, workspace attachment, workload
+   * resumption and durable settlement. A raced timer bounds every step; the
+   * control-listener proof happens before the SDK opens the block. */
   readonly attachBudgetMs: number;
   /**
    * The CAP on how long one restart keeps asking whether a restored server is
@@ -76,28 +59,8 @@ export interface DevboxPolicy {
   readonly portWaitMs: number;
   /** Gap between two listener probes inside that window. */
   readonly portProbeIntervalMs: number;
-  /**
-   * How long a REQUEST may be held on a restoration before it answers from
-   * the restoration's state instead of waiting for it.
-   *
-   * A request that OPENS a restoration, or arrives while one runs, joins the
-   * one single-flight attempt for this long and then answers "a restoration
-   * is running, ask again" — a readable, re-askable answer rather than an
-   * open frame. The checkpoint lane is held to the same bound: it serialises
-   * every commit, so holding it for a whole restore would stall commits
-   * behind an unrelated recovery. Nothing is abandoned — the attempt keeps
-   * running under the single-flight entry and the next ask joins or reads it
-   * — and the timer IS delivered, because nothing on this path runs inside
-   * `blockConcurrencyWhile`.
-   *
-   * GENEROUS ON PURPOSE. A cold attach ordinarily settles inside one join and
-   * the caller gets its answer first time. What this bounds is the pathological
-   * case.
-   *
-   * The ALARM door has no such bound and must not: it holds no caller, and
-   * something has to drive a restoration to completion for a box nobody is
-   * asking about.
-   */
+  /** A delivered checkpoint may join startup or explicit repair for this long.
+   * Requests arriving during onStart are held by the platform's own gate. */
   readonly requestJoinMs: number;
 }
 
@@ -148,6 +111,14 @@ export class ContainerStartOverrun extends Error {
       + 'running inside the container cannot be fenced from here.',
     );
     this.name = 'ContainerStartOverrun';
+  }
+}
+
+/** A prior activation disappeared before its durable restore claim settled. */
+export class ContainerStartInterrupted extends Error {
+  constructor() {
+    super('the previous restoration was interrupted before settlement; its container work may still be running');
+    this.name = 'ContainerStartInterrupted';
   }
 }
 
@@ -294,14 +265,9 @@ async function raceAllowance<T>(
  * taxonomy. Every step AFTER the attach reports instead: see
  * {@link withStepAllowance}.
  *
- * A REAL TIMER, WHICH IS WHY THE RESTORE RUNS ON A DELIVERED FRAME. A
- * `setTimeout` set inside `blockConcurrencyWhile` is not delivered until the
- * block releases, so this bound cannot fire in the container-start hook — and
- * a budget polled between commands cannot shorten the one command in flight,
- * which is how the in-gate placement measured out (six fresh starts, one
- * admitted). Detaching the work is not an alternative either: a promise left
- * floating in a Durable Object is cancelled on eviction with its rejection
- * swallowed, so the work would silently not happen.
+ * The deployed September 13 probe proved timer delivery inside the block.
+ * Control-port readiness must precede the block; a timer cannot make an
+ * unproven listener safe.
  *
  * `onOverrun` receives the outcome of the abandoned work if it ever settles.
  * Abandoning a value is not the same as discarding an error, and that late
@@ -463,7 +429,7 @@ const CodedFailureSchema = v.object({ code: v.string() });
  */
 export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryClass {
   for (let value = thrown.cause; ;) {
-    if (value instanceof ContainerStartOverrun) return 'abandoned';
+    if (value instanceof ContainerStartOverrun || value instanceof ContainerStartInterrupted) return 'abandoned';
     const coded = v.safeParse(CodedFailureSchema, value);
 
     if (coded.success) {
