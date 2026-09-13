@@ -212,9 +212,13 @@ const STEER_MARKER = 'KINU_STEER_LANDED';
 
 /** The seeded bug the recovery case needs. `add` subtracts, and the test expects
  *  a sum — so the first obvious command FAILS, which is the only way execution
- *  recovery can be measured at all. */
+ *  recovery can be measured at all. Plain `.mjs` run by `bun test`: the
+ *  workspace shell cannot run programs on a hosted deployment (its node shim
+ *  answers codegen-forbidden, vfs/workspace-runtimes.ts), so the runner is the
+ *  sandbox container, which ships a real bun — the episode measures cause
+ *  repair, not whether a toolchain exists where the agent first looked. */
 const BROKEN_SOURCE = [
-  'export function add(a: number, b: number): number {',
+  'export function add(a, b) {',
   '  return a - b;',
   '}',
   '',
@@ -222,18 +226,26 @@ const BROKEN_SOURCE = [
 
 const BROKEN_TEST = [
   "import { test, expect } from 'bun:test';",
-  "import { add } from './broken.ts';",
+  "import { add } from './broken.mjs';",
   '',
   "test('add sums', () => { expect(add(2, 3)).toBe(5); });",
   '',
 ].join('\n');
 
-const RECOVERY_TEST_COMMAND = 'bun test broken.test.ts';
+/** The command the verifier pins, verbatim, on the sandbox runtime: the
+ *  workspace shell has no test runner that can run programs on a hosted
+ *  deployment, so the same literal runs where `bun` is real. */
+const RECOVERY_TEST_COMMAND = 'bun test broken.test.mjs';
 
 const RecoveryTestRunSchema = v.object({
   command: v.literal(RECOVERY_TEST_COMMAND),
-  runtime: v.optional(v.literal('workspace')),
+  runtime: v.literal('sandbox'),
 });
+
+/** Single-quote a shell argument, escaping embedded quotes the POSIX way. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
 
 /**
  * What one public-plane episode may spend. Wider than the local single-turn
@@ -348,18 +360,26 @@ const CASES: readonly TrajectoryCase[] = [
     id: 'public-failure-recovery',
     purpose: 'A senior engineer who runs the tests, reads the failure, and fixes the cause.',
     seed: [
-      { path: 'broken.ts', content: BROKEN_SOURCE },
-      { path: 'broken.test.ts', content: BROKEN_TEST },
+      { path: 'broken.mjs', content: BROKEN_SOURCE },
+      { path: 'broken.test.mjs', content: BROKEN_TEST },
     ],
     turns: [
-      `Run \`${RECOVERY_TEST_COMMAND}\` in this workspace and reply with only PASS or FAIL.`,
-      `Fix the bug in broken.ts so that test passes, run \`${RECOVERY_TEST_COMMAND}\` again, and `
+      `Copy broken.mjs and broken.test.mjs into the sandbox, run \`${RECOVERY_TEST_COMMAND}\` there with the run tool's runtime 'sandbox', and reply with only PASS or FAIL.`,
+      `Fix the bug in broken.mjs so that test passes, copy both files into the sandbox, run \`${RECOVERY_TEST_COMMAND}\` again with runtime 'sandbox', and `
       + 'reply with only PASS or FAIL.',
     ],
     budget: { ...PUBLIC_BUDGET },
     async verify({ session, events, history }) {
-      const originalTests = await session.readFile('broken.test.ts', { allowMissing: true });
-      const result = await session.execute('workspace', RECOVERY_TEST_COMMAND);
+      const originalTests = await session.readFile('broken.test.mjs', { allowMissing: true });
+      const fixedSource = await session.readFile('broken.mjs', { allowMissing: true });
+
+      const staged = [
+        `printf %s ${shellQuote(Buffer.from(fixedSource ?? '').toString('base64'))} | base64 -d > /workspace/broken.mjs`,
+        `printf %s ${shellQuote(Buffer.from(originalTests ?? '').toString('base64'))} | base64 -d > /workspace/broken.test.mjs`,
+        `cd /workspace && ${RECOVERY_TEST_COMMAND}`,
+      ].join(' && ');
+
+      const result = await session.execute('sandbox', staged);
 
       if (result.exitCode === undefined) {
         throw new Error(`${INFRA_FAILURE_MARKER} verification command returned no exit code: ${result.error ?? 'unreported'}`);
@@ -683,7 +703,12 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     const session: Pick<KinuPublicSession, 'readFile' | 'execute'> = {
       readFile: (path) => Bun.file(join(root, path)).text(),
       async execute(_executor, command) {
-        const process = Bun.spawn(['bash', '-c', command], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+        // The verifier stages into /workspace (the sandbox container's
+        // default cwd, core/src/execution/sandbox.ts) while this fake runs on
+        // the local box: translate the mount so the same literal stages the
+        // scratch root the seed writer used.
+        const translated = command.replaceAll('/workspace', root);
+        const process = Bun.spawn(['bash', '-c', translated], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
 
         const [exitCode, stdout, stderr] = await Promise.all([process.exited,
           new Response(process.stdout).text(), new Response(process.stderr).text()]);
@@ -696,12 +721,12 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
         agentId: 'eval-public', userMessage: entry.turns[0] },
       { type: 'tool_call_end', runId: 'first', eventIndex: 99, timestamp: '2026-09-07T00:00:02Z',
-        name: 'run', toolCallId: 'failed-test', args: { command: 'bun test broken.test.ts' },
+        name: 'run', toolCallId: 'failed-test', args: { command: 'bun test broken.test.mjs', runtime: 'sandbox' },
         outcome: { success: false, reason: null, execution: { exitCode: 1 } } },
       { type: 'run_start', runId: 'second', eventIndex: 0, timestamp: '2026-09-07T00:00:03Z',
         agentId: 'eval-public', userMessage: entry.turns[1] },
       { type: 'tool_call_end', runId: 'second', eventIndex: 2, timestamp: '2026-09-07T00:00:04Z',
-        name: 'run', toolCallId: 'rerun-test', args: { command: 'bun test broken.test.ts' },
+        name: 'run', toolCallId: 'rerun-test', args: { command: 'bun test broken.test.mjs', runtime: 'sandbox' },
         result: '1 pass, 0 fail', outcome: { success: true } },
     ];
 
@@ -709,16 +734,16 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       { role: 'assistant', text: 'FAIL' }, { role: 'assistant', text: 'PASS' },
     ] };
 
-    await Bun.write(join(root, 'broken.test.ts'), BROKEN_TEST);
-    await Bun.write(join(root, 'broken.ts'), BROKEN_SOURCE + '// a + b is not the implementation\n');
+    await Bun.write(join(root, 'broken.test.mjs'), BROKEN_TEST);
+    await Bun.write(join(root, 'broken.mjs'), BROKEN_SOURCE + '// a + b is not the implementation\n');
     const broken = await entry.verify(input);
     expect(broken.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(false);
-    await Bun.write(join(root, 'broken.ts'), 'export const add = (a: number, b: number) => a - -b;\n');
+    await Bun.write(join(root, 'broken.mjs'), 'export const add = (a, b) => a - -b;\n');
     const fixed = await entry.verify(input);
     expect(fixed.every((subgoal) => subgoal.reached)).toBe(true);
 
     const unrelated = events.map((event): RunEvent => event.type === 'tool_call_end'
-      ? { ...event, args: { command: event.runId === 'first' ? 'false' : 'true' } } : event);
+      ? { ...event, args: { command: event.runId === 'first' ? 'false' : 'true', runtime: 'sandbox' } } : event);
 
     const notTested = await entry.verify({ ...input, events: unrelated });
     expect(notTested.find((subgoal) => subgoal.what === 'failure-observed')?.reached).toBe(false);

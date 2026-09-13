@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime } from './helpers';
+import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
+import { createTestRuntime, createWorkspaceBundle } from './helpers';
 import {
   createNimbusWorkspaceExecutor, createNimbusExecutor,
   nimbusSessionFiles,
@@ -7,6 +9,7 @@ import {
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
 import { DefaultExecutionRouter } from '../src/execution/router';
+import { CommandResultSchema } from '../src/execution/exec-result';
 
 function fakeBox() {
   const files = new Map<string, Uint8Array>();
@@ -166,6 +169,109 @@ describe('hosted Nimbus workspace provider', () => {
       inline,
       inboundNetwork: false,
     }).capabilities.has('net_inbound')).toBe(false);
+  });
+
+  test('a command the box answers 127 for names itself and the two remedies', async () => {
+    const box = fakeBox();
+    box.exec = async (command) => ({
+      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127,
+    });
+    box.runtimes = { list: async () => ({ installed: [], available: [{ name: 'bun' }] }) };
+
+    // The plain `Shell` the run tool drives carries the classification; the
+    // refusal text must name the command and both exits — the sandbox runtime
+    // and the install path this box's catalog CAN serve (`bun` is available).
+    const shell = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
+
+    expect(shell.exitCode).toBe(127);
+    expect(shell.refusal?.reason).toBe('unavailable');
+    expect(shell.refusal?.error).toContain('bun');
+    expect(shell.refusal?.error).toContain('sandbox');
+    expect(shell.refusal?.error).toContain('nimbus install');
+    expect(shell.stderr).toContain('command not found');
+
+    // The executor's public tool surface answers the same refusal object.
+
+    const { rt } = createTestRuntime();
+
+    const provider = createNimbusWorkspaceExecutor({
+      box,
+      inline: {
+        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
+      },
+    });
+
+    const answer = v.parse(CommandResultSchema, await provider.tools.exec!.execute('bun test broken.test.mjs'));
+
+    if (v.is(v.string(), answer)) throw new Error('expected a refusal object');
+
+    expect(answer.reason).toBe('unavailable');
+    expect(answer.error).toContain('bun');
+    expect(answer.error).toContain('nimbus install');
+  });
+
+  test('a box without a runtime catalog still names sandbox, and real failures pass through', async () => {
+    const box = fakeBox();
+    box.exec = async (command) => command.startsWith('exit')
+      ? { command, success: false, stdout: '', stderr: 'no', exitCode: 2 }
+      : { command, success: false, stdout: '', stderr: 'grep: command not found', exitCode: 127 };
+    // No `runtimes` member: nothing on this box is installable, so the text
+    // may not promise `nimbus install` for this command.
+
+    const missed = await nimbusSessionShell(box).exec('grep -r thing .');
+
+    expect(missed.refusal?.reason).toBe('unavailable');
+    expect(missed.refusal?.error).toContain('sandbox');
+
+    const real = await nimbusSessionShell(box).exec('exit 2');
+
+    expect(real.refusal).toBeUndefined();
+    expect(real.exitCode).toBe(2);
+  });
+
+  test('a runtime catalog read failure is carried into the refusal, not hidden as "no bins"', async () => {
+    const box = fakeBox();
+    box.exec = async (command) => ({
+      command, success: false, stdout: '', stderr: 'bun: command not found', exitCode: 127,
+    });
+    box.runtimes = { list: async () => { throw new Error('session box catalog socket closed'); } };
+
+    // The thrown list is a FACT about this refusal's confidence: the text
+    // still names the bin, the sandbox exit and the install path — and says
+    // the catalog itself could not be read, because "no bins known" and
+    // "could not ask" are different answers.
+    const missed = await nimbusSessionShell(box).exec('bun test broken.test.mjs');
+
+    expect(missed.exitCode).toBe(127);
+    expect(missed.refusal?.reason).toBe('unavailable');
+    expect(missed.refusal?.error).toContain('bun');
+    expect(missed.refusal?.error).toContain('sandbox');
+    expect(missed.refusal?.error).toContain('nimbus install bun');
+    expect(missed.refusal?.error).toContain('runtime catalog could not be read');
+    expect(missed.refusal?.error).toContain('session box catalog socket closed');
+  });
+
+  test('the embedded workspace shell answers its own absent command with the same refusal', async () => {
+    const database = new Database(':memory:');
+    const bundle = createWorkspaceBundle(database);
+
+    try {
+      const missed = await bundle.shell.exec('bun --version');
+
+      expect(missed.exitCode).toBe(127);
+      expect(missed.refusal?.reason).toBe('unavailable');
+      expect(missed.refusal?.error).toContain('bun');
+      expect(missed.refusal?.error).toContain('sandbox');
+
+      const ran = await bundle.shell.exec('echo embedded');
+
+      expect(ran.exitCode).toBe(0);
+      expect(ran.refusal).toBeUndefined();
+      expect(ran.stdout).toContain('embedded');
+    } finally {
+      database.close();
+    }
   });
 
   test('a listening port the host cannot address reaches the Ports surface as a reason, not as nothing', async () => {
