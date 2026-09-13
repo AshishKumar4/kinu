@@ -1,0 +1,24 @@
+bun test v1.4.0 (34cbb9a40)
+
+packages/core/tests/unit-step-stats.test.ts:
+[test-preload] ignoring ambient NO_COLOR — a signed-in shell is not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them
+62 |   test('p99 uses nearest rank over the same reported sample as p95', () => {
+63 |     const samples = Array.from({ length: 100 }, (_, index) => step({ input: 100, cacheRead: index + 1 }));
+64 |     const { cacheHit } = summarizeSteps(samples, { windowLimit: 100 });
+65 | 
+66 |     expect(cacheHit.p95).toBe(0.95);
+67 |     expect(cacheHit.p99).toBe(0.99);
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: 0.99
+Received: undefined
+
+      at <anonymous> (/home/mrwhite0racle/Kinu-wt-cache-ema/packages/core/tests/unit-step-stats.test.ts:67:26)
+(fail) summarizeSteps > p99 uses nearest rank over the same reported sample as p95 [0.53ms]
+
+ 0 pass
+ 18 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [120.00ms]
