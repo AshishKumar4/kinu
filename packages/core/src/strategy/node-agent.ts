@@ -326,7 +326,7 @@ export interface HostedNodeSeat {
   readonly profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   /** This node's own live per-step block (its jobs, tasks, approvals). */
-  readonly dynamic: () => DynamicContext;
+  readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
 }
 
 export interface NodeLoopDeps {
@@ -347,7 +347,7 @@ export interface NodeLoopDeps {
   profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   /** This node's own live per-step block (its jobs, tasks, approvals). */
-  dynamic: () => DynamicContext;
+  dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   model: LanguageModel;
   logger: Logger;
   signal?: AbortSignal;

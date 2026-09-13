@@ -503,7 +503,7 @@ export interface HeadInferenceDeps {
    * is a decision the backend makes and states, and an empty default is how a
    * kind ends up unable to see the background work it is itself holding.
    */
-  dynamic: () => DynamicContext;
+  dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   /** The LanguageModel this head reasons with (per-head model override applied upstream). */
   model: LanguageModel;
   /** The head's FULL toolset — the accumulator tools (buildHeadAccumulatorTools)

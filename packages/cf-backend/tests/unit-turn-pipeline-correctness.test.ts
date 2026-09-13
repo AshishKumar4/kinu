@@ -435,7 +435,7 @@ describe('turn-pipeline correctness wiring', () => {
     // an await, so it is sourced once at turn assembly and closed over by the
     // per-step snapshot — never rendered into the cacheable prefix.
     const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)');
-    const sourceIdx = actor.indexOf('this._turnMemoryTail = await readMemoryTail(this.rt.memory)');
+    const sourceIdx = actor.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
     expect(assembleIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeLessThan(assembleIdx);
@@ -447,12 +447,14 @@ describe('turn-pipeline correctness wiring', () => {
     // core's unit-dynamic-context-binding.test.ts). What is left here is the
     // two inputs only this backend knows.
     const snapshot = actor.slice(
-      actor.indexOf('protected dynamicContextSnapshot(): DynamicContext {'),
+      actor.indexOf('protected dynamicContextSnapshot('),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
 
     expect(snapshot).toContain('collectDynamicContext({');
-    expect(snapshot).toContain('memoryTail: this._turnMemoryTail');
+    expect(snapshot).toContain('memoryTail,');
+    expect(snapshot).toContain('profile,');
+    expect(actor).toContain('this.dynamicContextSnapshot(profile, activeToolSurface, memoryTail)');
     expect(snapshot).toContain('...this._mcpUnavailable');
     // Passed, not re-derived: a backend that rebuilt its own store handles here
     // would be back to stating the binding twice.
@@ -474,9 +476,15 @@ describe('turn-pipeline correctness wiring', () => {
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
 
-    expect(handed.filter(isDynamicContextBlock)).toHaveLength(0);
-    expect((await stepMessages(agent, 0, handed)).filter(isDynamicContextBlock)).toHaveLength(1);
-    expect((await stepMessages(agent, 4, handed)).filter(isDynamicContextBlock)).toHaveLength(1);
+    const turn = await agent.beforeTurn({
+      system: 'sys', messages: handed, tools: {}, model: 'harness-model', continuation: false, body: {},
+    });
+
+    const admitted = turn?.messages ?? handed;
+
+    expect(admitted.filter(isDynamicContextBlock)).toHaveLength(0);
+    expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
+    expect((await stepMessages(agent, 4, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
   });
 
   test('beforeTurn merges profile reasoning effort with cache provider options', () => {

@@ -26,12 +26,17 @@ import {
 } from '../prompting/volatile-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
-import { selectInjectableCraftedTools } from '../tools/crafted-executor';
-import { currentOperationProfile } from '../profiles/operation';
+import type { CraftedDeclaration } from '../tools/sandbox-contract';
+import type { ResolvedTurnProfile } from '../profiles/resolve';
+import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 
 export interface DynamicContextInput {
   readonly rt: AgentRuntime;
   readonly stores: AgentStores;
+  /** The profile already bound to the inference, never an ambient fallback. */
+  readonly profile: Pick<ResolvedTurnProfile, 'workMode' | 'allowedTools'>;
+  /** The installed sandbox's own resolver. Omission declares no crafted callables. */
+  readonly craftedTools?: () => readonly CraftedDeclaration[];
   /** The turn's MEMORY.md tail — read once per turn behind the only await in
    *  this plane, so the caller passes it rather than re-reading per step. */
   readonly memoryTail: string | undefined;
@@ -77,11 +82,11 @@ export function subordinateDelegatesOf(
  */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
-  const profile = currentOperationProfile(rt.actor)?.profile;
+  const { profile } = input;
 
   return agentDynamicContext({
-    mode: profile ? { workMode: profile.workMode, planSubmission: profile.allowedTools.includes('submit_plan') } : undefined,
-    craftedTools: selectInjectableCraftedTools(rt.craftStore, rt.storage.sql),
+    mode: { workMode: profile.workMode, planSubmission: profile.allowedTools.includes(SUBMIT_PLAN_TOOL) },
+    craftedTools: input.craftedTools?.(),
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,
     recoveryFindings: listRecoveryFindings(rt.storage.sql, rt.actor),

@@ -196,3 +196,35 @@ test('a hired subordinate is framed as a hire, not as a head', async () => {
   expect(system).not.toContain('You are a "head"');
   expect(system).not.toContain('ONE OF SEVERAL heads');
 });
+
+test('a hosted child advertises only its callable crafted surface and loses it when code reach is revoked', async () => {
+  const workspace = orchestratorHarness();
+
+  const child = await hostedSubordinateHarness(workspace, {
+    name: 'craft-prover', displayName: 'Craft prover', nameOrigin: 'user', mission: 'Inspect your current capabilities.',
+  });
+
+  child.actor.runtime.craftStore.create({
+    name: 'workspace_echo', description: 'Return the argument', code: '(input) => input', params: null, scope: 'local',
+  });
+  const model = turnCalling([]);
+  workspace.agent.overrideProviderRegistry({
+    registry: createProviderRegistry(),
+    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
+    resolveModel: () => model, normalizeSpecSync: (spec) => spec ?? 'test/model',
+  });
+
+  await workspace.agent.runHostedTaskTurn(child.actor, 'Inspect your available capabilities.');
+  expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('workspace_echo(...args');
+  expect(JSON.stringify(model.doStreamCalls[0]?.tools)).not.toContain('workspace_echo');
+
+  workspace.agent.harnessInstallCatalog({ roles: {
+    reader: { description: 'Files only', instructions: 'Inspect files.', tier: 'default', preset: 'ideate', allowedTools: ['file'] },
+  } });
+  child.actor.stores.config.setRoleSelection('reader');
+  await workspace.agent.runHostedTaskTurn(child.actor, 'Inspect the remaining capabilities.');
+  const last = model.doStreamCalls.at(-1);
+  expect(last?.tools?.map((entry) => entry.name)).not.toContain('execute_tools');
+  const current = last?.prompt.filter((message) => message.role === 'user').at(-1);
+  expect(JSON.stringify(current)).not.toContain('workspace_echo(...args');
+});

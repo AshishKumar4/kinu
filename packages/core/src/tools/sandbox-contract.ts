@@ -29,7 +29,8 @@ import * as v from 'valibot';
 import type { ToolSet } from 'ai';
 import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
-import { hasPlanPermission } from '../execution/work-mode';
+import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
+import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
 import { TOOL_REACH, type ToolSurfaceNarrowing } from './registry';
 import { KinuError } from '../obs';
@@ -142,6 +143,29 @@ export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefi
 export interface CraftedDeclaration {
   readonly name: string;
   readonly description: string;
+}
+
+/** The resolver travels with its tool through the same wrappers as planAllowed. */
+export function withCraftedToolDeclarations<Tool extends ToolSet[string]>(
+  entry: Tool,
+  read: () => readonly CraftedDeclaration[],
+) {
+  return Object.assign(entry, { craftedDeclarations: read });
+}
+
+/** Describe only the installed sandbox and its existing invocation reach. */
+export function craftedToolDeclarations(
+  tools: ToolSet,
+  profile: { readonly workMode: WorkMode; readonly allowedTools: readonly string[] },
+): readonly CraftedDeclaration[] {
+  const sandbox = tools[SANDBOX_TOOL];
+
+  if (!sandbox || !profile.allowedTools.includes(SANDBOX_TOOL)
+    || workModeRefusal(profile.workMode, hasPlanPermission(sandbox), SANDBOX_TOOL) !== null
+    || !('craftedDeclarations' in sandbox)) return [];
+  const read = v.parse(v.function(), sandbox.craftedDeclarations);
+
+  return v.parse(v.array(v.object({ name: v.string(), description: v.string() })), read());
 }
 
 /**

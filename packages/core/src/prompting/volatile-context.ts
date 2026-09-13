@@ -48,6 +48,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import { isDeepStrictEqual } from 'node:util';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
 } from './sections';
@@ -409,6 +410,20 @@ function executorMountSuffix(exec: PromptExecutorInfo): string {
  *  nothing. */
 const NOT_MEASURED_LABEL = 'not measured here';
 
+function renderExecutorStatus(exec: PromptExecutorInfo): string {
+  return `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorMountSuffix(exec)}${executorLimitsSuffix(exec)}`
+    + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}${executorSandboxSuffix(exec)}`;
+}
+
+function renderExecutionLegend(executors: readonly PromptExecutorInfo[]): string[] {
+  const hasUnknown = executors.some((exec) => EXECUTOR_CAPABILITIES
+    .some((capability) => exec.unmeasuredCapabilities?.includes(capability)));
+
+  return hasUnknown
+    ? [`("${NOT_MEASURED_LABEL}" means nobody asked that environment. It may well work, so try it before ruling it out.)`]
+    : [];
+}
+
 /**
  * What the environment could not answer for, as a second status suffix.
  *
@@ -574,6 +589,21 @@ function rosterSection<T>(
 /** Shared empty page: an absent plane renders nothing, never "(none)". */
 const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
+const DYNAMIC_SECTION_TITLES = {
+  mode: '## Work mode',
+  craftedTools: '## Crafted tools available through execute_tools',
+  factsBlock: '## World model (facts you remembered)',
+  memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
+  recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
+  executors: '## Execution status',
+  devices: '## Your user\'s machines (the `laptop` runtime)',
+  tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
+  jobs: '## Background work still running (collect it before you finish)',
+  delegates: '## Delegates working for you',
+  approvals: '## Waiting on the user (not on you)',
+  missingCapabilities: '## Configured but not available this turn (plan without these, and say so if asked)',
+} satisfies Record<keyof DynamicContext, string>;
+
 /**
  * The ledger-fed dynamic-context block (or null when there is nothing to say).
  *
@@ -591,19 +621,19 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
   if (ctx.mode) add('mode', renderWorkMode(ctx.mode));
 
   if (ctx.craftedTools && ctx.craftedTools.length > 0) {
-    add('craftedTools', `## Crafted tools available through execute_tools\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
+    add('craftedTools', `${DYNAMIC_SECTION_TITLES.craftedTools}\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
   }
 
   const facts = ctx.factsBlock?.trim();
 
-  if (facts) add('factsBlock', `## World model (facts you remembered)\n${facts}`);
+  if (facts) add('factsBlock', `${DYNAMIC_SECTION_TITLES.factsBlock}\n${facts}`);
 
   const memoryTail = ctx.memoryTail?.trim();
 
-  if (memoryTail) add('memoryTail', `## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
+  if (memoryTail) add('memoryTail', `${DYNAMIC_SECTION_TITLES.memoryTail}\n${memoryTail}`);
 
   add('recoveries', rosterSection(
-    '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
+    DYNAMIC_SECTION_TITLES.recoveries,
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, MAX_RECOVERIES,
     (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
@@ -611,23 +641,11 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
 
   if (executors.length > 0) {
-    const rows = executors.map((exec) =>
-      `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorMountSuffix(exec)}${executorLimitsSuffix(exec)}`
-      + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}${executorSandboxSuffix(exec)}`);
-
-    // The legend rides along only when a row actually carries an unknown, so
-    // the common case pays nothing for it, and where it does appear, the model
-    // needs telling that this is ignorance rather than a denial.
-    const legend = rows.some((row) => row.includes(NOT_MEASURED_LABEL))
-      ? [`("${NOT_MEASURED_LABEL}" means nobody asked that environment. It may well work, `
-        + 'so try it before ruling it out.)']
-      : [];
-
     add('executors', [
-      '## Execution status',
+      DYNAMIC_SECTION_TITLES.executors,
       'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
-      ...rows,
-      ...legend,
+      ...executors.map(renderExecutorStatus),
+      ...renderExecutionLegend(executors),
     ].join('\n'));
   }
 
@@ -644,38 +662,38 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
       : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
 
     add('devices', [
-      '## Your user\'s machines (the `laptop` runtime)',
+      DYNAMIC_SECTION_TITLES.devices,
       doctrine,
       ...fleet.map((device) => renderDeviceLine(device, fleet)),
     ].join('\n'));
   }
 
   add('tasks', rosterSection(
-    '## Your task list: what is still open (you keep this with the `tasks` tool)',
+    DYNAMIC_SECTION_TITLES.tasks,
     ctx.tasks ?? EMPTY_ROSTER, MAX_TASK_ROWS,
     (task) => `${task.parentId ? '  - ' : '- '}${task.id} [${task.status}] ${clip(task.title)}`,
   ));
 
   add('jobs', rosterSection(
-    '## Background work still running (collect it before you finish)',
+    DYNAMIC_SECTION_TITLES.jobs,
     ctx.jobs ?? EMPTY_ROSTER, MAX_JOBS,
     (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
   ));
 
   add('delegates', rosterSection(
-    '## Delegates working for you',
+    DYNAMIC_SECTION_TITLES.delegates,
     ctx.delegates ?? EMPTY_ROSTER, MAX_DELEGATES,
     (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
   ));
 
   add('approvals', rosterSection(
-    '## Waiting on the user (not on you)',
+    DYNAMIC_SECTION_TITLES.approvals,
     ctx.approvals ?? EMPTY_ROSTER, MAX_APPROVALS,
     (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
   ));
 
   add('missingCapabilities', rosterSection(
-    '## Configured but not available this turn (plan without these, and say so if asked)',
+    DYNAMIC_SECTION_TITLES.missingCapabilities,
     { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, MAX_MISSING_CAPABILITIES,
     (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));
@@ -698,76 +716,59 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   return dynamicBlock([...renderDynamicSections(ctx).values()]);
 }
 
-function executionRows(section: string): Map<string, { status: string; suffix: string; line: string }> {
-  const rows = new Map<string, { status: string; suffix: string; line: string }>();
+function executorDetails(exec: PromptExecutorInfo) {
+  const { active: _active, status: _status, available: _available, configured: _configured,
+    capabilities, unmeasuredCapabilities, ...details } = exec;
 
-  for (const line of section.split('\n')) {
-    const match = /^- ([^:]+): ([^,(]+)(.*)$/.exec(line);
-    const [, name, status, suffix] = match ?? [];
-
-    if (name !== undefined && status !== undefined && suffix !== undefined) rows.set(name, { status, suffix, line });
-  }
-
-  return rows;
+  return { ...details, capabilities: [...new Set(capabilities ?? [])].sort(),
+    unmeasuredCapabilities: [...new Set(unmeasuredCapabilities ?? [])].sort() };
 }
 
-function executionDelta(before: string, after: string): string {
-  const previous = executionRows(before);
-  const current = executionRows(after);
-  const changes: string[] = ['## Execution status'];
+function executionDelta(before: readonly PromptExecutorInfo[], after: readonly PromptExecutorInfo[]): string {
+  const previous = new Map(before.filter(executorIsSelectable).map((exec) => [exec.name, exec]));
+  const current = new Map(after.filter(executorIsSelectable).map((exec) => [exec.name, exec]));
+  const changes: string[] = [DYNAMIC_SECTION_TITLES.executors];
+  const changedExecutors: PromptExecutorInfo[] = [];
 
-  for (const [name, row] of current) {
+  for (const [name, exec] of current) {
     const old = previous.get(name);
 
-    if (old?.line === row.line) continue;
-    changes.push(old && old.suffix === row.suffix
-      ? `- ${name} status went from \`${old.status}\` to \`${row.status}\`.`
-      : row.line);
+    if (old && renderExecutorStatus(old) === renderExecutorStatus(exec)) continue;
+    changes.push(old && isDeepStrictEqual(executorDetails(old), executorDetails(exec))
+      ? `- ${name} status went from \`${executorAvailabilityLabel(old)}\` to \`${executorAvailabilityLabel(exec)}\`.`
+      : renderExecutorStatus(exec));
+    changedExecutors.push(exec);
   }
 
   for (const name of previous.keys()) {
     if (!current.has(name)) changes.push(`- ${name}: removed from execution status.`);
   }
 
-  return changes.join('\n');
+  return [...changes, ...renderExecutionLegend(changedExecutors)].join('\n');
 }
 
-function dynamicDelta(previous: ReadonlyMap<keyof DynamicContext, string>, current: ReadonlyMap<keyof DynamicContext, string>): string | null {
+function dynamicDelta(previousState: Readonly<DynamicContext>, currentState: Readonly<DynamicContext>): string | null {
+  const previous = renderDynamicSections(previousState);
+  const current = renderDynamicSections(currentState);
   const changed: string[] = [];
 
   for (const [key, section] of current) {
     const before = previous.get(key);
 
     if (before === section) continue;
-    changed.push(key === 'executors' && before !== undefined ? executionDelta(before, section) : section);
+    changed.push(key === 'executors' && before !== undefined
+      ? executionDelta(previousState.executors ?? [], currentState.executors ?? []) : section);
   }
 
-  for (const [key, section] of previous) {
-    if (!current.has(key)) changed.push(`${section.split('\n')[0]}\nCleared: no current entries.`);
+  for (const key of previous.keys()) {
+    if (!current.has(key)) changed.push(`${DYNAMIC_SECTION_TITLES[key]}\nCleared: no current entries.`);
   }
 
   return dynamicBlock(changed, 'delta');
 }
 
 function renderWorkMode(mode: NonNullable<DynamicContext['mode']>): string {
-  if (mode.workMode === 'build') {
-    return '## Work mode\nBuild mode: implementation is permitted within the user request and active tool permissions.';
-  }
-
-  return [
-    '## Work mode',
-    mode.planSubmission
-      ? '- Plan mode: investigate, then submit a concrete Markdown plan with affected files, risks, and verification through `submit_plan`.'
-      : '- Plan mode: investigate and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.',
-    '- Do not change project files, system resources, releases, or deployments. Use file read/list/stat/search for inspection. Research notes, task bookkeeping, and the plan itself remain allowed. After approval starts a Build turn, use mutating operations.',
-    '- Run code only through a tool that explicitly supports Plan-safe analysis. Unrestricted shell/local native execution is unavailable in Plan; do not route around that refusal through another environment.',
-    '- Do not expose ports or produce preview or output links. ' + (mode.planSubmission
-      ? 'The submitted plan is the only plan-mode output surface.'
-      : 'Your report feeds the parent plan. The parent writes the user-facing output.'),
-    mode.planSubmission
-      ? '- Until the plan is approved, do not begin implementation. When the missing answer must come from the user, ask a question. Otherwise end by calling `submit_plan`.'
-      : '- Do not begin implementation. Return your research and recommendations to the parent without calling or inventing `submit_plan`.',
-  ].join('\n');
+  return `${DYNAMIC_SECTION_TITLES.mode}\nMode: ${mode.workMode}; submit_plan: ${mode.planSubmission ? 'available' : 'unavailable'}.`;
 }
 
 /** The per-turn tail block (or null when there is nothing to say). */
@@ -810,16 +811,16 @@ interface LedgerBlock {
   /** Message count of the un-woven array when the block was born — it renders
    *  after that many messages, forever (the cache-stability contract), except
    *  where that slot has since become a tool result ({@link insertionPoint}). */
-  index: number;
+  readonly index: number;
   /** The frozen full snapshot or delta carried by this message. */
-  text: string;
+  readonly text: string;
   /** What this block costs the request, on the compaction ladder's chars/4
    *  scale. Priced ONCE, here at birth: the step pruner reads the ledger's
    *  total on every model step and `dropSuperseded` reads a slice of it, so
    *  neither has to re-derive the scale, and there is one place that applies
    *  it. */
-  tokens: number;
-  message: ModelMessage;
+  readonly tokens: number;
+  readonly message: ModelMessage;
 }
 
 /**
@@ -873,14 +874,7 @@ function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): nu
  */
 export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
-  private latestFull: string | null = null;
-  private latestSections = new Map<keyof DynamicContext, string>();
-  private fullNextChange = true;
-
-  /** Keep the old prefix; the first state update of a new turn is a full base. */
-  beginTurn(): void {
-    this.fullNextChange = true;
-  }
+  private currentState: Readonly<DynamicContext> | null = null;
 
   get size(): number {
     return this.blocks.length;
@@ -909,8 +903,8 @@ export class DynamicContextLedger {
    * Collapse the full base and its deltas into one fresh full block at the
    * newest position — the ONLY thing that removes a frozen block.
    *
-   * The current full render was captured with the newest delta. Keeping just
-   * that delta would discard every unchanged fact from its base.
+   * Re-render the stored immutable state. Keeping just the newest delta would
+   * discard every unchanged fact from its base; an empty state stays empty.
    *
    * Removing a mid-array message is exactly what `weave` refuses to do, because
    * it breaks the provider's prefix cache. So this is a pressure-relief act and
@@ -929,9 +923,10 @@ export class DynamicContextLedger {
     if (this.blocks.length <= 1) return 0;
     const newest = this.blocks.at(-1);
 
-    if (newest === undefined || this.latestFull === null) return 0;
+    if (newest === undefined || this.currentState === null) return 0;
     const before = this.overheadTokens;
-    this.blocks = [this.block(newest.index, this.latestFull)];
+    const full = renderDynamicContextBlock(this.currentState);
+    this.blocks = full === null ? [] : [this.block(newest.index, full)];
 
     return before - this.overheadTokens;
   }
@@ -949,19 +944,18 @@ export class DynamicContextLedger {
       previousIndex = block.index;
     }
 
-    const sections = renderDynamicSections(state);
-    const full = dynamicBlock([...sections.values()]);
+    const current = Object.freeze(structuredClone(state));
+    const previous = this.currentState;
+    const full = renderDynamicContextBlock(current);
+    const previousFull = previous === null ? null : renderDynamicContextBlock(previous);
 
-    // A null render appends nothing; frozen blocks stay regardless (removing
-    // a mid-array message would break the provider prefix cache).
-    if (full !== null && this.latestFull !== full) {
-      const text = this.fullNextChange ? full : dynamicDelta(this.latestSections, sections);
+    if (full !== previousFull) {
+      const text = this.blocks.length === 0 ? full : dynamicDelta(previous ?? {}, current);
 
       if (text !== null) this.blocks.push(this.block(history.length, text));
-      this.fullNextChange = false;
-      this.latestFull = full;
-      this.latestSections = sections;
     }
+
+    this.currentState = current;
 
     const woven: ModelMessage[] = [];
     let cursor = 0;
@@ -979,13 +973,11 @@ export class DynamicContextLedger {
 
   reset(): void {
     this.blocks = [];
-    this.latestFull = null;
-    this.latestSections = new Map();
-    this.fullNextChange = true;
+    this.currentState = null;
   }
 
   private block(index: number, text: string): LedgerBlock {
-    return { index, text, tokens: Math.round(text.length / 4), message: { role: 'user', content: text } };
+    return Object.freeze({ index, text, tokens: Math.round(text.length / 4), message: Object.freeze({ role: 'user', content: text }) });
   }
 }
 

@@ -46,7 +46,7 @@ import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
   recoverActorTurns,
   type TurnSteering,
-  type AgentStores, collectDynamicContext, subordinateDelegatesOf,
+  type AgentStores, collectDynamicContext, craftedToolDeclarations, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore,
@@ -2838,9 +2838,7 @@ export class LocalAgentSession implements BackendHost {
       temporaryAsk: this.teamDeps?.temporary !== undefined,
       externalTools,
       backend: 'cli-local',
-      workMode: this.actorSession.workMode,
       roleSection: profile.role,
-      planSubmissionAvailable: false,
       model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
@@ -2972,7 +2970,7 @@ export class LocalAgentSession implements BackendHost {
       loopVersion: await this.rt.identity.scaffold.version(),
       chat: liveTurn,
       extensions: [this.compactionExtension],
-      dynamic: () => this.dynamicContextSnapshot(memoryTail),
+      dynamic: (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools),
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
     }, (event) => {
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
@@ -4328,10 +4326,12 @@ export class LocalAgentSession implements BackendHost {
    * a block per step. `memoryTail` is the turn's read (the one input behind an
    * await), so the caller closes over it.
    */
-  private dynamicContextSnapshot(memoryTail: string | undefined): DynamicContext {
+  private dynamicContextSnapshot(memoryTail: string | undefined, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
+      profile,
+      craftedTools: () => craftedToolDeclarations(tools, profile),
       memoryTail,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
@@ -5063,7 +5063,7 @@ export class LocalAgentSession implements BackendHost {
       actor,
       runId: this.currentRunId ?? WORKSPACE_RUN_ID,
       profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-      dynamic: () => this.actorDynamicContext(actor),
+      dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
       release: async () => {
         this.actorHost.release(binding.reference);
         this.loopOrigins.delete(binding.reference.actorId);
@@ -5126,7 +5126,7 @@ export class LocalAgentSession implements BackendHost {
       actor,
       runId: this.currentRunId ?? WORKSPACE_RUN_ID,
       profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
-      dynamic: () => this.actorDynamicContext(actor),
+      dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
     };
   }
 
@@ -5160,10 +5160,12 @@ export class LocalAgentSession implements BackendHost {
 
   /** The live per-step context block for ONE hosted actor — its own stores,
    *  never this session's, so a fork reads the work it is itself holding. */
-  private actorDynamicContext(actor: HostedActor): DynamicContext {
+  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
     return collectDynamicContext({
       rt: actor.runtime,
       stores: actor.stores,
+      profile,
+      craftedTools: () => craftedToolDeclarations(tools, profile),
       memoryTail: undefined,
       missingCapabilities: this.mcpUnavailable,
       subordinateDelegates: () => [],

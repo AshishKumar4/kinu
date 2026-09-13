@@ -30,6 +30,7 @@ import {
   observeSystemPromptHash,
   renderActiveSkillsSection,
   DYNAMIC_CONTEXT_HEADER,
+  composePrepareStep,
   TURN_CONTEXT_HEADER,
   type PromptExecutorInfo,
 } from '../src/index';
@@ -52,16 +53,27 @@ const connectedLaptop: PromptExecutorInfo = { name: 'laptop', available: true, c
 
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
 
-test('mode and plan-submission changes do not rewrite the system prefix', () => {
+test('mode policy is part of the static system doctrine', () => {
   const { rt, testSql } = createTestRuntime();
 
   try {
-    const build = buildSystemPromptSync(rt, { workMode: 'build' });
-    expect(buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: true })).toBe(build);
-    expect(buildSystemPromptSync(rt, { workMode: 'plan', planSubmissionAvailable: false })).toBe(build);
+    const build = buildSystemPromptSync(rt);
+    expect(build).toContain('In Plan, inspect and research only.');
+    expect(build).toContain('Implementation waits for an approved Build turn.');
+    expect(build).not.toContain('Mode: plan;');
+    expect(build).not.toContain('Mode: build;');
   } finally {
     testSql.close();
   }
+});
+
+test('the mode ledger contains facts, not a second copy of the permission policy', () => {
+  const plan = renderDynamicContextBlock({ mode: { workMode: 'plan', planSubmission: true } });
+
+  expect(plan).toContain('Mode: plan; submit_plan: available.');
+  expect(plan).not.toContain('Do not change project files');
+  expect(renderDynamicContextBlock({ mode: { workMode: 'build', planSubmission: false } }))
+    .toContain('Mode: build; submit_plan: unavailable.');
 });
 
 /** The owner's answer for every body these tests read. They are about what the
@@ -820,22 +832,98 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(ledger.weave(history, current).at(-1)?.content).toBe(renderDynamicContextBlock(current) ?? '');
   });
 
-  test('each turn starts its updates with a full base without removing prior blocks', () => {
+  test('shared step preparation keeps the ledger append-only across a turn boundary', async () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'first turn' }];
-    const first = ledger.weave(history, state);
-    ledger.beginTurn();
+
+    const first = await composePrepareStep({ dynamic: { ledger, snapshot: () => state } },
+      { stepNumber: 0, messages: history, steps: [] });
+
     history.push({ role: 'assistant', content: 'done' }, { role: 'user', content: 'next turn' });
     const next = { ...state, factsBlock: '- k = next' };
-    const result = ledger.weave(history, next);
 
-    expect(result[1]).toBe(first[1]);
-    expect(result.at(-1)?.content).toBe(renderDynamicContextBlock(next) ?? '');
+    const result = await composePrepareStep({ dynamic: { ledger, snapshot: () => next } },
+      { stepNumber: 0, messages: history, steps: [] });
+
+    expect(result?.messages[1]).toBe(first?.messages[1]);
+    expect(result?.messages.at(-1)?.content).toContain('kind="delta"');
+    expect(result?.messages.at(-1)?.content).not.toContain('## Execution status');
     history.push({ role: 'assistant', content: 'working' });
     const delta = ledger.weave(history, { ...next, factsBlock: '- k = final' });
     expect(delta.at(-1)?.content).toContain('kind="delta"');
     expect(delta.at(-1)?.content).toContain('- k = final');
     expect(delta.at(-1)?.content).not.toContain('## Execution status');
+  });
+
+  test('empty live state appends a clear, stays empty, and cannot revive at compaction', () => {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'first' }];
+    const first = ledger.weave(history, state);
+    history.push({ role: 'assistant', content: 'finished' });
+    const empty = ledger.weave(history, {});
+
+    expect(empty[1]).toBe(first[1]);
+    expect(empty.at(-1)?.content).toContain('kind="delta"');
+    expect(empty.at(-1)?.content).toContain('## World model');
+    expect(empty.at(-1)?.content).toContain('Cleared: no current entries.');
+    expect(ledger.weave(history, {})).toEqual(empty);
+    expect(ledger.size).toBe(2);
+    expect(ledger.dropSuperseded()).toBeGreaterThan(0);
+    expect(ledger.weave(history, {})).toEqual(history);
+    const fresh = { factsBlock: '- fresh = yes' };
+    const revived = ledger.weave(history, fresh);
+    expect(revived.at(-1)?.content).toBe(renderDynamicContextBlock(fresh) ?? '');
+    expect(revived.at(-1)?.content).not.toContain('sandbox');
+  });
+
+  test('executor deltas use immutable structured identities, including punctuation', () => {
+    const ledger = new DynamicContextLedger();
+    const executor: PromptExecutorInfo = { ...idleSandbox, name: 'gpu: lab, one (not measured here)', label: 'Desk: GPU (left, 1)' };
+    const history: ModelMessage[] = [{ role: 'user', content: 'inspect' }];
+    const first = ledger.weave(history, { executors: [workspace, executor] });
+    executor.active = true;
+    executor.status = 'active';
+    history.push({ role: 'assistant', content: 'connected' });
+    const result = ledger.weave(history, { executors: [workspace, executor] });
+
+    expect(result[1]).toBe(first[1]);
+    expect(result.at(-1)?.content).toContain('gpu: lab, one (not measured here) status went from `ready on demand` to `active`');
+    expect(result.at(-1)?.content).not.toContain('- workspace:');
+    expect(result.at(-1)?.content).not.toContain('means nobody asked that environment');
+  });
+
+  test('executor additions, removals and changed facts retain the unknown-capability legend', () => {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'inspect' }];
+    ledger.weave(history, { executors: [workspace, idleSandbox, { name: 'old: gpu', available: true }] });
+    history.push({ role: 'assistant', content: 'changed' });
+
+    const result = ledger.weave(history, { executors: [workspace,
+      { ...activeSandbox, capabilities: ['python'], unmeasuredCapabilities: ['docker'] },
+      { name: 'new, gpu', available: true, capabilities: ['native_binary'] },
+    ] });
+
+    const delta = String(result.at(-1)?.content);
+
+    expect(delta).toContain('- old: gpu: removed from execution status.');
+    expect(delta).toContain('- new, gpu: available, runs: native_binary');
+    expect(delta).toContain('- sandbox: active, files at /sandbox, runs: python, not measured here: docker');
+    expect(delta).toContain('means nobody asked that environment');
+    expect(delta).not.toContain('- workspace:');
+  });
+
+  test('a changed mounted runtime names the new mount and clears the old runtime', () => {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'inspect mounts' }];
+    ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, activeSandbox] });
+    history.push({ role: 'assistant', content: 'device connected' });
+    const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedLaptop] }).at(-1)?.content);
+
+    expect(delta).toContain('- laptop: connected, files at /pc');
+    expect(delta).toContain('- sandbox: removed from execution status.');
+    expect(delta).not.toContain('/sandbox');
+    expect(delta).not.toContain('- workspace:');
+    expect(delta).not.toContain('unchanged = yes');
   });
 
   test('a disappeared roster is explicitly cleared without repeating other facts', () => {
@@ -1065,7 +1153,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(out.map((m) => m.role)).toEqual(['user', 'user', 'user', 'assistant', 'tool']);
   });
 
-  test('nothing to say → no block is born and none is removed', () => {
+  test('initial empty state costs nothing; later empty state clears without removing the prefix', () => {
     const ledger = new DynamicContextLedger();
     const out = ledger.weave([{ role: 'user', content: 'hi' }], {});
     expect(out.map(messageText)).toEqual(['hi']);
@@ -1076,9 +1164,10 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     ledger.weave([{ role: 'user', content: 'hi' }], state);
     expect(ledger.size).toBe(1);
     const after = ledger.weave([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }], {});
-    expect(ledger.size).toBe(1);
-    expect(after).toHaveLength(3);
+    expect(ledger.size).toBe(2);
+    expect(after).toHaveLength(4);
     expect(isDynamicBlock(String(after[1]!.content))).toBe(true);
+    expect(after.at(-1)?.content).toContain('Cleared: no current entries.');
   });
 });
 
@@ -1101,15 +1190,16 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
       history.push({ role: 'assistant', content: `a${i}` });
     }
 
-    const full = renderDynamicContextBlock({ ...state, factsBlock: `- k = v${blocks - 1}` }) ?? '';
+    const finalState = { ...state, factsBlock: `- k = v${blocks - 1}` };
+    const full = renderDynamicContextBlock(finalState) ?? '';
 
-    return { ledger, history, renders, full };
+    return { ledger, history, renders, full, finalState };
   }
 
   test('keeps the NEWEST block at its frozen position and drops the rest', () => {
-    const { ledger, history, renders, full } = ledgerWith(3);
+    const { ledger, history, renders, full, finalState } = ledgerWith(3);
     expect(ledger.size).toBe(3);
-    const before = ledger.weave(history, {});
+    const before = ledger.weave(history, finalState);
     expect(before.map(messageText)).toEqual([
       'turn-0', renders[0]!, 'a0', 'turn-1', renders[1]!, 'a1', 'turn-2', renders[2]!, 'a2',
     ]);
@@ -1120,7 +1210,7 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
     expect(freed).toBe(renders.reduce((sum, text) => sum + Math.round(text.length / 4), 0) - Math.round(full.length / 4));
 
     // The survivor is live state, still at the index it was born at.
-    const after = ledger.weave(history, {});
+    const after = ledger.weave(history, finalState);
     expect(after.map(messageText)).toEqual([
       'turn-0', 'a0', 'turn-1', 'a1', 'turn-2', full, 'a2',
     ]);

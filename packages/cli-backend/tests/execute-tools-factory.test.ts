@@ -7,9 +7,9 @@
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
-import { scratchDir, toolExecute } from '@kinu.run/test-utils';
+import { scratchDir, toolExecute, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
-import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock } from '@kinu.run/core';
+import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -38,8 +38,46 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     const next = factory(surface);
 
     expect(next.description).toBe(first.description);
+    expect(craftedToolDeclarations({ execute_tools: first }, { workMode: 'build', allowedTools: ['execute_tools'] }))
+      .toEqual([{ name: 'cache_echo', description: 'Return the supplied text' }]);
+    expect(craftedToolDeclarations({ execute_tools: first }, { workMode: 'build', allowedTools: [] })).toEqual([]);
     expect(await toolExecute<{ code: string }, ExecuteToolResult>(next)({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }))
       .toEqual({ result: 'CACHE_ECHO_OK' });
+  });
+
+  test('the provider sees the callable declaration in the ledger and a real call returns its output', async () => {
+    const executeTools = createNodeExecuteToolFactory()({ native: {}, providers: [], craftedTools: () => ({
+      cache_echo: { description: 'Return the supplied text', execute: async (text) => text },
+    }) });
+
+    const tools = { execute_tools: executeTools };
+    let calls = 0;
+
+    const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+      const invoke = calls++ === 0;
+
+      return {
+        content: invoke
+          ? [{ type: 'tool-call', toolName: 'execute_tools', toolCallId: 'echo', input: JSON.stringify({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }) }]
+          : [{ type: 'text', text: 'done' }],
+        finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
+        usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+      };
+    } });
+
+    for await (const event of runChat({ model, system: 'Use the available tools.', history: [{ role: 'user', content: 'Invoke the echo function.' }], tools,
+      dynamicContext: { ledger: new DynamicContextLedger(), snapshot: () => ({
+        craftedTools: craftedToolDeclarations(tools, { workMode: 'build', allowedTools: ['execute_tools'] }),
+      }) },
+    })) {
+      if (event.type === 'error') throw new Error(event.message);
+    }
+
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain('cache_echo(...args');
+    expect(JSON.stringify(model.doStreamCalls[0]?.tools)).not.toContain('cache_echo');
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt.filter((message) => message.role === 'tool'))).toContain('CACHE_ECHO_OK');
   });
 
   test('console output is captured and returned as logs, not written to stdout', async () => {

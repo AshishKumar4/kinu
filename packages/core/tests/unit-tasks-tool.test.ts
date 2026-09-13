@@ -305,14 +305,12 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     expect(await tasks({ action: 'mode', role: 'task' })).toEqual({ role: 'task'});
 
     const plan = buildSystemPromptSync(rt, {
-      workMode: 'plan',
-      planSubmissionAvailable: true,
       roleSection: roleSection('task'),
     });
 
     expect(plan).toContain('Role: Task');
-    expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
-    expect(plan).toMatch(/do not begin implementation/i);
+    expect(plan).toContain('In Plan, inspect and research only. Do not change project files or system resources, release, deploy');
+    expect(plan).toContain('Implementation waits for an approved Build turn.');
     expect(Object.keys(buildBuiltinTools({ rt }))).not.toContain('submit_plan');
   });
 

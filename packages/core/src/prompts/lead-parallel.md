@@ -7,4 +7,4 @@ Genuinely parallel work means independent tasks only. Each parallel writer works
 
 {{#if hasTaskHire}}When the rest of your work depends on one bounded answer, use `lifetime:'task'`: the call waits and returns its answer here.{{else}}This turn supports durable hires, not task-lifetime calls.{{/if}} Use a durable hire for an ongoing workstream, with real independent lead work while it runs. Its report arrives as an event that wakes you. After independent work is done, follow Background work and end the turn for that wake; that is waiting, not a claim that the assignment finished. Do not poll in a loop or start the same work again.
 
-A single hired subordinate can apply a batch of independent fixes within one assignment. Use separate hires for actual concurrent work; multiple messages to the same running hire revise its assignment rather than create parallel workers.
+Use separate hires for actual concurrent work; multiple messages to the same running hire revise its assignment rather than create parallel workers.

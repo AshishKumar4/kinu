@@ -8,7 +8,8 @@
 // its context had gone quiet.
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime } from '@kinu.run/test-utils';
-import { collectDynamicContext } from '../src/state/dynamic-context';
+import { createInlineCraftStore } from '../src/identity/inline-primitives';
+import { collectDynamicContext, type DynamicContextInput } from '../src/state/dynamic-context';
 import { createAgentStores } from '../src/state/agent-stores';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { makeSqlExec } from './helpers';
@@ -20,7 +21,6 @@ import type {
 } from '../src/prompting/volatile-context';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
-import { runOperationProfile } from '../src/profiles/operation';
 
 interface Fixture {
   readonly rt: AgentRuntime;
@@ -35,6 +35,7 @@ function setup(): Fixture {
   initWorkspaceSchema({
     execRaw: testSql.execRaw, sql: testSql.sql, exec: makeSqlExec(testSql.db),
   });
+  rt.craftStore = createInlineCraftStore(testSql.db);
   const actors = createTestActors(testSql.sql, testSql.execRaw);
   const sibling = actors.sibling('sibling');
 
@@ -46,6 +47,8 @@ function setup(): Fixture {
 }
 
 interface Overrides {
+  readonly profile?: DynamicContextInput['profile'];
+  readonly craftedTools?: DynamicContextInput['craftedTools'];
   readonly memoryTail?: string;
   readonly missingCapabilities?: readonly MissingCapability[];
   /** The backend-only planes, as the source callbacks a backend supplies. */
@@ -56,12 +59,21 @@ interface Overrides {
 function collect(o: Fixture, over: Overrides = {}, stores: AgentStores = o.stores): DynamicContext {
   return collectDynamicContext({
     rt: o.rt, stores,
+    profile: over.profile ?? { workMode: 'build', allowedTools: [] },
+    craftedTools: over.craftedTools,
     memoryTail: over.memoryTail,
     missingCapabilities: over.missingCapabilities ?? [],
     subordinateDelegates: over.subordinateDelegates,
     approvals: over.approvals,
   });
 }
+
+test('a workspace craft is not advertised when no callable resolver was supplied', () => {
+  const o = setup();
+  o.rt.craftStore.create({ name: 'secret_echo', description: 'Echo from the workspace', code: '(input) => input', params: null, scope: 'local' });
+
+  expect(collect(o).craftedTools ?? []).toEqual([]);
+});
 
 test('the current actor profile supplies mode and actual plan-submission reach to the ledger', () => {
   const o = setup();
@@ -73,12 +85,10 @@ test('the current actor profile supplies mode and actual plan-submission reach t
     workMode: 'plan', availableTools: ['file', 'submit_plan'], activeSkills: [],
   });
 
-  const operation = { actor: o.rt.actor, profile, inputs: null, runId: 'mode-run', turnId: 'mode-turn' };
-
-  expect(runOperationProfile(operation, () => collect(o).mode)).toEqual({ workMode: 'plan', planSubmission: true });
-  expect(runOperationProfile({ ...operation, profile: { ...profile, workMode: 'build', allowedTools: ['file'] } },
-    () => collect(o).mode)).toEqual({ workMode: 'build', planSubmission: false });
-  expect(collect(o).mode).toBeUndefined();
+  expect(collect(o, { profile }).mode).toEqual({ workMode: 'plan', planSubmission: true });
+  expect(collect(o, { profile: { ...profile, workMode: 'build', allowedTools: ['file'] } }).mode)
+    .toEqual({ workMode: 'build', planSubmission: false });
+  expect(collect(o).mode).toEqual({ workMode: 'build', planSubmission: false });
 });
 
 describe('the four store-backed planes are the reading actor\'s own', () => {
