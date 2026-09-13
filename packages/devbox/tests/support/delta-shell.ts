@@ -47,7 +47,7 @@ const Q = String.raw`'((?:[^']|'\\'')*)'`;
 const unquote = (word: string): string => word.replaceAll(`'\\''`, `'`);
 
 const OP = {
-  probe: new RegExp(String.raw`^out=\$\(find ${Q} (.*?)-mindepth 1 -printf '[^']*' 2>/dev/null \| base64 \| tr -d '\\n'\); rc=\$\?; printf '%s %s' "\$rc" "\$out"$`),
+  probe: new RegExp(String.raw`^out=\$\(set -o pipefail; find ${Q} (.*?)-mindepth 1 -printf '[^']*' 2>/dev/null \| devbox-block-lower --probe-opaque ${Q} \| base64 \| tr -d '\\n'\); rc=\$\?; printf '%s %s' "\$rc" "\$out"$`),
   prune: new RegExp(String.raw`-path ${Q} -prune -o`, 'g'),
   whiteout: new RegExp(String.raw`^stat -c '%t,%T' ${Q} 2>/dev/null \|\| printf 'x\\n'$`),
   basestat: new RegExp(String.raw`^stat -c '%F %s' ${Q} 2>/dev/null \|\| printf 'ABSENT\\n'$`),
@@ -278,6 +278,13 @@ class DeltaShell {
 
       if (path === undefined) throw new Error('whiteout lacks a path');
       const owned = this.#dest(unquote(path));
+
+      if (owned.relative.split('/').at(-1) === '.wh..wh..opq') {
+        owned.tree.writeFile(owned.relative, new Uint8Array(0), ROOT_METADATA);
+
+        return 0;
+      }
+
       const prefix = unquote(path).slice(0, -owned.relative.length - 1);
       const whiteouts = this.disk.whiteouts.get(prefix) ?? new Set<string>();
       const slash = owned.relative.lastIndexOf('/');
@@ -325,10 +332,16 @@ class DeltaShell {
 
     if (tree === undefined) return this.#say('1 ');
     const rows = tree.snapshot();
+
+    const opaque = new Set(rows.filter(row => row.path.split('/').at(-1) === '.wh..wh..opq')
+      .map(row => row.path.slice(0, Math.max(0, row.path.lastIndexOf('/')))));
+
     const names = new Map<number, number>();
 
     for (const row of rows) names.set(row.ino, (names.get(row.ino) ?? 0) + 1);
     const fields: string[] = [];
+
+    if (opaque.has('')) fields.push('o', '0', '2', '755', '0', '0', '4096', '0', '0', '', '');
 
     const excluded = (path: string): boolean => pruned.some((pattern) => {
       const parts = path.split('/');
@@ -343,7 +356,8 @@ class DeltaShell {
     for (const row of rows) {
       if (excluded(row.path)) continue;
       const meta = row.metadata!;
-      const type = row.kind === 'file' ? 'f' : row.kind === 'dir' ? 'd' : 'l';
+      const isOpaque = opaque.has(row.path) || ['trusted.overlay.opaque', 'user.overlay.opaque', 'user.fuseoverlayfs.opaque'].some(key => meta.xattrs[key] === 'y');
+      const type = row.kind === 'file' ? 'f' : row.kind === 'dir' ? isOpaque ? 'o' : 'd' : 'l';
 
       const nlink = row.kind === 'dir'
         ? 2 + rows.filter((child) => child.kind === 'dir' && child.path.startsWith(`${row.path}/`) && !child.path.slice(row.path.length + 1).includes('/')).length

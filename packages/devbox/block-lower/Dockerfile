@@ -3,7 +3,7 @@ RUN apk add --no-cache build-base
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --locked
+RUN cargo test --locked && cargo build --release --locked
 
 FROM docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f AS squash
 RUN apt-get update -qq && apt-get install -y --no-install-recommends build-essential libfuse-dev libzstd-dev zlib1g-dev pkg-config

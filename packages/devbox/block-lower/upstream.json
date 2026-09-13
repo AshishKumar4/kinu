@@ -1,7 +1,7 @@
 {
   "date": "2026-09-13",
-  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
-  "digest": "sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e",
+  "digest": "sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e",
   "sandboxVersion": "0.12.8",
   "sandbox": "docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f",
   "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
@@ -11,16 +11,17 @@
     "driver": "low-level, unmodified upstream"
   },
   "binaries": {
-    "devbox-block-lower": "4a419459d49884c3c28b2874b87d0d7e1e48f331e05642224c228c5442e23444",
+    "devbox-block-lower": "ad76e1563916b158ba9f43a73bb784937fdb669893c84bac6bd86ffe79e41b9c",
     "devbox-squashfuse": "7a3e37d78e4357c8b79fb443fec8267b99d0624410c180b9b7a1d46130bad33e"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
-    "Dockerfile": "7791e61ae27e1106340f31b8f59505fd560192229a8799f578121f1796774b2d",
+    "Dockerfile": "cd9c9fb55a86e80773baa6998b2b322b34345186c133d5f8e3782c41037b8654",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
     "src/index.rs": "c4f632c9f0cfcbc54d84194814bdf1d5cfcba5fa170f2599c06e2f02f349c130",
-    "src/main.rs": "4b5283d1dba59559a3d236034e3129f3b4359deaa9a476708188bf20a019fead",
-    "src/model.rs": "01056308811f9244dbc79a5a30d21232963409cfece54948d30fdfa3bd2fe404",
+    "src/main.rs": "e0a36a9ea41001530591292e13d679f5e28467f104300d348f9a48dbef880da7",
+    "src/model.rs": "ce3235af5ba144ebdb8874b19a4dbc35f63d159c581e4f7ddb2983d05e54a19c",
+    "src/probe.rs": "1dad9c88c07a1ac484f2685f61a5274fb0a839fdc90017e65a09d2f390aaaac3",
     "src/namespace.rs": "b2f750bea8a1dcae7c8910aba19734615f949e1b9d395e2b4b5274487d68011f",
     "src/storage.rs": "4a37c4d0187fcf0aa094958c24de13873c798de27ec9f8648a6d584931701666"
   }

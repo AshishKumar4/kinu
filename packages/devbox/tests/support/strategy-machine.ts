@@ -857,8 +857,17 @@ export class ContainerDisk {
   /** Plant one layer's rows over `merged`; answers the next layer's inode offset. */
   #mergeLayer(merged: Map<string, NodeEntry>, layer: string, inoBase: number): number {
     let highest = 0;
+    const rows = this.snapshot(layer);
 
-    for (const entry of this.snapshot(layer)) {
+    for (const entry of rows) {
+      if (entry.path.split('/').at(-1) !== '.wh..wh..opq') continue;
+      const parent = entry.path.slice(0, Math.max(0, entry.path.lastIndexOf('/')));
+
+      for (const path of merged.keys()) if (parent === '' || path.startsWith(`${parent}/`)) merged.delete(path);
+    }
+
+    for (const entry of rows) {
+      if (entry.path.split('/').at(-1) === '.wh..wh..opq') continue;
       highest = Math.max(highest, entry.ino);
 
       if (entry.kind !== 'dir' && merged.get(entry.path)?.kind === 'dir') {
@@ -908,6 +917,7 @@ export class ContainerDisk {
     const owner = this.#overlayOwner(path);
 
     if (owner !== undefined) {
+      if (owner.relative.split('/').at(-1) === '.wh..wh..opq') return undefined;
       const upper = this.trees.get(owner.overlay.upper)?.node(owner.relative);
 
       if (upper !== undefined) return { node: upper };
@@ -919,6 +929,9 @@ export class ContainerDisk {
         const node = this.node(`${layer}/${owner.relative}`);
 
         if (node !== undefined) return { node };
+        const parents = ['', ...ancestors(owner.relative).slice(0, -1).map(parent => parent.slice(1))];
+
+        if (parents.some(parent => this.node(`${layer}/${parent === '' ? '' : `${parent}/`}.wh..wh..opq`) !== undefined)) return undefined;
       }
 
       return undefined;

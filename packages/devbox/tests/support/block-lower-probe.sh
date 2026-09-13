@@ -34,6 +34,8 @@ mountpoint -q "$block"
 fuse-overlayfs -o "lowerdir=$block:$delta/.devbox-delta/tree:$base,upperdir=$upper,workdir=$probe_dir/work" "$merged"
 node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1])); if(s.payloadBytes!==0||s.indexPages!==0)throw Error(JSON.stringify(s)); console.log("attach-payload-bytes="+s.payloadBytes)' "$probe_dir/stats.json"
 cmp /fixture/expected "$merged/dir/file"
+test "$(cat "$merged/dir/whole")" = both
+test ! -e "$merged/dir/stale"
 cmp /fixture/whole "$merged/whole"
 test "$(readlink "$merged/link")" = whole
 test ! -e "$merged/gone/sub/file"

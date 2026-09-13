@@ -80,7 +80,8 @@ const FileSchema = v.variant('kind', [
   }),
 ]);
 
-const DirSchema = v.object({ p: RelPath, mode: Count, uid: Count, gid: Count });
+const DirSchema = v.pipe(v.object({ p: v.union([RelPath, v.literal('')]), mode: Count, uid: Count, gid: Count,
+  opaque: v.optional(v.boolean()) }), v.check(dir => dir.p !== '' || dir.opaque === true, 'a root directory record must be opaque'));
 
 /** The manifest, as the stage writes it and the wake reads it back. A store
  *  object is untrusted input even though this module wrote it. `dirs` carries
@@ -101,7 +102,7 @@ export type DeltaManifest = v.InferOutput<typeof DeltaManifestSchema>;
 /** One upper entry as the probe reports it: eleven null-separated fields. */
 export interface DeltaProbeEntry {
   readonly path: string;
-  /** find's `%y`: `f` file, `d` dir, `l` symlink, `c` char device. */
+  /** find's `%y`, with `o` for an opaque directory proved by the native probe. */
   readonly type: string;
   readonly ino: number;
   readonly nlink: number;
@@ -131,15 +132,25 @@ export function deltaProbeCommand(upperDir: string, excludes: readonly string[])
 
   const walk = `find ${shellPath(upperDir)} ${pruned.join(' ')} -mindepth 1 `
     + `-printf '%y\\0%i\\0%n\\0%m\\0%U\\0%G\\0%s\\0%T@\\0%C@\\0%l\\0%P\\0' 2>/dev/null `
-    + '| base64 | tr -d \'\\n\'';
+    + `| devbox-block-lower --probe-opaque ${shellPath(upperDir)} | base64 | tr -d '\\n'`;
 
-  return `# devbox-probe-v1\nout=$(${walk}); rc=$?; printf '%s %s' "$rc" "$out"`;
+  return `# devbox-probe-v1\nout=$(set -o pipefail; ${walk}); rc=$?; printf '%s %s' "$rc" "$out"`;
+}
+
+/** An unreadable opacity decision cannot become a legacy-format publication. */
+export class DeltaNamespaceProbeFailed extends Error {
+  constructor(code: string) {
+    super(`opaque-directory namespace could not be observed (probe ${code})`);
+    this.name = 'DeltaNamespaceProbeFailed';
+  }
 }
 
 /** Parse what {@link deltaProbeCommand} printed, or throw naming the refusal. */
 export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
   const space = stdout.indexOf(' ');
   const rc = space === -1 ? stdout.trim() : stdout.slice(0, space);
+
+  if (rc === '78' || rc === '127') throw new DeltaNamespaceProbeFailed(rc);
 
   if (rc !== '0') throw new Error(`the delta probe failed (${rc}): ${stdout.slice(0, 200)}`);
   const payload = space === -1 ? '' : stdout.slice(space + 1).trim();
@@ -173,7 +184,7 @@ export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
     if (!/^[0-7]+$/.test(mode)) throw new Error(`the delta probe holds a non-mode at record ${records.length}`);
     const path = field(10);
 
-    if (path === '' || path.startsWith('/') || path.split('/').includes('..')) {
+    if ((path === '' && field(0) !== 'o') || path.startsWith('/') || path.split('/').includes('..')) {
       throw new Error(`the delta probe holds a hostile path at record ${records.length}`);
     }
 
@@ -425,19 +436,29 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   const indexes = new Map<string, Uint8Array>();
   const linkGroups = new Map<number, string[]>();
   const hashIndex = new Map(input.hashFiles.map((path, index) => [path, index]));
+  const opaque = new Set(input.probe.filter(entry => entry.type === 'o').map(entry => entry.path));
 
   for (const entry of input.probe) {
     const basename = entry.path.slice(entry.path.lastIndexOf('/') + 1);
 
     if (basename.startsWith('.wh.')) {
-      if (basename === '.wh..wh..opq') throw new Error('opaque-directory publication requires an explicit namespace record');
+      if (basename === '.wh..wh..opq') {
+        const parent = entry.path.slice(0, Math.max(0, entry.path.lastIndexOf('/')));
+
+        if (!opaque.has(parent)) throw new Error('opaque-directory publication requires an explicit namespace record');
+        continue;
+      }
+
       const path = entry.path.slice(0, entry.path.lastIndexOf('/') + 1) + basename.slice(4);
       deleted.push(v.parse(RelPath, path));
       continue;
     }
 
-    if (entry.type === 'd') {
-      dirs.push({ p: entry.path, mode: entry.mode, uid: entry.uid, gid: entry.gid });
+    if (entry.type === 'd' || entry.type === 'o') {
+      const dir: DeltaManifest['dirs'][number] = { p: entry.path, mode: entry.mode, uid: entry.uid, gid: entry.gid };
+
+      if (entry.type === 'o') dir.opaque = true;
+      dirs.push(dir);
       continue;
     }
 
@@ -582,13 +603,14 @@ export function readDeltaIndex(ref: DeltaIndexRef, size: number, bytes: Uint8Arr
 export function mergeDeltaPublication(plan: DeltaPlan, retained: DeltaManifest,
   indexes: ReadonlyMap<string, Uint8Array>, sideDir: string): DeltaPlan {
   const next = plan.manifest;
-  const erased = [...next.deleted, ...next.files.map(file => file.p)];
+  const erased = [...next.deleted, ...next.files.map(file => file.p), ...next.dirs.filter(dir => dir.opaque).map(dir => dir.p)];
   const replaced = new Set([...next.files.map(file => file.p), ...next.dirs.map(dir => dir.p)]);
-  const removed = (path: string): boolean => replaced.has(path) || ancestorDirs(path).some(parent => erased.includes(parent)) || next.deleted.includes(path);
+  const removed = (path: string): boolean => erased.includes('') || replaced.has(path) || ancestorDirs(path).some(parent => erased.includes(parent)) || next.deleted.includes(path);
   const kept = retained.files.filter(file => !removed(file.p));
   const chunks = new Map(plan.chunks);
   const mergedIndexes = new Map(plan.indexes);
   const retainedFiles = new Map<string, string>();
+  const retainedDirs = new Map(retained.dirs.map(dir => [dir.p, dir]));
 
   for (const file of kept) {
     if (file.kind === 'whole') { retainedFiles.set(file.p, `${sideDir}/${DELTA_TREE_DIR}/${file.p}`); continue; }
@@ -610,7 +632,11 @@ export function mergeDeltaPublication(plan: DeltaPlan, retained: DeltaManifest,
   const links = retained.links.map(group => group.filter(path => paths.has(path) && !removed(path))).filter(group => group.length > 1);
 
   return { manifest: { v: 2, files,
-    dirs: [...retained.dirs.filter(dir => !removed(dir.p)), ...next.dirs].sort((a, b) => a.p.localeCompare(b.p)),
+    dirs: [...retained.dirs.filter(dir => !removed(dir.p)), ...next.dirs.map(dir => {
+      const previous = retainedDirs.get(dir.p);
+
+      return previous?.opaque === true ? { ...dir, opaque: true } : dir;
+    })].sort((a, b) => a.p.localeCompare(b.p)),
     deleted: [...new Set([...retained.deleted.filter(path => !removed(path)), ...next.deleted])].sort(),
     treplace: [...new Set([...retained.treplace.filter(path => paths.has(path)), ...next.treplace])].sort(),
     links: [...links, ...next.links] }, chunks, indexes: mergedIndexes, retainedFiles };
@@ -642,6 +668,12 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
     ops.push(first !== undefined
       ? `ln ${shellPath(`${treeDir}/${first}`)} ${shellPath(`${treeDir}/${file.p}`)}`
       : `cp -a ${shellPath(plan.retainedFiles?.get(file.p) ?? `${layout.upperDir}/${file.p}`)} ${shellPath(`${treeDir}/${file.p}`)}`);
+  }
+
+  // The tree mask hides base names without hiding this checkpoint's whole
+  // files from the higher block layer. No lower directory is enumerated.
+  for (const dir of plan.manifest.dirs) {
+    if (dir.opaque) ops.push(`: > ${shellPath(`${treeDir}/${dir.p === '' ? '' : `${dir.p}/`}.wh..wh..opq`)}`);
   }
 
   for (const [digest, chunk] of [...plan.chunks].sort(([a], [b]) => (a < b ? -1 : 1))) {

@@ -1,0 +1,57 @@
+
+ ⛅️ wrangler 4.129.0 (update available 4.131.1)
+───────────────────────────────────────────────
+
+WARNING! Your credentials are stored unencrypted in '/home/mrwhite0racle/.docker/config.json'.
+Configure a credential helper to remove this warning. See
+https://docs.docker.com/go/credential-store/
+
+Login Succeeded
+The push refers to repository [registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer]
+aeba5ac6e688: Preparing
+c90e678ff429: Preparing
+41ece6176649: Preparing
+5f70bf18a086: Preparing
+5f70bf18a086: Preparing
+f8fb451f0bf4: Preparing
+068ae13f6a69: Preparing
+a6c6258bf0b3: Preparing
+5f70bf18a086: Preparing
+0dcbdd7868c6: Preparing
+aa9b578af52b: Preparing
+af1661155858: Preparing
+55af7e2b56b9: Preparing
+ca4cd3c0e947: Preparing
+83aa5d9b4017: Preparing
+433c75eaf8d5: Preparing
+b74bc65e642f: Preparing
+c0359c5b6ede: Preparing
+aa9b578af52b: Waiting
+af1661155858: Waiting
+55af7e2b56b9: Waiting
+ca4cd3c0e947: Waiting
+83aa5d9b4017: Waiting
+433c75eaf8d5: Waiting
+b74bc65e642f: Waiting
+a6c6258bf0b3: Waiting
+c0359c5b6ede: Waiting
+0dcbdd7868c6: Waiting
+068ae13f6a69: Waiting
+5f70bf18a086: Layer already exists
+41ece6176649: Layer already exists
+f8fb451f0bf4: Layer already exists
+068ae13f6a69: Layer already exists
+0dcbdd7868c6: Layer already exists
+a6c6258bf0b3: Layer already exists
+aa9b578af52b: Layer already exists
+af1661155858: Layer already exists
+55af7e2b56b9: Layer already exists
+ca4cd3c0e947: Layer already exists
+83aa5d9b4017: Layer already exists
+433c75eaf8d5: Layer already exists
+b74bc65e642f: Layer already exists
+c0359c5b6ede: Layer already exists
+c90e678ff429: Pushed
+aeba5ac6e688: Pushed
+20260913-opaque: digest: sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e size: 4082
+Pushed image: registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer:20260913-opaque

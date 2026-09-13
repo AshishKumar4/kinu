@@ -10,6 +10,8 @@ pub struct Directory {
     pub mode: u16,
     pub uid: u32,
     pub gid: u32,
+    #[serde(default)]
+    pub opaque: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -89,7 +91,10 @@ impl Manifest {
             }
         }
         for dir in &self.dirs {
-            if !path_valid(&dir.p) || dir.mode > 0o7777 || !names.insert(&dir.p) {
+            if !(path_valid(&dir.p) || (dir.p.is_empty() && dir.opaque))
+                || dir.mode > 0o7777
+                || !names.insert(&dir.p)
+            {
                 return Err(invalid("invalid or duplicate directory"));
             }
         }
@@ -153,13 +158,14 @@ pub struct Inode {
 /// Whole files and other namespace entries belong to the lazy tree lower.
 pub fn inodes(manifest: &Manifest) -> io::Result<Vec<Inode>> {
     manifest.validate()?;
+    let root_attrs = manifest.dirs.iter().find(|dir| dir.p.is_empty());
     let root = Inode {
         path: String::new(),
         parent: 1,
         size: 0,
-        mode: 0o755,
-        uid: 0,
-        gid: 0,
+        mode: root_attrs.map_or(0o755, |dir| dir.mode),
+        uid: root_attrs.map_or(0, |dir| dir.uid),
+        gid: root_attrs.map_or(0, |dir| dir.gid),
         index: None,
         children: DirectoryEntries::new(),
     };
