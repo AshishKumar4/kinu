@@ -1,0 +1,122 @@
+{
+  "runId": "b20260913110816",
+  "date": "2026-09-13T11:09:10.893Z",
+  "source": {
+    "commit": "ce6751eb3ddf995463ece977607c07ab64c74234",
+    "dirtyDigest": "sha256:3afe47a38b0ab6ab103b9012cefb21cb06462f2709cce1f1e619ad45613f5d2a"
+  },
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0",
+  "worker": "kinu-devbox-bench-b20260913110816-snapshot-chain",
+  "bucket": "kinu-devbox-bench-b20260913110816-snapshot-chain",
+  "workerVersion": "84487374-4c33-4d00-bc54-00af42983b06",
+  "scope": "empty attach then first exec; lifecycle attribution only",
+  "c3": null,
+  "large": null,
+  "lifecycle": [
+    {
+      "initial": {
+        "attach": {
+          "kind": "empty",
+          "detail": "no chain recorded; an empty overlay is attached"
+        },
+        "state": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/38561afd9f2bc23bb8f3947b92304bfc05dbe266e3c8ca1df0574678517a95be/",
+          "state": {
+            "restoration": "attached",
+            "running": true,
+            "unready": "the container start hook has not settled",
+            "lastAttach": {
+              "kind": "empty",
+              "detail": "no chain recorded; an empty overlay is attached"
+            },
+            "bootId": "ccfed14f-cac6-4834-a515-464fe381a762",
+            "chain": null,
+            "incidents": {
+              "total": 2,
+              "undelivered": 0
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789297727396,
+            "replacedCount": 0,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913110816",
+          "ms": 9
+        },
+        "redrives": 3,
+        "ms": 16739,
+        "startedAt": 1789297710708
+      },
+      "exec": {
+        "ok": true,
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": "",
+        "ms": 117
+      }
+    },
+    {
+      "initial": {
+        "attach": {
+          "kind": "empty",
+          "detail": "no chain recorded; an empty overlay is attached"
+        },
+        "state": {
+          "extractionAllowed": false,
+          "storePrefix": "boxes/38561afd9f2bc23bb8f3947b92304bfc05dbe266e3c8ca1df0574678517a95be/",
+          "state": {
+            "restoration": "attached",
+            "running": true,
+            "unready": "the container start hook has not settled",
+            "lastAttach": {
+              "kind": "empty",
+              "detail": "no chain recorded; an empty overlay is attached"
+            },
+            "bootId": "9068ed25-2949-4fbf-99f3-37ab101d814a",
+            "chain": null,
+            "incidents": {
+              "total": 4,
+              "undelivered": 2
+            },
+            "strategy": "snapshot-chain",
+            "durable": true,
+            "ready": false,
+            "lastInteractionAt": 1789297737883,
+            "replacedCount": 1,
+            "supervised": [],
+            "ports": []
+          },
+          "ok": true,
+          "strategy": "snapshot-chain",
+          "box": "ab-snapshot-chain-b20260913110816",
+          "ms": 8
+        },
+        "redrives": 2,
+        "ms": 8748,
+        "startedAt": 1789297729253
+      },
+      "exec": {
+        "ok": true,
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": "",
+        "ms": 67
+      }
+    }
+  ],
+  "cleanup": [
+    "worker: deleted or absent",
+    "kinu-devbox-bench-b20260913110816-snapshot-chain-snapshotchainbox: absent",
+    "absent",
+    "drained 0 objects and 0 multipart uploads"
+  ],
+  "errors": [
+    "lifecycle empty baseline refused: [stale-owner → retry] The sandbox was destroyed while the operation was pending.: The sandbox was destroyed while the operation was pending."
+  ]
+}

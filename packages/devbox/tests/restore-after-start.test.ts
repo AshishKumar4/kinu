@@ -168,7 +168,7 @@ describe('the start hook owns restoration', () => {
     const start = box.start().then(() => { returned = true; });
     await parked.reached;
     expect(returned).toBe(false);
-    expect(container.initGate).toBeDefined();
+    expect(container.initGate).toBeUndefined();
     expect(rows.get('devbox:restoration')).toEqual({
       phase: 'restoring', where: 'start', since: expect.any(Number),
     });
@@ -274,12 +274,13 @@ describe('the start hook owns restoration', () => {
     expect(armed(container)).toBe(0);
   });
 
-  test('T5: requests delivered during the hook wait behind it', async () => {
+  test('T5: delivered requests join readiness while the RPC input gate stays open', async () => {
     const { box, container } = await stoppedBoxWithService();
     const parked = gate();
     container.stampGate = parked;
     const start = box.start();
     await parked.reached;
+    expect(container.initGate).toBeUndefined();
     const first = deliver(container, () => box.exec('echo first'));
     const second = deliver(container, () => box.exec('echo second'));
     expect(container.execs.some(command => command.startsWith('echo'))).toBe(false);

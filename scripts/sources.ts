@@ -48,8 +48,8 @@
 
 import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { FileSink, Subprocess } from 'bun';
 import { gitEnv } from '../packages/test-utils/src/git.ts';
 import {
@@ -438,6 +438,33 @@ export function readMatching(predicate: (file: string) => boolean): Map<string, 
 /** Product source: the files a gate holds to the standard. */
 export function readSources(): Map<string, string> {
   return readMatching(isProductSource);
+}
+
+/** Installed implementations of the container input blocks. These are vendor
+ * files, not repository files: the pinned package entry points own this set. */
+export function readContainerInputBlockSources(): Map<string, string> {
+  const selected = new Map<string, string>();
+
+  for (const specifier of ['@cloudflare/containers', '@cloudflare/sandbox']) {
+    const dist = dirname(new URL(import.meta.resolve(specifier)).pathname);
+
+    const visit = (folder: string): void => {
+      for (const entry of readdirSync(folder, { withFileTypes: true })) {
+        const file = join(folder, entry.name);
+
+        if (entry.isDirectory()) visit(file);
+        else if (entry.isFile() && entry.name.endsWith('.js')) {
+          const text = readFileSync(file, 'utf8');
+
+          if (text.includes('blockConcurrencyWhile')) selected.set(file, text);
+        }
+      }
+    };
+
+    visit(dist);
+  }
+
+  return selected;
 }
 
 /** Colocated and `tests/` suites, which `readSources` deliberately omits. A gate

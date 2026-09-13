@@ -591,13 +591,8 @@ export class FakeSandbox {
     );
   }
   /**
-   * Set while the container-start hook holds the platform's init gate.
-   *
-   * The one platform fact this fake models that is NOT a container behaviour:
-   * while `onStart` is awaited inside `blockConcurrencyWhile` the runtime
-   * delivers no event to the Durable Object. A test that called `box.exec()`
-   * directly during that window would be asserting against an interleaving the
-   * platform cannot produce, so {@link deliver} awaits this first.
+   * An explicit platform input block. The patched SDK's container hook does
+   * not hold one; delivered operations join Devbox readiness themselves.
    */
   initGate: Promise<void> | undefined;
 
@@ -1391,17 +1386,10 @@ export class FakeSandbox {
     this.startFaultAfterRunning = undefined;
 
     if (fault !== undefined) throw fault;
-    // The SDK awaits onStart inside its block on every start request.
-    // Incoming requests wait on initGate; timers and awaited I/O can complete.
-    const opened = Promise.withResolvers<void>();
-    this.initGate = opened.promise;
-
-    try {
-      await this.onStart();
-    } finally {
-      this.initGate = undefined;
-      opened.resolve();
-    }
+    // 2026-09-13 cloud block trace b20260913105359: an adoption RPC inside
+    // the SDK hook block never receives its reply. The patched SDK releases
+    // its storage block first; Devbox's readiness singleflight gates callers.
+    await this.onStart();
 
   }
 
