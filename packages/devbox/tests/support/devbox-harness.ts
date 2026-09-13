@@ -375,6 +375,8 @@ export function fakeStorage(): FakeStorage {
  */
 export const STAMP_COMMAND = '> /tmp/devbox-boot-id';
 
+const IMAGE_DIRECTORIES = ['/', '/workspace', '/tmp', '/var/tmp'] as const;
+
 /**
  * The container, as the SDK presents it.
  *
@@ -402,8 +404,8 @@ export class FakeSandbox {
   /** THE SDK'S TABLE, shared with the Durable Object's SQLite: see
    *  {@link scheduleTableOf}. */
   readonly scheduleRows: { callback: string; time: number }[];
-  /** Ports a probe finds a listener on. A port absent from here answers the way
-   *  a refused connection does, which is what the shipped probe reads. */
+  /** Configured probe answers for services on a started container, retained
+   *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
   readonly fileOperations: FileOperation[] = [];
   /** Every bucket mount/unmount the box asked the SDK for, as
@@ -463,7 +465,7 @@ export class FakeSandbox {
    * earn directories by `mkdir -p`; a cwd absent from this set refuses the
    * chdir, as the container does.
    */
-  readonly directories = new Set<string>(['/', '/workspace', '/tmp', '/var/tmp']);
+  readonly directories = new Set<string>(IMAGE_DIRECTORIES);
   readonly fileOperationFailures = {
     rename: Array<Error>(),
     move: Array<Error>(),
@@ -505,6 +507,7 @@ export class FakeSandbox {
   stampGate: Gate | undefined;
   exposeGate: Gate | undefined;
   destroyFault: Error | undefined;
+  stopFault: Error | undefined;
   destroys = 0;
   bootId: string | undefined;
   containerStarts = 0;
@@ -541,9 +544,8 @@ export class FakeSandbox {
   /**
    * Overlay mounts this container serves, by work directory. Recorded when the
    * box's own `fuse-overlayfs` command runs and reported back through
-   * `cat /proc/mounts`, which is what `isOverlayMounted` reads. A stop clears
-   * them: FUSE dies with the container while the disk survives, so a wake
-   * re-mounts what the record names.
+   * `cat /proc/mounts`, which is what `isOverlayMounted` reads. Successful
+   * container termination clears them together with the local filesystem.
    */
   readonly overlayMounts = new Set<string>();
   /**
@@ -561,8 +563,8 @@ export class FakeSandbox {
   chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string } | undefined;
   /**
    * Staged archives by container path: what the box's own `mksquashfs`
-   * command measured, which the later `dd` of that same path publishes. Kept
-   * across a stop the way the staged file on the disk is.
+   * command measured, which the later `dd` of that same path publishes.
+   * These are local files, not the remote objects in chainStore.
    */
   readonly stagedArchives = new Map<string, Uint8Array>();
   /**
@@ -1316,9 +1318,29 @@ export class FakeSandbox {
 
     if (fault !== undefined) return Promise.reject(fault);
     this.running.running = false;
+    this.#loseContainerLocalState();
 
     return Promise.resolve();
   }
+
+  #loseContainerLocalState(): void {
+    this.files.clear();
+    this.directories.clear();
+
+    for (const path of IMAGE_DIRECTORIES) this.directories.add(path);
+    this.bootId = undefined;
+    this.stagedArchives.clear();
+    this.processes.clear();
+    this.processLogs.clear();
+    this.overlayMounts.clear();
+    this.layerMounts.clear();
+    this.s3fsMounts.clear();
+    this.workdirHolder = undefined;
+    this.sessionCwd = '/workspace';
+    this.changeVersion = 0;
+    this.journalSocketUp = false;
+  }
+
   async containerFetch(): Promise<Response> {
     return new Response();
   }
@@ -1445,26 +1467,15 @@ export class FakeSandbox {
 
   stops = 0;
 
-  /**
-   * A stop ends every process in the container and the process table with
-   * them: the SDK answers `getProcess` from the container's own server
-   * (`client.processes.getProcess`), which a stop takes down, so a wake finds
-   * no row for any runner or daemon the previous life started. What a stop
-   * does NOT take is the instance disk: the boot marker under `/tmp` and the
-   * runner's result files stay, which is the same-instance wake the platform
-   * can produce (`src/snapshot-chain.ts`, "the same-instance path").
-   */
+  /** Successful physical termination discards local state, not DO storage,
+   * remote objects, recorded call history or configured fault responses. */
   stop(): Promise<void> {
     this.stops += 1;
+    const fault = this.stopFault;
+
+    if (fault !== undefined) return Promise.reject(fault);
     this.running.running = false;
-    this.processes.clear();
-    // The FUSE daemons go with the processes: the overlay and the layer
-    // mounts they served are gone on the next start, while the disk — files,
-    // directories, the boot marker, the staged archives — survives. The
-    // SDK-registry store mounts stay listed the way the patched SDK leaves
-    // them, for the next attach to adopt or replace.
-    this.overlayMounts.clear();
-    this.layerMounts.clear();
+    this.#loseContainerLocalState();
 
     return Promise.resolve();
   }

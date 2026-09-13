@@ -468,6 +468,25 @@ export class ContainerDisk {
     if (this.stopped) throw new ContainerStopped(what);
   }
 
+  /** Successful termination loses every container-local byte: files, trees,
+   *  mounts, overlays and the whiteouts between them. Recorded call history
+   *  and configured faults stay — they are the test's memory, not the
+   *  container's — and so do the lifecycle flags: a stopped disk is gone,
+   *  not alive-again. The disk object itself survives so references the
+   *  caller already holds observe the loss rather than a swap. */
+  discardLocalState(): void {
+    this.files.clear();
+    this.dirs.clear();
+    this.dirs.add(DEVBOX_WORKDIR);
+    this.dirs.add(DEVBOX_RUNTIME_DIR);
+    this.mounts.clear();
+    this.overlays.clear();
+    this.trees.clear();
+    this.mountServed.clear();
+    this.whiteouts.clear();
+    this.usedBytes = 0;
+  }
+
   /** Charge `delta` bytes against the quota; refuse, effect-free, past it. */
   charge(delta: number, path = '(tree)'): void {
     // tmpfs lives in memory rather than on the container disk, and layer
@@ -1448,11 +1467,13 @@ function checkpointCommand(
   return undefined;
 }
 
-/** The container's mounts and releases: a layer mounted, an overlay composed,
- *  a mount point or every delta layer released. Undefined for any other
- *  command. */
+/** The container's mounts and releases: the live mount table read, a layer
+ *  mounted, an overlay composed, a mount point or every delta layer released.
+ *  Undefined for any other command. */
 function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
+
+  if (command === 'cat /proc/mounts') return shellOk(disk.procMounts());
 
   // Releasing every delta layer this container serves, whichever generation
   // mounted it.
@@ -1512,6 +1533,21 @@ function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch):
   return undefined;
 }
 
+/** The container's process fault policy, in one place: a fault only fires on
+ *  a live container (a dead or stopped one answers nothing it scripted), the
+ *  first match wins, the command is recorded as reached, and the reply is the
+ *  fault's own stderr and exit code — never the shell's. */
+function processFaultReply(disk: ContainerDisk, command: string): ShellReply | undefined {
+  const fault = disk.dead || disk.stopped ? undefined : disk.processFaults.find((entry) => entry.match.test(command));
+
+  if (fault === undefined) return undefined;
+
+  disk.processFaultsReached.push(command);
+
+  return { stdout: '', stderr: fault.stderr, exitCode: fault.exitCode };
+}
+
+
 function chainExec(
   disk: ContainerDisk,
   deaths: DeathWatch,
@@ -1528,13 +1564,9 @@ function chainExec(
     const refused = sessionShellRefusal(command);
 
     if (refused !== undefined) throw refused;
-    const fault = disk.dead || disk.stopped ? undefined : disk.processFaults.find((entry) => entry.match.test(command));
+    const fault = processFaultReply(disk, command);
 
-    if (fault !== undefined) {
-      disk.processFaultsReached.push(command);
-
-      return { stdout: '', stderr: fault.stderr, exitCode: fault.exitCode };
-    }
+    if (fault !== undefined) return fault;
 
     const ok = shellOk;
     // The chunked delta's own shell, answered with real bytes. See
@@ -1542,8 +1574,6 @@ function chainExec(
     const delta = deltaCommand(command, disk);
 
     if (delta !== undefined) return delta;
-
-    if (command === 'cat /proc/mounts') return ok(disk.procMounts());
 
     const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
 
@@ -1741,17 +1771,29 @@ function snapshotChainArm(): ConformanceArm {
       this.#storage = this.#build();
     }
 
-    replaceContainer(): void {
-      this.disk.dead = true;
-      this.disk = new ContainerDisk();
+    /** A stopped container loses everything that lived on its own disk —
+     *  every byte, every mount, the boot-local stamp and whatever a commit
+     *  had staged — while the durable store, the DO's row, the recorded
+     *  calls and the configured faults carry on. Replacement clears the
+     *  same set; a stopped boot just keeps its flags on the same disk. */
+    #loseContainerLocalState(): void {
+      this.disk.discardLocalState();
       this.#seedStamp = undefined;
       this.#publishing = undefined;
+      this.#packed = undefined;
+    }
+
+    replaceContainer(): void {
+      this.#loseContainerLocalState();
+      this.disk.dead = true;
+      this.disk = new ContainerDisk();
       // The old boot's held commit keeps the old gate; the replacement gets its own.
       this.#finalizeGate = new OneShotGate();
       this.#storage = this.#build();
     }
 
     stop(): void {
+      this.#loseContainerLocalState();
       this.disk.stopped = true;
     }
 
