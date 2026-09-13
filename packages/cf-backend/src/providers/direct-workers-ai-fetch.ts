@@ -285,21 +285,36 @@ async function sseResponse(
   startedAt: number,
 ): Promise<Response> {
   const reader = body.getReader();
-  const first = await reader.read();
+  let first: Awaited<ReturnType<typeof reader.read>>;
 
-  if (first.done) {
-    await reader.cancel();
+  try {
+    first = await reader.read();
+  } catch (cause) {
+    // A refused head is not a stream to hold: release the lock before the
+    // error propagates so the binding body never stays locked behind it.
+    reader.releaseLock();
 
-    return unstreamable(model, 'an empty stream');
+    throw cause;
   }
+
+  // Both early refusals cancel upstream — the request is over either way —
+  // and release in `finally`, so even a cancel rejection cannot leave the
+  // lock held.
+  const refuseEarly = async (reason: string): Promise<Response> => {
+    try {
+      await reader.cancel();
+    } finally {
+      reader.releaseLock();
+    }
+
+    return unstreamable(model, reason);
+  };
+
+  if (first.done) return refuseEarly('an empty stream');
 
   const head = new TextDecoder().decode(first.value).trimStart();
 
-  if (head.startsWith('{') || head.startsWith('[')) {
-    await reader.cancel();
-
-    return unstreamable(model, 'a JSON completion');
-  }
+  if (head.startsWith('{') || head.startsWith('[')) return refuseEarly('a JSON completion');
 
   diagnostics.event('workers_ai.direct_stream_first_byte', {
     model,
@@ -324,23 +339,27 @@ async function sseResponse(
       else controller.enqueue(next.value);
     },
     // A cancelled reader is what stops the upstream request, so an abandoned
-    // turn stops costing neurons.
-    cancel: () => reader.cancel(),
+    // turn stops costing neurons. Downstream cancellation is its OWN terminal
+    // path: it releases the lock in `finally` too, so it cannot bypass the
+    // terminal callback's cleanup and leave the binding body locked.
+    async cancel(reason) {
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
+    },
   });
 
   // One pass over the bytes. The translation below already splits every line
   // and parses every `data:` payload, so the cached-usage repair applies inside
   // it as a rule rather than as a second transform doing the same work again.
   return new Response(
-    // The terminal frame has gone out: stop the upstream request the way a
-    // cancelled reader does, so the turn ends at [DONE] instead of at
-    // producer close — including a producer that never closes behind it.
-    // The terminal frame has gone out: stop the upstream request the way a
-    // cancelled reader does, so the turn ends at [DONE] instead of at
-    // producer close — including a producer that never closes behind it.
-    // Awaited inside the transform's own pull, so a rejection reaches the
-    // consumer's error path instead of floating; the lock releases either
-    // way, in `finally`.
+    // The terminal frame has gone out: stop the upstream request so the
+    // turn ends at [DONE] instead of at producer close — including a
+    // producer that never closes behind it. Awaited inside the transform's
+    // own lifecycle, so a rejection reaches the consumer's error path
+    // instead of floating; the lock releases either way, in `finally`.
     source.pipeThrough(openAIChunkTransform(model, async () => {
       try {
         await reader.cancel();

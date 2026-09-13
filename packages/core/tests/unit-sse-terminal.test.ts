@@ -227,6 +227,35 @@ describe('withSseTerminal', () => {
     expect(upstream.calls).toHaveLength(1);
   });
 
+  test('a failing upstream read rejects with the same cause and unlocks the body', async () => {
+    const upstream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(encoder.encode(sseData('{"content":"hi"}')));
+        c.error(new Error('upstream broke'));
+      },
+    });
+
+    const fetchImpl = asFetchFunction(async () => new Response(
+      upstream,
+      { headers: { 'content-type': 'text/event-stream' } },
+    ));
+
+    const response = await withSseTerminal(fetchImpl)('http://fake.invalid/v1/chat/completions');
+
+    let outcome: string;
+
+    try {
+      await drain(response.body ?? new ReadableStream<Uint8Array>());
+      outcome = 'resolved';
+    } catch (cause) {
+      outcome = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    // The same rejection reaches the consumer — never swallowed, never
+    // wrapped — and the upstream body it read from is unlocked.
+    expect(outcome).toBe('upstream broke');
+    expect(upstream.locked).toBe(false);
+  });
   test('non-SSE bodies pass through untouched', async () => {
     const fetchImpl = asFetchFunction(async () => Response.json({ data: [{ id: 'probe' }] }));
     const wrapped = withSseTerminal(fetchImpl);
