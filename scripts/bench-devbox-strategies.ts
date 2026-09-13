@@ -61,7 +61,7 @@ import {
 export type { ExecReply, CheckpointReply, FileObservation, StateReply, StartupPoll, StartupCompletion, StartupObservation } from '../packages/devbox/bench/observation-schema';
 
 import { DELTA_MANIFEST_NAME, DeltaManifestSchema, type DeltaManifest } from '../packages/devbox/src/chunked-delta';
-import { evaluateLiveC3, type C3Identity, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
+import { BlockAttachMetricsSchema, evaluateLiveC3, type BlockAttachMetrics, type C3Identity, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import { PublicationWindowSchema, publicationTotals } from '../packages/devbox/bench/publication-meter';
 import { C3_BYTES_BOUND, C3_WORKLOAD } from '../packages/devbox/bench/witness-files';
 import { parseArgs } from 'node:util';
@@ -5253,6 +5253,7 @@ export async function measureLiveC3(
     row.destroyReceipt = await destroyBox(fixture, box);
     row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { observations: restorationObservations });
     row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', C3_WORKLOAD.baselineBytes, row.errors, row.restoration.startedAt);
+    row.blockReads = await readBlockAttachMetrics(fixture, box);
     observe(row);
     // Observer code is outside the one-file workload, and installed only after the cold clock ends.
     await installWitnessHarness(fixture, box, harness);
@@ -5268,6 +5269,16 @@ export async function measureLiveC3(
   }
 
   return row;
+}
+
+/** Capture before an observer reads the changed file. A missing counter is
+ * unmeasured, never a zero inferred from absence. */
+export async function readBlockAttachMetrics(fixture: Fixture, box: string): Promise<BlockAttachMetrics> {
+  const reply = await execInBox(fixture, box, 'cat /var/tmp/devbox/block-lower-stats.json');
+
+  if (reply.ok !== true || reply.exitCode !== 0 || reply.stdout === undefined) throw new Error(`block-read counters unobserved: ${reply.error ?? reply.stderr}`);
+
+  return v.parse(BlockAttachMetricsSchema, JSON.parse(reply.stdout));
 }
 
 /** How long a release is given after an arm already failed. Short on purpose:

@@ -7,6 +7,7 @@ import {
 } from './observation-schema';
 import { PublicationWindowSchema, publicationTotals, type PublicationTotals, type PublicationWindow } from './publication-meter';
 import { C3_BYTES_BOUND, C3_OVERWRITE_SHA256, C3_WORKLOAD } from './witness-files';
+import { RestorePhaseStampsSchema, type RestorePhaseStamps } from '../src/durability/contracts';
 
 export interface C3Identity {
   commit: string;
@@ -45,7 +46,8 @@ export interface LiveC3Observation {
   destroyReceipt: DestroyReply | null;
   restoration: StartupCompletion | null;
   restorationObservations: StartupObservation[];
-  restoreProbe: { kind?: string; treeBytes?: number | null; wallMs: number | null; probeAt: number | null; outcome: string } | null;
+  restoreProbe: { kind?: string; treeBytes?: number | null; wallMs: number | null; probeAt: number | null; outcome: string; phases?: RestorePhaseStamps } | null;
+  blockReads?: BlockAttachMetrics | null;
   file: FileObservation | null;
   correctness: 'passed' | 'failed' | 'unmeasured';
   errors: string[];
@@ -53,6 +55,12 @@ export interface LiveC3Observation {
 }
 
 const Count = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
+
+export const BlockAttachMetricsSchema = v.object({
+  generation: v.pipe(v.string(), v.minLength(1)), payloadBytes: Count, indexPages: Count, readRequests: Count,
+});
+
+export type BlockAttachMetrics = v.InferOutput<typeof BlockAttachMetricsSchema>;
 
 const Text = v.pipe(v.string(), v.minLength(1));
 
@@ -76,7 +84,8 @@ export const LiveC3ObservationSchema = v.looseObject({
   })),
   beforeDestroy: v.nullable(StateReplySchema), destroyReceipt: v.nullable(DestroyReplySchema),
   restoration: v.nullable(StartupCompletionSchema), restorationObservations: v.array(StartupObservationSchema),
-  restoreProbe: v.nullable(v.looseObject({ wallMs: v.nullable(Count), probeAt: v.nullable(Count), outcome: v.string() })),
+  restoreProbe: v.nullable(v.looseObject({ wallMs: v.nullable(Count), probeAt: v.nullable(Count), outcome: v.string(), phases: v.optional(RestorePhaseStampsSchema) })),
+  blockReads: v.optional(v.nullable(BlockAttachMetricsSchema)),
   file: v.nullable(FileObservationSchema), correctness: v.picklist(['passed', 'failed', 'unmeasured']), errors: v.array(v.string()), cleanup: v.nullable(TeardownReplySchema),
 }) satisfies v.GenericSchema<LiveC3Observation>;
 
