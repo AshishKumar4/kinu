@@ -36,13 +36,6 @@
       "decision": "traversal"
     },
     {
-      "file": "packages/core/src/read-models/background-event.ts",
-      "kind": "hand-parser",
-      "owner": "parseDrainedEvents",
-      "sourceSha256": "d652e1a8f8b03c0d4f5b6adf9dc82952e1debe51146dba4df70333123263beb7",
-      "decision": "framing"
-    },
-    {
       "file": "packages/cf-backend/src/email/inbound.ts",
       "kind": "hand-parser",
       "owner": "stripQuotedReply",
@@ -83,13 +76,6 @@
       "owner": "parseMemoryContent",
       "sourceSha256": "e98aaef960d0f2cd869c7abeb4b4816e74944bea11b46f9a9134a19459de9258",
       "decision": "framing"
-    },
-    {
-      "file": "packages/core/src/execution/terminal-lane.ts",
-      "kind": "hand-parser",
-      "owner": "scanCommandLine",
-      "sourceSha256": "f73dc9be912ee73c0c139a6dadc29b85f5db07f243d9a7dbca6505b80ee3cde5",
-      "decision": "cli"
     },
     {
       "file": "packages/cf-backend/tests/helpers/declared-members.ts",
@@ -295,13 +281,6 @@
       "decision": "cli"
     },
     {
-      "file": "packages/core/src/tui/context-status.ts",
-      "kind": "hand-parser",
-      "owner": "stripKnownProvider",
-      "sourceSha256": "e41b2bd0d7a20cf88067b46fe3b82a4bf4b1f46553a1145c06fcfaebab55aab4",
-      "decision": "lexical"
-    },
-    {
       "file": "packages/cli/tests/device-connect.test.ts",
       "kind": "regex-literal",
       "owner": "REQUIRED_SIBLINGS",
@@ -379,6 +358,13 @@
       "decision": "handbook"
     },
     {
+      "file": "packages/core/src/execution/terminal-lane.ts",
+      "kind": "hand-parser",
+      "owner": "scanCommandLine",
+      "sourceSha256": "f73dc9be912ee73c0c139a6dadc29b85f5db07f243d9a7dbca6505b80ee3cde5",
+      "decision": "cli"
+    },
+    {
       "file": "packages/core/src/heads/head-summary.ts",
       "kind": "hand-parser",
       "owner": "extractFinalText",
@@ -404,6 +390,13 @@
       "kind": "hand-parser",
       "owner": "extractBalancedJson",
       "sourceSha256": "4cf0e02736d26c5eaa962107ae1438d4bb795a4f07be3a933431f53de557f207",
+      "decision": "framing"
+    },
+    {
+      "file": "packages/core/src/read-models/background-event.ts",
+      "kind": "hand-parser",
+      "owner": "parseDrainedEvents",
+      "sourceSha256": "d652e1a8f8b03c0d4f5b6adf9dc82952e1debe51146dba4df70333123263beb7",
       "decision": "framing"
     },
     {
@@ -446,6 +439,13 @@
       "kind": "regex-literal",
       "owner": "parseSkillFile",
       "sourceSha256": "ff56a1a2ae37b6386d4ab996a2e4c30e3cdcec9e05a2970aee2032c4e1f0c246",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/tui/context-status.ts",
+      "kind": "hand-parser",
+      "owner": "stripKnownProvider",
+      "sourceSha256": "e41b2bd0d7a20cf88067b46fe3b82a4bf4b1f46553a1145c06fcfaebab55aab4",
       "decision": "lexical"
     },
     {
@@ -659,10 +659,17 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/devbox/bench/publication-meter.test.ts",
+      "kind": "regex-literal",
+      "owner": "uploadId",
+      "sourceSha256": "9b030d5cd3b5e6d2bc72c640fda0deb28395089997810eec35fe7d3f90d37dfb",
+      "decision": "xml"
+    },
+    {
       "file": "packages/devbox/src/chunked-delta.ts",
       "kind": "hand-parser",
       "owner": "parseDeltaProbe",
-      "sourceSha256": "7b7e110e91db8fca004fb3e8e8e3daa2c0e803f953e936dac0c96ae02df87e8c",
+      "sourceSha256": "06cad49b93681e095977a33aaeaa5cc98ffb43f2d65d6fba91d4a9cb29d57c68",
       "decision": "protected"
     },
     {
