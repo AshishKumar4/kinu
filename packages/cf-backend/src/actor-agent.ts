@@ -22,7 +22,7 @@ import {
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
@@ -4609,37 +4609,13 @@ export abstract class ActorAgent extends Think<Env> {
     return this._tracing;
   }
 
-  /**
-   * Best-effort tracing, where best-effort is a CONTRACT and not a hope.
-   *
-   * Every call site is fire-and-forget from inside work whose result must not
-   * depend on a log row landing. `this.sql` is SYNCHRONOUS (`sql(...): T[]` on
-   * the SDK's Agent) so `void` discards a row array, not a promise, and a
-   * failing insert — a full database, a table a migration has not reached — is a
-   * throw on the caller's own stack. Without this catch it becomes the caller's
-   * failure, and it has: the sandbox lifecycle seam logs before it
-   * answers the container, so one unwritable row turned an announcement the
-   * agent had ALREADY been given into a rejected RPC, and the container then
-   * retried an incident that was on record forever, being refused by a log line
-   * every time.
-   *
-   * The event NAME is reported and the detail is NOT. The name is a closed word
-   * from this file; the detail is caller prose that can carry workspace text.
-   */
+  /** The platform's monotonic turn clock, over the shared durable trace. */
   protected logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
-    const now = Date.now();
 
-    try {
-      void this.sql`INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at)
-        VALUES (${this.actorHandle().actorId}, ${event}, ${detail ?? null}, ${elapsed}, ${now})`;
-    } catch (cause) {
-      diagnostics.failure('activity_log.write_failed', toKinuError({
-        doing: 'recording an activity-log row',
-        cause,
-        otherwise: 'io',
-      }), { source: event });
-    }
+    writeActivityLog(() => ({ sql: this.boundSql, actor: this.actorHandle() }), {
+      event, detail: detail ?? null, elapsedMs: elapsed, createdAt: Date.now(),
+    });
   }
 
   /**

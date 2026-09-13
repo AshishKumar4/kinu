@@ -214,6 +214,7 @@ const SHARED_TRANSPORTS = {
   listDeferredApprovals: '.list',
   listCurriculumTasks: 'listProposedTasks',
   listRuns: 'listRuns',
+  logActivity: 'writeActivityLog',
   listScaffoldVersions: 'listScaffoldVersions',
   // `refinementDebt` is the direct call the delegation check can see; the row
   // view beside it (`refinementRequestView`) is passed by reference into map.

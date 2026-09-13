@@ -30,6 +30,7 @@ import {
   profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
+  readActivityLog,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
   type ModelCallSink, type ProfileCatalogEnvelope, type SqlExecutor, type SqlValue,
   type EventVariant,
@@ -1302,6 +1303,21 @@ describe('LocalAgentSession — context window', () => {
 });
 
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
+  test('turn activity is durably recorded through the shared activity-log interface', async () => {
+    const { session, rt } = setup();
+
+    try {
+      await session.send('record this turn');
+      const rows = readActivityLog(rt.storage.sql, rt.actor, 20);
+
+      expect(rows.filter((row) => row.event === 'first_chunk')).toHaveLength(1);
+      expect(rows.filter((row) => row.event === 'step_finish')).toHaveLength(1);
+      expect(rows.every((row) => row.createdAt > 0 && row.elapsedMs >= 0)).toBe(true);
+    } finally {
+      await session.end();
+    }
+  });
+
   test('deferred approval survives a session restart and grants one execution across both runtime surfaces', async () => {
     const { db, rt, session, events } = setup();
     const command = 'git push --force origin main';
