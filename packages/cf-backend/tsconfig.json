@@ -35,6 +35,7 @@
     "tests/workerd/plan-announce-probe.ts",
     "tests/workerd/slate-actor-probe.ts",
     "tests/workerd/slate-durability-probe.ts",
+    "tests/workerd/account-reset-probe.ts",
     "tests/workerd/two-turn-probe.ts",
     "tests/workerd/user-socket-probe.ts"
   ]

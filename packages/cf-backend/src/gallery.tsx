@@ -22,6 +22,11 @@
  *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
+ *   /gallery.html?frame=workspaces → the Workspaces page (`&view=tiled` for the grid)
+ *   /gallery.html?frame=plugins  → the Plugins page
+ *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
+ *                                  the modal the Setup card opens;
+ *                                  `&panel=providers|mcp|cli` picks which
  *   /gallery.html?frame=app&path=/ → the SHIPPED shell (`Layout`, its rail,
  *                                  the living background) routed to `path`:
  *                                  `/`, `/user/settings` or `/shared`. What the
@@ -149,7 +154,9 @@ import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspa
 import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
-import { AddServerCard } from "@/pages/UserMcpPage";
+import { AddServerCard } from "@/components/account/McpServersPanel";
+import { PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { AccountProvider } from "@/hooks/use-account";
 import SharedPage from "@/pages/SharedPage";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
@@ -236,7 +243,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // fixture that type-checks can still fail the schema it is read through.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
-    createdAt: NOW - 90 * 864e5, lastSeenAt: NOW,
+    createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
   },
   // The registry answers { entries, total }, the envelope `listWorkspaces`
   // validates; a bare array parses as nothing and HomePage photographs its
@@ -269,6 +276,11 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
+/* The frames the account fixture answers: settings sections, and the surfaces
+   that mount the account panels in place — the setup modal and the wizard
+   today; plugins and workspaces join when their commits land. */
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins"]);
+
 /* Account-settings failure rig. The browser owns the two transitions: Codex
    stays failed until `gallery:settings-heal`; the gateway read stays pending
    until `gallery:settings-release`. Every sibling GET settles immediately, so
@@ -288,9 +300,61 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
   });
 }
 
+/** What the plugins page reads beyond the settings reads: the device grants
+ *  (one for the plugins frame; the settings frames keep an empty list because
+ *  the device-row gate reads the roster without one) and the owner's crafted
+ *  tools. Null for every other path. */
+function pluginsFixture(path: string): Response | null {
+  if (path === "/api/user/devices/consents") {
+    return fixtureJson(frame === "plugins"
+      ? [{ agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" }]
+      : []);
+  }
+
+  // The query string rides on `path` for a relative URL, so the match is by prefix.
+  if (path.startsWith("/api/user/experience")) {
+    return fixtureJson([
+      {
+        id: "exp-1", kind: "craft", key: "parse-ledger", title: "parse-ledger", sourceWorkspace: "checkout-fixes",
+        publishedAt: NOW - 2 * 864e5, evidence: "EMA 0.91 over 12 runs",
+        payload: { kind: "craft", description: "Turn a bank CSV export into settlement rows.", params: null, code: "", score: 0.91 },
+      },
+      {
+        id: "exp-2", kind: "craft", key: "triage-inbox", title: "triage-inbox", sourceWorkspace: "email-triage",
+        publishedAt: NOW - 5 * 864e5, evidence: "EMA 0.84 over 9 runs",
+        payload: { kind: "craft", description: "Sort a mailbox into the three piles the owner acts on.", params: null, code: "", score: 0.84 },
+      },
+    ]);
+  }
+
+  return null;
+}
+
 async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
+  if (path === "/api/user/onboarding/complete" && method === "POST") {
+    return fixtureJson({ onboardedAt: NOW });
+  }
+
+  if (path === "/api/user/account" && method === "DELETE") {
+    return fixtureJson({ deleted: true });
+  }
+
+  if (path === "/api/user/profile" && method === "PATCH") {
+    const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
+    const displayName = patch.success ? patch.output.displayName : "Owner";
+
+    return fixtureJson({
+      email: "owner@example.com", displayName,
+      createdAt: NOW - 864e5, lastSeenAt: NOW,
+      onboardedAt: frame === "welcome" ? null : NOW - 864e5,
+    });
+  }
+
   if (path === "/api/user/profile") {
-    return fixtureJson({ email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW });
+    return fixtureJson({
+      email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
+      onboardedAt: frame === "welcome" ? null : NOW - 864e5,
+    });
   }
 
   if (path === "/api/user/credentials") {
@@ -345,6 +409,30 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     });
   }
 
+  // The setupmodal frame mounts the real HomePage chrome behind the modal, so
+  // the roster and the panel's server list both answer here — a 404 would put
+  // a failure in the sidebar and the Recent section that a real page has
+  // never shown.
+  if (path === "/api/user/workspaces") {
+    return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+  }
+
+  if (path === "/api/user/mcp/servers") {
+    return fixtureJson([
+      {
+        id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
+        transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
+        authUrl: null, error: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+      },
+      {
+        id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+        transport: "sse", status: "authenticating", toolsCount: 0,
+        allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+        error: null, createdAt: NOW - 864e5, updatedAt: NOW,
+      },
+    ]);
+  }
+
   if (path === "/api/user/devices/dev-1" && method === "DELETE") {
     localStorage.setItem("gallery-device-incident", "revoked");
 
@@ -388,7 +476,9 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     }]);
   }
 
-  if (path === "/api/user/devices/consents") return fixtureJson([]);
+  const plugins = pluginsFixture(path);
+
+  if (plugins !== null) return plugins;
 
   if (path === "/api/user/profile-catalog") {
     // The real digest over the real canonical bytes, hashed here with
@@ -597,7 +687,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
 
-  if (frame === "usersettingsstate" && path.startsWith("/api/user/")) {
+  if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) {
     return userSettingsFixture(path, method, init?.body);
   }
 
@@ -6016,7 +6106,9 @@ async function mount() {
           <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
           <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
         </div>
-      ), entries: ["/"],
+      ),
+      // On its own route, so the rail's primary nav lights Shared and not Home.
+      entries: [APP_ROUTES.shared],
     }],
     ["sharedialog", { node: <ShareDialogFrame />, entries: ["/"] }],
     ["unmapped", {
@@ -6026,6 +6118,15 @@ async function mount() {
         </div>
       ), entries: ["/"],
     }],
+    // The home chrome with one account panel open over it, as the Setup card
+    // draws it: `&panel=providers|mcp|cli` picks the modal's body.
+    ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
+    // The onboarding wizard, stepped: `&step=0..3` picks which panel is open.
+    ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
+    // The two primary-nav pages behind the shipped chrome; `&view=tiled`
+    // seeds the workspaces page's stored choice.
+    ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
+    ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -6252,14 +6353,12 @@ async function mount() {
     // The real chrome, not the page alone: the sidebar's own route logic
     // decides what it renders at "/", and photographing the page without the
     // rail would pass a sidebar the app never shows. The cards read their
-    // overviews through the same store the shell mounts.
+    // overviews through the store every frame is mounted under (below).
     node = (
-      <WorkspaceOverviewsProvider>
-        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
-        </div>
-      </WorkspaceOverviewsProvider>
+      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
+      </div>
     );
   }
   // The shipped shell as App.tsx composes it — `Layout` owns the rail, the
@@ -6272,7 +6371,15 @@ async function mount() {
 
 
   createRoot(document.getElementById("root")!).render(
-    <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
+    // Every frame is mounted under the shell's three stores — account, roster,
+    // overviews — so a page photographed alone reads the same way it does
+    // behind `Layout`; a frame that mounts `Layout` itself gets Layout's own
+    // nearer store, exactly as the app does.
+    <StrictMode>
+      <MemoryRouter initialEntries={entries}>
+        <AccountProvider><WorkspaceRosterProvider><WorkspaceOverviewsProvider>{node}</WorkspaceOverviewsProvider></WorkspaceRosterProvider></AccountProvider>
+      </MemoryRouter>
+    </StrictMode>,
   );
 }
 
