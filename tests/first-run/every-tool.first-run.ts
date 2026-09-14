@@ -24,7 +24,7 @@ import { BUILTIN_TOOLS, DEPS_GATED_TOOLS, type JsonValue, type RunEvent } from '
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
-import { firstRunTurnEvents } from './turn-settlement';
+import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 
 const SUITE = 'First-run · every-tool';
 
@@ -141,8 +141,17 @@ describe(SUITE, () => {
         const subgoals: EvalSubgoal[] = [];
 
         // ── Turn 1: the agent names what it sees, and touches nothing. ──────
-        await session.prompt(LIST_ASK);
-        const listedCalls = firstRunTurnEvents(await session.runEvents(), LIST_ASK).filter(isToolCallEnd).length;
+        // A listing the running turn absorbs is answered by THAT turn — and
+        // only the events after the splice belong to it: work the turn did
+        // before it ever saw the ask is the run's own, not the listing's.
+        const listing = await session.prompt(LIST_ASK);
+        const splicedAt = firstRunSpliceStep(await session.history(), LIST_ASK);
+
+        const listedCalls = firstRunTurnEvents(await session.runEvents(), LIST_ASK, {
+          splicedAtStep: splicedAt,
+          absorbedBy: listing.landed === 'mid-turn' ? listing.absorbedBy : undefined,
+        }).filter(isToolCallEnd).length;
+
         const listed = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';
         const unseen = ROOT_TOOLS.filter((name) => !listed.includes(name));
 
