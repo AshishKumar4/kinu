@@ -4118,6 +4118,19 @@ function ShareDialogFrame() {
   );
 }
 
+/** The read-only blueprint page, routed so `useParams` names the id the page
+ *  would fetch. `&viewer=signedout` renders the sign-in branch of its one
+ *  action. */
+function BlueprintFrame() {
+  const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
+
+  return (
+    <Routes>
+      <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} workspaces={STOCK_ROSTER.entries} />} />
+    </Routes>
+  );
+}
+
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
 
@@ -5879,16 +5892,37 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
 
-  const fixtureFrames = new Map<string, React.ReactNode>([
-    ["supervise", <SuperviseFrame />],
-    ["supervisefresh", <SuperviseFrame evolved={false} />],
-    ["activity", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />],
-    ["activityclean", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />],
-    ["activityempty", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />],
-    ["activitycache", <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>],
+  // Frames a name alone fixes — the ones that need no dispatch branch because
+  // their only parameters live in the row itself. `entries` is the routed
+  // location the MemoryRouter opens on for frames that read a route param.
+  const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
+    ["supervise", { node: <SuperviseFrame />, entries: ["/"] }],
+    ["supervisefresh", { node: <SuperviseFrame evolved={false} />, entries: ["/"] }],
+    ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
+    ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
+    ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
+    ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
+    // The read-only page a visitor sees, routed the way App.tsx routes it.
+    ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
+    ["shared", {
+      node: (
+        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
+        </div>
+      ), entries: ["/"],
+    }],
+    ["sharedialog", { node: <ShareDialogFrame />, entries: ["/"] }],
+    ["unmapped", {
+      node: (
+        <div className="h-screen w-[720px] p-sidebar p-text">
+          <UnmappedBindingsPanel slate="issue-triage" title="Issue triage" rpc={workRpc} onOpen={() => {}} fixture={BLUEPRINT_BINDINGS} />
+        </div>
+      ), entries: ["/"],
+    }],
   ]);
 
-  const fixtureNode = fixtureFrames.get(frame);
+  const fixture = fixtureFrames.get(frame);
 
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
@@ -6052,7 +6086,7 @@ async function mount() {
       </Routes>
     );
   }
-  else if (fixtureNode !== undefined) node = fixtureNode;
+  else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
@@ -6105,33 +6139,6 @@ async function mount() {
       <Routes>
         <Route path="/control" element={<div className="h-screen p-bg p-text"><ControlPage /></div>} />
       </Routes>
-    );
-  }
-  else if (frame === "shared") {
-    node = (
-      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
-      </div>
-    );
-  }
-  // The read-only page a visitor sees: `&viewer=signedout` renders the sign-in
-  // branch of its one action.
-  else if (frame === "blueprint") {
-    const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
-    entries = [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`];
-    node = (
-      <Routes>
-        <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} workspaces={STOCK_ROSTER.entries} />} />
-      </Routes>
-    );
-  }
-  else if (frame === "sharedialog") node = <ShareDialogFrame />;
-  else if (frame === "unmapped") {
-    node = (
-      <div className="h-screen w-[720px] p-sidebar p-text">
-        <UnmappedBindingsPanel slate="issue-triage" title="Issue triage" rpc={workRpc} onOpen={() => {}} fixture={BLUEPRINT_BINDINGS} />
-      </div>
     );
   }
   else if (frame === "home") {
