@@ -1231,6 +1231,27 @@
       "owner": "relative",
       "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
       "decision": "protected"
+    },
+    {
+      "file": "packages/cf-backend/src/components/surfaces/shared.tsx",
+      "kind": "hand-parser",
+      "owner": "split",
+      "sourceSha256": "bc2ecdf7d45222485edc8dd632734f1b6deda7235281b7315c7042cb2ecb6de6",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/src/slates/resident.ts",
+      "kind": "regexp-constructor",
+      "owner": "STATIC_SPECIFIER",
+      "sourceSha256": "7173476f62ac398120293f59a410afa602ff76829ce0bd862ad370e67073b0d5",
+      "decision": "bundleResolver"
+    },
+    {
+      "file": "packages/cf-backend/tests/workerd/slate-process.test.ts",
+      "kind": "regex-literal",
+      "owner": "importMap",
+      "sourceSha256": "0682a5b2fbc8da91cd67d0f7740d144767ae0e61f37cdc1786113e3cd4d679d6",
+      "decision": "lexical"
     }
   ]
 }
