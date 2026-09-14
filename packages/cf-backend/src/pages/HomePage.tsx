@@ -3,13 +3,13 @@ import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
+import { SetupCard } from "@/components/account/SetupCard";
 import {
   CONNECT_AI_MESSAGE,
   MISSION_LABEL,
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
-import { APP_ROUTES } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
@@ -89,18 +89,7 @@ export default function HomePage() {
         </form>
 
         <aside className="order-3 min-w-0 lg:order-none">
-          <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
-            <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
-            <Link to={APP_ROUTES.userSettings} className="block py-[5px] p-t-control p-accent">
-              Connect providers →
-            </Link>
-            <Link to={APP_ROUTES.userMcp} className="block py-[5px] p-t-control p-accent">
-              Add MCP servers →
-            </Link>
-            <a href="/install" className="block py-[5px] p-t-control p-accent">
-              Install the CLI →
-            </a>
-          </div>
+          <SetupCard returnTo="/" />
         </aside>
 
         {(listFailed || workspaces.length > 0) && (
