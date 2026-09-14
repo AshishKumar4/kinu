@@ -178,7 +178,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
     await orch.drainPendingEvents();
 
-    const step = orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
+    const step = await orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
 
     if (!step?.[1]) throw new Error('expected injected signal step');
     expect(String(step[1].content)).toContain('Is staging green?');

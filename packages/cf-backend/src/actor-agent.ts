@@ -100,8 +100,8 @@ import {
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
-  UserSteerDrain, describeLandedSteers,
-  type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
+  describeLandedSteers, USER_MESSAGE_SIGNAL_KIND,
+  type UserSteer,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   OVERFLOW_RETRY_EVENT, type OverflowRecoveryDecision,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
@@ -604,8 +604,9 @@ interface WorkspaceTitleInputs {
 
 
 /**
- * Where `steerTurn` put the operator's words. Unlike the drain's own
- * {@link UserSteerDrain.accept} outcome, this never says `idle`: an idle actor
+ * Where `steerTurn` put the operator's words. Unlike the signal seam's own
+ * outcome for the user kind — which may also answer 'queued' by running the
+ * steer as its own user-origin turn — this never says `idle`: an idle actor
  * queues the text as the next ordinary turn itself, so every answer names a
  * place the words now are, never work the caller still owes.
  */
@@ -1460,14 +1461,6 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
-    // The user steer-drain registers BEFORE the orchestrator's signal
-    // extension: a signal splice must never shift the indices the user-steer
-    // drain replays into durable history (the same ordering the CLI's
-    // ExtensionHost uses).
-    this.extensions.register({
-      name: 'kinu.user-steer',
-      prepareStep: (ctx) => this.userSteer.prepareStep(ctx),
-    });
     // The orchestrator's per-turn extension: the turn steering's observation
     // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
     // through closures because `orch` is built lazily and this runs in the
@@ -1584,7 +1577,7 @@ export abstract class ActorAgent extends Think<Env> {
       const response = await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true });
       this.contextPlane.endTurn({
         turnId: claimedTurn.turnId,
-        history: [...this._turnDurableInput, ...this.userSteer.replayInto(response)],
+        history: [...this._turnDurableInput, ...this.orch.signals.replayInto(response)],
       });
     }
 
@@ -1598,9 +1591,6 @@ export abstract class ActorAgent extends Think<Env> {
     this._inFlight = false;
     this._turnOperation = null;
     this._cliCwd = null;
-    // Order matters: the flag is already clear, so the leftover steer enqueues
-    // as a turn of its own instead of buffering for a turn that is over.
-    this.rerunLeftoverSteers();
     const completed = result.status === 'completed';
     const injectedSignals = this.orch.signals.settle({ completed });
 
@@ -1688,11 +1678,10 @@ export abstract class ActorAgent extends Think<Env> {
    * `mode` rides the enqueued turn as its `kinuMode`, so a Plan composer's
    * fallback turn keeps the Plan bar the ordinary send path would have given it.
    */
-  protected async acceptUserSteer(text: string, mode: WorkMode): Promise<SteerTurnLanding> {
+  protected async acceptUserSteer(text: string, mode: WorkMode, id = `steer-${nanoid(12)}`): Promise<SteerTurnLanding> {
     const body = text.trim();
 
     if (!body) throw new Error('steerTurn requires the message text');
-    const id = `steer-${nanoid(12)}`;
 
     // The decision and durable reservation are one synchronous actor slice.
     // A mid-turn steer exists in SQL before the client hears it queued, so an
@@ -1703,10 +1692,15 @@ export abstract class ActorAgent extends Think<Env> {
       if (turnId === null) throw new Error('running turn has no durable identity');
       void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
         VALUES (${this.actorHandle().actorId}, ${id}, ${turnId}, ${mode}, ${body})`;
-      const outcome = this.userSteer.accept({ id, text: body });
+      // The user kind of signal: the seam answers 'mid-turn' and owns the
+      // 'queued' steer_status frame (same bytes — it broadcasts through
+      // host.broadcast, which is this.broadcast).
+
+      const outcome = await this.orch.signals.deliver({
+        kind: USER_MESSAGE_SIGNAL_KIND, text: body, user: { id, mode },
+      });
 
       if (outcome !== 'mid-turn') throw new Error('turn changed while accepting a steer');
-      this.broadcastSteerStatus({ status: 'queued', steerId: id, text: body });
       this.logActivity('steer_queued', body.slice(0, 120));
 
       return 'mid-turn';
@@ -1714,7 +1708,7 @@ export abstract class ActorAgent extends Think<Env> {
 
     // The operator's own words, exactly as the ordinary send path would have
     // written them — author-stamped so the row wears the user bubble, never
-    // filed as the harness speaking (the rerunLeftoverSteers precedent).
+    // filed as the harness speaking (the sweepOrphanedSteers precedent).
     const queued = await this.host.enqueueTurn({
       text: body,
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: mode },
@@ -1750,7 +1744,8 @@ export abstract class ActorAgent extends Think<Env> {
     // Core builds the rows: it assigns the fallback id and stamps BOTH metadata
     // keys together — a row carrying the steer key without the step key is
     // indistinguishable from an ordinary user turn at rest. What stays here is
-    // transport: Durable Object messages and this class's broadcast channel.
+    // transport: Durable Object messages. The 'landed' steer_status frame is
+    // the seam's, broadcast after this resolves — same key order, same bytes.
     const rows = describeLandedSteers(steers, atStep);
     await this.addMessages(rows.map((row) => ({
       id: row.id,
@@ -1762,7 +1757,6 @@ export abstract class ActorAgent extends Think<Env> {
     for (const row of rows) {
       void this.sql`DELETE FROM pending_steers
         WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
-      this.broadcastSteerStatus({ status: 'landed', steerId: row.id, text: row.text, atStep: row.atStep });
     }
   }
 
@@ -1776,26 +1770,24 @@ export abstract class ActorAgent extends Think<Env> {
       .map((row) => ({ ...row, state: 'queued' as const, atStep: null }));
   }
 
-  /** The one place a steer's lifecycle reaches connected surfaces. Written as a
-   *  literal so the broadcast-wiring gate can see the channel it must prove has
-   *  a consumer. */
-  private broadcastSteerStatus(detail: SteerStatusDetail): void {
-    this.broadcast(JSON.stringify({ type: 'steer_status', ...detail } satisfies SteerStatusEvent));
-  }
-
   /**
-   * Steers that never saw a step boundary (the model was already writing its
-   * final answer) rerun as a USER-origin turn. It carries the operator's own
-   * words, so it says so: without the stamp the enqueue seam would read a row
-   * with no author and the programmatic id prefix it gives every row, and file
-   * the operator's sentence as the harness's. Detached: a turn must never block
-   * on the next one's queue slot.
+   * Rows whose turn is gone — an activation that died with steers acknowledged —
+   * rerun as a USER-origin turn. The LIVE turn's own leftovers are the seam's:
+   * they rerun from SignalDelivery.settle, so this sweep reads only rows bound
+   * to a turn id nobody holds.
+   *
+   * Each carries the operator's own words, so it says so: without the stamp the
+   * enqueue seam would read a row with no author and the programmatic id prefix
+   * it gives every row, and file the operator's sentence as the harness's.
+   * Admission deletes the rows (see host.enqueueTurn): a durable admission and
+   * the reservation's removal are one fact. Detached: a restore must never
+   * block on the next turn's queue slot.
    */
   private readonly _rerunningSteerKeys = new Set<string>();
   private _rerunningSteerTask: AsyncTaskOwner | null = null;
   private _rerunningSteerPending = false;
 
-  private rerunLeftoverSteers(): void {
+  protected sweepOrphanedSteers(): void {
     this._rerunningSteerPending = true;
 
     if (this._rerunningSteerTask !== null) return;
@@ -1811,13 +1803,17 @@ export abstract class ActorAgent extends Think<Env> {
           while (this._rerunningSteerPending) {
             this._rerunningSteerPending = false;
 
-            // Terminal leftovers come from SQL, not the RAM drain: a reset has
+            // Orphan rows come from SQL, not the RAM drain: a reset has
             // already lost RAM, while these rows are the operator words we
             // acknowledged. Keep seq order and mode boundaries; merging a Plan
-            // steer with Build would run it on the wrong tool surface.
+            // steer with Build would run it on the wrong tool surface. The
+            // live turn's rows are excluded — its leftovers rerun from the
+            // seam at settle, not from this sweep.
+            const live = this.durableTurnId() ?? '';
+
             const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
               SELECT id, turn_id, mode, text FROM pending_steers
-      WHERE actor_id = ${this.actorHandle().actorId} ORDER BY seq ASC`;
+              WHERE actor_id = ${this.actorHandle().actorId} AND turn_id <> ${live} ORDER BY seq ASC`;
 
             steers = rows.length;
             let index = 0;
@@ -1837,22 +1833,13 @@ export abstract class ActorAgent extends Think<Env> {
               this._rerunningSteerKeys.add(idempotencyKey);
 
               try {
-                const queued = await this.host.enqueueTurn({
+                await this.host.enqueueTurn({
                   text: group.map((row) => row.text).join('\n\n'),
                   metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: first.mode },
                   idempotencyKey,
+                  origin: 'user',
+                  steerIds: group.map((row) => row.id),
                 });
-
-                const duplicateAdmission = queued.durable?.accepted === false
-                  && (queued.durable.status === 'pending' || queued.durable.status === 'running'
-                    || queued.durable.status === 'completed');
-
-                if (queued.status !== 'queued' && !duplicateAdmission) continue;
-
-                for (const row of group) {
-        void this.sql`DELETE FROM pending_steers
-          WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
-      }
               } finally {
                 this._rerunningSteerKeys.delete(idempotencyKey);
               }
@@ -1867,7 +1854,7 @@ export abstract class ActorAgent extends Think<Env> {
         if (this._rerunningSteerTask === owner) {
           this._rerunningSteerTask = null;
 
-          if (this._rerunningSteerPending) this.rerunLeftoverSteers();
+          if (this._rerunningSteerPending) this.sweepOrphanedSteers();
         }
       }
     })();
@@ -2944,6 +2931,9 @@ export abstract class ActorAgent extends Think<Env> {
             }
           },
         },
+      }, {
+        onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
+        turnId: () => this.durableTurnId(),
       });
     }
 
@@ -3523,7 +3513,7 @@ export abstract class ActorAgent extends Think<Env> {
       const armWake = this.durableWakeOwner();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
-        enqueueTurn: async ({ text, metadata, idempotencyKey, yieldsToUserMessage }) => {
+        enqueueTurn: async ({ text, metadata, idempotencyKey, yieldsToUserMessage, origin, files, steerIds }) => {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
             : null;
@@ -3538,14 +3528,39 @@ export abstract class ActorAgent extends Think<Env> {
           // this is the seam every programmatic row is written through: a turn
           // that reaches it without saying who wrote it is the harness speaking,
           // and the chat pane must never draw it as the owner's bubble.
+
+          // A user-origin turn (the seam's steer rerun) carries the operator's
+          // words: attachments become file parts ahead of the text, the same
+          // shape a FileUIPart is converted to.
+          const fileParts = origin === 'user'
+            ? (files ?? []).map((f) => ({ type: 'file' as const, url: f.url, mediaType: f.mediaType, filename: f.filename }))
+            : [];
+
           const message: UIMessage = {
             id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`,
-            role: 'user' as const, parts: [{ type: 'text' as const, text }],
+            role: 'user' as const, parts: [...fileParts, { type: 'text' as const, text }],
             metadata: stampTurnAuthor(metadata),
+          };
+
+          // Admission is what retires the acknowledged rows: the steer exists
+          // as its own turn's durable message from here, so the pending_steers
+          // row — which exists only to outlive an eviction — is spent.
+          const retireSteerRows = () => {
+            if (origin !== 'user' || steerIds === undefined) return;
+
+            for (const steerId of steerIds) {
+              void this.sql`DELETE FROM pending_steers
+                WHERE actor_id = ${this.actorHandle().actorId} AND id = ${steerId}`;
+            }
           };
 
           if (idempotencyKey) {
             const result = await this.submitMessages([message], { idempotencyKey, metadata });
+
+            if (result.accepted === true || (result.accepted === false
+              && (result.status === 'pending' || result.status === 'running' || result.status === 'completed'))) {
+              retireSteerRows();
+            }
 
             return {
               status: result.status === 'aborted' || result.status === 'skipped' || result.status === 'error'
@@ -3602,6 +3617,8 @@ export abstract class ActorAgent extends Think<Env> {
             }, turnOptions);
 
             if (yielded) return { status: 'yielded' };
+
+            if (result.status === 'completed') retireSteerRows();
 
             return { status: result.status === 'completed' ? 'queued' : 'skipped' };
           } finally {
@@ -4491,26 +4508,6 @@ export abstract class ActorAgent extends Think<Env> {
   protected _activeProgrammaticUserMessage: UIMessage | null = null;
   /** Standalone drains may span Think auto-continuations under one request id. */
   protected readonly _pendingDrainReplyTurns = new Map<string, string>();
-
-  /**
-   * Mid-turn steers — what the user typed while this turn was running. The
-   * SHARED core drain, so the USER semantics are defined in exactly one place
-   * for both backends: each steer persists as a verbatim user row (the
-   * walk-back fork cuts at user messages), an interrupt hands what the model
-   * never saw back to the composer, and anything left over reruns as a
-   * user-origin turn.
-   *
-   * Deliberately NOT `orch.signals`: a signal is never persisted and always
-   * re-delivers as a turn of its own, which is the opposite of all three.
-   */
-  protected readonly userSteer = new UserSteerDrain({
-    turnInFlight: () => this._inFlight,
-    // A drain is the moment the steer stops being "queued" and becomes
-    // something the model has. Both halves of saying so happen here: the
-    // durable user row (so the fork and every read model see it) and the
-    // broadcast every open surface renders it from.
-    onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
-  });
 
   /** The public extension seam on the cloud backend — the SAME ExtensionHost
    *  contract `runChat` drives on the CLI, bridged onto Think's subclass
@@ -6082,10 +6079,10 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Tags this turn for device-side file checkpoints and restores its own
    *  pending steers. The user message id is what the web turn card holds,
-   *  so restore-by-turn resolves directly. A reset loses UserSteerDrain
-   *  RAM, never the acknowledged rows: this turn restores only its OWN
-   *  steers, and rows from a finished turn stay with terminal leftover
-   *  routing, never spliced into a later conversation. */
+   *  so restore-by-turn resolves directly. A reset loses the seam's pending
+   *  queue, never the acknowledged rows: this turn restores only its OWN
+   *  steers, and rows whose turn is gone are swept into a user-origin turn,
+   *  never spliced into a later conversation. */
   private restoreTurnCheckpoint(): void {
     let lastUserId: string | undefined = this._turnInputMessage?.id;
 
@@ -6103,12 +6100,13 @@ export abstract class ActorAgent extends Think<Env> {
     // `beforeTurn` IS the handoff, and it carries what a row here could not:
     // which issued actor owns the turn, which execution epoch owns it, and the
     // program identity the turn was admitted on.
-    const pending = this.sql<{ id: string; text: string }>`
-      SELECT id, text FROM pending_steers
+    const pending = this.sql<{ id: string; text: string; mode: WorkMode }>`
+      SELECT id, text, mode FROM pending_steers
       WHERE actor_id = ${this.actorHandle().actorId} AND turn_id = ${this._turnCheckpoint.turnId}
       ORDER BY seq ASC`;
 
-    if (pending.length > 0) this.userSteer.restorePending(pending);
+    if (pending.length > 0) this.orch.signals.restorePending(pending);
+    this.sweepOrphanedSteers();
   }
 
   /**
@@ -6253,9 +6251,6 @@ export abstract class ActorAgent extends Think<Env> {
       // own engine cannot re-judge a turn it did not run.
       this._turnEvolutionEnabled = this.turnRecordsEvolution();
       this._turnOriginContext = Object.freeze(structuredClone([...turnMessages]));
-      // Fresh splice coordinates for this streamText call. Steers already
-      // buffered survive — they were typed for the turn that is about to run.
-      this.userSteer.beginTurn();
       this.logActivity("beforeturn", "streamText() called next");
 
       // A real user message is the verdict on the previous turn — dispatch the

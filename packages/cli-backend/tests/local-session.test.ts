@@ -1018,7 +1018,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
 
 /** The wire shape of one dynamic-context block (core volatile-context.ts). */
 function isDynamicBlock(text: string): boolean {
-  return /^<dynamic_context fingerprint="[0-9a-f]{16}">\n/.test(text)
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}" kind="(?:full|delta)">\n/.test(text)
     && text.endsWith('\n</dynamic_context>');
 }
 
@@ -3537,6 +3537,60 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const last = prompts.at(-1)!;
     const texts = userTexts(last);
     expect(texts).toContain('do it differently');
+    await session.end();
+  });
+
+  test('a user-origin enqueueTurn lands at the queue FRONT, carrying its files', async () => {
+    // The seam's leftover rerun — the user's next turn — is admitted ahead of
+    // every programmatic inject still waiting, and it is the user's own turn:
+    // kind 'user' on the turn-start, the attachment as a file part on the
+    // prompt.
+    const { model, prompts, release } = toolThenAnswerModel('done');
+    const { session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+
+    // Both enqueued while the turn is mid-flight: the programmatic one first —
+    // the ordering claim is that it LOSES the slot anyway. The promises settle
+    // with their turns, so they are awaited at the end, where the answer is.
+    const programTurn = session.enqueueTurn({ text: 'background fact', metadata: { kinuEvent: 'event_drain' } });
+
+    const userTurn = session.enqueueTurn({
+      origin: 'user',
+      text: 'the operator said this',
+      files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }],
+    });
+
+    release();
+    await turn;
+    await waitFor(() => turnStarts(events).length >= 3);
+
+    expect(turnStarts(events).map((s) => [s.kind, s.text])).toEqual([
+      ['user', 'main question'],
+      ['user', 'the operator said this'],
+      ['programmatic', 'background fact'],
+    ]);
+
+    // The user's turn — the second turn's first request — carries the file
+    // part ahead of its text, exactly as a send() attachment does. (The tail
+    // user message is the workspace-instructions block, so match the steer's
+    // own words rather than position.)
+    const userTurnPrompt = prompts[2]!;
+
+    const steerMessage = userTurnPrompt.find((m) => m.role === 'user'
+      && JSON.stringify(m).includes('the operator said this'))!;
+
+    expect(steerMessage.content).toEqual(expect.arrayContaining([
+      // streamText hands the model the decoded part: `data` is the base64
+      // payload, not the data: URL the seam carried.
+      expect.objectContaining({
+        type: 'file', data: 'AA', mediaType: 'image/png', filename: 'shot.png',
+      }),
+    ]));
+
+    await expect(programTurn).resolves.toEqual({ status: 'queued' });
+    await expect(userTurn).resolves.toEqual({ status: 'queued' });
     await session.end();
   });
 });

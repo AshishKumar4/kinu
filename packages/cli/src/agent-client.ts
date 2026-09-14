@@ -318,10 +318,12 @@ export interface AgentClient {
   /** Run one user turn. Events stream through subscribe(); the JSONL log is
    *  appended internally. */
   send(prompt: AgentPrompt, opts?: AgentClientSendOptions): Promise<AgentTurnResult>;
-  /** Deliver a user message while a turn is in flight. Local sessions inject
-   *  it into the RUNNING turn at the next role-safe step boundary; cloud
-   *  sessions submit it immediately and the DO runs it as the next serialized
-   *  turn. Returns false when no turn is active — use send() instead. */
+  /** Deliver a user message while a turn is in flight. On a cloud agent this
+   *  is a thin alias over the raw submit: the server routes a text-only
+   *  submit during a running turn as a steer under the client's message id,
+   *  and one with attachments as the next turn. Locally it is the same kind
+   *  of message reaching the running turn's next step boundary. Returns false
+   *  when no turn is active — `send` is the entry point. */
   steer(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
   /** Steer-as-Branch: run the prompt as a parallel budgeted head against the
    *  live turn's input snapshot WITHOUT interrupting it. When both finish the

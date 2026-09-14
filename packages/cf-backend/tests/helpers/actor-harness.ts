@@ -319,7 +319,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Start the durable pieces of a turn the model-free harness does not drive. */
   harnessBeginTurn(turnId: string): void {
     this.declareTurnCheckpoint(turnId);
-    this.userSteer.beginTurn();
+    this.orch.signals.beginTurn(false);
   }
 
   /**
@@ -361,14 +361,17 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
 
-  /** Rebuild the reset-lost steer drain from its SQL authority for one turn. */
+  /** Rebuild the reset-lost user queue from its SQL authority for one turn —
+   *  and sweep the rows no live turn owns, exactly as restoreTurnCheckpoint
+   *  does inside the real beforeTurn. */
   harnessRestorePendingSteers(turnId: string): void {
-    this.userSteer.interrupt();
+    this.orch.signals.interrupt();
 
-    const pending = this.sql<{ id: string; text: string }>`
-      SELECT id, text FROM pending_steers WHERE turn_id = ${turnId} ORDER BY seq ASC`;
+    const pending = this.sql<{ id: string; text: string; mode: WorkMode }>`
+      SELECT id, text, mode FROM pending_steers WHERE turn_id = ${turnId} ORDER BY seq ASC`;
 
-    this.userSteer.restorePending(pending);
+    this.orch.signals.restorePending(pending);
+    this.sweepOrphanedSteers();
   }
 
   /** The terminal transition bracket, at the two entry points production uses.

@@ -932,7 +932,7 @@ describe('turn-pipeline correctness wiring', () => {
       const signals = harness.agent.observeOrch().signals;
       expect(await signals.deliver({ kind: 'event_drain', text: 'a build finished', replyTurnId }))
         .toBe('mid-turn');
-      signals.prepareStep({ stepNumber: 0, messages: [] });
+      await signals.prepareStep({ stepNumber: 0, messages: [] });
     }
 
     test('a spliced drain settles once, and the activation sweep will not redeliver it', async () => {

@@ -413,10 +413,11 @@ export class CloudAgentClient implements AgentClient {
     return this.submit(prompt, opts, false);
   }
 
-  /** Cloud steer: the DO persists an incoming chat request immediately and
-   *  serializes it on its TurnQueue, so a mid-turn submit reaches the agent
-   *  now and runs as the next turn at the boundary. Admission stays immediate;
-   *  this client owns the submission until its result or failure is rendered. */
+  /** Cloud steer: a thin alias over the raw submit — the server routes a
+   *  text-only submit during a running turn as a steer under the client's
+   *  message id, and one with attachments as the next turn. `send` is the
+   *  entry point; admission stays immediate and this client owns the
+   *  submission until its result or failure is rendered. */
   steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
     const taskId = randomRequestId();

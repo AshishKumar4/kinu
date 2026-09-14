@@ -62,6 +62,12 @@ export interface ProgrammaticTurn {
   readonly idempotencyKey?: string;
   /** The turn is a move offered to an agent nobody has spoken to, not an event it must hear. If a message the operator wrote has been admitted by the time this turn takes its slot, the host runs nothing and answers 'yielded': that message is the turn now. Read inside the slot, never before it — the race this closes is a message landing between the enqueue and the start. */
   readonly yieldsToUserMessage?: boolean;
+  /** 'user': this turn carries the operator's own words (a steer rerun). The host queues it as
+   *  a user turn: CLI at the queue FRONT with kind 'user' and `files`; CF as an operator-stamped
+   *  row and it deletes the `pending_steers` rows named by `steerIds` once admitted. */
+  readonly origin?: 'user';
+  readonly files?: readonly PromptFile[];
+  readonly steerIds?: readonly string[];
 }
 
 /** A file attached to a user prompt — the ai-sdk FileUIPart payload (sans tag).

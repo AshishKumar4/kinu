@@ -145,7 +145,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     });
 
     expect(routed).toBe('mid-turn');
-    harness.agent.observeOrch().signals.prepareStep({ stepNumber: 0, messages: [] });
+    await harness.agent.observeOrch().signals.prepareStep({ stepNumber: 0, messages: [] });
     finishTurnWith(harness, OUTPUT_LIMIT_REACHED);
 
     const delivered = await settle(harness, 'u-spliced', 'a-spliced');

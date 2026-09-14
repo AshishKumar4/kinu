@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { Database } from 'bun:sqlite';
 import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { UIMessage } from 'ai';
@@ -43,20 +44,27 @@ function steerFrames(frames: readonly string[]) {
 
 interface SteerHarness {
   agent: HarnessOrchestratorAgent;
+  /** The harness's own SQLite — pending_steers is SQL authority, so the dead
+   *  turn's rows and the admission delete are asserted here, not in RAM. */
+  db: Database;
   frames: string[];
   /** Durable rows the actor appended without starting a turn. */
   appended: UIMessage[][];
   /** Programmatic turns the actor enqueued (the leftover rerun path). */
-  enqueued: Array<{ text: string; metadata?: unknown; idempotencyKey?: string }>;
-  /** Declare a turn in flight, the way beforeTurn does. */
-  startTurn(): void;
+  enqueued: Array<{
+    text: string; metadata?: unknown; idempotencyKey?: string;
+    origin?: 'user'; steerIds?: readonly string[];
+  }>;
+  /** Prepare a real turn: beforeTurn sets the in-flight flag, the durable
+   *  turn identity and the step snapshot a steer must land on. */
+  startTurn(): Promise<void>;
 }
 
 function steerHarness(): SteerHarness {
-  const { agent } = orchestratorHarness();
+  const { agent, db } = orchestratorHarness();
   const frames: string[] = [];
   const appended: UIMessage[][] = [];
-  const enqueued: Array<{ text: string; metadata?: unknown; idempotencyKey?: string }> = [];
+  const enqueued: SteerHarness['enqueued'] = [];
   let inFlight = false;
   Reflect.set(agent, 'broadcast', (payload: string) => { frames.push(payload); });
   // `addMessages` is Think's "append to history WITHOUT starting a turn" API and
@@ -65,8 +73,15 @@ function steerHarness(): SteerHarness {
   Reflect.set(agent, 'addMessages', async (messages: UIMessage[]) => { appended.push(messages); });
   Reflect.set(agent, '_host', {
     broadcast: (event: { type: string }) => { frames.push(JSON.stringify(event)); },
-    enqueueTurn: async (turn: { text: string; metadata?: unknown; idempotencyKey?: string }) => {
+    enqueueTurn: async (turn: SteerHarness['enqueued'][number]) => {
       enqueued.push(turn);
+      // Admission deletes the acknowledged rows — the real host's enqueueTurn
+      // does this inside the same call, so a suite reading the table afterwards
+      // sees what production would leave.
+
+      for (const id of turn.steerIds ?? []) {
+        db.query('DELETE FROM pending_steers WHERE id = ?').run(id);
+      }
 
       return { status: 'queued' as const };
     },
@@ -74,18 +89,25 @@ function steerHarness(): SteerHarness {
     setTimer: () => {},
     headRuntime: undefined,
   });
+  // The harness builds `orch` during onStart — with the REAL host captured —
+  // before this swap can run. The signal seam holds that capture, so rebuild
+  // it: the next `this.orch` read materializes over the fake host, and the
+  // pending queue it would have held was empty anyway.
+  Reflect.set(agent, '_orch', null);
 
   return {
-    agent, frames, appended, enqueued,
-    startTurn: () => {
+    agent, db, frames, appended, enqueued,
+    startTurn: async () => {
+      // Production opens a turn through beforeTurn; driving the same entry
+      // point gives beforeStep the prepared snapshot it refuses without, and
+      // writes the durable turn identity a mid-turn steer binds to.
+      await agent.beforeTurn({
+        system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
+        continuation: false, body: {},
+      });
+
       inFlight = true;
       Reflect.set(agent, '_inFlight', true);
-      // Production stamps the durable turn identity in the same slice that
-      // opens the turn; a mid-turn steer is REFUSED without it, because the SQL
-      // reservation must name the turn an eviction would hand it back to. Driven
-      // through the harness seam rather than by reflecting a private field, so
-      // the steer queue this turn opens is opened too.
-      agent.harnessBeginTurn(`turn-${crypto.randomUUID()}`);
     },
   };
 }
@@ -149,8 +171,16 @@ describe('a message typed while the agent is working', () => {
       text: 'nothing is running',
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' },
     }]);
-    // Nothing was buffered for a step boundary: the next turn's steps carry no splice.
-    expect(await stepMessages(h.agent, 0, HISTORY)).toEqual(HISTORY);
+    // Nothing was buffered for a step boundary: the next turn's steps carry no
+    // splice. beforeTurn opens that turn the way production does, so beforeStep
+    // reads its prepared snapshot.
+
+    const turn = await h.agent.beforeTurn({
+      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
+      continuation: false, body: {},
+    });
+
+    expect(await stepMessages(h.agent, 0, turn?.messages ?? HISTORY)).toEqual(turn?.messages ?? HISTORY);
   });
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
@@ -175,7 +205,7 @@ describe('a message typed while the agent is working', () => {
 
   test('is taken mid-turn, announced as queued, and reaches the model at the next step', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
 
     expect(await h.agent.steerTurn('also check staging')).toEqual({ landed: 'mid-turn' });
 
@@ -203,7 +233,7 @@ describe('a message typed while the agent is working', () => {
 
   test('restores a reset-lost steer from SQL before the resumed turn reaches its next step', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     const turnId = h.agent.harnessDurableTurnId();
 
     if (turnId === null) throw new Error('expected the harness turn to be durable');
@@ -219,7 +249,7 @@ describe('a message typed while the agent is working', () => {
 
   test('persists as a VERBATIM user row carrying the id and the step it landed in', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('also check staging');
     await stepMessages(h.agent, 4, HISTORY);
 
@@ -244,7 +274,7 @@ describe('a message typed while the agent is working', () => {
 
   test('two steers merge into one user message but persist as two rows', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('also check staging');
     await h.agent.steerTurn('and the logs');
 
@@ -262,7 +292,7 @@ describe('a message typed while the agent is working', () => {
 
   test('an empty steer is refused outright rather than sent as a blank turn', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await expect(h.agent.steerTurn('   ')).rejects.toThrow(/requires the message text/);
   });
 });
@@ -270,7 +300,7 @@ describe('a message typed while the agent is working', () => {
 describe('stopping a turn with a steer still pending', () => {
   test('keeps the text queued instead of handing it back', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('change of plans');
 
     const outcome = await h.agent.cancelCurrentWork();
@@ -288,7 +318,7 @@ describe('stopping a turn with a steer still pending', () => {
 
   test('leaves a steer the model already read alone', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('also check staging');
     await stepMessages(h.agent, 0, HISTORY);
 
@@ -298,7 +328,7 @@ describe('stopping a turn with a steer still pending', () => {
 
   test('two queued steers become the next turn text in order once the abort settles', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('first');
     await h.agent.steerTurn('second');
     await h.agent.cancelCurrentWork();
@@ -322,11 +352,16 @@ describe('stopping a turn with a steer still pending', () => {
 describe('a steer that never saw a step boundary', () => {
   test('reruns as a USER-origin turn, not as a programmatic one', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
+    // beforeTurn names the turn by its run id (run-…), not a turn-… handle;
+    // the rerun key embeds the id the live turn claimed. Read it while the
+    // steer is written, before the settle clears the checkpoint.
+    const rerunTurnId = h.agent.harnessDurableTurnId();
+
+    if (rerunTurnId === null) throw new Error('expected the harness turn to be durable');
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
     await h.agent.steerTurn('one more thing');
-
     await h.agent.onChatResponse({
       status: 'completed',
       requestId: 'req-1',
@@ -337,8 +372,9 @@ describe('a steer that never saw a step boundary', () => {
     expect(h.enqueued).toHaveLength(1);
     expect(h.enqueued[0]).toMatchObject({
       text: 'one more thing',
+      origin: 'user',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-      idempotencyKey: expect.stringMatching(/^steer-rerun:turn-.*:build:steer-/),
+      idempotencyKey: expect.stringMatching(new RegExp(`^steer-rerun:${rerunTurnId}:build:steer-`)),
     });
     // NO kinuEvent: every provenance decision downstream reads this as the
     // user's own next message, which is what it is. Stamping an event here
@@ -353,7 +389,7 @@ describe('a steer that never saw a step boundary', () => {
 
   test('keeps noncontiguous mode groups distinct while preserving each group across duplicate terminal callbacks', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('first build', 'build');
     await h.agent.steerTurn('plan next', 'plan');
     await h.agent.steerTurn('second build', 'build');
@@ -378,7 +414,7 @@ describe('a steer that never saw a step boundary', () => {
 
   test('is not rerun twice — the turn that takes it drains it', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('one more thing');
 
     const settled = {
@@ -390,5 +426,57 @@ describe('a steer that never saw a step boundary', () => {
     await h.agent.onChatResponse({ ...settled, requestId: 'req-1' });
     await h.agent.onChatResponse({ ...settled, requestId: 'req-2' });
     expect(h.enqueued).toHaveLength(1);
+  });
+});
+
+describe('an eviction with acknowledged steers', () => {
+  test('restores only the live turn\'s rows and sweeps a dead turn\'s as one user-origin turn', async () => {
+    const h = steerHarness();
+    await h.startTurn();
+    const liveTurnId = h.agent.harnessDurableTurnId();
+
+    if (liveTurnId === null) throw new Error('expected the harness turn to be durable');
+    await h.agent.steerTurn('the live turn keeps me');
+
+    // A second, DEAD turn's reservation: the activation that owned it never
+    // reached its settle. Written through SQL, because the point is that SQL —
+    // not RAM — is the authority an eviction tests.
+    const actorRow = h.db.query<{ actor_id: string }, [string]>(
+      'SELECT actor_id FROM pending_steers WHERE turn_id = ?',
+    ).get(liveTurnId);
+
+    if (!actorRow) throw new Error('the live steer left no pending_steers row');
+    h.db.query(
+      `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+       VALUES (?, 'steer-dead-1', 'turn-dead', 'plan', 'orphaned by an eviction')`,
+    ).run(actorRow.actor_id);
+    h.db.query(
+      `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+       VALUES (?, 'steer-dead-2', 'turn-dead', 'plan', 'also orphaned')`,
+    ).run(actorRow.actor_id);
+
+    h.agent.harnessRestorePendingSteers(liveTurnId);
+    await h.agent.harnessJoinDetachedFibers();
+
+    // The live turn's next step splices ITS words only — the dead turn's stay
+    // out of a conversation they were never typed for.
+    expect(await stepMessages(h.agent, 0, HISTORY)).toEqual([
+      ...HISTORY,
+      { role: 'user', content: 'the live turn keeps me' },
+    ]);
+
+    // The dead turn's rows rerun as ONE user-origin turn, mode-stamped by their
+    // own rows and keyed by the turn they belonged to.
+    expect(h.enqueued).toEqual([{
+      text: 'orphaned by an eviction\n\nalso orphaned',
+      origin: 'user',
+      steerIds: ['steer-dead-1', 'steer-dead-2'],
+      idempotencyKey: 'steer-rerun:turn-dead:plan:steer-dead-1',
+      metadata: { kinuAuthor: 'operator', kinuMode: 'plan' },
+    }]);
+
+    // Admission deleted them, and the live row's step drain deleted it too:
+    // nothing is left to sweep twice.
+    expect(h.db.query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get()!.c).toBe(0);
   });
 });
