@@ -1187,12 +1187,12 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-09-14 after the models-section and slate-sharing UX
-    // self-tests joined this row: 265.76s over one run on the 24-thread
-    // workstation (was 190 declared against 177.63s / 175.02s on 2026-08-24).
-    seconds: 285,
+    // Measured 2026-09-14 after the app-background UX self-test joined this
+    // row: 293.62s over one run on the 24-thread workstation (was 265.76s
+    // before it joined, same day).
+    seconds: 315,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1232,6 +1232,12 @@ export const LADDER: readonly Gate[] = [
       + 'and the shared library, the blueprint page, the share dialog and the '
       + 'unmapped-bindings panel render at both widths in both themes with the '
       + 'warning and fork copy they owe and no rate or spend anywhere. The '
+      + 'living background is measured on the shipped shell itself: it sits '
+      + 'behind the rail and the page with pointer-events none and a negative '
+      + 'z-index, stops its clock when the document is hidden, draws one still '
+      + 'under reduced motion and on a phone width, never mounts under a '
+      + 'workspace route, and follows the overview read model through idle, '
+      + 'working and attention. The '
       + 'drive costs nothing measurable: 55.8s before and '
       + '55.6s after for chat-and-files-ux alone, 2026-09-01.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
