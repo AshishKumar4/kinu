@@ -29,7 +29,7 @@ import type {
   ChatOptions, ChatEvent,
   CompletedTurn, TurnContinuity, FiberCtx,
   LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
-  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
+  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, UserSteer,
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
@@ -1030,7 +1030,7 @@ export class LocalAgentSession implements BackendHost {
     this.rt.setModelOperations?.(this.modelOperations);
     this.deferrals = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(this.rt.storage.sql, this.rt.actor),
-      signals: this.actorSession.orchestrator.signals,
+      inbox: this.actorSession.orchestrator.inbox,
       remember: (grants) => { this.config.grantShellApproval(grants); },
       audit: (record) => {
         this.eventRecorder.emit(this.currentRunId || WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
@@ -1043,7 +1043,7 @@ export class LocalAgentSession implements BackendHost {
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
-      signals: this.actorSession.orchestrator.signals,
+      inbox: this.actorSession.orchestrator.inbox,
       eventLog: this.eventLog,
       scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
@@ -1474,7 +1474,7 @@ export class LocalAgentSession implements BackendHost {
    *  asking the agent to continue with the chosen approach. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     return pickAlternateTake(
-      { sql: this.rt.storage.sql, actor: this.rt.actor, engine: this.engine, signals: this.actorSession.orchestrator.signals },
+      { sql: this.rt.storage.sql, actor: this.rt.actor, engine: this.engine, inbox: this.actorSession.orchestrator.inbox },
       takeId, nodeId);
   }
 
@@ -1587,13 +1587,17 @@ export class LocalAgentSession implements BackendHost {
   private settlingDepth = 0;
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    // The seam's leftover rerun — the operator's own IMMEDIATE next turn, ahead
-    // of everything else queued. Each call carries one contiguous mode run, so
-    // it goes behind the reruns already at the front to keep typed order.
+    // The operator's own words, from the inbox — a settled turn's leftovers
+    // rerun, or a message that reached the inbox between one turn's settle
+    // and the next send. Either way the operator's IMMEDIATE next turn, ahead
+    // of everything else queued, behind only earlier user-origin turns, and
+    // answered at admission: the settle that reruns leftovers is on this
+    // pump's own stack, so its execution cannot be awaited from here.
     if (input.origin === 'user') {
       const item: QueueItem = {
         text: input.text,
         ...(input.files !== undefined && { files: input.files }),
+        metadata: input.metadata,
         kind: 'user',
         rerun: true,
         settle: () => {},
@@ -1682,44 +1686,71 @@ export class LocalAgentSession implements BackendHost {
     `.length > 0;
   }
 
-  /** BackendHost seam — will there be a next step for a signal to land on?
+  /** BackendHost seam — will there be a next step for a message to land on?
    *
    *  The actor owns the preparing/running boundary; settling has no next step.
-   *  A signal received during asynchronous preparation can reach step zero.
+   *  A message received during asynchronous preparation can reach step zero.
+   *  A user turn this session has queued and not yet opened counts too: a
+   *  message arriving behind it rides that turn's first step rather than
+   *  queueing a turn of its own behind it.
    *
-   *  User steers are the user kind of signal on this same seam: their splices
-   *  persist as verbatim user rows for the walk-back fork, interrupt() hands
-   *  what the model never saw back to the composer, and leftovers rerun as
-   *  user-origin turns through {@link enqueueTurn}'s origin branch.
    *  A user splice and an event splice land at the same step tail as two
    *  adjacent user-role messages, which every provider adapter groups into one
    *  turn. */
   turnInFlight(): boolean {
-    return this.actorSession.inFlight;
+    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
   }
 
   // ── Public driver API ──────────────────────────────────────────────
 
-  /** Run a user turn (and any programmatic turns it cascades). Resolves when
-   *  the user's own turn has finished. Attachments (data-URL PromptFiles)
-   *  become file parts on the turn's user message.
+  /**
+   * Send the user's message — the one entry, whatever the session is doing.
    *
-   *  REJECTS when another process holds this conversation's driver lease. The
-   *  message was not sent and no turn ran, so resolving would tell the person
-   *  their words landed when they were dropped; the rejection names the holder
-   *  and what to do about it. */
-  send(
+   * A turn is running (or one this session queued has not yet opened): the
+   * message goes through the inbox and lands at that turn's next step, where
+   * everything pending drains into one merged user message; the answer is
+   * `'mid-turn'`, at once. Input that never sees a step boundary (the model
+   * was already writing its final answer) reruns as the immediate next turn.
+   *
+   * Nothing is running: the message starts a user turn (and any programmatic
+   * turns it cascades) and the answer is `'turn'` when that turn has finished.
+   * Attachments (data-URL PromptFiles) become file parts on the turn's user
+   * message either way.
+   *
+   * REJECTS when another process holds this conversation's driver lease. The
+   * message was not sent and no turn ran, so resolving would tell the person
+   * their words landed when they were dropped; the rejection names the holder
+   * and what to do about it.
+   */
+  async send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: { tier?: TierId } = {},
-  ): Promise<void> {
+  ): Promise<SendLanding> {
     const { text, files } = normalizePromptInput(input);
-    const { promise, resolve, reject } = Promise.withResolvers<void>();
+
+    if (this.turnInFlight()) {
+      // Identity is assigned on ACCEPTANCE, so the queued announcement, the
+      // landed one and the durable row are all the same message to a surface —
+      // which is what stops one being rendered twice under two names.
+      const id = `steer-${crypto.randomUUID().slice(0, 12)}`;
+      const steer: UserSteer & { readonly id: string } = { text, id };
+
+      if (files !== undefined && files.length > 0) Object.assign(steer, { files });
+      const outcome = await this.actorSession.send(steer);
+
+      if (outcome === 'mid-turn') return 'mid-turn';
+
+      if (outcome === 'queued') return 'turn';
+      throw new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.');
+    }
+
+    const { promise, resolve, reject } = Promise.withResolvers<SendLanding>();
     const metadata = opts.tier === undefined ? undefined : { profile_tier: opts.tier };
     this.queue.push({
       text, files, metadata, kind: 'user',
       settle: (refusal) => {
         if (!refusal) {
-          resolve();
+          resolve('turn');
 
           return;
         }
@@ -1733,23 +1764,6 @@ export class LocalAgentSession implements BackendHost {
     this.pump();
 
     return promise;
-  }
-
-  /**
-   * Steer the in-flight turn: queue the message for injection at the next step
-   * boundary (prepareStep), where everything pending drains into one merged
-   * user message. Input that never sees a boundary (the model was already
-   * writing its final answer) runs as the immediate next turn instead.
-   * Returns false when no turn is active — callers should send() normally.
-   */
-  steer(input: string | { text: string; files: ReadonlyArray<PromptFile> }): boolean {
-    const parts = normalizePromptInput(input);
-    // Identity is assigned on ACCEPTANCE, so the queued announcement, the
-    // landed one and the durable row are all the same steer to a surface —
-    // which is what stops one steer being rendered twice under two names.
-    const id = `steer-${crypto.randomUUID().slice(0, 12)}`;
-
-    return this.actorSession.steer({ ...parts, id });
   }
 
   /**
@@ -2203,7 +2217,7 @@ export class LocalAgentSession implements BackendHost {
 
     await reconcileInterruptedForks({
       journal: this.headJournal,
-      signals: this.actorSession.orchestrator.signals,
+      inbox: this.actorSession.orchestrator.inbox,
       search: this.mctsSearchStore,
       runEvents: this.eventRecorder,
       resume: jobRedriveResumeGate({
@@ -3039,7 +3053,7 @@ export class LocalAgentSession implements BackendHost {
     // be queued hands their bound event rows back to pending. Settling them as
     // answered leaves those rows bound forever to a turn nothing can read back.
     const durable = runError === null && 'committed' in commit;
-    const settled = this.actorSession.orchestrator.signals.settle({ completed: durable });
+    const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });
 
     if (durable) this.closeEventDeliveryLeases(item, settled.absorbed);
 
@@ -4007,7 +4021,7 @@ export class LocalAgentSession implements BackendHost {
       }),
       govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: recorded.gateOpen,
-      deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),
+      send: (signal) => this.actorSession.orchestrator.inbox.send(signal),
       record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
     });
   }

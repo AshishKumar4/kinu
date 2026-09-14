@@ -163,7 +163,7 @@ describe('the public session speaks the frames the web client speaks', () => {
 
   test('an RPC request carries the method and its arguments', () => {
     const frame = decodeFrame(encodeRpcRequest({
-      requestId: 'rpc-1', method: 'steerTurn', args: ['stop, use the file tool', 'build'],
+      requestId: 'rpc-1', method: 'send', args: ['stop, use the file tool', [], 'build'],
     }));
 
     // Same as above: an outbound frame is not one this session consumes.

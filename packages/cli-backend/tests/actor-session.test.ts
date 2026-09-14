@@ -134,7 +134,7 @@ test('logical actors in one store keep live context, mode and structured tool da
 
   try {
     await Promise.all([leftStarted.promise, rightStarted.promise]);
-    expect(right.actor.steer({ id: 'right-steer', text: 'right-only steer' })).toBe(true);
+    expect(await right.actor.send({ id: 'right-steer', text: 'right-only steer' })).toBe('mid-turn');
     releaseLeft.resolve();
     expect(await leftRun).toMatchObject({ text: 'left finished', failure: null, interrupted: false });
     expect(right.actor.inFlight).toBe(true);
@@ -154,7 +154,7 @@ test('logical actors in one store keep live context, mode and structured tool da
     // The steer that never saw a step boundary reruns as a user-origin turn —
     // what the seam hands the host when the turn settles, observed here the
     // way the session's own pump would.
-    right.actor.orchestrator.signals.settle({ completed: true });
+    right.actor.orchestrator.inbox.settle({ completed: true });
     await Promise.resolve();
     expect(right.enqueued).toEqual([expect.objectContaining({
       origin: 'user', text: 'right-only steer', steerIds: ['right-steer'],
@@ -197,7 +197,7 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
     expect(actor.inFlight).toBe(false);
     // A refused steer — no turn in flight — is never queued into the seam, so
     // settling reruns nothing.
-    actor.orchestrator.signals.settle({ completed: true });
+    actor.orchestrator.inbox.settle({ completed: true });
     await Promise.resolve();
     expect(enqueued).toEqual([]);
     expect(JSON.stringify(model.doStreamCalls)).not.toContain('stale private input');
