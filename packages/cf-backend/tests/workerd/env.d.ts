@@ -23,7 +23,10 @@ import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
-import type { CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall, QueueProbeMode } from './two-turn-shapes';
+import type {
+  CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
+  InputReceipt, PreparedConversation, QueueProbeMode,
+} from './two-turn-shapes';
 import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
@@ -58,6 +61,10 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   httpReset(): Promise<void>;
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
   queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]>;
+  prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation>;
+  completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; receipts: InputReceipt[] }>;
+  inputReceiptsFor(workspace: string): Promise<InputReceipt[]>;
+  replayQueuedConversation(prepared: PreparedConversation): Promise<InputReceipt[]>;
 }
 
 
