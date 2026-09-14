@@ -15,11 +15,12 @@ const DUST_STRIDE = 4;
 /** Top speed of a mote in box widths per second: over a minute to cross a phone. */
 const MAX_DRIFT = 0.015;
 
-/** Alpha of a mote's core at full twinkle; the halo is a tenth of it. Set
- *  where the paragraph keeps WCAG AA under the worst pixel a mote puts behind
- *  it: measured 2026-09-13 at 390×844 and 430×932, the mean and 1% tail did
- *  not move and the worst pixel read 4.62 on dark and 4.50 on paper. */
-const CORE_ALPHA: Record<HeroPalette['mode'], number> = { dark: 0.18, light: 0.18 };
+/** Alpha of a mote's core at full twinkle; the halo is a tenth of it. The
+ *  highest values (step 0.01) at which the paragraph keeps WCAG AA under the
+ *  worst pixel a mote puts behind it: measured 2026-09-13 at 390×844 and
+ *  430×932, device pixel ratios 1 to 3, the mean and 1% tail did not move and
+ *  the worst pixel read 4.51 on dark and 4.50 on paper (4.45 and 4.41 one step up). */
+const CORE_ALPHA: Record<HeroPalette['mode'], number> = { dark: 0.19, light: 0.18 };
 
 /** How far past an edge a mote drifts before it re-enters on the far side. */
 const WRAP_MARGIN = 0.02;
