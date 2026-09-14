@@ -1,3 +1,4 @@
+// Browser-only landing art with no backend consumer: it compiles anywhere, so `gate:capability-parity` lists it as movable by name.
 import { NODE_STRIDE, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER } from './simulation';
 import { cssRgba, type HeroPalette, type Rgb, type SearchTreeRenderer } from './renderer';
 
