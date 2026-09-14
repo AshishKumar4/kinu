@@ -169,6 +169,31 @@ describe('repairSseCachedUsage', () => {
     expect(out.headers.get('x-probe')).toBe('yes');
     await out.text();
   });
+
+  // KINU-049. The AI SDK's chunk schema requires `choices`, so a usage-only
+  // frame that omits it cannot be forwarded at all — the repair adds exactly
+  // an empty array, and every other frame passes byte-identical.
+  test('a usage-only frame without choices gains exactly an empty array', async () => {
+    const bare = `data: {${tailHead},"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574}}`;
+    const input = sse(DELTA_CHUNK, bare, 'data: [DONE]');
+    const out = await repairSseCachedUsage(sseResponse(input)).text();
+    expect(out).toContain(`data: {${tailHead},"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574},"choices":[]}\n`);
+    expect(out).toContain(`${DELTA_CHUNK}\n`);
+    expect(out).toContain('data: [DONE]\n');
+  });
+
+  test('a usage frame WITH choices is left byte-identical', async () => {
+    const input = sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, 'data: [DONE]');
+    const out = await repairSseCachedUsage(sseResponse(input)).text();
+    expect(out).toBe(input);
+  });
+
+  test('an error frame is never given a choices array', async () => {
+    const errFrame = `data: {"error":{"message":"upstream exploded","type":"server_error"},"usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1}}`;
+    const input = sse(DELTA_CHUNK, errFrame, 'data: [DONE]');
+    const out = await repairSseCachedUsage(sseResponse(input)).text();
+    expect(out).toBe(input);
+  });
 });
 
 describe('cached-usage accounting end to end (workers-ai provider)', () => {
