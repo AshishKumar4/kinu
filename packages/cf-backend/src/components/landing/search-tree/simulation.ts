@@ -1,3 +1,4 @@
+// Browser-only landing art with no backend consumer: it compiles anywhere, so `gate:capability-parity` lists it as movable by name.
 /**
  * The living search tree: attempts branch rightward from one seed, every tip
  * carries the score its verifier returned, weak attempts dim to embers and

@@ -1,3 +1,4 @@
+// Browser-only landing art with no backend consumer: it compiles anywhere, so `gate:capability-parity` lists it as movable by name.
 import { seededRandom } from '../search-tree/simulation';
 import { cssRgba, type HeroPalette } from '../search-tree/renderer';
 
