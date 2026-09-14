@@ -129,7 +129,8 @@ const ROOT_ONLY_TABLES = [
   'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_content', 'slate_content_chunks', 'slate_deployment_reservations',
   'slate_deployments', 'slate_invocations', 'slate_previews', 'slate_publications',
-  'slate_receipts', 'slate_resource_reservations', 'slate_resources', 'slate_versions',
+  'slate_receipts', 'slate_resource_reservations', 'slate_resources',
+  'slate_share_users', 'slate_shares', 'slate_versions',
   'slates', 'workspace_actors', 'workspace_identity',
 ];
 
