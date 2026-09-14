@@ -309,7 +309,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 

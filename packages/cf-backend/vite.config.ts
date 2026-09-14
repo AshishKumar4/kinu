@@ -8,6 +8,7 @@ import agents from "agents/vite";
 import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from './vite-prompt-text';
+import { slateVendor } from './slate-vendor';
 
 /**
  * The Nimbus session worker loads its runtime artifacts — the node shims
@@ -106,7 +107,9 @@ const wgslClientOnly = {
 };
 
 export default defineConfig({
-  plugins: [promptText(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(), cloudflare(), tailwindcss()],
+  // `slateVendor` is the virtual-module half of the runner's vendored bytes —
+  // registered for dev and build so `virtual:kinu-slate-vendor` resolves.
+  plugins: [promptText(), slateVendor(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(), cloudflare(), tailwindcss()],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
   // builtin; excluded, it serves as source and the resolveId hook reaches it.
   // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field

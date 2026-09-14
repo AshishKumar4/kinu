@@ -503,3 +503,34 @@ test('a command the approval ladder stops answers every surface with its class, 
   expect(failed).toMatchObject({ ok: false, reason: 'io' });
   expect(await files.readFile(marker, { encoding: 'utf8' })).toBe('ran');
 });
+
+test('the reserved __storage binding answers the slate\'s own durable KV, per slate and within bounds', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/self-store', { recursive: true });
+  await files.writeFile('/home/user/slates/self-store/package.json', JSON.stringify({ main: 'server.ts' }));
+  await files.mkdir('/home/user/slates/peer-store', { recursive: true });
+  await files.writeFile('/home/user/slates/peer-store/package.json', JSON.stringify({ main: 'server.ts' }));
+
+  const storage = (id: string, member: string, args: JsonValue[] = []) =>
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, id, '__storage', { member, args, invocation: null });
+
+  expect(await storage('self-store', 'get', ['k'])).toEqual({ ok: true, value: null });
+  expect(await storage('self-store', 'put', ['k', { n: 1 }])).toEqual({ ok: true, value: null });
+  expect(await storage('self-store', 'get', ['k'])).toEqual({ ok: true, value: { value: { n: 1 } } });
+  expect(await storage('peer-store', 'get', ['k'])).toEqual({ ok: true, value: null });
+  expect(await storage('self-store', 'list', [{ prefix: 'k' }])).toEqual({ ok: true, value: [['k', { n: 1 }]] });
+  expect(await storage('self-store', 'delete', ['k'])).toEqual({ ok: true, value: true });
+  expect(await storage('self-store', 'delete', ['k'])).toEqual({ ok: true, value: false });
+  expect(await storage('self-store', 'list')).toEqual({ ok: true, value: [] });
+
+  expect(await storage('self-store', 'get', [])).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(await storage('self-store', 'nope', [])).toMatchObject({ ok: false, reason: 'denied' });
+
+  const planning: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
+
+  expect(await actor.agent.slateBindingCallAs(planning, 'self-store', '__storage', { member: 'get', args: ['k'], invocation: null }))
+    .toMatchObject({ ok: true });
+  expect(await actor.agent.slateBindingCallAs(planning, 'self-store', '__storage', { member: 'put', args: ['k', 1], invocation: null }))
+    .toMatchObject({ ok: false, reason: 'denied' });
+});

@@ -15,16 +15,19 @@ export { CodemodeEgress } from '../../src/codemode-egress';
 export { SlateBinding } from '../../src/slates/bindings';
 
 const source = `
+import { SlateObject } from "kinu:slate";
 const fetchFromModule = fetch;
 let calls = 0;
-export default { async fetch(request) {
-  calls += 1;
-  try {
-    const url = new URL(request.url);
-    const response = await fetchFromModule(url.searchParams.get('target'), { redirect: url.searchParams.get('redirect') ?? 'follow' });
-    return Response.json({ calls, status: response.status, location: response.headers.get('location'), body: await response.text() });
-  } catch (cause) { return Response.json({ calls, error: String(cause) }); }
-} };`;
+export class Slate extends SlateObject {
+  async fetch(request) {
+    calls += 1;
+    try {
+      const url = new URL(request.url);
+      const response = await fetchFromModule(url.searchParams.get('target'), { redirect: url.searchParams.get('redirect') ?? 'follow' });
+      return Response.json({ calls, status: response.status, location: response.headers.get('location'), body: await response.text() });
+    } catch (cause) { return Response.json({ calls, error: String(cause) }); }
+  }
+}`;
 
 export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);

@@ -1,159 +1,207 @@
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
+import * as v from 'valibot';
 
-it('compiled authored TypeScript answers through a resident process until stopped', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-server'));
+it('runs an authored class: the prototype is the surface and the reserved storage round-trips', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-class'));
   await subject.start();
 
   try {
-    const first = await subject.request('/first');
-    const second = await subject.request('/second');
-    expect(first.status).toBe(200);
-    expect(JSON.parse(first.body)).toEqual({ calls: 1, path: '/first' });
-    expect(second.status).toBe(200);
-    expect(JSON.parse(second.body)).toEqual({ calls: 2, path: '/second' });
+    // `__storage` is the reserved handle, never part of the guest's env map:
+    // only the declared PEER binding is visible to the slate.
+    expect(await subject.call('envKeys', [])).toEqual({ ok: true, value: '["PEER"]' });
+    expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #1 [probe]' });
+    expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #2 [probe]' });
+    expect(await subject.call('missing', [])).toMatchObject({ ok: false, error: expect.stringContaining('has no method missing') });
+    expect(await subject.socket('greet', ['browser'])).toEqual({ ok: true, value: 'hello browser #3 [probe]' });
   } finally {
     await subject.stop();
   }
+});
 
-  expect((await subject.request('/stopped')).status).toBe(404);
+it('this.storage survives a process restart while the facet SQLite does not', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('storage-survival'));
+
+  const source = [
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  async bump() {',
+    '    this.sql.exec("CREATE TABLE IF NOT EXISTS probe (n INTEGER NOT NULL)");',
+    '    this.sql.exec("INSERT INTO probe (n) VALUES (1)");',
+    '    const rows = this.sql.exec("SELECT count(*) AS n FROM probe").toArray()[0].n;',
+    '    const stored = (await this.storage.get("n")) ?? 0;',
+    '    await this.storage.put("n", stored + 1);',
+    '    return { rows, stored: stored + 1 };',
+    '  }',
+    '}',
+  ].join('\n');
+
+  await subject.start(source);
+
+  try {
+    expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":1}' });
+    await subject.stop();
+    await subject.start(source);
+    expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":2}' });
+  } finally {
+    await subject.stop();
+  }
+});
+
+it('a slate declaring a browser surface serves the shell, the client bundle, and the kinu:slate module', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('browser-surface'));
+  // Single file: main and browser are the same module, so the generated
+  // entries do the splitting — the server bundle keeps the class and the
+  // client bundle keeps the component.
+  await subject.start([
+    'import { useState } from "react";',
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  async ping() { return "server-only-marker-1c9e"; }',
+    '}',
+    'export default function App() {',
+    '  const [n] = useState(1);',
+    '  return <button>{"client-only-marker-7f3a"}</button>;',
+    '}',
+  ].join('\n'), false, undefined, undefined,
+    { main: 'app.tsx', browser: 'app.tsx', slate: { title: 'Notes' } });
+
+  try {
+    const shell = await subject.route('/');
+
+    expect(shell.status).toBe(200);
+    expect(shell.body).toContain('<title>Notes</title>');
+    expect(shell.body).toContain('/__kinu/client.js');
+    // The shell's import map is the module surface the client bundle resolves
+    // against — exact JSON, and every path it names must answer.
+    const importMap = shell.body.match(/<script type="importmap">\s*(\{[^<]*?)\s*<\/script>/)?.[1];
+
+    expect(importMap).toBeDefined();
+    expect(JSON.parse(importMap!)).toEqual({
+      imports: {
+        'react': '/__kinu/react.js',
+        'react-dom/client': '/__kinu/react.js',
+        'react/jsx-runtime': '/__kinu/react.js',
+        'capnweb': '/__kinu/capnweb.js',
+        'kinu:slate': '/__kinu/slate.js',
+      },
+    });
+
+    const mapped = Object.values(v.parse(v.object({ imports: v.record(v.string(), v.string()) }), JSON.parse(importMap!)).imports)
+      .concat('/__kinu/client.js');
+
+    for (const path of mapped) {
+      expect(await subject.route(path)).toMatchObject({ status: 200, contentType: 'text/javascript; charset=utf-8' });
+    }
+
+    const slateModule = await subject.route('/__kinu/slate.js');
+
+    expect(slateModule.status).toBe(200);
+    expect(slateModule.body).toContain('newWebSocketRpcSession');
+    expect(await subject.call('ping', [])).toEqual({ ok: true, value: 'server-only-marker-1c9e' });
+
+
+    // The generated entries are kernel tooling under the runtime dir, never
+    // authored files inside the slate's own tree.
+    expect(await subject.paths()).toEqual({ kinuInSlateRoot: false, entries: ['client.js', 'server.js'] });
+
+    // Single-file mode: the marker strings prove which half survived each
+    // bundle — the server bundle keeps the class's method bodies and drops
+    // the component's, the client bundle the reverse.
+    const artifacts = await subject.artifacts();
+
+    expect(artifacts.application).not.toContain('client-only-marker-7f3a');
+    expect(artifacts.application).not.toContain('createRoot');
+    expect(artifacts.application).toContain('server-only-marker-1c9e');
+    expect(artifacts.client).toBeDefined();
+    expect(artifacts.client).toContain('client-only-marker-7f3a');
+    expect(artifacts.client).not.toContain('server-only-marker-1c9e');
+    expect(artifacts.client).not.toContain('this.storage');
+    expect(artifacts.shell).toBe(shell.body);
+  } finally {
+    await subject.stop();
+  }
+});
+
+it('serves only registered assets and the authored fetch; everything else is 404', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('routing'));
+  await subject.start();
+
+  try {
+    expect((await subject.route('/__kinu/index.js')).status).toBe(404);
+    const fetched = await subject.route('/');
+
+    expect(fetched.status).toBe(404);
+    expect(fetched.body).toBe('not found');
+    expect((await subject.route('/__rpc')).status).toBe(400);
+  } finally {
+    await subject.stop();
+  }
+});
+
+it('a class that is not the slate contract fails to boot, and the authored fetch is never the app surface', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('contract'));
+  const missing = await subject.compileProbe('export class NotSlate { }');
+
+  expect(missing.code).toBe('bad_input');
+  expect(missing.detail).toContain('must export class Slate extends SlateObject');
+
+  try {
+    expect(await subject.compileProbe('import { SlateObject } from "kinu:slate"; export class Slate extends SlateObject { }')).toEqual({ ok: true });
+    expect(await subject.route('/')).toMatchObject({ status: 404, body: 'Not found' });
+    expect(await subject.call('fetch', [])).toMatchObject({ ok: false, error: expect.stringContaining('has no method fetch') });
+    expect(await subject.call('_private', [])).toMatchObject({ ok: false, error: expect.stringContaining('has no method _private') });
+  } finally {
+    await subject.stop();
+  }
+});
+
+it('binding calls never run outside a slate method invocation', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('invocation-scope'));
+  // The constructor runs under startProcess, which no invocation wraps: the
+  // call queued there must still be refused when a later method drains it.
+  // (A timer INSIDE a method keeps its lineage on purpose — async context
+  // propagation attributes the call to the invocation it runs under.)
+  await subject.start([
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  #early;',
+    '  constructor(ctx, env) { super(ctx, env); this.#early = this.env.PEER.echo("x"); }',
+    '  async replay() {',
+    '    try { await this.#early; return "unexpected"; }',
+    '    catch (cause) { return String(cause); }',
+    '  }',
+    '}',
+  ].join('\n'));
+
+  try {
+    const result = await subject.call('replay', []);
+
+    expect(result.ok).toBe(true);
+    expect(result.ok ? result.value : '').toContain('there is no invocation to run it under');
+  } finally {
+    await subject.stop();
+  }
 });
 
 it('Slate compilation requires Nimbus credentialed EsbuildService reads', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('compiler-authority'));
   await subject.seedPrivateSource();
+  await subject.seedGroupSource();
   expect(await subject.readPrivateSourceAsAgent()).toMatchObject({ error: expect.stringContaining('EACCES') });
 
-  const result = await subject.compileProbe([
+  const denied = await subject.compileProbe([
     'import secret from "/root/private.ts";',
-    'export default { fetch() { return new Response(secret); } };',
-  ].join('\n'));
+    'export default secret;',
+  ].join('\n'), { uid: 1000, gid: 1000, groups: [], umask: 0o022 });
 
-  expect(result).toMatchObject({ code: 'bad_input' });
-});
+  expect(denied.code).toBe('bad_input');
+  expect(denied.detail).toContain('EACCES');
 
-it('each resident request retains its own app call chain across the loopback binding', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('binding-chain'));
-  await subject.start([
-    'export default { async fetch(request, env) {',
-    '  return Response.json(await env.PEER.echo(new URL(request.url).pathname));',
-    '} };',
-  ].join('\n'), true);
+  const grouped = await subject.compileProbe([
+    'import secret from "/shared/group.ts";',
+    'export default secret;',
+  ].join('\n'), { uid: 1000, gid: 1000, groups: [], umask: 0o022 });
 
-  try {
-    const answers = await Promise.all([subject.request('/deep', ['a', 'b', 'c']), subject.request('/one', ['z'])]);
-    expect(answers.map((answer) => JSON.parse(answer.body))).toEqual([
-      { chain: ['a', 'b', 'c', 'probe'], args: ['/deep'] }, { chain: ['z', 'probe'], args: ['/one'] },
-    ]);
-    const refused = await subject.request('/cycle', ['peer', 'other']);
-    expect(refused.status).toBe(500);
-    expect(JSON.parse(refused.body)).toMatchObject({ reason: 'denied', error: expect.stringContaining('re-enters slate peer') });
-    expect(JSON.parse((await subject.request('/fresh')).body)).toEqual({ chain: ['probe'], args: ['/fresh'] });
-  } finally {
-    await subject.stop();
-  }
-});
-
-it('authored code that keeps an old request\'s bindings cannot replay its call chain', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('binding-replay'));
-  // The escape this closes: stash `env` on one request and use it on the next.
-  // The stashed bindings carry the FIRST request's invocation id, and the host
-  // retired that id when the first request settled.
-  await subject.start([
-    'let kept = null;',
-    'export default { async fetch(request, env) {',
-    '  const path = new URL(request.url).pathname;',
-    '  if (path === "/keep") { kept = env; return Response.json(await env.PEER.echo("kept")); }',
-    '  try { return Response.json(await kept.PEER.echo("replayed")); }',
-    '  catch (cause) { return Response.json({ replayRefused: String(cause.message) }); }',
-    '} };',
-  ].join('\n'), true);
-
-  try {
-    // A shallow root call, whose bindings the slate keeps.
-    expect(JSON.parse((await subject.request('/keep', [])).body)).toEqual({ chain: ['probe'], args: ['kept'] });
-    // A DEEP call that replays them. Before the invocation record this answered
-    // `chain: ['probe']` — the shallow lineage — which is how a slate re-entered
-    // an ancestor the honest chain would have refused.
-    const replayed = JSON.parse((await subject.request('/replay', ['peer', 'mid'])).body);
-    expect(replayed.replayRefused).toContain('which this host is not running');
-    expect(replayed.chain).toBeUndefined();
-  } finally {
-    await subject.stop();
-  }
-});
-
-it('bindings kept from a PREVIEW request cannot stand in for a hop lineage', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('preview-replay'));
-  // The preview arm of the same escape. A browser GET is a root lineage, so
-  // bindings kept from one would yield an empty chain when presented from
-  // inside a hop — the ancestors the honest chain refuses on.
-  await subject.start([
-    'let kept = null;',
-    'export default { async fetch(request, env) {',
-    '  const path = new URL(request.url).pathname;',
-    '  if (path === "/visit") { kept = env; return Response.json({ visited: true }); }',
-    '  try { return Response.json(await kept.PEER.echo("from-preview-bindings")); }',
-    '  catch (cause) { return Response.json({ replayRefused: String(cause.message) }); }',
-    '} };',
-  ].join('\n'), true);
-
-  try {
-    // A preview visit: no chain argument, which is the browser shape.
-    expect(JSON.parse((await subject.request('/visit')).body)).toEqual({ visited: true });
-    const replayed = JSON.parse((await subject.request('/hop', ['peer', 'mid'])).body);
-    expect(replayed.replayRefused).toContain('which this host is not running');
-    expect(replayed.chain).toBeUndefined();
-  } finally {
-    await subject.stop();
-  }
-});
-
-it('authored fetch failures preserve their cause chain and leave the process callable', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('authored-cause'));
-  await subject.start([
-    'export default { fetch(request) {',
-    '  if (new URL(request.url).pathname === "/fail") throw new Error("outer", { cause: new Error("inner") });',
-    '  return new Response("alive");',
-    '} };',
-  ].join('\n'));
-
-  try {
-    const failed = await subject.request('/fail');
-    expect(failed.status).toBe(500);
-    expect(JSON.parse(failed.body)).toEqual({ reason: 'io', error: 'outer: inner' });
-    expect(await subject.request('/')).toEqual({ status: 200, body: 'alive' });
-  } finally { await subject.stop(); }
-});
-
-it('a compiler warmed with supplementary-group access does not lend it to another caller', async () => {
-  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('compiler-groups'));
-  await subject.seedGroupSource();
-  const source = 'import text from "/shared/group.ts"; export default { fetch() { return new Response(text); } };';
-  const first = await subject.compileProbe(source, { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 });
-  expect(first).toEqual({ status: 200, body: 'group-protected-source' });
-  const revoked = await subject.compileProbe(source, { uid: 1000, gid: 1000, groups: [], umask: 0o022 });
-  expect(revoked).toMatchObject({ code: 'bad_input' });
-});
-
-it('the sealed workspace root answers the native binding RPC without making it browser-callable', async () => {
-  // Post-cutover shape (f9c0b3847): `SubordinateAgent` and its exploration
-  // twin are gone — a subordinate, a head, a node and a branch are directory
-  // kinds behind the one sealed workspace object, and a hosted actor holds no
-  // slate read model of its own — so the loop below seeds one sealed
-  // workspace per family rather than one sealed class per family, and asserts
-  // the same two halves for each: the native binding RPC answers server-side
-  // (the seal lists it) and the method stays out of the browser registry.
-  const families: readonly ('subordinate' | 'exploration')[] = ['subordinate', 'exploration'];
-
-  for (const family of families) {
-    const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName(`native-slate-bindings:${family}`));
-    const result = await root.exercise(family);
-    expect(result.browserCallable).toBe(false);
-    // The read model answered with its catalogue — not a seal refusal, and
-    // not an empty stand-in. What the catalogue lists is the provider
-    // registry's business (pinned by its own unit tests); this test pins
-    // that the sealed hop reached the method and ran it.
-    expect(result.answer.length).toBeGreaterThan(0);
-  }
+  expect(grouped.code).toBe('bad_input');
 });

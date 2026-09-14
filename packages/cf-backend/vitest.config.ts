@@ -42,8 +42,11 @@
  * there, but `scripts/capability-parity.ts` reads tsconfig with `JSON.parse`.
  */
 import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { buildSync, transform } from 'esbuild';
+import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
 import { probeOutbound } from './tests/workerd/http-model-fake';
 import { kCurrentWorker } from 'miniflare';
@@ -101,6 +104,15 @@ function standardDecorators(): Plugin {
   };
 }
 
+// The probe bundles below are raw esbuild `buildSync`, which cannot run
+// plugins — so `virtual:kinu-slate-vendor` resolves by alias to the same
+// module text the Vite plugin serves, materialized once per config load.
+const slateVendorModulePath = fileURLToPath(new URL('../../node_modules/.cache/kinu/slate-vendor.js', import.meta.url));
+
+mkdirSync(dirname(slateVendorModulePath), { recursive: true });
+
+writeFileSync(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
+
 const workerCompatibility = { compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'] };
 
 const hostedPreviewProbe = buildSync({
@@ -116,7 +128,7 @@ const slateActorProbe = buildSync({
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'],
   target: 'es2022',
-  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
@@ -125,7 +137,7 @@ const planAnnounceProbe = buildSync({
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/plan-announce-probe.js', import.meta.url)),
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
-  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
@@ -134,7 +146,7 @@ const slateEgressProbe = buildSync({
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-egress-probe.js', import.meta.url)),
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
@@ -143,7 +155,7 @@ const twoTurnProbe = buildSync({
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/two-turn-probe.js', import.meta.url)),
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
-  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
@@ -152,6 +164,7 @@ let forbiddenEgressHits = 0;
 export default defineConfig({
   plugins: [
     promptText(),
+    slateVendor(),
     standardDecorators(),
     cloudflareTest({
       main: './tests/workerd/worker.ts',
