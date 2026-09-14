@@ -5782,6 +5782,7 @@ async function mount() {
     ["activity", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />],
     ["activityclean", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />],
     ["activityempty", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />],
+    ["activitycache", <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>],
   ]);
 
   const fixtureNode = fixtureFrames.get(frame);
@@ -5952,7 +5953,6 @@ async function mount() {
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
-  else if (frame === "activitycache") node = <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];
