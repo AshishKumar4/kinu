@@ -41,45 +41,15 @@
 
 import { workspaceAddressRefusal } from '@kinu.run/core';
 import { previewHostSuffix } from '@kinu.run/core';
-import { timingSafeEqual } from '@kinu.run/core';
 import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run/core';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
+import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
 
-const HKDF_SALT = 'kinu.workspace-preview.salt';
-
-const HKDF_INFO = 'kinu.workspace-preview.v4';
-
-/** Signing keys, cached by secret. The derivation is deterministic over
- *  material the isolate already holds, so the cache adds no exposure and
- *  removes an HKDF from every preview request. */
-const signingKeys = new Map<string, Promise<CryptoKey>>();
-
-function signingKey(secret: string): Promise<CryptoKey> {
-  let pending = signingKeys.get(secret);
-
-  if (!pending) {
-    pending = (async () => {
-      const material = await crypto.subtle.importKey('raw', utf8(secret), 'HKDF', false, ['deriveKey']);
-
-      return crypto.subtle.deriveKey(
-        { name: 'HKDF', hash: 'SHA-256', salt: utf8(HKDF_SALT), info: utf8(HKDF_INFO) },
-        material,
-        { name: 'HMAC', hash: 'SHA-256' },
-        false,
-        ['sign'],
-      );
-    })();
-    signingKeys.set(secret, pending);
-  }
-
-  return pending;
-}
-
-function utf8(value: string): Uint8Array<ArrayBuffer> {
-  return new TextEncoder().encode(value);
-}
+/** The v4 preview signer: its own HKDF salt and info, so a preview token
+ *  verifies nowhere else (`lib/label-signer.ts` states the key discipline). */
+const previewSigner = labelSigner('kinu.workspace-preview.salt', 'kinu.workspace-preview.v4');
 
 /** The Durable Object method a preview request reaches. Declared here so the
  *  route holds the narrowest view of the orchestrator it needs. */
@@ -90,21 +60,8 @@ interface WorkspacePreviewHost {
   ): Promise<Response>;
 }
 
-function previewSecrets(env: Env): string[] {
-  const current = env.CREDENTIAL_ENCRYPTION_KEY?.trim();
-
-  if (!current) return [];
-
-  const retired = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  return [current, ...retired];
-}
-
 export function nimbusPreviewConfigured(env: Env): boolean {
-  return previewHostSuffix(env) !== null && previewSecrets(env).length > 0;
+  return previewHostSuffix(env) !== null && previewSigner.secrets(env).length > 0;
 }
 
 /**
@@ -118,38 +75,8 @@ export function nimbusPreviewConfigured(env: Env): boolean {
  * the edge from this build on, and the Ports surface mints v4 URLs from the
  * same still-live capabilities on its next listing.
  */
-async function previewToken(secret: string, workspace: string, port: number, handle: string): Promise<string> {
-  const digest = await crypto.subtle.sign(
-    'HMAC',
-    await signingKey(secret),
-    utf8(`kinu:workspace-preview:v4:${workspace}:${port}:${handle}`),
-  );
-
-  return base32(new Uint8Array(digest)).slice(0, 15);
-}
-
-const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
-
-/** Lowercase RFC-4648 base32 without padding — the alphabet a DNS label admits. */
-function base32(bytes: Uint8Array): string {
-  let bits = 0;
-  let buffer = 0;
-  let encoded = '';
-
-  for (const byte of bytes) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-
-    while (bits >= 5) {
-      bits -= 5;
-      encoded += BASE32[(buffer >>> bits) & 31];
-      buffer &= (1 << bits) - 1;
-    }
-  }
-
-  if (bits > 0) encoded += BASE32[(buffer << (5 - bits)) & 31];
-
-  return encoded;
+function previewMessage(workspace: string, port: number, handle: string): string {
+  return `kinu:workspace-preview:v4:${workspace}:${port}:${handle}`;
 }
 
 /**
@@ -181,14 +108,14 @@ export async function nimbusPreviewUrl(
   const suffix = previewHostSuffix(env);
 
   if (!suffix) return { unavailable: 'this deployment has no preview host (PREVIEW_HOST_SUFFIX is not set)' };
-  const secret = previewSecrets(env)[0];
+  const secret = previewSigner.secrets(env)[0];
 
   if (!secret) return { unavailable: 'this deployment has no preview signing secret (CREDENTIAL_ENCRYPTION_KEY is not set)' };
   const refusal = workspaceAddressRefusal(workspaceName);
 
   if (refusal !== null) return { unavailable: refusal };
   const handle = capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH);
-  const token = await previewToken(secret, workspaceName, port, handle);
+  const token = await previewSigner.token(secret, previewMessage(workspaceName, port, handle));
   const host = buildWorkspacePreviewHost({ port, workspace: workspaceName, handle, token, suffix });
 
   // The name passed the label grammar above, so the label fits by the budget
@@ -218,20 +145,15 @@ export async function handleNimbusPreviewHostRequest(request: Request, env: Env)
 
   if (!preview) return null;
   const { port, workspace, token, handle } = preview;
-  const secrets = previewSecrets(env);
 
-  if (secrets.length === 0) {
+  if (previewSigner.secrets(env).length === 0) {
     return new Response('Preview authentication is unavailable.', {
       status: 503,
       headers: { 'cache-control': 'no-store' },
     });
   }
 
-  const expected = await Promise.all(
-    secrets.map((secret) => previewToken(secret, workspace, port, handle)),
-  );
-
-  if (!expected.some((candidate) => timingSafeEqual(token, candidate))) {
+  if (!await previewSigner.verify(env, previewMessage(workspace, port, handle), token)) {
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 

@@ -6,6 +6,8 @@ import WorkspacePage from "./pages/WorkspacePage";
 import SettingsPage from "./pages/SettingsPage";
 import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
+import SharedPage from "./pages/SharedPage";
+import BlueprintPage from "./pages/BlueprintPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES } from "@kinu.run/core";
 import { lazyRoute } from "./lazy-route";
@@ -81,6 +83,7 @@ export default function App() {
           <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
           <Route path={APP_ROUTES.userSettings} element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
           <Route path={APP_ROUTES.userMcp} element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
+          <Route path={APP_ROUTES.shared} element={<ErrorBoundary label="shared"><SharedPage /></ErrorBoundary>} />
           <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
           <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
           <Route path={APP_ROUTES.explore} element={
@@ -100,6 +103,8 @@ export default function App() {
           <Route path={APP_ROUTES.agentSettings} element={<ErrorBoundary label="agent-settings"><KeyedSettings /></ErrorBoundary>} />
           <Route path={APP_ROUTES.triggers} element={<TriggersRedirect />} />
         </Route>
+        {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
+        <Route path={APP_ROUTES.sharedBlueprint} element={<ErrorBoundary label="blueprint"><BlueprintPage /></ErrorBoundary>} />
       </Routes>
     </BrowserRouter>
   );

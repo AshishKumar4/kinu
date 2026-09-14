@@ -21,7 +21,8 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon } from "@phosphor-icons/react";
+import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, ShareNetworkIcon,
+} from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
@@ -419,6 +420,11 @@ export default function Sidebar() {
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
               <GearIcon size={14} />
               <span>Account settings</span>
+            </Link>
+            <Link to="/shared" onClick={() => setShowUserMenu(false)}
+              className="flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover">
+              <ShareNetworkIcon size={14} />
+              <span>Shared blueprints</span>
             </Link>
             {profile?.controlPlane === true && (
               <Link to="/control" onClick={() => setShowUserMenu(false)}
