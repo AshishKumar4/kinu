@@ -10,6 +10,7 @@ import {
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { RECENT_WORKSPACES } from "@/hooks/use-workspace-overviews";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
 export default function HomePage() {
@@ -32,7 +33,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-bg">
+    <div className="h-full overflow-y-auto">
       <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
           {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
@@ -94,7 +95,7 @@ export default function HomePage() {
               {listFailed && <span className="p-t-status p-warning">could not load</span>}
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
-              {workspaces.slice(0, 5).map((agent, index) => (
+              {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (
                 <WorkspaceOverviewCard key={agent.name} workspace={agent} variant="row" first={index === 0} />
               ))}
             </div>

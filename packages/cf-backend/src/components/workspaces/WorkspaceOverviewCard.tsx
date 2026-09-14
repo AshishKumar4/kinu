@@ -5,24 +5,17 @@
  * same read (`read-models/workspace-overview.ts`) wherever it appears, and two
  * renderers of it would say two things about one workspace.
  *
- * The name renders the moment the roster lands; the overview loads beside it
- * and fails independently. The retry button sits BESIDE the link — a button
+ * The name renders the moment the roster lands; the overview is the shared
+ * per-name read (`use-workspace-overviews`) and fails independently. The retry button sits BESIDE the link — a button
  * inside an anchor is nested interactive content, so the card is a wrapper
  * holding the link and the action separately.
  */
-import { useCallback } from "react";
 import { Link } from "react-router-dom";
 import { timeAgo } from "@kinu.run/core";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
-import { getWorkspaceOverview, type WorkspaceEntry } from "@/lib/user-api";
+import { lastValue } from "@/hooks/use-async-resource";
+import { useWorkspaceOverview } from "@/hooks/use-workspace-overviews";
+import type { WorkspaceEntry } from "@/lib/user-api";
 import { OverviewEvidence, OverviewLabel } from "@/pages/home-overview-label";
-
-/** The shared cadence the workspace surfaces already poll at — the card asks
- *  the same question they do and inherits their rhythm rather than growing a
- *  second timer policy. Module scope because `useAsyncResource` keys its timer
- *  effect on this identity. */
-const overviewRevalidate = (): number => LIVE_DATA_REFRESH_MS;
 
 export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   workspace: WorkspaceEntry;
@@ -31,8 +24,9 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   /** A row after the first draws the dashed rule above it. */
   first?: boolean;
 }) {
-  const load = useCallback(() => getWorkspaceOverview(workspace.name), [workspace.name]);
-  const { resource, reload } = useAsyncResource(load, overviewRevalidate, workspace.name);
+  // One shared read per name, whoever is watching it: the home list, the
+  // Workspaces page and the shell's background all see the same answer.
+  const { resource, reload } = useWorkspaceOverview(workspace.name);
 
   const overview = lastValue(resource);
   const stale = resource.status === "error" && overview !== null;

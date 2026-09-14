@@ -1787,6 +1787,13 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
+export {
+  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+} from './orchestrator/chat-session';
+
+export { ActorMessagesTranscript, type TranscriptStore, type TranscriptRow } from './orchestrator/transcript-store';
+
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
 export {
@@ -2154,9 +2161,9 @@ export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

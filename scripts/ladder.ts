@@ -1187,14 +1187,13 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts',
+    run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-09-14 after account-ux grew to its four cases (the setup
-    // modal, the onboarding wizard, the account section with its delete, and
-    // the primary-nav pages): 324.74s over one run on the 24-thread
-    // workstation (284.30s earlier the same day with the first case alone,
-    // declared 305; 265.76s before account-ux joined, declared 285).
-    seconds: 350,
+    // Measured 2026-09-14 with both the app-background and the account-ux
+    // self-tests in this row: 347.00s over one run on the 24-thread
+    // workstation (293.62s with app-background alone, declared 315; 324.74s
+    // with account-ux alone, declared 350; 265.76s before either joined).
+    seconds: 375,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1234,6 +1233,12 @@ export const LADDER: readonly Gate[] = [
       + 'and the shared library, the blueprint page, the share dialog and the '
       + 'unmapped-bindings panel render at both widths in both themes with the '
       + 'warning and fork copy they owe and no rate or spend anywhere. The '
+      + 'living background is measured on the shipped shell itself: it sits '
+      + 'behind the rail and the page with pointer-events none and a negative '
+      + 'z-index, stops its clock when the document is hidden, draws one still '
+      + 'under reduced motion and on a phone width, never mounts under a '
+      + 'workspace route, and follows the overview read model through idle, '
+      + 'working and attention. The '
       + 'drive costs nothing measurable: 55.8s before and '
       + '55.6s after for chat-and-files-ux alone, 2026-09-01. The account surfaces '
       + 'join here: the setup modal over the home chrome, the settings providers '

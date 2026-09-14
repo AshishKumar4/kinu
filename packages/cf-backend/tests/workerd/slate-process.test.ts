@@ -189,6 +189,74 @@ it('a class that is not the slate contract fails to boot, and the authored fetch
   }
 });
 
+it('boots the class whether main exports it as Slate or as default, and the refusal names what it found', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('export-shapes'));
+  // The exact source the first-run eval model wrote after reading the skill:
+  // SlateObject imported from kinu:slate, the class as the DEFAULT export.
+  await subject.start([
+    'import { SlateObject } from "kinu:slate";',
+    '',
+    'export default class Slate extends SlateObject {',
+    '  async fetch(request, env) {',
+    '    const url = new URL(request.url);',
+    '    if (request.method === "GET" && url.pathname === "/ping") {',
+    '      return new Response(',
+    '        JSON.stringify({ message: "pong", method: request.method, path: url.pathname }),',
+    '        { status: 200, headers: { "content-type": "application/json" } },',
+    '      );',
+    '    }',
+    '    return new Response("Not Found", { status: 404 });',
+    '  }',
+    '}',
+  ].join('\n'));
+
+  try {
+    const ping = await subject.route('/ping');
+
+    expect(ping.status).toBe(200);
+    expect(JSON.parse(ping.body)).toEqual({ message: 'pong', method: 'GET', path: '/ping' });
+    expect(await subject.route('/nope')).toMatchObject({ status: 404, body: 'Not Found' });
+  } finally {
+    await subject.stop();
+  }
+
+  // The named-export shape the skill documents must keep booting.
+  await subject.start([
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  async fetch() { return new Response("named ok"); }',
+    '}',
+  ].join('\n'));
+
+  try {
+    expect(await subject.route('/anything')).toMatchObject({ status: 200, body: 'named ok' });
+  } finally {
+    await subject.stop();
+  }
+
+  // The plain fetch-object the model tried first: the refusal must say it
+  // found a default export that is not the class, not just repeat the contract.
+  const plainObject = await subject.compileProbe('export default { async fetch() { return new Response("ok"); } };');
+
+  expect(plainObject.code).toBe('bad_input');
+  expect(plainObject.detail).toContain('must export class Slate extends SlateObject');
+  expect(plainObject.detail).toContain('default');
+
+  // A class named Slate that does not extend SlateObject says so.
+  const notExtended = await subject.compileProbe('export class Slate {}');
+
+  expect(notExtended.code).toBe('bad_input');
+  expect(notExtended.detail).toContain('Slate');
+  expect(notExtended.detail).toContain('SlateObject');
+
+  // The class without the import fails at evaluation: the refusal reports the
+  // module threw, with the real error, instead of a bare io fault.
+  const noImport = await subject.compileProbe('export default class Slate extends SlateObject { async fetch() { return new Response("x"); } }');
+
+  expect(noImport.code).toBe('bad_input');
+  expect(noImport.detail).toContain('SlateObject is not defined');
+});
+
 it('binding calls never run outside a slate method invocation', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('invocation-scope'));
   // The constructor runs under startProcess, which no invocation wraps: the
