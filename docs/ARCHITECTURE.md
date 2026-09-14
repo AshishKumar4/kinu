@@ -236,7 +236,7 @@ flowchart TB
 
     subgraph Host["ExtensionHost (core/src/extension.ts), both backends"]
         Comp["compaction: @kinu.run/compaction (transformContext)"]
-        Inj["kinu.signals: prepareStep"]
+        Inj["kinu.inbox: prepareStep"]
     end
 
     Assembly["Context assembly (core/src/prompting)<br/>attachment-sanitizer · DynamicContextLedger<br/>step-prune (0.7 window) · cache-breakpoints"]
@@ -277,22 +277,24 @@ Two extensions register at construction on both backends:
   the cheapest thing in the request to give up, and being woven per model step no
   ladder stage ever sees it. What it frees is subtracted from the pressure the
   engine hears about, so relief here can stand the rest of the ladder down.
-- Signal delivery (`kinu.signals`, a `prepareStep` hook) is the one way
+- The inbox (`kinu.inbox`, a `prepareStep` hook) is the one way
   anything asynchronous reaches the agent
-  (`core/src/orchestrator/signals.ts`). A producer (event-hub drain, settled
-  background job, overflow retry, take pick, MCP task) states intent and
-  nothing else. A signal compatible with the active turn is spliced into its
-  next step by the `StepInjections` math (`step-injections.ts`). One needing
-  its own turn or a different trusted Plan/Build mode enqueues immediately via
-  `BackendHost.enqueueTurn`, starting a turn if none runs. `turnInFlight` and
-  the trusted mode are the only routing facts. Spliced messages are ephemeral
-  exactly like `<dynamic_context>` beside them: model-visible at the tip,
-  absent from durable history, gone on cold start. Mechanical steering
-  (`turn-steering.ts`) is handed to the step being prepared, so it cannot
-  outlive it. Compatible live-turn signals share one buffer and one splice, so
-  no registration order shifts another producer recorded indices. Queued
-  own-turn signals use the same host without the buffer. This is the DO
-  counterpart of the CLI `kinu.steering` drain.
+  (`core/src/orchestrator/inbox.ts`). A producer (event-hub drain, settled
+  background job, overflow retry, take pick, MCP task, the composer's own
+  message) calls `send()` and nothing else. A message sent while a turn runs
+  is spliced into its next step by the `StepInjections` math
+  (`step-injections.ts`); sent while idle, it becomes the next turn through
+  `BackendHost.enqueueTurn`. What a running turn never absorbed re-delivers
+  at settle the same way — the operator's words as one user-origin turn, then
+  each event as a turn of its own. `inbox.busy` is the only routing fact.
+  Spliced event text is ephemeral exactly like `<dynamic_context>` beside it:
+  model-visible at the tip, absent from durable history, gone on cold start;
+  spliced user messages land as verbatim durable rows first, so the row exists
+  before the model reads it. Mechanical steering (`turn-steering.ts`) is handed
+  to the step being prepared, so it cannot outlive it. Everything buffered for
+  one boundary drains into ONE splice — user messages as one durable user
+  message first — so no registration order shifts another producer's recorded
+  indices. This one drain is both backends' path.
 
 Supporting context machinery, all in `core/src/prompting`, shared by both
 backends: the attachment sanitizer offloads model-incompatible file parts to

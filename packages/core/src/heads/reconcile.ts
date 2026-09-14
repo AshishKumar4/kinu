@@ -17,14 +17,14 @@
  * is gone — it had already read that the fork was in flight, and a state
  * ledger that goes quiet does not retract anything.
  *
- * The telling rides the ONE delivery seam (`SignalDeliverer`): a step boundary
+ * The telling goes through the ONE inbox (`AgentInbox`): a step boundary
  * when a turn is running, a queued turn when the agent is idle. There is no
  * second notification path, and nothing here picks a mechanism.
  */
 
 import type { RunEventInput } from '../events/types';
 import type { MctsSearchStore } from '../mcts/search-store';
-import type { SignalDeliverer } from '../types/signals';
+import type { AgentInbox } from '../types/signals';
 import type { AbandonedHeadRun, HeadJournal } from './journal';
 import * as v from 'valibot';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
@@ -268,7 +268,7 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
  */
 export async function reconcileInterruptedForks(deps: {
   readonly journal: Pick<HeadJournal, 'markInterrupted' | 'unfinishedRoots' | 'abandonRunning'>;
-  readonly signals: SignalDeliverer;
+  readonly inbox: AgentInbox;
   /**
    * The search-run ledger, when the caller has one. A swarm's row in
    * `mcts_search_runs` claims a live executor exactly as its journal rows do,
@@ -357,7 +357,7 @@ export async function reconcileInterruptedForks(deps: {
     runs.map((run) => `${run.rootId} (${run.abandoned}/${run.total})`).join(', '),
   );
   recordAbandonedRuns(deps.runEvents, runs);
-  await deps.signals.deliver({
+  await deps.inbox.send({
     kind: FORK_INTERRUPTED_SIGNAL,
     text: forkInterruptedWake(runs),
     // Keyed on the FACT — the retired run set — because this producer is

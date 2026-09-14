@@ -32,7 +32,7 @@ import { wrapToolsForBackground, type BackgroundableTool } from '../src/jobs/bac
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
@@ -227,7 +227,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
   test("the training run detaches, settles, and enqueues the wake carrying its result", async () => {
     // The same seams unit-background-job-runner.test.ts asserts on, driven from
     // the real sandbox lane instead of a bare promise: the REAL runner, the REAL
-    // SignalDelivery, the REAL durable store. Only the fiber and the platform
+    // Inbox, the REAL durable store. Only the fiber and the platform
     // host are doubles, because a DO is the one thing a unit cannot have.
     const db = new Database(':memory:');
     initBackgroundJobsTable(makeExecRaw(db));
@@ -262,7 +262,7 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     };
 
     const runner = new BackgroundJobRunner({
-      store, fiber, signals: new SignalDelivery(host), eventLog: new EventLog(hubSql, actor),
+      store, fiber, inbox: new Inbox(host), eventLog: new EventLog(hubSql, actor),
       scheduleDrain: () => {}, logActivity: () => {},
       // A zero window so the crossing is decided by the command not having
       // finished, never by how long a test waited.

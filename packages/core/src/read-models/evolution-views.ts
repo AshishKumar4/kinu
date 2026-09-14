@@ -22,7 +22,7 @@ import {
   buildTakeContinuationPrompt, recordTakePick, type TakePickOutcome,
 } from '../mcts/takes';
 import { getCurrentScaffoldVersion } from '../scaffold/shadow';
-import type { SignalDeliverer } from '../types/signals';
+import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -85,7 +85,7 @@ export interface TakePickDeps {
   /** The actor whose scaffold lineage and take ledger this pick answers for. */
   readonly actor: ActorHandle;
   readonly engine: EvolutionEngine;
-  readonly signals: SignalDeliverer;
+  readonly inbox: AgentInbox;
 }
 
 /**
@@ -122,7 +122,7 @@ export async function pickAlternateTake(
   let continuationQueued = false;
 
   if (record.changedAnswer) {
-    const outcome = await deps.signals.deliver({
+    const outcome = await deps.inbox.send({
       kind: 'take_pick',
       text: buildTakeContinuationPrompt(record.set, record.chosen),
     });

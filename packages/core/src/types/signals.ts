@@ -1,10 +1,10 @@
-// The signal contract — what an asynchronous producer states when it wants to
-// reach the agent, and what it learns about the outcome. Pure types, so a
-// producer (the background-job runner, the overflow-recovery policy, a backend
-// RPC) depends on the vocabulary without pulling in the delivery machinery.
+// The message contract — what a producer states when it wants to reach the
+// agent, and what it learns about the outcome. Pure types, so a producer (the
+// background-job runner, the overflow-recovery policy, a backend RPC) depends
+// on the vocabulary without pulling in the delivery machinery.
 //
-// The mechanism lives in orchestrator/signals.ts (SignalDelivery), which is the
-// only implementation and the only caller of BackendHost.enqueueTurn /
+// The mechanism lives in orchestrator/inbox.ts (Inbox), which is the only
+// implementation and the only caller of BackendHost.enqueueTurn /
 // turnInFlight.
 //
 // There is ONE delivery time: the agent's next step. A producer never states
@@ -16,14 +16,15 @@ import type { PromptFile } from './backend-host';
 import type { WorkMode } from './turn';
 import type { JsonObject } from '../utils/json';
 
-/** A message the user typed while a turn runs, delivered as the user kind of signal. */
+/** The user's own message, sent as the user kind of signal. */
 export interface UserSignalIdentity {
-  /** Stable id assigned when the steer is ACCEPTED (the client's message id on the
-   *  raw-chat path). Rides steer_status broadcasts and the durable user row. */
+  /** Stable id assigned when the message is ACCEPTED (the client's message id on
+   *  the raw-chat path). Rides steer_status broadcasts and the durable user row. */
   readonly id: string;
   readonly files?: readonly PromptFile[];
-  /** The composer's mode; rides a leftover rerun as `kinuMode`. Never a reason to
-   *  refuse the splice — the user's words always land in the running turn. */
+  /** The composer's mode — a fact the message carries, which rides a
+   *  user-origin turn as `kinuMode`. Never a reason to refuse the splice: the
+   *  user's words always land in the running turn. */
   readonly mode: WorkMode;
 }
 
@@ -34,10 +35,16 @@ export const USER_MESSAGE_SIGNAL_KIND = 'user_message';
  *  generation won the queue slot; 'failed' = the platform enqueue threw. */
 export type SignalUndeliveredReason = 'preempted' | 'failed';
 
-/** What actually happened to a delivered signal. 'yielded': the turn the
- *  signal was offered reached its slot after an operator message was already
- *  admitted — the offer was withdrawn and that message is the turn now. */
-export type SignalOutcome = 'mid-turn' | 'queued' | 'undelivered' | 'yielded';
+/** What actually happened to a sent message. 'mid-turn': it rides the next
+ *  step of a turn that already exists. 'queued': it started a turn of its own.
+ *  'yielded': the turn the signal was offered reached its slot after an
+ *  operator message was already admitted — the offer was withdrawn and that
+ *  message is the turn now. */
+export type SendOutcome = 'mid-turn' | 'queued' | 'undelivered' | 'yielded';
+
+/** Where a user-facing entry put the user's message, as a surface hears it:
+ *  spliced into the running turn, or run as a turn of its own. */
+export type SendLanding = 'mid-turn' | 'turn';
 
 /** One asynchronous nudge at the agent: an event-hub drain, a settled
  *  background job, an overflow retry, a take pick, an MCP task, the turn's own
@@ -59,9 +66,6 @@ export interface AgentSignal {
   readonly replyTurnId?: string;
   /** Extra metadata stamped on the queued turn alongside `kinuEvent`. */
   readonly metadata?: Readonly<JsonObject> | undefined;
-  /** This signal carries a trusted turn mode and must not be spliced into a
-   * differently-modeled live turn. Queue it as its own turn instead. */
-  readonly requiresOwnTurn?: boolean | undefined;
   /**
    * The turn is a move offered to an agent nobody has spoken to, not an event
    * it must hear. Set by the producer; forwarded to the host, which checks it
@@ -71,8 +75,8 @@ export interface AgentSignal {
   /**
    * How strongly the producer asks this to be weighed, when it has an opinion.
    * Judging and rendering only: delivery never routes on it — when the agent
-   * can hear a note is a question for turn state and governing metadata, not
-   * for how strongly the note is meant.
+   * hears a note is a question for turn state alone, not for how strongly the
+   * note is meant.
    */
   readonly severity?: AdvisorSeverity | undefined;
   /**
@@ -95,18 +99,16 @@ export interface AgentSignal {
    *  queued turn was pre-empted or the enqueue threw. Never called for a
    *  signal that reached a step boundary. */
   readonly compensate?: (reason: SignalUndeliveredReason) => void;
-  /** Set: this signal IS the user's own words, typed while a turn runs — the
-   *  steer. The user kind skips every routing test: it always lands in the
-   *  running turn's next step (or, when none is running, becomes its own
-   *  user-origin turn rather than an event card). Its `kind` is
-   *  {@link USER_MESSAGE_SIGNAL_KIND}. */
+  /** Set: this signal IS the user's own words. It lands in the running turn's
+   *  next step, or, when none is running, becomes its own user-origin turn
+   *  rather than an event card. Its `kind` is {@link USER_MESSAGE_SIGNAL_KIND}. */
   readonly user?: UserSignalIdentity;
 }
 
-/** The delivery seam as producers depend on it — structural, so nothing but the
- *  verb crosses into a producer's module. */
-export interface SignalDeliverer {
-  deliver(signal: AgentSignal): Promise<SignalOutcome>;
+/** The inbox as producers depend on it — structural, so nothing but the verb
+ *  crosses into a producer's module. */
+export interface AgentInbox {
+  send(signal: AgentSignal): Promise<SendOutcome>;
 }
 
 export interface SettledSignals {
@@ -118,7 +120,7 @@ export interface SettledSignals {
 
 /** The turn-metadata key carrying a signal's card identity into the durable
  *  message a queued signal becomes — the round trip that lets the turn tell
- *  the seam which card it is showing (see SignalDelivery.beginTurn). */
+ *  the inbox which card it is showing (see Inbox.beginTurn). */
 export const SIGNAL_ID_METADATA_KEY = 'signalId';
 
 /** Where a signal is on its way to the agent. Delivery opens the card
@@ -131,7 +133,7 @@ export type SignalCardState = 'pending' | 'shown' | 'undelivered';
 /**
  * The chat card for one signal, at each moment its state changes.
  *
- * Broadcast by the delivery seam and by nothing else, so the card cannot claim
+ * Broadcast by the inbox and by nothing else, so the card cannot claim
  * the agent saw something it did not: 'pending' is emitted where the signal is
  * routed, 'shown' where the step (or the turn the signal started) actually
  * takes it in.
