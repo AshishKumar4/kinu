@@ -112,6 +112,12 @@ function pairing(messages: readonly ModelMessage[]) {
 describe('a hosted step whose history came from another provider', () => {
   test('is handed destination-neutral ids, still paired', async () => {
     const { agent } = orchestratorHarness();
+    // beforeStep refuses an unprepared turn: open it through beforeTurn, the
+    // way production does, so the step reads a real snapshot.
+    await agent.beforeTurn({
+      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
+      continuation: false, body: {},
+    });
 
     const carried = pairing(await stepMessages(agent, [...HISTORY]));
 
@@ -128,6 +134,10 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('converts source reasoning to portable text and removes its signature', async () => {
     const { agent } = orchestratorHarness();
+    await agent.beforeTurn({
+      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
+      continuation: false, body: {},
+    });
 
     const messages = await stepMessages(agent, [...HISTORY]);
 
@@ -146,6 +156,10 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('pairs the same way on every step, so a re-issued request is stable', async () => {
     const { agent } = orchestratorHarness();
+    await agent.beforeTurn({
+      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
+      continuation: false, body: {},
+    });
 
     const first = pairing(await stepMessages(agent, [...HISTORY]));
     const second = pairing(await stepMessages(agent, [...HISTORY]));
