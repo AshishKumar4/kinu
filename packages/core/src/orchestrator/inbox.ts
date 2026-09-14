@@ -68,7 +68,7 @@ import { metadataBroadcastEvent } from '../read-models/background-event';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
-import type { RawSqlExec } from '../types/primitives';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 // ── The user kind's vocabulary ─────────────────────────────────────
@@ -207,6 +207,149 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     media_type TEXT NOT NULL,
     url        TEXT NOT NULL
   )`);
+}
+
+/**
+ * ONE pending-send ledger, one store, both backends: every row read and write
+ * against `pending_steers` and `pending_steer_files` (declared above by
+ * {@link initPendingSendTables}) goes through here.
+ *
+ * The ledger holds two states, and `turn_id` is how they are told apart:
+ *
+ *   - BOUND — the steer was accepted into a live or admitted turn; the row
+ *     names the turn it lands in, so a reset restores it into that turn's
+ *     first step rather than starting a turn of its own;
+ *   - IDLE-QUEUED — `turn_id` NULL; the CLI's own send lane admits the
+ *     message as the queue's record while no turn owns it (cf admits such a
+ *     send as an `assistant_messages` row first and never writes NULL).
+ *
+ * `actor_id` scopes every statement: one workspace database hosts a root and
+ * every actor beneath it, and the `UNIQUE (actor_id, id)` key means an id is
+ * an actor's to spend — never a workspace's. A backend owns nothing but the
+ * two facts it alone knows: WHICH actor it serves and WHICH turn it calls
+ * live. Each statement is committed by its own statement boundary; a caller
+ * that needs a retirement atomic with another write wraps the call in its own
+ * transaction — the executor speaks over one connection, so no store-side
+ * transaction shape is needed.
+ */
+export class PendingSendStore {
+  constructor(
+    private readonly sql: SqlExecutor,
+    private readonly actorId: string,
+  ) {}
+
+  /**
+   * The durable half of acceptance: the reservation exists before the client
+   * hears the send was taken. `turnId` is null only on the CLI's idle send
+   * lane — a send a backend accepted mid-turn or into a queued turn carries
+   * that turn's id, and the cf side refuses to reserve without one.
+   */
+  reserve(steer: AcceptedSteer & { readonly turnId: string | null }): void {
+    void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+      VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text})`;
+
+    for (const file of steer.files ?? []) {
+      void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
+        VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.url})`;
+    }
+  }
+
+  /**
+   * The rerun admission's row: a steer a user-origin turn carries must exist
+   * as a row before the turn is admitted, bound to that turn's id when it has
+   * none — `OR IGNORE` because a leftover rerun's ids already carry theirs.
+   * Attachments are not written here: a rerun's files ride the reservation it
+   * already has, and a fresh row carries none.
+   */
+  ensureReserved(steer: {
+    readonly id: string;
+    readonly turnId: string | null;
+    readonly mode: WorkMode;
+    readonly text: string;
+  }): void {
+    void this.sql`INSERT OR IGNORE INTO pending_steers (actor_id, id, turn_id, mode, text)
+      VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text})`;
+  }
+
+  /**
+   * Spend reservations: the row and its attachments together, so a restart
+   * has nothing left to hand back. The files go FIRST — a crash between the
+   * two statements leaves steer rows whose files are gone rather than the
+   * reservation itself re-delivered.
+   */
+  retire(ids: readonly string[]): void {
+    for (const id of ids) {
+      void this.sql`DELETE FROM pending_steer_files
+        WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
+      void this.sql`DELETE FROM pending_steers
+        WHERE actor_id = ${this.actorId} AND id = ${id}`;
+    }
+  }
+
+  /** The attachments a reservation carried, in the order the steer was sent —
+   *  restored with it so a restart does not lose the files a dead process
+   *  acknowledged. */
+  files(steerId: string): PromptFile[] {
+    return this.sql<{ filename: string; media_type: string; url: string }>`
+      SELECT filename, media_type, url FROM pending_steer_files
+      WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}
+      ORDER BY seq ASC`
+      .map((row) => ({ filename: row.filename, mediaType: row.media_type, url: row.url }));
+  }
+
+  /**
+   * Every acknowledged send this actor still owes, in the order it was
+   * accepted — the bound rows a live turn re-reads and the idle-queued rows
+   * that rerun as turns of their own. Attachments stay beside the steer row
+   * and ride {@link files}, not this row set.
+   */
+  restore(): PendingSendRow[] {
+    return this.sql<{ id: string; turn_id: string | null; mode: WorkMode; text: string }>`
+      SELECT id, turn_id, mode, text FROM pending_steers
+      WHERE actor_id = ${this.actorId}
+      ORDER BY seq ASC`
+      .map(toPendingSendRow);
+  }
+
+  /** The reservations bound to one turn — the rows a reset restores into
+   *  that turn's first step. */
+  forTurn(turnId: string): PendingSendRow[] {
+    return this.sql<{ id: string; turn_id: string | null; mode: WorkMode; text: string }>`
+      SELECT id, turn_id, mode, text FROM pending_steers
+      WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}
+      ORDER BY seq ASC`
+      .map(toPendingSendRow);
+  }
+
+  /**
+   * The reservations whose turn is GONE — bound to a turn id nobody holds.
+   * NULL rows are not dead: `turn_id <> live` is NULL and so not TRUE, which
+   * is the one line keeping a backend that writes idle-queued rows from
+   * sweeping the queue as orphans.
+   */
+  sweepDead(liveTurnId: string): PendingSendRow[] {
+    return this.sql<{ id: string; turn_id: string | null; mode: WorkMode; text: string }>`
+      SELECT id, turn_id, mode, text FROM pending_steers
+      WHERE actor_id = ${this.actorId} AND turn_id <> ${liveTurnId}
+      ORDER BY seq ASC`
+      .map(toPendingSendRow);
+  }
+}
+
+/** The row shape `pending_steers` answers in, mapped to the store's public
+ *  vocabulary once so the three reads cannot drift on a column name. */
+const toPendingSendRow = (row: {
+  id: string; turn_id: string | null; mode: WorkMode; text: string;
+}): PendingSendRow => ({ id: row.id, turnId: row.turn_id, mode: row.mode, text: row.text });
+
+
+/** One acknowledged send as the ledger holds it: its id, the turn it is bound
+ *  to (null while idle-queued), the composer's mode and its words. */
+export interface PendingSendRow {
+  readonly id: string;
+  readonly turnId: string | null;
+  readonly mode: WorkMode;
+  readonly text: string;
 }
 
 /** A user steer as a backend's durable reservation sees it: the words, the
