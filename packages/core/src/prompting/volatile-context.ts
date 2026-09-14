@@ -612,7 +612,7 @@ const DYNAMIC_SECTION_TITLES = {
  *  the listing check is answered in-line, so it needs no call. A reported set
  *  is not the same plane as an unreported one — `undefined` stays silent. */
 const NO_CRAFTED_TOOLS_YET =
-  'No crafted tools exist in this workspace yet — `workspace.listTools()` would return nothing; `workspace.createTool` adds the first.';
+  'No crafted tools exist in this workspace yet. `workspace.listTools()` returns an empty list; `workspace.createTool` adds the first.';
 
 /**
  * The ledger-fed dynamic-context block (or null when there is nothing to say).
