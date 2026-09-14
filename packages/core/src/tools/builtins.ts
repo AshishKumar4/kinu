@@ -170,7 +170,8 @@ export interface BuiltinToolDeps {
    */
   vectorStore?: import('../memory/vector-store').VectorStore | null;
   /** agent_facts world model. When provided, the `memory` tool also exposes
-   *  the keyed-fact actions (remember / recall / forget). */
+   *  remember/recall/forget, and search joins remembered facts to the note
+   *  hits through the same RRF merge. */
   facts?: import('../memory/facts').FactsStore;
   /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
    *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
@@ -620,9 +621,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // concept: state written now to be read later. They are actions here rather
   // than separate tools chosen by storage shape.
   // search auto-hybridises: Vectorize-backed semantic + FTS5 lexical merged via
-  // RRF when a VectorStore is wired + available; pure FTS5 otherwise.
-  // Dispatch lives in memory-tool.ts, shared verbatim with the `memory.*`
-  // codemode namespace (memory-codemode.ts) — one implementation, two callers.
+  // RRF when a VectorStore is wired + available; the wired FactsStore is a
+  // second lexical source in that same merge, and the lexical arm when it is
+  // the only one. Dispatch lives in memory-tool.ts, shared verbatim with the
+  // `memory.*` codemode namespace (memory-codemode.ts) — one implementation,
+  // two callers.
   const facts = deps.facts;
 
   const runMemoryAction = createMemoryDispatcher({
@@ -638,7 +641,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: [...memoryActionsFor(!!facts)],
           description: facts
-            ? 'remember/recall/forget a keyed fact, save/search prose notes, or read this agent’s past conversation'
+            ? 'remember/recall/forget a keyed fact, save/search prose notes and remembered facts, or read this agent’s past conversation'
             : 'save a note, search memory notes, or read this agent’s past conversation',
         },
         key: { type: 'string', description: 'For action=remember/recall/forget: a stable identifier (e.g. "user.tz", "deploy.target").' },
@@ -647,7 +650,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         content: { type: 'string', description: 'For action=save: the note text.' },
         query: {
           type: 'string',
-          description: 'For action=search: the note query. For action=conversations: full-text query over prior messages (all terms must match; omit to browse archived roots).',
+          description: 'For action=search: full-text query over notes'
+            + (facts ? ' and remembered facts (key or value)' : '')
+            + '. For action=conversations: full-text query over prior messages (all terms must match; omit to browse archived roots).',
         },
         around_message_id: {
           type: 'string',

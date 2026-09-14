@@ -1,23 +1,28 @@
 /**
- * Hybrid retrieval — combines FTS5 (lexical) with VectorStore (semantic)
- * via Reciprocal Rank Fusion.
+ * Hybrid retrieval — merges the lexical sources (FTS5 notes, plus the keyed
+ * FactsStore when one is wired) with VectorStore (semantic) via Reciprocal
+ * Rank Fusion.
  *
  * Use cases where this beats pure-FTS5:
  *   • Paraphrase queries ("how do I cancel" vs stored "abort the call")
  *   • Concept queries ("error handling" finds chunks about try/catch + retries)
  *   • Multi-language or synonym recall
  *
- * Use cases where pure-FTS5 wins (and the FTS5 list dominates RRF):
+ * Use cases where the lexical arms win (and dominate RRF):
  *   • Exact-string lookups (identifiers, file paths)
  *   • Very short queries
+ *   • A fact remembered by key — `fact:` hits only ever come from the lexical
+ *     arms, which is exactly what searching for a thing you wrote down needs.
  *
- * The RRF merge surfaces the best of both regardless.
+ * The RRF merge surfaces the best of all of them regardless.
  */
 
 import type { Memory } from '../types/primitives';
 import type { VectorStore, VectorSearchHit } from './vector-store';
 import { reciprocalRankFusion } from './vector-store';
+import { searchFacts, type FactSearchHit, type FactsStore } from './facts';
 import { diagnostics, toKinuError, type KinuError } from '../obs/index';
+
 
 export interface LexicalHit {
   readonly id: string;
@@ -38,8 +43,14 @@ export interface HybridHit {
   readonly snippet: string;
   /** RRF-merged score (sum of 1/(k+rank) across sources that surfaced it). */
   readonly rrfScore: number;
-  /** Where this hit came from. */
-  readonly sources: ReadonlyArray<'lexical' | 'semantic'>;
+  /** Where this hit came from. `fact` is the FactsStore lexical arm: a hit
+   *  carrying it is a remembered fact, labelled for display rather than
+   *  addressed by `path:start-end`. */
+  readonly sources: ReadonlyArray<'lexical' | 'semantic' | 'fact'>;
+  /** Display override for the `[…]` position a note fills with
+   *  `path:start-end`. Fact hits set `fact: <key>`; a note hit leaves it
+   *  undefined and its callers keep rendering the chunk address. */
+  readonly label?: string;
   /** Underlying lexical score, if it came from FTS5. */
   readonly lexicalScore?: number;
   /** Underlying semantic similarity, if it came from Vectorize. */
@@ -103,6 +114,11 @@ export interface HybridSearchOptions {
   finalK?: number;
   /** RRF constant. Default 60 (Cormack/Lynam). */
   rrfK?: number;
+  /** The actor's keyed world model, wired when the runtime has one. Facts join
+   *  the merge as a second LEXICAL source: a fact is a candidate when the query
+   *  terms cover its key or its rendered value (searchFacts), and its hit
+   *  renders `[fact: <key>]` beside the note chunks. */
+  facts?: FactsStore;
   /** Fills in the snippet for a hit that has no text of its own. Omit only
    *  where the caller has no memory to read back from — semantic-only hits then
    *  carry the score but no text. */
@@ -128,18 +144,26 @@ type ArmOutcome<Hit> =
  */
 type SemanticOutcome = ArmOutcome<VectorSearchHit> | { readonly kind: 'skipped' };
 
+/** The fact arm shares the semantic arm's third outcome for the same reason:
+ *  an unwired FactsStore is `skipped`, never `answered` with an empty list. */
+type FactsOutcome = ArmOutcome<FactSearchHit> | { readonly kind: 'skipped' };
+
 /**
- * Hybrid search — runs lexical + semantic in parallel, merges via RRF,
+ * Hybrid search — runs every wired source in parallel, merges via RRF,
  * returns the top-finalK enriched hits.
  *
  * If the vector store is unavailable, this transparently degrades to
- * lexical-only — the caller doesn't need to feature-detect.
+ * lexical-only — the caller doesn't need to feature-detect. The FactsStore,
+ * when wired, is a second LEXICAL arm on the same footing as the FTS5 note
+ * index: one RRF list each, fused on `id` (`fact:` hits can never collide
+ * with a `path:start-end` chunk).
  *
- * ONE arm failing degrades to the other and is recorded rather than raised:
- * covering for a dead source is the whole reason two of them run. Losing every
- * arm raises, because the return type cannot say "the search did not happen" —
- * an empty array here reads as an empty CORPUS, and answering "no matches" for
- * a query that was never executed is the one failure this must not fake.
+ * ONE arm failing degrades to the rest and is recorded rather than raised:
+ * covering for a dead source is the whole reason more than one runs. Losing
+ * every arm raises, because the return type cannot say "the search did not
+ * happen" — an empty array here reads as an empty CORPUS, and answering "no
+ * matches" for a query that was never executed is the one failure this must
+ * not fake.
  */
 export async function hybridSearch(
   query: string,
@@ -150,6 +174,7 @@ export async function hybridSearch(
   const perSourceK = options.perSourceK ?? 20;
   const finalK = options.finalK ?? 10;
   const rrfK = options.rrfK ?? 60;
+  const factsStore = options.facts;
 
   const lexicalArm = (async (): Promise<ArmOutcome<LexicalHit>> => {
     try {
@@ -179,14 +204,31 @@ export async function hybridSearch(
       })()
     : Promise.resolve({ kind: 'skipped' });
 
-  // Both arms are already in flight; awaiting them together keeps a slow source
-  // off the other's critical path, exactly as before.
-  const [lexical, semantic] = await Promise.all([lexicalArm, semanticArm]);
+  const factsArm: Promise<FactsOutcome> = factsStore
+    ? (async (): Promise<FactsOutcome> => {
+        try {
+          return { kind: 'answered', hits: searchFacts(factsStore, query, perSourceK) };
+        } catch (cause) {
+          return {
+            kind: 'failed',
+            error: toKinuError({
+              doing: 'run the facts half of a hybrid search', cause, otherwise: 'io',
+            }),
+          };
+        }
+      })()
+    : Promise.resolve({ kind: 'skipped' });
 
-  // The fallback decision, taken once with both outcomes in hand — the view no
-  // handler had. A survivor makes the other arm's failure a degradation worth
-  // recording; no survivor makes it the answer.
-  if (lexical.kind === 'answered' || semantic.kind === 'answered') {
+  // All arms are already in flight; awaiting them together keeps a slow source
+  // off the others' critical path, exactly as before.
+  const [lexical, semantic, factArm] = await Promise.all([lexicalArm, semanticArm, factsArm]);
+
+  // The fallback decision, taken once with every outcome in hand — the view no
+  // handler had. A survivor makes the other arms' failures a degradation worth
+  // recording; no survivor makes them the answer.
+  const answered = [lexical, semantic, factArm].some((arm) => arm.kind === 'answered');
+
+  if (answered) {
     if (lexical.kind === 'failed') {
       diagnostics.failure('memory.lexical_search_failed', lexical.error);
     }
@@ -194,45 +236,66 @@ export async function hybridSearch(
     if (semantic.kind === 'failed') {
       diagnostics.failure('memory.semantic_search_failed', semantic.error);
     }
-  } else if (semantic.kind === 'failed') {
-    // Two chains, and neither is the one that may be dropped: which index broke
-    // first is the whole diagnosis when a retrieval tier goes dark at once.
-    throw new AggregateError(
-      [lexical.error, semantic.error],
-      'hybrid search failed: neither the lexical nor the semantic index answered',
-      { cause: lexical.error },
-    );
+
+    if (factArm.kind === 'failed') {
+      diagnostics.failure('memory.fact_search_failed', factArm.error);
+    }
   } else {
-    // Semantic was never available to cover for it, so the lexical failure IS
-    // the result. It is already classified and chained; it travels as it is.
-    throw lexical.error;
+    const failures = [lexical, semantic, factArm].flatMap((arm) =>
+      arm.kind === 'failed' ? [arm.error] : []);
+
+    if (failures.length === 1) {
+      // One arm ran and lost, and nothing was available to cover for it, so
+      // its failure IS the result. It is already classified and chained; it
+      // travels as it is.
+      throw failures[0];
+    }
+
+    // Every chain that ran failed, and none is the one that may be dropped:
+    // which indexes broke is the whole diagnosis when retrieval goes dark at
+    // once.
+    throw new AggregateError(
+      failures,
+      'hybrid search failed: no retrieval source answered',
+      { cause: failures[0] },
+    );
   }
 
   // Only now, past the classification, does a lost arm become no candidates.
   const lexicalHits: readonly LexicalHit[] = lexical.kind === 'answered' ? lexical.hits : [];
 
+  const factHits: readonly FactSearchHit[] = factArm.kind === 'answered' ? factArm.hits : [];
+
   const semanticHits: readonly VectorSearchHit[] = semantic.kind === 'answered'
     ? semantic.hits
     : [];
 
-  // RRF accepts any { id } shape; we feed both lists.
-  const merged = reciprocalRankFusion<{ id: string }>([lexicalHits, semanticHits], rrfK);
+  // RRF accepts any { id } shape; we feed all three lists. A fact id is
+  // namespaced (`fact:`), so a remembered fact and a note chunk can never
+  // fuse into one row.
+  const merged = reciprocalRankFusion<{ id: string }>([lexicalHits, factHits, semanticHits], rrfK);
 
   // Re-enrich with metadata (prefer lexical snippet/text; carry semantic score if present).
   const byIdLex = new Map(lexicalHits.map((h) => [h.id, h]));
+  const byIdFact = new Map(factHits.map((h) => [h.id, h]));
   const byIdSem = new Map(semanticHits.map((h) => [h.id, h]));
 
   return Promise.all(merged.slice(0, finalK).map(async (m): Promise<HybridHit> => {
     const l = byIdLex.get(m.id);
+    const f = byIdFact.get(m.id);
     const s = byIdSem.get(m.id);
-    const sources: Array<'lexical' | 'semantic'> = [];
+    const sources: Array<'lexical' | 'semantic' | 'fact'> = [];
 
     if (l) sources.push('lexical');
 
+    if (f) sources.push('fact');
+
     if (s) sources.push('semantic');
     // A semantic-only hit has no lexical snippet to borrow: read its text back
-    // from the chunk's own address, or it arrives blank and unusable.
-    let snippet = l?.snippet ?? s?.text ?? '';
+    // from the chunk's own address, or it arrives blank and unusable. A fact
+    // hit always carries its rendered value, so it never reaches the
+    // rehydrator.
+    let snippet = l?.snippet ?? f?.snippet ?? s?.text ?? '';
 
     if (!snippet && s && options.rehydrate) {
       try {
@@ -255,6 +318,7 @@ export async function hybridSearch(
       snippet,
       rrfScore: m.rrfScore,
       sources,
+      label: f ? `fact: ${f.key}` : undefined,
       lexicalScore: l?.score,
       semanticScore: s?.score,
     };
