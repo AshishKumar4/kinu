@@ -6,7 +6,8 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./turn-model": "./src/turn-model.ts"
+    "./turn-model": "./src/turn-model.ts",
+    "./parity-normalizer": "./src/parity-normalizer.ts"
   },
   "dependencies": {
     "@kinu.run/core": "workspace:*"

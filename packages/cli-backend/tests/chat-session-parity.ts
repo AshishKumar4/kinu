@@ -16,7 +16,7 @@
  * scenario on the pre-extraction tree.
  */
 import { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu.run/test-utils';
+import { parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import type { LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
@@ -210,48 +210,6 @@ function frontendView(event: SessionEvent): JsonValue {
   }
 }
 
-/**
- * Every minted id and clock reading replaced by its order of appearance, so
- * two runs of one conversation compare equal on everything the script decides.
- */
-function normalizer() {
-  const seen = new Map<string, string>();
-  const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
-  const STEER = /\bsteer-[A-Za-z0-9_-]{12}\b/g;
-  const CLOCK_KEY = /(?:At|Ms|_at|_ms)$/;
-
-  const name = (id: string, kind: string): string => {
-    const known = seen.get(id);
-
-    if (known !== undefined) return known;
-    const minted = `<${kind}#${String(seen.size + 1)}>`;
-    seen.set(id, minted);
-
-    return minted;
-  };
-
-  const text = (value: string): string =>
-    value.replace(UUID, (id) => name(id, 'uuid')).replace(STEER, (id) => name(id, 'steer'));
-
-  const json = (value: JsonValue): JsonValue => {
-    if (v.is(v.string(), value)) return text(value);
-
-    if (Array.isArray(value)) return value.map(json);
-
-    if (v.is(v.record(v.string(), JsonValueSchema), value)) {
-      return Object.fromEntries(Object.entries(value).map(([key, entry]) =>
-        [key, CLOCK_KEY.test(key) && v.is(v.number(), entry) ? '<clock>' : json(entry)]));
-    }
-
-    return value;
-  };
-
-  /** A whole-column id (an event-log id, a trace id) that has no recognisable shape. */
-  const opaque = (value: string | null, kind: string): string | null => value === null ? null : name(value, kind);
-
-  return { text, json, opaque };
-}
-
 /** The durable record at one point of the script: one row per entry. */
 const DurableRowsSchema = v.object({
   actorMessages: v.array(JsonValueSchema),
@@ -279,7 +237,7 @@ export const ParitySnapshotSchema = v.object({
 
 export type ParitySnapshot = v.InferOutput<typeof ParitySnapshotSchema>;
 
-function durableRows(db: Database, norm: ReturnType<typeof normalizer>): DurableRows {
+function durableRows(db: Database, norm: ParityNormalizer): DurableRows {
   const parseJson = (column: string | null): JsonValue => column === null ? null : norm.json(decodeJsonValue({ value: JSON.parse(column) }));
 
   const actorMessages = db.query<{
@@ -354,7 +312,7 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
   ]);
 
   const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
-  const norm = normalizer();
+  const norm = parityNormalizer();
 
   // 1. An idle send runs as a turn of its own.
   await a.send('one');
