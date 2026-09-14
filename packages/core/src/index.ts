@@ -1786,6 +1786,13 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
+export {
+  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+} from './orchestrator/chat-session';
+
+export { ActorMessagesTranscript, type TranscriptStore, type TranscriptRow } from './orchestrator/transcript-store';
+
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
 export {
