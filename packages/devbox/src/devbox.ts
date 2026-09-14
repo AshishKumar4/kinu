@@ -1426,12 +1426,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     });
 
     try {
-      // The SDK may already have buffered a row that the completed hook deleted.
-      // That stale callback cannot reopen the hook around an active caller.
-      if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
-      await this.#startContainer();
+      await this.#dispatch(STARTUP_CALLBACK, async () => {
+        // The SDK may already have buffered a row that the completed hook deleted.
+        // That stale callback cannot reopen the hook around an active caller.
+        if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
+        await this.#startContainer();
 
-      if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
+        if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
+      });
     } finally {
       this.#trace('startup.callback.exit', { generation: this.#generation, ms: Date.now() - since, phase: this.#restoration.phase });
     }
@@ -3075,15 +3077,17 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const since = Date.now();
     this.#trace('schedule.enter', { callback, running: this.ctx.container?.running === true });
 
-    try {
-      nextSeconds = await body();
-    } catch (error) {
-      console.error(`[devbox] scheduled ${callback} failed: ${describe({ cause: error })}`);
-    }
+    await this.#dispatch(callback, async () => {
+      try {
+        nextSeconds = await body();
+      } catch (error) {
+        console.error(`[devbox] scheduled ${callback} failed: ${describe({ cause: error })}`);
+      }
 
-    this.#trace('schedule.exit', { callback, ms: Date.now() - since, nextSeconds: nextSeconds ?? undefined });
+      this.#trace('schedule.exit', { callback, ms: Date.now() - since, nextSeconds: nextSeconds ?? undefined });
 
-    if (nextSeconds !== null) await this.#arm(callback, nextSeconds);
+      if (nextSeconds !== null) await this.#arm(callback, nextSeconds);
+    });
   }
 
   /** The SDK's alarm loop, traced at its edges: a loop that stops firing is
@@ -3633,11 +3637,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.schedule(delaySeconds, callback, null);
   }
 
-  /** Is a row for this callback already scheduled in the FUTURE? The question
-   *  `#arm` asks before writing one, and the question `ensureReady` asks before
-   *  driving a retry the schedule already owes. */
+  /** Is a row for this callback already pending? The question `#arm` asks
+   *  before writing one. A callback dispatching its own row sees that row and
+   *  looks past it; every other caller counts it, because a due row nobody
+   *  has delivered is still owed and arming beside it moves the alarm away. */
   async #pending(callback: string): Promise<boolean> {
-    return !needsArming(await this.listSchedules(callback), Date.now() / 1000);
+    return !needsArming(await this.listSchedules(callback), Date.now() / 1000, this.#dispatching.has(callback));
+  }
+
+  /** The callbacks the alarm loop is dispatching right now, by name. */
+  readonly #dispatching = new Set<string>();
+
+  /** Run one scheduled callback's body with its name marked as dispatching,
+   *  so the row still in the table under it is read as its own. */
+  async #dispatch<T>(callback: string, body: () => Promise<T>): Promise<T> {
+    this.#dispatching.add(callback);
+
+    try {
+      return await body();
+    } finally {
+      this.#dispatching.delete(callback);
+    }
   }
 }
 

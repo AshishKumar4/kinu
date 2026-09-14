@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import {
   BENCH_ACCOUNT_ID, CELL_STARTUP_MS, SANDBOX_IMAGE, boxName, boxState, checkpointOperation,
   cleanupObservationProbes, createFixtureResources, deployFixture, describeIncidentReasons, destroyBox,
-  drainBucketResidue, execInBox, measureLiveC3, r2ResiduePlane, readBlockAttachMetrics, readIncidentReasons,
+  drainBucketResidue, execInBox, measureLiveC3, orphanTeardownExecutor, r2ResiduePlane, readBlockAttachMetrics, readIncidentReasons,
   readRestoreProbe, sourceRevision, startupOperation, teardownLiveArms, writeFileInBox,
   type Fixture, type IncidentReasonRow, type StartupCompletion, type StartupObservation, type StateReply,
 } from './bench-devbox-strategies';
@@ -14,7 +14,7 @@ import { evaluateLiveC3, type BlockAttachMetrics, type LiveC3Observation } from 
 import type { RestorePhaseStamps } from '../packages/devbox/src/durability/contracts';
 import type { StartupState } from '../packages/devbox/bench/observation-schema';
 import { containerAppIds, delay, deleteContainerApps, publishTeardown, runTeardownOnce, runWrangler } from './fixtures/r2-bench/deploy-substrate';
-import { createManifest, replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
+import { createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -212,6 +212,15 @@ async function run(): Promise<number> {
         : 'two storage cells; not full strategy admission', c3, large, lifecycle, cleanup, errors }, null, 2));
 
   const log = (message: string): void => { process.stderr.write(`[block-attach] ${message}\n`); };
+
+  // Abandoned runs first, before this run creates anything: a driver killed
+  // between its deploy and its teardown (`b20260914070552`, an observer
+  // ceiling on the driver's own process) leaves a manifest naming a live
+  // Worker, container application and bucket that only a later driver reads.
+  for (const earlier of await recoverAbandonedRuns(REPO, runId, orphanTeardownExecutor(residue), log)) {
+    if (earlier.failures.length > 0 || !earlier.replayed) errors.push(`earlier run ${earlier.runId} still holds resources`);
+    else cleanup.push(`earlier run ${earlier.runId}: abandoned resources deleted or absent`);
+  }
 
   const wrangle = (args: readonly string[], options: { allowFailure?: boolean } = {}): string => runWrangler(REPO, args, options);
   const deletion = (absent: boolean, name: string): DeleteOutcome => absent ? { ok: true } : { ok: false, error: `${name} is still present` };

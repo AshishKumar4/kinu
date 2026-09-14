@@ -333,6 +333,61 @@ coordinator. Both are green after it; the before-running control remains
 green. Each exec returns the new boot marker only after restore settles.
 Raw control evidence is under `bench-artifacts/devbox-admission/20260913154111/`.
 
+D14. A due schedule row is never re-armed by a caller that is not
+dispatching it (2026-09-14, `fix/devbox-o1`). The "cold restore unstarted"
+red of `b20260914045438` is not a regression between `4ded56c3b` and
+`5d2707ba3`: the same 55-second `running:true, restoration:unstarted`
+reading, with one incident undelivered and no heartbeat tick, appears on
+`40f16afc6` (both cells of `b20260913131044`) and on `4ded56c3b` (the dense
+baseline of `b20260913143908`). Its cause was measured on
+`b20260914070552` (`ba2258e91` plus the startup traces of `791a80a83`,
+ten destroy/create cycles, `--lifecycle`, interrupted by the driver's own
+process ceiling after seven): cycles 2, 3, 5 and 6 each recorded exactly one
+admission refusal, `Container request aborted.: The container is not
+listening in the TCP address 10.0.0.1:3000` after the 6,000 ms port wait,
+then nothing for the rest of the 55 s window. The retry row was armed one
+second out and the platform never delivered it. The raw tail shows why:
+`Alarm - Canceled` at 07:06:16, 07:07:08, 07:08:09, 07:09:09 and 07:10:09
+UTC and no `devbox.alarm.enter` between 07:06:22 and 07:08:14. The driver
+reads `/state` every 300 ms; `devboxState` kicks the startup row through
+`#arm`, whose guard counted only future rows, so once the row was due every
+reading inserted another row and the SDK's `schedule()` reset the object's
+one platform alarm a second out each time. The alarm was moved away faster
+than the platform could deliver it. Cycle 4 recovered only because its
+refusal left the container stopped, which the driver answers with a second
+drive; the same cycle then ran 150 accumulated startup rows in one alarm
+pass. `needsArming` now takes the dispatching flag: a callback looks past
+its own due row, every other caller counts every row. The lifecycle double
+is red before the fix (four polls after the row came due armed it four
+times) and green after; the self-re-arming direction stays red. Not yet
+measured live: the fix's cloud run is the next `--lifecycle` cell, then the
+C3 cell. Evidence: `bench-artifacts/block-attach/b20260914070552/`
+(`observations.json`, `tail.log`, `lifecycle.jsonl`) and its completed
+seven-entry teardown `bench-artifacts/teardown/b20260914070552.json`, zero
+objects and zero multipart uploads, bucket absent.
+
+H1 (hypothesis, unmeasured live). One object attempt per checkpoint by
+publishing the staged archive with an HTTP PUT to the mount's own egress
+host (`http://r2.internal/<binding>/<key>`) instead of `mkdir -p` and `dd`
+through s3fs. The three attempts of `b20260914045438` are `put
+backups/<id>/ 0`, `put backups/<id>/delta.sqsh 0` and `put
+backups/<id>/delta.sqsh 69632`: s3fs 1.90 (the pinned image) PUTs a
+directory marker on `mkdir` and an empty object on `create` before its
+flush, and has no option to skip either, so the s3fs shape's floor is two.
+A presigned PUT is not direct here: the product runs `enableInternet =
+false` and intercepts all of 80/443, so it would add an R2 API key and a
+SigV4 hop and still pass every byte through the Worker. The egress-host PUT
+uses the credential-less handler the mount already registers, one `put` for
+an archive up to the part size and one multipart upload above it, and s3fs
+stays for reads. Measured locally on 2026-09-14 in the pinned sandbox image
+(Bun 1.3.12): a 69,632-byte archive is one PUT; a 3,149,824-byte archive with
+1 MiB parts is one multipart upload of four parts; a `Bun.file` slice as a
+fetch body sends nothing, a slice `.stream()` with an explicit
+`Content-Length` and a whole `Bun.file` both send with the length. Source of
+the probe: `/tmp/o1-publisher/`, not yet in the tree. Nothing in the product
+publishes this way yet; D4's chunked delta and the record's byte check are
+unchanged by it.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
@@ -425,7 +480,10 @@ their final residue counts were zero objects and zero multipart uploads.
 C3 still made three object attempts: two zero-byte directory/placeholder
 PUTs and the payload write. The payload-size gate passes; the one-attempt
 gate remains red. No attempt was hidden or reclassified to admit the run.
-O1 therefore remains open as a full strategy-admission claim.
+`b20260914045438` on `5d2707ba3` repeated both: three attempts, and a cold
+restore that read `running:true, restoration:unstarted` for 55 s. D14 names
+the startup cause and its fix; H1 names the publication design under
+measurement. O1 therefore remains open as a full strategy-admission claim.
 O2. Storage implementation closed by D7. Deployed latency evidence remains
 part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is
