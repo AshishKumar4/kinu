@@ -19,8 +19,10 @@
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
+import { ftsQueryTerms } from '@kinu.run/agent-utils/memory';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { classify } from '../obs/index';
+
 
 export interface Fact {
   key: string;
@@ -175,6 +177,82 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
   };
 }
 
+/** The text a fact shows where a fact is data: a string verbatim, anything
+ *  else as JSON. One rule, so the prompt block and a search hit agree. */
+function renderFactValue(value: JsonValue): string {
+  const text = v.safeParse(v.string(), value);
+
+  return text.success ? text.output : JSON.stringify(value);
+}
+
+/** A fact the fact arm of memory search surfaced. Renders beside a note hit
+ *  as `[fact: <key>]` with the rendered value as the snippet; `id` namespaces
+ *  the hit so it can never fuse with a `path:start-end` note chunk. */
+export interface FactSearchHit {
+  readonly id: string;
+  readonly key: string;
+  readonly snippet: string;
+  /** Coarse rank signal inside the fact list: the RRF consumer reads the
+   *  position, never the number. */
+  readonly score: number;
+  readonly lastObservedAt: number;
+}
+
+/** A fact's key is normalized on write (lowercase, whitespace → '_'), so the
+ *  corpus side tokenizes on every non-alphanumeric run — one that folded the
+ *  way keys do would never split `deploy_target` into the two terms the query
+ *  side produces. The QUERY side goes through `ftsQueryTerms` so a fact arm
+ *  answers to exactly the terms the FTS index would. */
+function factTermSet(text: string): Set<string> {
+  return new Set(
+    text.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean),
+  );
+}
+
+/**
+ * The lexical arm of memory search over `agent_facts`: a fact is a candidate
+ * when every query term appears in its key, in its rendered value, or split
+ * across the two — the same all-terms-anywhere rule the note index applies to
+ * a chunk. `remember` is the only write path, so a search that cannot see a
+ * remembered fact reports "no results" for state the agent itself just wrote.
+ *
+ * Ranked matches-first: a hit whose key covers every query term outranks one
+ * that needed the value, then most recently observed, then key for a stable
+ * tie. Best `limit` returned.
+ */
+export function searchFacts(facts: FactsStore, query: string, limit: number): FactSearchHit[] {
+  const terms = new Set(
+    ftsQueryTerms(query).flatMap((term) => term.toLowerCase().split(/[^a-z0-9]+/)).filter(Boolean),
+  );
+
+  if (terms.size === 0) return [];
+
+  const hits: Array<{ hit: FactSearchHit; keyMatch: boolean }> = [];
+
+  for (const fact of facts.all()) {
+    const rendered = renderFactValue(fact.value);
+    const keyTerms = factTermSet(fact.key);
+    const doc = new Set([...keyTerms, ...factTermSet(rendered)]);
+
+    if (![...terms].every((term) => doc.has(term))) continue;
+
+    const keyMatch = [...terms].every((term) => keyTerms.has(term));
+
+    hits.push({
+      hit: { id: `fact:${fact.key}`, key: fact.key, snippet: rendered, score: keyMatch ? 1 : 0.5, lastObservedAt: fact.lastObservedAt },
+      keyMatch,
+    });
+  }
+
+  return hits
+    .sort((a, b) =>
+      Number(b.keyMatch) - Number(a.keyMatch)
+      || b.hit.lastObservedAt - a.hit.lastObservedAt
+      || a.hit.key.localeCompare(b.hit.key))
+    .slice(0, limit)
+    .map((entry) => entry.hit);
+}
+
 /** Render the top-K most recently observed facts as a system-prompt block.
  *  Returned format is concise YAML-ish so the LLM treats it as data, not prose. */
 export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}): string {
@@ -186,9 +264,7 @@ export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}
   let used = 0;
 
   for (const f of facts) {
-    const text = v.safeParse(v.string(), f.value);
-    const val = text.success ? text.output : JSON.stringify(f.value);
-    const line = `${f.key}: ${val}`;
+    const line = `${f.key}: ${renderFactValue(f.value)}`;
 
     if (used + line.length + 1 > max) break;
     lines.push(line);

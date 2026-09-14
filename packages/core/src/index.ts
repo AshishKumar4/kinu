@@ -1336,8 +1336,8 @@ export {
 // agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
 // Top-K recent facts are auto-rendered into the system prompt every turn.
 export {
-  initFactsTable, createFactsStore, renderFactsBlock,
-  type Fact, type FactsStore, type FactUpsertResult,
+  initFactsTable, createFactsStore, renderFactsBlock, searchFacts,
+  type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult,
 } from './memory/facts';
 
 export {

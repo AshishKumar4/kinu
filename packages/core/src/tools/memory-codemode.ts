@@ -31,10 +31,23 @@ async function decodeMemoryResult(input: { pending: Promise<unknown> }): Promise
 
 const TYPES_BASE = `  /** Save a prose note or lesson too long to be a keyed value. */
   save(content: string): Promise<string>;
-  /** Search memory notes — hybrid FTS5 + Vectorize (RRF) when a vector store
+`;
+
+/** The search member's doc line changes with the facts gate: a runtime without
+ *  a FactsStore searches notes only, and the declaration must not promise
+ *  remembered facts it cannot find. */
+const typesSearch = (hasFacts: boolean) => hasFacts
+  ? `  /** Search memory notes and remembered facts (matched on key or value) —
+   *  hybrid FTS5 + Vectorize (RRF) over the notes when a vector store is wired
+   *  and available, FTS5 + facts otherwise. */
+  search(query: string): Promise<string>;
+`
+  : `  /** Search memory notes — hybrid FTS5 + Vectorize (RRF) when a vector store
    *  is wired and available, FTS5-only otherwise. */
   search(query: string): Promise<string>;
-  /** Read this agent's past conversation: pass query to search, an
+`;
+
+const TYPES_TAIL = `  /** Read this agent's past conversation: pass query to search, an
    *  around_message_id to scroll a window, or neither to browse archived roots. */
   conversations(opts?: { query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number }): Promise<unknown>;`;
 
@@ -99,7 +112,13 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
 
   const tools: CodemodeProvider['tools'] = {
     save: { planAllowed: true, description: 'Save a prose note or lesson too long to be a keyed value.', execute: dispatch('save') },
-    search: { planAllowed: true, description: 'Search memory notes (hybrid FTS5 + Vectorize when wired).', execute: dispatch('search') },
+    search: {
+      planAllowed: true,
+      description: hasFacts
+        ? 'Search memory notes and remembered facts (key or value); hybrid FTS5 + Vectorize over notes when wired.'
+        : 'Search memory notes (hybrid FTS5 + Vectorize when wired).',
+      execute: dispatch('search'),
+    },
     conversations: { planAllowed: true, description: 'Read this agent’s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
   };
 
@@ -111,7 +130,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
 
   return {
     name: TOOL_REACH.memory.codemode,
-    types: `export declare const memory: {\n${TYPES_BASE}${hasFacts ? TYPES_FACTS : ''}\n};\n`,
+    types: `export declare const memory: {\n${TYPES_BASE}${typesSearch(hasFacts)}${TYPES_TAIL}${hasFacts ? TYPES_FACTS : ''}\n};\n`,
     tools,
     positionalArgs: true,
   };

@@ -5,12 +5,13 @@
  * memory.* reaches this same implementation from execute_tools. One
  * dispatcher serves both surfaces.
  */
-import type { Memory, SqlExecutor } from '../types/primitives';
+import type { Memory, MemorySearchResult, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
-import type { FactsStore } from '../memory/facts';
 import type { VectorStore } from '../memory/vector-store';
+import { reciprocalRankFusion } from '../memory/vector-store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { appendMemoryNote } from '../memory/note';
+import { searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import { ConversationSearchStore } from '../memory/conversation-search';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
@@ -77,13 +78,13 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       };
 
       const hits = await hybridSearch(query, lexicalFn, vs, {
-        finalK: 10, rehydrate: memorySnippetRehydrator(memory),
+        finalK: 10, rehydrate: memorySnippetRehydrator(memory), facts,
       });
 
       if (hits.length === 0) return 'No results found.';
 
       return hits.map((h) =>
-        `[${h.path}:${h.startLine}-${h.endLine}] ` +
+        `[${h.label ?? `${h.path}:${h.startLine}-${h.endLine}`}] ` +
         `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
       ).join('\n\n');
     }
@@ -92,11 +93,35 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
 
     const coverage = 'Lexical search only; semantic recall is unavailable.';
 
-    if (results.length === 0) return `${coverage}\nNo results found.`;
+    if (!facts) {
+      // No second lexical source: the note page IS the answer, rendered
+      // unchanged.
+      if (results.length === 0) return `${coverage}\nNo results found.`;
 
-    return `${coverage}\n` + results
-      .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`)
-      .join('\n\n');
+      return `${coverage}\n` + results
+        .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`)
+        .join('\n\n');
+    }
+
+    // Facts are the second lexical source, fused through the same RRF the
+    // hybrid path uses — one ordering policy, no separate ranking. A fact hit
+    // renders its key and score where a note hit shows its chunk address.
+    const merged = reciprocalRankFusion<(MemorySearchResult & { id: string; kind: 'note' }) | (FactSearchHit & { kind: 'fact' })>(
+      [
+        results.map((r) => ({ ...r, id: `${r.path}:${r.startLine}-${r.endLine}`, kind: 'note' as const })),
+        searchFacts(facts, query, 10).map((f) => ({ ...f, kind: 'fact' as const })),
+      ],
+    ).slice(0, 10);
+
+    if (merged.length === 0) return `${coverage}\nNo results found.`;
+
+    return `${coverage}\n` + merged.map((m) => {
+      const hit = m.sources[0];
+
+      return hit.kind === 'note'
+        ? `[${hit.path}:${hit.startLine}-${hit.endLine}] (score ${hit.score.toFixed(2)})\n${hit.snippet}`
+        : `[fact: ${hit.key}] (rrf ${m.rrfScore.toFixed(3)}, sources: ${hit.kind})\n${hit.snippet}`;
+    }).join('\n\n');
   };
 
   // `conversations` action: zero-LLM FTS5 transcript recall over the canonical
