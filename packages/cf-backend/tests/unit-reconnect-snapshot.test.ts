@@ -123,6 +123,12 @@ async function landQueuedSteers(agent: HarnessOrchestratorAgent): Promise<void> 
   // which the harness has none of. The drain's durable half — the DELETE — runs
   // either way, and that is the half a reconnect reads.
   Reflect.set(agent, 'addMessages', async () => { await Promise.resolve(); });
+  // beforeStep refuses an unprepared turn: open it through beforeTurn, the way
+  // production does, so the drain reads a real snapshot.
+  await agent.beforeTurn({
+    system: 'sys', messages, tools: {}, model: new MockLanguageModelV3(),
+    continuation: false, body: {},
+  });
   const prepared = agent.beforeStep(context);
 
   if (prepared instanceof Promise) await prepared;

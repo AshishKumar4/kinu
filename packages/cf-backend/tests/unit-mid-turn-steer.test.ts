@@ -48,8 +48,9 @@ interface SteerHarness {
   appended: UIMessage[][];
   /** Programmatic turns the actor enqueued (the leftover rerun path). */
   enqueued: Array<{ text: string; metadata?: unknown; idempotencyKey?: string }>;
-  /** Declare a turn in flight, the way beforeTurn does. */
-  startTurn(): void;
+  /** Prepare a real turn: beforeTurn sets the in-flight flag, the durable
+   *  turn identity and the step snapshot a steer must land on. */
+  startTurn(): Promise<void>;
 }
 
 function steerHarness(): SteerHarness {
@@ -77,15 +78,25 @@ function steerHarness(): SteerHarness {
 
   return {
     agent, frames, appended, enqueued,
-    startTurn: () => {
+    startTurn: async () => {
+      // Production opens a turn through beforeTurn; the model-free harness
+      // drives the same entry point so beforeStep sees a prepared snapshot.
+      const turn = await agent.beforeTurn({
+        system: 'sys',
+        messages: [...HISTORY],
+        tools: {},
+        model: HARNESS_MODEL,
+        continuation: false,
+        body: {},
+      });
+
+      void turn;
       inFlight = true;
       Reflect.set(agent, '_inFlight', true);
-      // Production stamps the durable turn identity in the same slice that
-      // opens the turn; a mid-turn steer is REFUSED without it, because the SQL
-      // reservation must name the turn an eviction would hand it back to. Driven
-      // through the harness seam rather than by reflecting a private field, so
-      // the steer queue this turn opens is opened too.
-      agent.harnessBeginTurn(`turn-${crypto.randomUUID()}`);
+      // The durable turn identity is what a mid-turn steer binds to; beforeTurn
+      // wrote it from the request, and the harness reads it back through the
+      // same accessor a recovery would.
+      agent.harnessDurableTurnId();
     },
   };
 }
@@ -149,8 +160,16 @@ describe('a message typed while the agent is working', () => {
       text: 'nothing is running',
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' },
     }]);
-    // Nothing was buffered for a step boundary: the next turn's steps carry no splice.
-    expect(await stepMessages(h.agent, 0, HISTORY)).toEqual(HISTORY);
+
+    // Nothing was buffered for a step boundary: the next turn's steps carry no
+    // splice. beforeTurn opens that turn the way production does, so beforeStep
+    // reads its prepared snapshot.
+    const turn = await h.agent.beforeTurn({
+      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
+      continuation: false, body: {},
+    });
+
+    expect(await stepMessages(h.agent, 0, turn?.messages ?? HISTORY)).toEqual(HISTORY);
   });
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
@@ -175,7 +194,7 @@ describe('a message typed while the agent is working', () => {
 
   test('is taken mid-turn, announced as queued, and reaches the model at the next step', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
 
     expect(await h.agent.steerTurn('also check staging')).toEqual({ landed: 'mid-turn' });
 
@@ -203,7 +222,7 @@ describe('a message typed while the agent is working', () => {
 
   test('restores a reset-lost steer from SQL before the resumed turn reaches its next step', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     const turnId = h.agent.harnessDurableTurnId();
 
     if (turnId === null) throw new Error('expected the harness turn to be durable');
@@ -219,7 +238,7 @@ describe('a message typed while the agent is working', () => {
 
   test('persists as a VERBATIM user row carrying the id and the step it landed in', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('also check staging');
     await stepMessages(h.agent, 4, HISTORY);
 
@@ -244,7 +263,7 @@ describe('a message typed while the agent is working', () => {
 
   test('two steers merge into one user message but persist as two rows', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('also check staging');
     await h.agent.steerTurn('and the logs');
 
@@ -262,7 +281,7 @@ describe('a message typed while the agent is working', () => {
 
   test('an empty steer is refused outright rather than sent as a blank turn', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await expect(h.agent.steerTurn('   ')).rejects.toThrow(/requires the message text/);
   });
 });
@@ -270,7 +289,7 @@ describe('a message typed while the agent is working', () => {
 describe('stopping a turn with a steer still pending', () => {
   test('keeps the text queued instead of handing it back', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('change of plans');
 
     const outcome = await h.agent.cancelCurrentWork();
@@ -288,7 +307,7 @@ describe('stopping a turn with a steer still pending', () => {
 
   test('leaves a steer the model already read alone', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('also check staging');
     await stepMessages(h.agent, 0, HISTORY);
 
@@ -298,7 +317,7 @@ describe('stopping a turn with a steer still pending', () => {
 
   test('two queued steers become the next turn text in order once the abort settles', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('first');
     await h.agent.steerTurn('second');
     await h.agent.cancelCurrentWork();
@@ -322,7 +341,13 @@ describe('stopping a turn with a steer still pending', () => {
 describe('a steer that never saw a step boundary', () => {
   test('reruns as a USER-origin turn, not as a programmatic one', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
+    // beforeTurn names the turn by its run id (run-…), not the harness's former
+    // turn-… handle; the rerun key embeds the id the live turn claimed. Read it
+    // while the steer is written, before the settle clears the checkpoint.
+    const rerunTurnId = h.agent.harnessDurableTurnId();
+
+    if (rerunTurnId === null) throw new Error('expected the harness turn to be durable');
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
     await h.agent.steerTurn('one more thing');
@@ -338,7 +363,7 @@ describe('a steer that never saw a step boundary', () => {
     expect(h.enqueued[0]).toMatchObject({
       text: 'one more thing',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-      idempotencyKey: expect.stringMatching(/^steer-rerun:turn-.*:build:steer-/),
+      idempotencyKey: expect.stringMatching(new RegExp(`^steer-rerun:${rerunTurnId}:build:steer-`)),
     });
     // NO kinuEvent: every provenance decision downstream reads this as the
     // user's own next message, which is what it is. Stamping an event here
@@ -353,7 +378,7 @@ describe('a steer that never saw a step boundary', () => {
 
   test('keeps noncontiguous mode groups distinct while preserving each group across duplicate terminal callbacks', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('first build', 'build');
     await h.agent.steerTurn('plan next', 'plan');
     await h.agent.steerTurn('second build', 'build');
@@ -378,7 +403,7 @@ describe('a steer that never saw a step boundary', () => {
 
   test('is not rerun twice — the turn that takes it drains it', async () => {
     const h = steerHarness();
-    h.startTurn();
+    await h.startTurn();
     await h.agent.steerTurn('one more thing');
 
     const settled = {
