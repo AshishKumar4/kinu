@@ -329,3 +329,123 @@ export async function awaitTokenAccepted(
     await delay(3_000);
   }
 }
+
+/** What `wrangler containers info <id> --json` is trusted to say about an
+ *  application's instances. Parsed rather than cast: a row this driver cannot
+ *  read must not pass as "provisioned". */
+const ContainerAppInfoSchema = v.looseObject({
+  name: v.optional(v.string()),
+  health: v.optional(v.looseObject({
+    instances: v.optional(v.record(v.string(), v.number())),
+  })),
+});
+
+/** One reading of the platform's instance counts for an application. */
+export interface ApplicationHealth {
+  readonly at: number;
+  readonly instances: Readonly<Record<string, number>>;
+}
+
+export type ApplicationHealthReader = (applicationId: string) => ApplicationHealth;
+
+/**
+ * Instance states the platform has finished provisioning: `healthy` is an
+ * idle provisioned instance, `active` and `assigned` are provisioned instances
+ * a Durable Object holds. `scheduling` and `starting` are the rollout still in
+ * progress, and `container.start()` answers "There is no container instance
+ * that can be provided to this Durable Object, try again later" for the whole
+ * of it.
+ */
+export const PROVISIONED_INSTANCE_STATES = ['healthy', 'active', 'assigned'] as const;
+
+export function provisionedInstances(instances: Readonly<Record<string, number>>): number {
+  return PROVISIONED_INSTANCE_STATES.reduce((count, state) => count + (instances[state] ?? 0), 0);
+}
+
+export function readApplicationHealth(repoRoot: string, applicationId: string): ApplicationHealth {
+  const output = runWrangler(repoRoot, ['containers', 'info', applicationId, '--json']);
+  const start = output.indexOf('{');
+
+  if (start === -1) throw new Error(`container application ${applicationId} info had no JSON object: ${output.slice(0, 240)}`);
+  const info = v.parse(ContainerAppInfoSchema, JSON.parse(output.slice(start)));
+
+  return { at: Date.now(), instances: info.health?.instances ?? {} };
+}
+
+export interface ApplicationRollout {
+  readonly application: string;
+  readonly applicationId: string;
+  /** From `since` (the deploy's return) to the reading that reported a
+   *  provisioned instance. */
+  readonly readyAfterMs: number;
+  /** Every reading, oldest first, as `<ms since> <state:count ...>`. */
+  readonly readings: readonly string[];
+}
+
+export interface RolloutWait {
+  readonly repoRoot: string;
+  readonly application: string;
+  readonly log: (message: string) => void;
+  readonly readHealth?: ApplicationHealthReader;
+  readonly listApplications?: typeof containerAppIds;
+  readonly sleep?: (ms: number) => Promise<void>;
+  /** The clock origin, normally the moment `wrangler deploy` returned. */
+  readonly since?: number;
+  readonly deadlineMs?: number;
+  readonly pollMs?: number;
+}
+
+function describeInstances(instances: Readonly<Record<string, number>>): string {
+  const counted = Object.entries(instances).filter(([, count]) => count !== 0);
+
+  return counted.length === 0 ? 'no instances' : counted.map(([state, count]) => `${state}:${String(count)}`).join(' ');
+}
+
+/**
+ * Hold a fresh deployment until its container application has a provisioned
+ * instance.
+ *
+ * MEASURED 2026-09-14 (`bench-artifacts/rollout-probe/r20260914233505/`):
+ * `wrangler deploy` returns while the application's one instance is still
+ * `scheduling` or `starting`; with nothing touching the Durable Object the
+ * instance reported `healthy` 37,760 ms after the deploy returned, and a
+ * Durable Object driving the bench's 6 s admission windows back to back from
+ * the deploy was admitted 39,636 ms after it — the same clock, so the windows
+ * neither hurry nor delay the rollout. A driver that kicks a cold attach
+ * before this returns measures the platform's rollout inside its own startup
+ * ceiling: D16's refusal, D5's 25,039 ms cold attach and every earlier
+ * first-attach figure held that rollout.
+ */
+export async function awaitApplicationRollout(wait: RolloutWait): Promise<ApplicationRollout> {
+  const readHealth = wait.readHealth ?? ((applicationId: string): ApplicationHealth => readApplicationHealth(wait.repoRoot, applicationId));
+  const listed = (wait.listApplications ?? containerAppIds)(wait.repoRoot, [wait.application], wait.log);
+  const applicationId = listed[0]?.id;
+
+  if (applicationId === undefined) throw new Error(`container application ${wait.application} is not listed after deploy`);
+  const sleep = wait.sleep ?? delay;
+  const deadlineMs = wait.deadlineMs ?? 180_000;
+  const readings: string[] = [];
+  let reading = readHealth(applicationId);
+  const since = wait.since ?? reading.at;
+
+  for (;;) {
+    readings.push(`${String(reading.at - since)} ${describeInstances(reading.instances)}`);
+
+    if (provisionedInstances(reading.instances) >= 1) {
+      const rollout = { application: wait.application, applicationId, readyAfterMs: reading.at - since, readings };
+      wait.log(`container application ${wait.application} provisioned ${String(rollout.readyAfterMs)} ms after deploy (${readings.join(', ')})`);
+
+      return rollout;
+    }
+
+    if (reading.at - since > deadlineMs) {
+      throw new Error(
+        `container application ${wait.application} reported no provisioned instance within ${String(deadlineMs)} ms of deploy `
+        + `(last reading: ${describeInstances(reading.instances)})`,
+      );
+    }
+
+    await sleep(wait.pollMs ?? 2_000);
+    reading = readHealth(applicationId);
+  }
+}

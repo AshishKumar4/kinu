@@ -493,6 +493,7 @@ function fullIdentity(overrides: Partial<RunIdentity> = {}): RunIdentity {
     startedAt: '2026-08-30T10:00:00.000Z',
     finishedAt: '2026-08-30T10:41:00.000Z',
     image: SANDBOX_IMAGE,
+    rollouts: [],
     imageSha256: SANDBOX_IMAGE_DIGEST,
     ...overrides,
   };
