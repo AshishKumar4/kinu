@@ -183,6 +183,41 @@ function sanitizeRemoteProse(text: string | undefined): string | undefined {
 }
 
 /**
+ * The arguments a call forwards, with one omission allowed.
+ *
+ * A form-shaped client that never touched an optional field still sends it as
+ * `""`, and a strict server then validates that empty string — it is not a
+ * URI, a date, or an enum member, it is the absence of an answer. The tool's
+ * OWN admitted `inputSchema` says which keys may be absent: a key that is
+ * declared in `properties` and absent from `required` may be dropped when its
+ * value is exactly `""`. Everything else is the caller's real input and passes
+ * through untouched — a required key's `""` included, since dropping a
+ * required field would only trade the server's own validation error for a
+ * different one.
+ */
+export function omitEmptyOptionalArgs(
+  args: JsonObject,
+  inputSchema: JsonObject | undefined,
+): JsonObject {
+  const properties = inputSchema?.properties;
+
+  if (!v.is(JsonObjectSchema, properties)) return args;
+
+  const required = new Set(
+    v.is(v.array(v.string()), inputSchema?.required) ? inputSchema.required : [],
+  );
+
+  const out: JsonObject = {};
+
+  for (const [key, value] of Object.entries(args)) {
+    if (value === '' && key in properties && !required.has(key)) continue;
+    out[key] = value;
+  }
+
+  return out;
+}
+
+/**
  * What a remote MCP catalog is admitted against.
  *
  * THERE IS NO MCP NUMBER AT ALL. A tool definition is not message traffic: it
