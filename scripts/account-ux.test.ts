@@ -42,6 +42,26 @@ async function shoot(page: Page, name: string): Promise<string> {
 
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
 
+/** The rail's primary nav, as drawn: which rows carry the active token (the
+ *  elevated background class every active row shares) and which one react-
+ *  router marks current. Exactly one row may be lit, and it must be the page's. */
+async function activeNavRow(page: Page): Promise<string> {
+  const rows = await page.$$eval('nav[aria-label="Primary"] a', (anchors) => anchors.map((a) => ({
+    label: a.textContent?.trim() ?? '',
+    lit: a.className.includes('bg-[var(--c-elevated)]') && !a.className.includes('hover:bg-[var(--c-elevated)]'),
+    current: a.getAttribute('aria-current') === 'page',
+  })));
+
+  const lit = rows.filter((row) => row.lit);
+  const current = rows.filter((row) => row.current);
+
+  if (lit.length !== 1 || current.length !== 1 || lit[0]?.label !== current[0]?.label) {
+    throw new Error(`expected exactly one lit and current nav row, got ${JSON.stringify(rows)}`);
+  }
+
+  return lit[0].label;
+}
+
 /** The fixture arms two states for the sibling failure rig: Codex failed and
  *  the gateway read held. This gate wants the settled account, so it heals and
  *  releases them, then retries the failed card's read. */
@@ -295,6 +315,7 @@ describe('account panels', () => {
 
               expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins']);
               expect(links[0]?.current).toBe('page');
+              expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the roster
               // eyebrow above the rows, the account row at the foot. (The New
               // workspace button is absent on the home route by design.)
@@ -323,6 +344,8 @@ describe('account panels', () => {
               expect(await page.$eval('[aria-pressed="true"]', (button) => button.getAttribute('aria-label')))
                 .toBe(view === 'tiled' ? 'Tiled view' : 'List view');
               expect(await page.$eval('[data-workspaces-view]', (section) => section.getAttribute('data-workspaces-view'))).toBe(view);
+
+              if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
               shots.push(await shoot(page, `workspaces-${view}-${viewport}-${theme}`));
 
               await page.type('[aria-label="Search workspaces"]', 'perf');
@@ -350,6 +373,7 @@ describe('account panels', () => {
               expect(body).toContain(text);
             }
 
+            if (viewport === 'desktop') expect(await activeNavRow(plugins)).toBe('Plugins');
             shots.push(await shoot(plugins, `plugins-${viewport}-${theme}`));
             await plugins.evaluate(() => {
               const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Manage');
@@ -370,6 +394,8 @@ describe('account panels', () => {
 
             for (const heading of ['My shared', 'Shared with me', 'Public', 'From people I know']) expect(body).toContain(heading);
             expect(body).toContain('Nothing public yet');
+
+            if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Shared');
             shots.push(await shoot(shared, `shared-four-${viewport}-${theme}`));
           } finally {
             await shared.close();

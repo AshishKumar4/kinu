@@ -6106,7 +6106,9 @@ async function mount() {
           <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
           <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
         </div>
-      ), entries: ["/"],
+      ),
+      // On its own route, so the rail's primary nav lights Shared and not Home.
+      entries: [APP_ROUTES.shared],
     }],
     ["sharedialog", { node: <ShareDialogFrame />, entries: ["/"] }],
     ["unmapped", {
