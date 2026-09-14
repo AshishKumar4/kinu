@@ -19,11 +19,11 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, PromptFile,
 } from '../src/types/backend-host';
 import type { AgentSignal, SignalCardEvent, UserSignalIdentity } from '../src/types/signals';
+// The user kind's wire name — the production constant, so a rename breaks the
+// import instead of quietly leaving this file asserting the old one.
+import { USER_MESSAGE_SIGNAL_KIND as USER_MESSAGE_KIND } from '../src/types/signals';
 import { JsonObjectSchema } from '../src/utils/json';
 import type { WorkMode } from '../src/types/turn';
-
-/** The user kind's wire name — pinned literally so a rename cannot slip by. */
-const USER_MESSAGE_KIND = 'user_message';
 
 /** A prepareStep context: what the step pipeline hands an extension. */
 function step(stepNumber: number, messages: ModelMessage[]) {
