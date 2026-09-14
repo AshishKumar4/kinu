@@ -86,7 +86,7 @@ export function PreviewTabsGallery() {
   const rpc: Rpc = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const reply = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(value)).json<T>();
 
-    if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789 } });
+    if (method === 'previewSlate') return reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } });
     else if (method === 'getExecutorDiff') return reply({ mode: 'vfs-baseline', files: diff ? [{ path: 'src/app.ts', status: 'changed', additions: 1, deletions: 0, diff: '+export const ready = true;' }] : [] });
     else if (method === 'inspectSubordinate') {
       const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
