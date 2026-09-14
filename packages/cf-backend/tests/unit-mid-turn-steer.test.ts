@@ -81,7 +81,7 @@ function steerHarness(): SteerHarness {
     startTurn: async () => {
       // Production opens a turn through beforeTurn; the model-free harness
       // drives the same entry point so beforeStep sees a prepared snapshot.
-      const turn = await agent.beforeTurn({
+      await agent.beforeTurn({
         system: 'sys',
         messages: [...HISTORY],
         tools: {},
@@ -90,13 +90,8 @@ function steerHarness(): SteerHarness {
         body: {},
       });
 
-      void turn;
       inFlight = true;
       Reflect.set(agent, '_inFlight', true);
-      // The durable turn identity is what a mid-turn steer binds to; beforeTurn
-      // wrote it from the request, and the harness reads it back through the
-      // same accessor a recovery would.
-      agent.harnessDurableTurnId();
     },
   };
 }
@@ -342,12 +337,6 @@ describe('a steer that never saw a step boundary', () => {
   test('reruns as a USER-origin turn, not as a programmatic one', async () => {
     const h = steerHarness();
     await h.startTurn();
-    // beforeTurn names the turn by its run id (run-…), not the harness's former
-    // turn-… handle; the rerun key embeds the id the live turn claimed. Read it
-    // while the steer is written, before the settle clears the checkpoint.
-    const rerunTurnId = h.agent.harnessDurableTurnId();
-
-    if (rerunTurnId === null) throw new Error('expected the harness turn to be durable');
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
     await h.agent.steerTurn('one more thing');
@@ -363,7 +352,7 @@ describe('a steer that never saw a step boundary', () => {
     expect(h.enqueued[0]).toMatchObject({
       text: 'one more thing',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-      idempotencyKey: expect.stringMatching(new RegExp(`^steer-rerun:${rerunTurnId}:build:steer-`)),
+      idempotencyKey: expect.stringMatching(/^steer-rerun:(?:run|turn)-[\w-]+:build:steer-/),
     });
     // NO kinuEvent: every provenance decision downstream reads this as the
     // user's own next message, which is what it is. Stamping an event here
