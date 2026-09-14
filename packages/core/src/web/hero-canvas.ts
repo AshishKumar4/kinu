@@ -1,15 +1,16 @@
 /**
- * The Canvas2D half of the hero art: the search tree's 2D renderer and the
- * phone's dust, both drawing the frames web/hero-art simulates. Nothing in
- * here mounts, observes, or runs a clock — a component supplies the canvas,
- * the palette, and the cadence; a recording stub supplies the same surface
- * in tests, which is how the renderers are proved against the frame.
+ * The Canvas2D half of the living art: the `ArtFrame` renderer every
+ * picture draws through when there is no GPU (the search tree, the
+ * connectome), and the phone's dust. Nothing in here mounts, observes, or
+ * runs a clock — a component supplies the canvas, the palette, and the
+ * cadence; a recording stub supplies the same surface in tests, which is how
+ * the renderers are proved against the frame.
  */
 
 import {
-  cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, seededRandom, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT,
-  TONE_EMBER, type HeroPalette, type Rgb, type SearchTreeRenderer,
-} from './hero-art';
+  type ArtPalette, type ArtRenderer, cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, type Rgb, seededRandom, STROKE_STRIDE, TONE_ASH,
+  TONE_BRIGHT, TONE_EMBER,
+} from './art';
 
 /**
  * The slice of CanvasRenderingContext2D this renderer draws with. A real
@@ -44,7 +45,7 @@ function mix(from: Rgb, to: Rgb, amount: number): Rgb {
 /** The same tone rule the WGSL palette module applies: an ordinary attempt
  *  is cooler the weaker it scores, the kept path is the gold (deepened to
  *  the text-grade gold on paper), ash is ash, an ember is a cooling gold. */
-function toneColor(palette: HeroPalette, tone: number, glow: number): Rgb {
+function toneColor(palette: ArtPalette, tone: number, glow: number): Rgb {
   if (tone === TONE_BRIGHT) return palette.mode === 'light' ? palette.bright : palette.accent;
 
   if (tone === TONE_ASH) return palette.ash;
@@ -56,17 +57,17 @@ function toneColor(palette: HeroPalette, tone: number, glow: number): Rgb {
 }
 
 /** Every tree colour sits behind the copy: it recedes toward the ground by RECESS. */
-function recede(palette: HeroPalette, color: Rgb): Rgb {
+function recede(palette: ArtPalette, color: Rgb): Rgb {
   return mix(color, palette.ground, RECESS);
 }
 
 /**
- * Canvas2D drawing of the search tree: the same frame the WebGPU renderer
+ * Canvas2D drawing of an `ArtFrame`: the same frame the WebGPU renderer
  * draws, without a bloom pass. Bright strokes get one wide faint underlay so
  * the best path still reads as lit, which costs a second stroke only for the
  * few strokes that earn it.
  */
-export function createCanvasRenderer(context: StrokeSurface, initialPalette: HeroPalette): SearchTreeRenderer {
+export function createCanvasRenderer(context: StrokeSurface, initialPalette: ArtPalette): ArtRenderer {
   let palette = initialPalette;
   let width = 1;
   let height = 1;
@@ -242,7 +243,7 @@ const MAX_DRIFT = 0.015;
  *  where the paragraph keeps WCAG AA under the worst pixel a mote puts behind
  *  it: measured 2026-09-13 at 390×844 and 430×932, the mean and 1% tail did
  *  not move and the worst pixel read 4.62 on dark and 4.50 on paper. */
-const CORE_ALPHA: Record<HeroPalette['mode'], number> = { dark: 0.18, light: 0.18 };
+const CORE_ALPHA: Record<ArtPalette['mode'], number> = { dark: 0.18, light: 0.18 };
 
 /** How far past an edge a mote drifts before it re-enters on the far side. */
 const WRAP_MARGIN = 0.02;
@@ -364,7 +365,7 @@ export interface DustSurface {
 export interface DustRenderer {
   readonly kind: 'canvas';
   resize(width: number, height: number, ratio: number): void;
-  setPalette(palette: HeroPalette): void;
+  setPalette(palette: ArtPalette): void;
   render(frame: DustFrame): void;
   dispose(): void;
 }
@@ -374,7 +375,7 @@ export interface DustRenderer {
  * denser core, in the same gold the tree's kept path wears — deepened to the
  * text-grade gold on paper, the same rule toneColor applies to TONE_BRIGHT.
  */
-export function createDustRenderer(context: DustSurface, initialPalette: HeroPalette): DustRenderer {
+export function createDustRenderer(context: DustSurface, initialPalette: ArtPalette): DustRenderer {
   let palette = initialPalette;
   let width = 1;
   let height = 1;
