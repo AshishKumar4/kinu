@@ -431,4 +431,20 @@ export function initUserTables(sql: SqlExec): void {
   // The owner's cross-workspace experience library: the crafts, lessons, facts
   // and agent loops one workspace proved and published for the owner's others.
   initExperienceLibraryTables(sql);
+
+  // Blueprints other users named this account on. A PROJECTION: the row is
+  // written when the owner shares, and every read asks the owner's workspace
+  // object again, so a stale row can only list something that then refuses.
+  // `title` is the cached title the list shows before that answer arrives.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_shares_received (
+      owner_user_id TEXT NOT NULL,
+      owner_email   TEXT NOT NULL,
+      workspace     TEXT NOT NULL,
+      share_id      TEXT NOT NULL,
+      title         TEXT NOT NULL,
+      created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      PRIMARY KEY (owner_user_id, workspace, share_id)
+    )
+  `);
 }
