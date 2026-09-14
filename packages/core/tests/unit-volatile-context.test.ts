@@ -547,7 +547,7 @@ describe('the crafted-tools plane', () => {
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('## Crafted tools available through execute_tools');
     expect(text).toContain('No crafted tools exist in this workspace yet');
-    expect(text).toContain('`workspace.listTools()` would return nothing');
+    expect(text).toContain('`workspace.listTools()` returns an empty list');
   });
 
   test('an unreported set renders nothing — undefined is not an empty list', () => {
