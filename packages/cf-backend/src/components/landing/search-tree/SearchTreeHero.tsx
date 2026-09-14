@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactElement } from 'react';
 
+import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { createCanvasRenderer } from '@kinu.run/core/web/hero-canvas';
 import { SearchTree, type HeroPalette, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
 import { boxOf, createPlayback, readPalette, type Box, type FrameTimes } from './stage';
@@ -64,7 +65,17 @@ async function pickRenderer(canvas: HTMLCanvasElement, palette: HeroPalette, box
   const { createWebGpuRenderer } = await import('./renderer-webgpu');
   const outcome = await createWebGpuRenderer(canvas, palette, box.width, box.height, box.ratio);
 
-  return outcome.kind === 'renderer' ? outcome.renderer : canvasRenderer(canvas, palette);
+  if (outcome.kind === 'renderer') return outcome.renderer;
+
+  // The landing has no client-error route — `POST /api/client-errors` asks for
+  // a session the public page by definition lacks — so a failed start is said
+  // here, through the obs sink, with the reason the outcome carried.
+  // 'unsupported' is a browser fact, not a failure, and stays quiet.
+  if (outcome.kind === 'failed') {
+    diagnostics.event('landing.hero_webgpu_failed', { reason: outcome.reason });
+  }
+
+  return canvasRenderer(canvas, palette);
 }
 
 function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
@@ -93,6 +104,42 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
     renderer = null;
     canvas?.remove();
     canvas = null;
+  };
+
+  /** A fresh canvas under the host; the element itself goes because a canvas
+   *  that gave its context to WebGPU never hands a 2d one out again. */
+  const installCanvas = (): HTMLCanvasElement => {
+    canvas?.remove();
+    const next = document.createElement('canvas');
+    next.className = 'absolute inset-0 size-full';
+    host.appendChild(next);
+    canvas = next;
+
+    return next;
+  };
+
+  /**
+   * A live GPU fault: the WebGPU renderer has already disposed itself, so the
+   * mount's half is the swap — a fresh element, Canvas2D, the same tree. The
+   * simulation keeps its clock and its frontier; only the drawing rebinds.
+   */
+  const onGpuFault = (error: Error): void => {
+    if (renderer?.kind !== 'webgpu') return;
+
+    try {
+      const next = installCanvas();
+      const fallback = canvasRenderer(next, palette);
+      renderer = fallback;
+      next.dataset.renderer = fallback.kind;
+      fit();
+      playback.sync();
+      diagnostics.event('landing.hero_webgpu_faulted', { reason: renderThrownChain({ cause: error }) });
+    } catch (swap) {
+      diagnostics.event('landing.hero_fallback_failed', {
+        fault: renderThrownChain({ cause: error }),
+        reason: renderThrownChain({ cause: swap }),
+      });
+    }
   };
 
   const facts = (frame: { readonly pruned: number; readonly hidden: number; readonly generation: number; readonly time: number }): void => {
@@ -142,10 +189,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
 
   const start = (): void => {
     teardownRenderer();
-    const next = document.createElement('canvas');
-    next.className = 'absolute inset-0 size-full';
-    host.appendChild(next);
-    canvas = next;
+    const next = installCanvas();
     const box = boxOf(host);
     tree = new SearchTree({ seed: SEED, aspect: box.height / box.width });
 
@@ -167,6 +211,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
 
       renderer = picked;
       next.dataset.renderer = picked.kind;
+      picked.onFault?.(onGpuFault);
       fit();
       playback.sync();
     }).catch(startFailed);
