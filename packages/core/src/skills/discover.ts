@@ -12,25 +12,23 @@
  * would cost. `readSkillBody` fetches one, later, for the few that were
  * admitted.
  *
- * Front matter cannot be fetched without its tail: `SkillsVfs.readFile` — like
- * the workspace `VFS` behind it — reads whole files, and there is no ranged read
- * to borrow. `stat` is what keeps that honest: a file whose reported size alone
- * cannot fit the turn's whole skills allocation could never contribute a body,
- * so it is named from its filename and never opened at all.
- *
- * Order is a single total order — by name, code-unit ascending — decided here
- * and nowhere else. `readdir` order is filesystem- and backend-dependent, and
- * for a corpus that overflows the allocation order decides which skills the
- * model gets to see at all.
+ * Front matter is read under the byte ceiling `admissionBytes` derives from
+ * the turn's allocation — with `stat` the ceiling is consulted BEFORE the
+ * read (a file whose size alone cannot fit is named, never opened); without
+ * it the read itself is truncated to the same ceiling, so no file plane can
+ * hand discovery an unbounded body. Discovery also ends: at most as many
+ * files are opened as the prompt budget could list headers for, taken in the
+ * sorted order — and the rest are counted in `omitted`, never read.
  */
-import { estimateTokens } from '../llm';
+import { admissionBytes, estimateTokens } from '../llm';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { parseMarkdownFrontmatter } from '../utils/markdown-frontmatter';
 import type { VfsEntryStat } from '../types/primitives';
 
 import { parseSkillFile, skillNameProblem } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
-import { SKILLS_DIR, type DiscoveredSkill, type ParsedSkill, type SkillBodyRef } from './types';
+
+import { SKILLS_DIR, workspaceSkillIndexLine, type DiscoveredSkill, type ParsedSkill, type SkillBodyRef } from './types';
 
 /** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
@@ -60,6 +58,11 @@ export interface SkillsDiscovery {
   skills: DiscoveredSkill[];
   /** Files too big to open, by name, code-unit ascending. */
   unread: UnreadSkillFile[];
+  /** Candidates discovery did not open because the header count bound was
+   *  already spent — they are neither skills nor unread, just beyond what the
+   *  turn's index could ever list. Counted, not read. Absent means zero for
+   *  hand-built fixtures. */
+  omitted: number;
 }
 
 export interface DiscoverOpts {
@@ -111,6 +114,21 @@ export async function discoverSkills(
 
   for (const s of BUILTIN_SKILL_HEADERS) byName.set(s.name, s);
   const unread: UnreadSkillFile[] = [];
+  let omitted = 0;
+  // The byte ceiling the whole allocation implies — `admissionBytes`, the one
+  // derivation agents-md also reads. With stat it is consulted before the
+  // read; without stat it is enforced on what the read returns, so a plane
+  // that cannot answer size cannot hand discovery an unbounded body either.
+  const ceiling = admissionBytes(opts.admissionTokens);
+
+  // And the count bound: the index prices every header against the same
+  // allocation, so the most skills discovery may open is the number of the
+  // CHEAPEST workspace header line the budget could carry — priced off the
+  // same string the admission renders (render.ts), newline included, exactly
+  // as admitSkillsIndex charges it.
+  let slots = Math.floor(
+    opts.admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1),
+  );
 
   let entries: string[] = [];
 
@@ -122,9 +140,15 @@ export async function discoverSkills(
     entries = [];
   }
 
-  for (const entry of entries) {
-    if (!entry.endsWith('.md')) continue;
-    const stem = entry.replace(/\.md$/, '');
+  // Candidates in the one total order BEFORE any are opened: readdir order is
+  // filesystem-dependent, and the bound below decides which names are ever
+  // read at all.
+  const candidates = entries
+    .filter((entry) => entry.endsWith('.md'))
+    .map((entry) => entry.replace(/\.md$/, ''))
+    .sort(compareSkillNames);
+
+  for (const stem of candidates) {
     const path = skillPath(stem, dir);
     // The filename stem IS the skill's name (Anthropic's spec lets the
     // directory name supply it), so an illegal stem is not a skill at all —
@@ -143,33 +167,39 @@ export async function discoverSkills(
       continue;
     }
 
+    if (slots <= 0) { omitted += 1; continue; }
+
     try {
       const size = vfs.stat ? (await vfs.stat(path))?.size : undefined;
 
-      if (size !== undefined && estimateTokens(size) > opts.admissionTokens) {
+      if (size !== undefined && size > ceiling) {
+        slots -= 1;
         unread.push({ name: stem, path, bytes: size });
         continue;
       }
 
-      const text = await readTextFile(vfs, path);
+      const text = await readTextFile(vfs, path, ceiling);
       // The stem doubles as the fallback `name` so Claude-Code skills authored
       // without a `name:` line still parse. If frontmatter DOES specify a name,
       // we still require it to match the filename to avoid drift.
       const parsed = parseSkillFile(text, 'vfs', stem);
 
-      if (!parsed.ok) { onErr(path, parsed.error); continue; }
+      if (!parsed.ok) { onErr(path, parsed.error); slots -= 1; continue; }
 
       if (parsed.skill.name !== stem) {
-        onErr(path, `filename "${entry}" does not match front-matter name "${parsed.skill.name}"`);
+        onErr(path, `filename "${stem}.md" does not match front-matter name "${parsed.skill.name}"`);
+        slots -= 1;
         continue;
       }
 
+      slots -= 1;
       byName.set(parsed.skill.name, discovered(parsed.skill, {
         kind: 'file',
         path,
         chars: parsed.skill.body.length,
       }));
     } catch (error) {
+      slots -= 1;
       onErr(path, renderThrownChain({ cause: error }));
     }
   }
@@ -177,25 +207,41 @@ export async function discoverSkills(
   return {
     skills: [...byName.values()].sort((a, b) => compareSkillNames(a.name, b.name)),
     unread: unread.sort((a, b) => compareSkillNames(a.name, b.name)),
+    omitted,
   };
 }
 
 /**
- * Read a skill's complete source file.
+ * Read a skill's complete source file, under the byte ceiling the caller's
+ * token allocation implies.
  *
  * The front matter is live policy (`allowed_tools`, activation, invocation and
  * unknown extension fields), not decoration. Any trust decision therefore
  * binds this complete raw value, while a caller that renders instructions may
- * parse the body from the same bytes afterwards.
+ * parse the body from the same bytes afterwards. `admissionTokens` is the
+ * budget this read is for (admission's remaining allocation, the owner
+ * preview's full one); a body past `admissionBytes(admissionTokens)` is read
+ * truncated to it, so the bytes a digest binds are the bytes the budget could
+ * carry — never more.
  */
-export async function readSkillFile(vfs: SkillsVfs, ref: SkillBodyRef): Promise<string> {
-  return ref.kind === 'builtin' ? ref.text : readTextFile(vfs, ref.path);
+export async function readSkillFile(
+  vfs: SkillsVfs,
+  ref: SkillBodyRef,
+  admissionTokens: number,
+): Promise<string> {
+  return ref.kind === 'builtin'
+    ? ref.text
+    : readTextFile(vfs, ref.path, admissionBytes(admissionTokens));
 }
 
 /** Fetch one admitted body. A built-in body is a module constant and a VFS body
- * is parsed from the complete source file it came from. */
-export async function readSkillBody(vfs: SkillsVfs, ref: SkillBodyRef): Promise<string> {
-  return parseMarkdownFrontmatter(await readSkillFile(vfs, ref)).body;
+ * is parsed from the bounded source file read. */
+export async function readSkillBody(
+  vfs: SkillsVfs,
+  ref: SkillBodyRef,
+  admissionTokens: number,
+): Promise<string> {
+  return parseMarkdownFrontmatter(await readSkillFile(vfs, ref, admissionTokens)).body;
 }
 
 /** Filename-safe path for a skill name. */
@@ -211,8 +257,10 @@ function discovered(skill: ParsedSkill, bodyRef: SkillBodyRef): DiscoveredSkill 
   return { ...header, bodyRef };
 }
 
-async function readTextFile(vfs: SkillsVfs, path: string): Promise<string> {
+async function readTextFile(vfs: SkillsVfs, path: string, ceiling: number): Promise<string> {
   const raw = await vfs.readFile(path, { encoding: 'utf8' });
+  const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
 
-  return raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+  // The plane has no ranged read, so the bound lands on what the read hands
+  return text.length <= ceiling ? text : text.slice(0, ceiling);
 }

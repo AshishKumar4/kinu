@@ -17,7 +17,7 @@
 
 import type { VFS } from '../types/primitives';
 import type { ExecutorProvider } from '../execution/types';
-import { CHARS_PER_TOKEN } from '../llm';
+import { admissionBytes } from '../llm';
 import { stepContextLimit, type ModelWindow } from './step-prune';
 import type {
   InstructionTrustResolver, VerifiedInstructionTrust,
@@ -81,7 +81,7 @@ export interface AgentsMdAdmission {
  * no fact supports.
  */
 function agentsMdCharBudget(limits: ModelWindow): number {
-  return stepContextLimit(limits) * CHARS_PER_TOKEN;
+  return admissionBytes(stepContextLimit(limits));
 }
 
 /**
