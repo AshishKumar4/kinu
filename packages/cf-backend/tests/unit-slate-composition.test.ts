@@ -607,7 +607,8 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
 
   const answer = await call([{ prompt: 'summarize', system: 'be brief' }]);
 
-  expect(answer).toEqual({ ok: true, value: { text: 'model answer', model: DEFAULT_WORKERS_AI_MODEL_SPEC, usage: { input: 9, output: 4 } } });
+  expect(answer).toEqual({ ok: true, value: { text: 'model answer', model: DEFAULT_WORKERS_AI_MODEL_SPEC, tier: 'default', usage: { input: 9, output: 4 } } });
+
   expect(seen).toEqual([DEFAULT_WORKERS_AI_MODEL_SPEC]);
 
   const operations = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)))
