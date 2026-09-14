@@ -17,6 +17,7 @@
 import type { ModelMessage } from 'ai';
 import type { ActorReference } from '../identity/actor-handle';
 import { operatorMessageAdmitted } from '../identity/conversation-store';
+import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import type { JsonObject } from '../utils/json';
 
@@ -34,14 +35,18 @@ export interface TranscriptStore {
    * Append a user row. IDEMPOTENT ON `id`: a re-announced programmatic turn's
    * row is the row its first announcement wrote, and a user turn's admission
    * row survives the commit that writes it again with its stamp. `parentId`
-   * chains a landed steer under its turn's opening row; `metadata` is the
-   * provenance stamp core gave the row, absent on a plain user turn.
+   * chains a landed steer under the row before it — the turn's opening row for
+   * the first, the previous steer after that — so a walk from the answer
+   * reaches every steer; `metadata` is the provenance stamp core gave the row,
+   * absent on a plain user turn. `files` are the attachments the message
+   * carried; a store whose rows hold only text keeps none.
    */
   appendUser(row: {
     readonly id: string;
     readonly text: string;
     readonly parentId?: string | null;
     readonly metadata?: JsonObject;
+    readonly files?: ReadonlyArray<PromptFile>;
   }): void;
 
   /**
@@ -86,6 +91,8 @@ export class ActorMessagesTranscript implements TranscriptStore {
     readonly parentId?: string | null;
     readonly metadata?: JsonObject;
   }): void {
+    // The plain store's rows are text: an attachment rides the model message
+    // in memory and the reservation on disk, never this row.
     const stamp = row.metadata === undefined ? null : JSON.stringify(row.metadata);
     void this.sql`INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, parent_id, role, content, metadata)
       VALUES (${this.actor.actorId}, ${row.id}, ${this.sessionId}, ${row.parentId ?? null}, ${'user'}, ${row.text}, ${stamp})`;

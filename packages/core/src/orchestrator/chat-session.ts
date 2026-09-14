@@ -865,7 +865,9 @@ export class ChatSession {
     // rather than an answer-less steer. A PROGRAMMATIC turn writes at commit
     // exactly as before: `announcementOnDisk` is its dedup — an admitted-but-
     // unfinished gate turn must read as not-yet-said so the retry re-queues it.
-    if (item.kind === 'user') this.transcript.appendUser({ id: this.turnId, text: item.text });
+    if (item.kind === 'user') {
+      this.transcript.appendUser({ id: this.turnId, text: item.text, ...(item.files !== undefined && { files: item.files }) });
+    }
 
     const lease = this.actorSession.beginTurn(
       { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,
@@ -1254,14 +1256,22 @@ export class ChatSession {
 
   /** The two facts one drain makes durable, in one transaction: the landed
    *  user rows a surface reads, and the retirement of the reservations they
-   *  spent. Either both exist or neither does. The row's parent is the turn's
-   *  opening message — durable at admission, so it is always on disk here —
-   *  and its stamp is the one `describeLandedSteers` already gave it. */
+   *  spent. Either both exist or neither does. The rows chain: the first under
+   *  the turn's opening message — durable at admission, so it is always on disk
+   *  here — and each later one under the steer before it, so a walk up from
+   *  the answer reaches every steer the model read. The stamp is the one
+   *  `describeLandedSteers` already gave each row. */
   private commitLandedSteers(rows: readonly LandedSteerRow[]): void {
     this.transaction(() => {
+      let parentId = this.actorSession.landedSteers.at(-1)?.id ?? this.turnId;
+
       for (const row of rows) {
-        this.transcript.appendUser({ id: row.id, text: row.text, parentId: this.turnId, metadata: row.metadata });
+        this.transcript.appendUser({
+          id: row.id, text: row.text, parentId, metadata: row.metadata,
+          ...(row.files !== undefined && { files: row.files }),
+        });
         this.pendingSends.retire([row.id]);
+        parentId = row.id;
       }
     });
   }

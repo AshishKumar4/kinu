@@ -28,6 +28,7 @@ import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage } from "agents/chat";
 import { bindChatInput } from './chat-intake';
+import { AssistantMessagesTranscript } from './chat-transcript';
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
@@ -219,7 +220,7 @@ import {
   stepContextLimit,
   mergeProviderOptions, reasoningEffortOptions,
   uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, operatorMessageAdmitted,
+  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -1515,7 +1516,7 @@ export abstract class ActorAgent extends Think<Env> {
       }
 
       try {
-        const hasMessage = (id: string) => this.sql<{ id: string }>`SELECT id FROM assistant_messages WHERE id = ${id}`.length > 0;
+        const hasMessage = (id: string) => this.chatTranscript.has(id);
 
         if (event?.type === 'chat-request') {
           const routed = await this.routeBusyChat(event, hasMessage);
@@ -3660,7 +3661,7 @@ export abstract class ActorAgent extends Think<Env> {
               shouldApplyMessages: () => {
                 if (yielded) return false;
 
-                if (!operatorMessageAdmitted(this.boundSql, this.actorHandle())) return true;
+                if (!this.chatTranscript.operatorSpoke()) return true;
 
                 yielded = true;
                 diagnostics.event('genesis.yielded_to_message', {
@@ -4649,6 +4650,14 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._boundSql) this._boundSql = bindAgentSql(this);
 
     return this._boundSql;
+  }
+
+  /** The root's transcript, through the SDK's own session provider — core's
+   *  TranscriptStore over `assistant_messages`. Lazy for the reason every store
+   *  here is: `actorHandle()` resolves the directory row `ensureSchema` creates. */
+  private _chatTranscript: AssistantMessagesTranscript | null = null;
+  protected get chatTranscript(): AssistantMessagesTranscript {
+    return this._chatTranscript ??= new AssistantMessagesTranscript(this, this.boundSql, this.actorHandle());
   }
 
 
