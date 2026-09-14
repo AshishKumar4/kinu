@@ -405,6 +405,7 @@ export class ActorSession {
     for (const extension of input.extensions) extensions.register(extension);
     extensions.register({ name: 'kinu.steering', prepareStep: ctx => this.userSteer.prepareStep(ctx) });
     extensions.register(this.orchestrator.turnExtension);
+    const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
     let text = '';
     let completed = false;
     let program: ActorTurnProgram | null = null;
@@ -450,11 +451,61 @@ export class ActorSession {
         inputs: active.profileInputs, runId: lease.runId, turnId: lease.turnId,
       }));
 
-      const folded = await this.foldTurnEvents(lease, active, events, emit);
+      for await (const event of events) {
+        this.requireTurn(lease);
 
-      text = folded.text;
-      completed = folded.completed;
-      failure = folded.failure;
+        switch (event.type) {
+          case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
+          case 'tool-call': pending.push(event); break;
+          case 'tool-result': {
+            let index = pending.length - 1;
+
+            while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
+            const call = index < 0 ? undefined : pending.splice(index, 1)[0];
+            this.orchestrator.acc.recordToolCall(event.success
+              ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.result }
+              : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
+                  execution: event.execution, error: event.error ?? event.result });
+            break;
+          }
+
+          case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
+          case 'error': {
+            this.orchestrator.acc.hadError = true;
+
+            // AN `error` EVENT IS A FAILURE, not a note beside a successful turn.
+            // A thrown cause reaches the catch below and becomes `failure`, but
+            // the scaffold loop reports a dead provider by PUSHING this event
+            // instead of throwing (`scaffold/executor.ts`), so a turn whose
+            // model never answered arrived here with `failure` still null: the
+            // result read as completed, `runHeadInference` saw no break, and
+            // `settleTurnClaim(lease, 'completed')` wrote COMPLETED into the
+            // admission ledger for a turn that produced nothing. A claim that
+            // lies about how a turn ended is worse than no claim, because
+            // recovery verifies claims and would resume nothing.
+            //
+            // FIRST failure wins, and an abort is not one: an interrupted turn
+            // has its own outcome and its own message, and the arms below
+            // already distinguish them.
+            if (failure === null
+              && !active.abort.signal.aborted
+              && event.message !== INTERRUPTED_TURN) {
+              failure = new Error(event.message);
+            }
+
+            break;
+          }
+
+          case 'done':
+            this.messages.push(...this.userSteer.replayInto(event.responseMessages));
+
+            if (!text.trim() && event.text.trim()) text = event.text;
+            completed = true;
+            break;
+        }
+
+        emit(event);
+      }
     } catch (cause) {
       if (!completed) this.messages.push(...this.userSteer.recordedMessages());
       failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
@@ -481,81 +532,6 @@ export class ActorSession {
       admittedMessages: active.claim === null ? [] : this.options.claims.admittedFor(active.claim).messages,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };
-  }
-
-  /** Consume the turn's event stream into the durable history and the running
-   *  totals `execute` returns. Each event re-asserts the lease so a turn whose
-   *  claim was superseded stops mid-stream rather than folding another actor's
-   *  events. The loop body is verbatim what `execute` ran; it is a method so the
-   *  turn's setup and settlement read without the per-event branch weight. */
-  private async foldTurnEvents(
-    lease: ActorTurnLease,
-    active: ActiveTurn,
-    events: AsyncIterable<ChatEvent>,
-    emit: (event: ChatEvent) => void,
-  ): Promise<{ text: string; completed: boolean; failure: Error | null }> {
-    const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
-    let text = '';
-    let completed = false;
-    let failure: Error | null = null;
-
-    for await (const event of events) {
-      this.requireTurn(lease);
-
-      switch (event.type) {
-        case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
-        case 'tool-call': pending.push(event); break;
-        case 'tool-result': {
-          let index = pending.length - 1;
-
-          while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
-          const call = index < 0 ? undefined : pending.splice(index, 1)[0];
-          this.orchestrator.acc.recordToolCall(event.success
-            ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.result }
-            : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
-                execution: event.execution, error: event.error ?? event.result });
-          break;
-        }
-
-        case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
-        case 'error': {
-          this.orchestrator.acc.hadError = true;
-
-          // AN `error` EVENT IS A FAILURE, not a note beside a successful turn.
-          // A thrown cause reaches the catch below and becomes `failure`, but
-          // the scaffold loop reports a dead provider by PUSHING this event
-          // instead of throwing (`scaffold/executor.ts`), so a turn whose
-          // model never answered arrived here with `failure` still null: the
-          // result read as completed, `runHeadInference` saw no break, and
-          // `settleTurnClaim(lease, 'completed')` wrote COMPLETED into the
-          // admission ledger for a turn that produced nothing. A claim that
-          // lies about how a turn ended is worse than no claim, because
-          // recovery verifies claims and would resume nothing.
-          //
-          // FIRST failure wins, and an abort is not one: an interrupted turn
-          // has its own outcome and its own message, and the arms below
-          // already distinguish them.
-          if (failure === null
-            && !active.abort.signal.aborted
-            && event.message !== INTERRUPTED_TURN) {
-            failure = new Error(event.message);
-          }
-
-          break;
-        }
-
-        case 'done':
-          this.messages.push(...this.userSteer.replayInto(event.responseMessages));
-
-          if (!text.trim() && event.text.trim()) text = event.text;
-          completed = true;
-          break;
-      }
-
-      emit(event);
-    }
-
-    return { text, completed, failure };
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {
