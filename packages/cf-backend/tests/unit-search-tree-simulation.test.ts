@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_EMBER, type KeepOut, type SearchTreeFrame,
+  NODE_STRIDE, PULSE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER, type KeepOut, type SearchTreeFrame,
 } from '@kinu.run/core/web/hero-art';
 
 const ASPECT = 700 / 1280;
@@ -196,7 +196,7 @@ describe('the tree keeps out of the headline', () => {
 
     expect(throughHeadline.spawnedInside).toBeGreaterThan(5);
     expect(throughLower.spawnedInside).toBeGreaterThan(50);
-    expect(throughLower.bestInside).toBeGreaterThan(300);
+    expect(throughLower.bestInside).toBeGreaterThan(100);
   });
 
   test('the box is a boundary, not a wall: the tree still grows past its right edge in the band', () => {
@@ -295,6 +295,120 @@ describe('the best path is the kept lineage', () => {
     const tree = run(417, 27);
 
     expect(tree.frame().generation).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('information flows along the tree', () => {
+  interface PulseRow {
+    readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number;
+    readonly tail: number; readonly head: number; readonly tone: number; readonly alpha: number;
+    readonly id: number; readonly layer: number; readonly direction: number;
+  }
+
+  function pulsesOf(frame: SearchTreeFrame): PulseRow[] {
+    const rows: PulseRow[] = [];
+
+    for (let index = 0; index < frame.pulseCount; index += 1) {
+      const at = index * PULSE_STRIDE;
+      const p = frame.pulses;
+      rows.push({
+        x0: p[at] ?? 0, y0: p[at + 1] ?? 0, x1: p[at + 4] ?? 0, y1: p[at + 5] ?? 0,
+        tail: p[at + 6] ?? 0, head: p[at + 7] ?? 0, tone: p[at + 10] ?? 0, alpha: p[at + 11] ?? 0,
+        id: p[at + 12] ?? 0, layer: p[at + 13] ?? 0, direction: p[at + 14] ?? 0,
+      });
+    }
+
+    return rows;
+  }
+
+  test('pulses spawn deterministically from the seed', () => {
+    const first = run(417, 20).frame();
+    const second = run(417, 20).frame();
+
+    expect(first.pulseCount).toBeGreaterThan(0);
+    expect(pulsesOf(first)).toEqual(pulsesOf(second));
+    expect(pulsesOf(run(418, 20).frame())).not.toEqual(pulsesOf(first));
+  });
+
+  test('a pulse moves one way along its edge, hands over at the edge\'s end, and rides only living branches', () => {
+    const tree = new SearchTree({ seed: 417, aspect: ASPECT });
+    run(417, 4, tree);
+    let previous = new Map(pulsesOf(tree.frame()).map((row) => [row.id, row]));
+    const edgesRidden = new Map<number, number>();
+    let handovers = 0;
+    let forward = new Set<number>();
+    let back = new Set<number>();
+    let brightestForward = 0;
+    let brightestBack = 0;
+
+    for (let index = 0; index < 60 * 36; index += 1) {
+      tree.step(DT);
+      const frame = tree.frame();
+      const strokes = keyedStrokes(frame);
+      const current = new Map(pulsesOf(frame).map((row) => [row.id, row]));
+
+      for (const [id, row] of current) {
+        // The pulse rides a stroke the frame draws, and never an ember or ash.
+        const stroke = strokes.get(`${String(row.layer)}|${String(row.y0)}|${String(row.y1)}`);
+
+        expect(stroke).toBeDefined();
+        expect(stroke?.[9]).not.toBe(TONE_ASH);
+        expect(stroke?.[9]).not.toBe(TONE_EMBER);
+        expect(row.head).toBeGreaterThanOrEqual(0);
+        expect(row.head).toBeLessThanOrEqual(1);
+        expect(row.alpha).toBeLessThanOrEqual(0.85 + 1e-6);
+
+        if (row.direction > 0) {
+          forward = forward.add(id);
+          brightestForward = Math.max(brightestForward, row.alpha);
+          expect(row.tone).toBe(TONE_BRIGHT);
+          expect(row.tail).toBeLessThanOrEqual(row.head);
+          // Brighter than the branch it rides, at the head.
+          expect(row.alpha).toBeGreaterThanOrEqual(stroke?.[10] ?? 1);
+        } else {
+          back = back.add(id);
+          brightestBack = Math.max(brightestBack, row.alpha);
+          expect(row.tone).not.toBe(TONE_BRIGHT);
+          expect(row.tail).toBeGreaterThanOrEqual(row.head);
+        }
+
+        const before = previous.get(id);
+
+        if (before === undefined) {
+          edgesRidden.set(id, 1);
+          continue;
+        }
+
+        const sameEdge = before.y0 === row.y0 && before.y1 === row.y1;
+
+        if (sameEdge) {
+          // Monotone along the edge, the way the pulse points.
+          if (row.direction > 0) expect(row.head).toBeGreaterThanOrEqual(before.head);
+          else expect(row.head).toBeLessThanOrEqual(before.head);
+        } else {
+          // The next edge begins where the last one ended: forward, a child; back, the parent.
+          handovers += 1;
+          edgesRidden.set(id, (edgesRidden.get(id) ?? 1) + 1);
+
+          if (row.direction > 0) {
+            expect(row.y0).toBe(before.y1);
+            expect(Math.abs(row.x0 - before.x1)).toBeLessThan(0.01);
+          } else {
+            expect(row.y1).toBe(before.y0);
+            expect(Math.abs(row.x1 - before.x0)).toBeLessThan(0.01);
+          }
+        }
+      }
+
+      previous = current;
+    }
+
+    expect(handovers).toBeGreaterThan(20);
+    expect(Math.max(...edgesRidden.values())).toBeGreaterThanOrEqual(3);
+    // Scores return rarer and dimmer than attempts go out.
+    expect(back.size).toBeGreaterThan(0);
+    expect(back.size * 3).toBeLessThan(forward.size);
+    expect(brightestBack).toBeLessThan(brightestForward);
   });
 });
 

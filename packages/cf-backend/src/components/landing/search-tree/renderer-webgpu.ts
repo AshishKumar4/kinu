@@ -4,11 +4,12 @@ import {
 } from 'vgpu';
 
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { NODE_STRIDE, RECESS, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
+import { NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
 import compositeSource from './composite.wgsl';
 import nodesSource from './nodes.wgsl';
+import pulsesSource from './pulses.wgsl';
 import strokesSource from './strokes.wgsl';
 
 /** Instance capacity, sized above what the simulation reaches in an hour;
@@ -16,6 +17,8 @@ import strokesSource from './strokes.wgsl';
 const STROKE_CAPACITY = 2_048;
 
 const NODE_CAPACITY = 1_024;
+
+const PULSE_CAPACITY = 256;
 
 const STROKE_SEGMENTS = 14;
 
@@ -87,6 +90,7 @@ export async function createWebGpuRenderer(
 
     const strokeData = new Float32Array(new ArrayBuffer(4 * STROKE_CAPACITY * STROKE_STRIDE));
     const nodeData = new Float32Array(new ArrayBuffer(4 * NODE_CAPACITY * NODE_STRIDE));
+    const pulseData = new Float32Array(new ArrayBuffer(4 * PULSE_CAPACITY * PULSE_STRIDE));
 
     const strokeGeometry: Geometry = geometry(gpu, {
       buffers: [{ attributes: { curve: 'float32x4', tip: 'float32x4', look: 'float32x4' }, data: strokeData, stepMode: 'instance' }],
@@ -99,6 +103,13 @@ export async function createWebGpuRenderer(
       buffers: [{ attributes: { point: 'float32x4', look: 'float32x4' }, data: nodeData, stepMode: 'instance' }],
       vertexCount: 6,
       label: 'hero-nodes',
+    });
+
+    const pulseGeometry: Geometry = geometry(gpu, {
+      buffers: [{ attributes: { curve: 'float32x4', span: 'float32x4', look: 'float32x4', identity: 'float32x4' }, data: pulseData, stepMode: 'instance' }],
+      vertexCount: (STROKE_SEGMENTS + 1) * 2,
+      topology: 'triangle-strip',
+      label: 'hero-pulses',
     });
 
     const view = () => ({ resolution: size, ratio, time: 0 });
@@ -116,6 +127,14 @@ export async function createWebGpuRenderer(
       geometry: nodeGeometry,
       blend: 'premultiplied',
       label: 'hero-nodes',
+      set: { view: view(), palette: paletteUniform(initialPalette) },
+    });
+
+    const pulses: Draw = draw(gpu, {
+      shader: pulsesSource,
+      geometry: pulseGeometry,
+      blend: 'premultiplied',
+      label: 'hero-pulses',
       set: { view: view(), palette: paletteUniform(initialPalette) },
     });
 
@@ -139,7 +158,7 @@ export async function createWebGpuRenderer(
     // A surface is only a target inside a frame; its signature pre-warms the
     // composite pipeline the same way.
     await Promise.all([
-      strokes.compile(scene), nodes.compile(scene), bright.compile(bloomA),
+      strokes.compile(scene), pulses.compile(scene), nodes.compile(scene), bright.compile(bloomA),
       blurH.compile(bloomB), blurV.compile(bloomA), composite.compile({ colors: [canvasSurface.format] }),
     ]);
 
@@ -161,6 +180,7 @@ export async function createWebGpuRenderer(
         bloomA.resize(bloomSize(size[0], size[1]));
         bloomB.resize(bloomSize(size[0], size[1]));
         strokes.set({ view: view() });
+        pulses.set({ view: view() });
         nodes.set({ view: view() });
         blurH.set({ blur: { texel: bloomA.texelSize } });
         blurV.set({ blur: { texel: bloomB.texelSize } });
@@ -168,6 +188,7 @@ export async function createWebGpuRenderer(
       setPalette(palette) {
         if (disposed) return;
         strokes.set({ palette: paletteUniform(palette) });
+        pulses.set({ palette: paletteUniform(palette) });
         nodes.set({ palette: paletteUniform(palette) });
         composite.set({ composite: { strength: BLOOM_STRENGTH[palette.mode] } });
       },
@@ -175,14 +196,18 @@ export async function createWebGpuRenderer(
         if (disposed) return;
         const strokeCount = Math.min(current.count, STROKE_CAPACITY);
         const nodeCount = Math.min(current.nodeCount, NODE_CAPACITY);
+        const pulseCount = Math.min(current.pulseCount, PULSE_CAPACITY);
 
         if (strokeCount > 0) strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE));
 
         if (nodeCount > 0) nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE));
 
+        if (pulseCount > 0) pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE));
+
         frame(gpu, (pass) => {
           pass.pass({ target: scene, clear: [0, 0, 0, 0] }, (encoder) => {
             encoder.draw(strokes, { instances: strokeCount });
+            encoder.draw(pulses, { instances: pulseCount });
             encoder.draw(nodes, { instances: nodeCount });
           });
           pass.pass({ target: bloomA }, bright);
@@ -201,6 +226,7 @@ export async function createWebGpuRenderer(
         disposed = true;
         stopListening();
         strokeGeometry.destroy();
+        pulseGeometry.destroy();
         nodeGeometry.destroy();
         canvasSurface.dispose();
         gpu.dispose();
