@@ -813,6 +813,22 @@ describe('discoverSkills', () => {
     expect(v.calls.readFile).toEqual([]);
   });
 
+  test('the slates built-in ships the authoring doctrine', () => {
+    const skill = BUILTIN_SKILLS.find((s) => s.name === 'slates');
+
+    expect(skill).toBeDefined();
+    expect(skill!.auto_activate).toBe(true);
+    expect(skill!.keywords).toEqual(expect.arrayContaining(['slate', 'dashboard']));
+
+    for (const fragment of [
+      'class Slate extends SlateObject', 'this.storage', 'this.sql',
+      'kinu:slate', 'slate://', 'env.agent.send', 'env.ai.run',
+      'persists across restarts once Nimbus retains the facet',
+    ]) {
+      expect(skill!.body).toContain(fragment);
+    }
+  });
+
   test('skips malformed files via onParseError instead of throwing', async () => {
     const errors: Array<{ path: string; err: string }> = [];
 
@@ -880,7 +896,7 @@ describe('discoverSkills', () => {
       };
     }));
 
-    expect(orders[0]!.names).toEqual(['apex', 'audit-implementation', 'mid', 'zulu']);
+    expect(orders[0]!.names).toEqual(['apex', 'audit-implementation', 'mid', 'slates', 'zulu']);
 
     for (const o of orders) {
       expect(o.names).toEqual(orders[0]!.names);
@@ -1079,7 +1095,7 @@ describe('skills admission', () => {
       + renderActiveSkillsSection(set, 'unverified');
 
     const discovered = [...discovery.skills.map(s => s.name), ...discovery.unread.map(u => u.name)];
-    expect(discovered.length).toBe(14); // 12 authored + the built-in + the whale
+    expect(discovered.length).toBe(12 + BUILTIN_SKILLS.length + 1); // 12 authored + the built-ins + the whale
 
     for (const name of discovered) {
       expect(indexText.includes(`**${name}**`) || activeText.includes(`### ${name}`)).toBe(true);
