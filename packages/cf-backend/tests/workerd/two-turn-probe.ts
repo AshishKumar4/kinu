@@ -60,7 +60,7 @@
  * stale — CompiledWasm modules and `workerLoaders` are wired for the sibling
  * probes in vitest.config.ts.
  */
-import { Agent, getAgentByName } from 'agents';
+import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
@@ -75,13 +75,16 @@ import {
   setDiagnosticsSink,
   type RecordingLogger,
 } from '@kinu.run/core/obs';
-import type { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type {
   CallRecord,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
   HttpCall,
+  InputReceipt,
+  PreparedConversation,
   QueueProbeMode,
 } from './two-turn-shapes';
 import {
@@ -89,6 +92,7 @@ import {
   DriveOnceResultSchema,
   ExerciseResultSchema,
   HttpCallSchema,
+  PreparedConversationSchema,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
 import { ownerCaller } from '@kinu.run/core';
@@ -99,7 +103,39 @@ import { ownerCaller } from '@kinu.run/core';
 // the class measures its own fixture, not the shipped surface.
 export { UserDO } from '../../src/user/user-do';
 
-export { OrchestratorAgent } from '../../src/orchestrator';
+/** The production orchestrator, sealed with its own surface plus the one
+ *  fixture read, bound under the production name so the same service-binding
+ *  wiring runs the actual production lifecycle. It adds NO production method
+ *  and no state: the constructor only retains the given DurableObjectState so
+ *  `inputReceipts` can observe the actor's durable input ledger — the rows the
+ *  real socket path writes — as legitimate external storage, never reaching a
+ *  protected member or a made-up setter. */
+export class ObservedOrchestrator extends ProductionOrchestrator {
+  private readonly actorState: AgentContext;
+
+  constructor(ctx: AgentContext, env: ProbeEnv) {
+    super(ctx, env);
+    this.actorState = ctx;
+    Reflect.deleteProperty(this, 'inputReceipts');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts']);
+  }
+
+  /** The request-owned input rows the real chat intake persisted, exactly as
+   *  stored — the admission ledger a reset must hand to the next activation. */
+  async inputReceipts(): Promise<InputReceipt[]> {
+    return this.actorState.storage.sql
+      .exec('SELECT actor_id, request_id, message_ids, settled FROM actor_turn_inputs ORDER BY actor_id, request_id')
+      .toArray()
+      .map((row) => ({
+        actorId: String(row.actor_id),
+        requestId: String(row.request_id),
+        messageIds: v.parse(v.array(v.string()), JSON.parse(String(row.message_ids))),
+        settled: row.settled === 1,
+      }));
+  }
+}
+
+export { ObservedOrchestrator as OrchestratorAgent };
 
 /** The request shape `bindingInputs` hands the binding (direct-workers-ai-
  *  fetch.ts:209-227): the openai-compatible body minus `model`, with `stream`
@@ -236,13 +272,14 @@ export class FakeAI extends WorkerEntrypoint {
       `FakeAI: unrecognized non-stream request shape (keys: ${Object.keys(parsed).join(',')}) — `
       + 'a lane the probe does not satisfy; extend the fake or report the lane',
     );
-}
+  }
 }
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>;
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
+  & Pick<ObservedOrchestrator, 'inputReceipts'>;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
@@ -307,6 +344,7 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
     }
   }
 }
+
 
 export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Spike 1: does an AbortSignal cross the service binding into `run`?
@@ -469,13 +507,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Real socket intake and Think queue; only the remote model response is
    * held. Peer ingress queues a durable event-drain submission while both
    * socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold'>): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
-    const target: QueueTarget = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
-      this.env.OrchestratorAgent, workspace,
-    );
+    const target: QueueTarget = await this.queueTarget(workspace);
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
@@ -575,6 +611,195 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       restore();
     }
   }
+
+  /** The shared workspace+owner claim both queue modes open with: a real
+   *  UserDO registration, the capability token, the compat credential, and the
+   *  queue model pinned so the fake can hold one turn's call. */
+  private async claimQueueWorkspace(mode: QueueProbeMode): Promise<{ target: QueueTarget; workspace: string; owner: string }> {
+    const workspace = `queue-${mode}-workspace`;
+    const owner = `queue-${mode}-owner`;
+
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Queue Probe');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-queue');
+    await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+
+    return { target, workspace, owner };
+  }
+
+  /** One chat frame over a real socket, persisted before it returns, and the
+   *  exact wire it sent — the frame the cold test replays after the reset. */
+  private async sendChatFrame(target: QueueTarget, workspace: string, text: string): Promise<string> {
+    const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+      headers: { Upgrade: 'websocket' },
+    }));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
+    socket.accept();
+
+    const wire = JSON.stringify({
+      type: 'cf_agent_use_chat_request', id: text,
+      init: { method: 'POST', body: JSON.stringify({
+        messages: [{ id: `input-${text}`, role: 'user', parts: [{ type: 'text', text }] }],
+        trigger: 'submit-message',
+      }) },
+    });
+
+    try {
+      socket.send(wire);
+      const began = Date.now();
+
+      for (;;) {
+        const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+        const history = v.parse(SocketHistorySchema, await page.json());
+
+        if (history.some((row) => row.role === 'user' && row.id === `input-${text}`)) break;
+
+        if (Date.now() - began > 20000) throw new Error(`socket input ${text} was not persisted`);
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      socket.close(1000, 'frame sent');
+    }
+
+    return wire;
+  }
+
+  /** Bounded join on a turn's completion: `get-messages` returns id+role rows,
+   *  so a settled turn is observable as one more assistant row. Genesis writes
+   *  the first; each later turn's answer is the count a caller waits for. */
+  private async awaitAssistantCount(target: QueueTarget, workspace: string, count: number): Promise<void> {
+    const began = Date.now();
+
+    for (;;) {
+      const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+      const history = v.parse(SocketHistorySchema, await page.json());
+      const assistant = history.filter((row) => row.role === 'assistant').length;
+
+      if (assistant >= count) return;
+
+      if (Date.now() - began > 20000) throw new Error(`queue probe: ${count} assistant rows never persisted (saw ${assistant})`);
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+
+  /** The cold drive's setup: genesis and A run to completion, then B is sent
+   *  while its model call is held and a third chat C is queued behind it — so
+   *  B's input is durable-but-in-flight and C's is durable-and-untouched when
+   *  the test resets the object. Genesis is call 1, A is call 2; the hold arms
+   *  from the third probe-queue call, which is B's. C never reaches a call. */
+  async prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation> {
+    const { target, workspace, owner } = await this.claimQueueWorkspace(mode);
+    await fetch('http://probe-control.invalid/queue/hold', {
+      method: 'POST', body: JSON.stringify({ from: 3 }),
+    });
+
+    const genesis = await target.beginGenesisTurn();
+
+    if (!genesis.started) throw new Error('queue probe genesis did not start');
+
+    // A runs to completion before B is admitted, so B's prefix carries it.
+    await this.sendChatFrame(target, workspace, 'QUEUE-A');
+    await this.awaitAssistantCount(target, workspace, 2);
+
+    const bWire = await this.sendChatFrame(target, workspace, 'QUEUE-B');
+    // B's model call is the held one: arrived resolves only once B's turn has
+    // actually reached the parked provider request, so the in-flight state is
+    // real, not assumed from having sent.
+    await fetch('http://probe-control.invalid/queue/arrived');
+
+    // C is admitted behind the held turn and stays queued — its input row is
+    // durable and untouched, the pending input a recovery continuation must
+    // never consume.
+    const cWire = await this.sendChatFrame(target, workspace, 'QUEUE-C');
+
+    // Both admissions are durable before the reset: the input rows the socket
+    // path wrote are the tokens the replays must resolve to.
+    const receipts = await target.inputReceipts();
+
+    return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, receipts });
+  }
+  /** The reset half: a fresh socket to the SAME object replays B's and C's
+   *  exact frames. Each replay is a re-delivery of a row the object already
+   *  persisted — the durable ledger, not the socket, binds it to the request. */
+  async replayQueuedConversation(prepared: PreparedConversation): Promise<InputReceipt[]> {
+    const target: QueueTarget = await this.queueTarget(prepared.workspace);
+
+    const response = await target.fetch(new Request(
+      `https://probe/agents/orchestrator-agent/${prepared.workspace}`,
+      { headers: { Upgrade: 'websocket' } },
+    ));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error('replay did not receive a real WebSocket');
+    socket.accept();
+
+    try {
+      socket.send(prepared.bFrame);
+      socket.send(prepared.cFrame);
+    } finally {
+      socket.close(1000, 'replayed');
+    }
+
+    return await target.inputReceipts();
+  }
+
+  /** The join: release the held model call and wait on the queued turn's own
+   *  completion evidence, then return the wire log and the durable receipts. */
+  async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; receipts: InputReceipt[] }> {
+    const target: QueueTarget = await this.queueTarget(prepared.workspace);
+
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    try {
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      await awaitFactsCompressed(recording, 2); // B's recovered turn + C's own turn
+      await awaitQuiet(recording);
+
+      return { http: await this.httpCalls(), receipts: await target.inputReceipts() };
+    } finally {
+      restore();
+    }
+  }
+
+  /** The orchestrator stub, typed to the fixture class the durableObjects
+   *  binding installs — `env.OrchestratorAgent` is declared against the
+   *  production class in env.d.ts, so the one place the fixture names its own
+   *  class is the one place the type widens. */
+  private queueTarget(workspace: string): Promise<QueueTarget> {
+    return getAgentByName<ProbeEnv, ObservedOrchestrator>(
+      // SAFETY: the durableObjects binding declares ObservedOrchestrator under
+      // the OrchestratorAgent name (the re-export at the top of this file), and
+      // that class extends ProductionOrchestrator and adds inputReceipts, so
+      // every stub the namespace returns carries the member the production
+      // declaration does not name.
+      this.env.OrchestratorAgent as DurableObjectNamespace<ObservedOrchestrator>,
+      workspace,
+    );
+  }
+
+
+
+  async inputReceiptsFor(workspace: string): Promise<InputReceipt[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.inputReceipts();
+  }
+
 
 
   /** One parameterized drive for the lifecycle variants: its own workspace so
