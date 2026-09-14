@@ -1018,7 +1018,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
 
 /** The wire shape of one dynamic-context block (core volatile-context.ts). */
 function isDynamicBlock(text: string): boolean {
-  return /^<dynamic_context fingerprint="[0-9a-f]{16}">\n/.test(text)
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}" kind="(?:full|delta)">\n/.test(text)
     && text.endsWith('\n</dynamic_context>');
 }
 
