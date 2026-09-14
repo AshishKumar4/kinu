@@ -183,7 +183,7 @@ describe('the public session speaks the frames the web client speaks', () => {
 
     const turn = recorder.settled();
 
-    if (turn === null) throw new Error('the terminal frame did not settle the turn');
+    if (turn === null || turn.landed !== 'turn') throw new Error('the terminal frame did not settle the turn');
     expect(turn.hadError).toBe(false);
     // Text deltas JOINED, not last-wins: a decoder that overwrote would report
     // the tail of an answer as the whole of it.
@@ -208,7 +208,7 @@ describe('the public session speaks the frames the web client speaks', () => {
       requestId: FIXTURE_REQUEST_ID, chunks: RECOVERY_TURN_CHUNKS,
     })).settled();
 
-    if (turn === null) throw new Error('the terminal frame did not settle the turn');
+    if (turn === null || turn.landed !== 'turn') throw new Error('the terminal frame did not settle the turn');
     expect(turn.toolCalls).toHaveLength(2);
     expect(turn.toolCalls[0]?.result).toContain('Error (exit 1)');
     // A structured output is stringified rather than dropped: the second call
@@ -228,7 +228,7 @@ describe('the public session speaks the frames the web client speaks', () => {
       chatErrorFrame({ requestId: FIXTURE_REQUEST_ID, message: 'Internal Server Error' }),
     ]).settled();
 
-    if (turn === null) throw new Error('the error frame did not settle the turn');
+    if (turn === null || turn.landed !== 'turn') throw new Error('the error frame did not settle the turn');
     expect(turn.hadError).toBe(true);
   });
 
@@ -260,7 +260,7 @@ describe('the public session speaks the frames the web client speaks', () => {
 
     const turn = recorder.settled();
 
-    if (turn === null) throw new Error('the replayed terminal frame did not settle the turn');
+    if (turn === null || turn.landed !== 'turn') throw new Error('the replayed terminal frame did not settle the turn');
     expect(turn.text).toBe('Wrote note.txt.');
     expect(turn.toolCalls).toHaveLength(1);
     expect(turn.steps).toBe(2);

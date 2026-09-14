@@ -378,6 +378,79 @@ export function compareRunEventOrder(a: RunEvent, b: RunEvent): number {
     || a.eventIndex - b.eventIndex;
 }
 
+
+/**
+ * The run a mid-turn landing is answered by.
+ *
+ * THE ATTRIBUTION RULE: a prompt whose send reports `landed:'mid-turn'` opens
+ * no run of its own — the run whose `run_start` precedes the landing and whose
+ * `run_end` has not yet arrived when it lands is the run that absorbs it, and
+ * that run's model calls, tool calls and transcript rows are the case's. A
+ * suite that scanned `run_start.userMessage` for the prompt's text would find
+ * no such row for an absorbed prompt and score it zero — the "every prompt
+ * opens its own turn" assumption this helper exists to retire.
+ *
+ * `landedAt` is the instant the send's done frame arrived, as an ISO string —
+ * the same clock domain `timestamp` is written in. Absent a landing (a caller
+ * that only knows a marker reached the transcript), omit it and the rule is
+ * "the run open NOW": the live run, or the most recently closed one when the
+ * last close predates the read.
+ */
+export function absorbingRunId(
+  events: readonly RunEvent[], landedAt?: string,
+): string | null {
+  const starts = new Map<string, string>();
+  const ends = new Map<string, string>();
+
+  for (const event of events) {
+    if (event.type === 'run_start') starts.set(event.runId, event.timestamp);
+
+    if (event.type === 'run_end') ends.set(event.runId, event.timestamp);
+  }
+
+  if (starts.size === 0) return null;
+
+  if (landedAt !== undefined) {
+    // Open at the landing: started no later, and still running then — no
+    // `run_end`, or one stamped after the landing.
+    const open = [...starts.entries()].filter(([runId, started]) => {
+      const ended = ends.get(runId);
+
+      return started <= landedAt && (ended === undefined || ended > landedAt);
+    });
+
+    if (open.length > 0) {
+      open.sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
+
+      return open[open.length - 1]![0];
+    }
+
+    // The landing closed its run between write and read (clock skew, a
+    // one-step turn): the latest run to end at or after the landing is it.
+    const closed = [...ends.entries()].filter(([, ended]) => ended >= landedAt)
+      .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));
+
+    if (closed.length > 0) return closed[0]![0];
+
+    // No run admits the landing. The caller's send frame said it landed
+    // mid-turn, so SOME run answered it — the latest the log holds.
+    return [...starts.entries()].sort((a, b) =>
+      a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]))[starts.size - 1]![0];
+  }
+
+  // Post-hoc, no landing time: the run open NOW, or — when the last close
+  // predates this read — the most recently closed run.
+  const live = [...starts.keys()].filter((runId) => !ends.has(runId))
+    .sort((a, b) => starts.get(a)!.localeCompare(starts.get(b)!) || a.localeCompare(b));
+
+  if (live.length > 0) return live[live.length - 1]!;
+
+  const closed = [...ends.entries()]
+    .sort((a, b) => b[1].localeCompare(a[1]) || b[0].localeCompare(a[0]));
+
+  return closed[0]?.[0] ?? null;
+}
+
 /**
  * Evidence about the STOP CONDITION, which is the fact the two loops disagree
  * about.
