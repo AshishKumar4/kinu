@@ -7,9 +7,9 @@ import { resolve } from 'node:path';
 import * as realReact from 'react';
 
 import {
-  NODE_STRIDE, PULSE_STRIDE, RECESS, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
-  type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer,
-} from '@kinu.run/core/web/hero-art';
+  type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+} from '@kinu.run/core/web/art';
+import { SearchTree } from '@kinu.run/core/web/hero-art';
 import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { SearchTreeHero, type SearchTreeHandle } from '../src/components/landing/search-tree/SearchTreeHero';
@@ -20,7 +20,7 @@ const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree
 
 const CORE_WEB = resolve(import.meta.dir, '../../core/src/web');
 
-const PALETTE: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
+const PALETTE: ArtPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
 interface Recording {
   strokes: number;
@@ -84,7 +84,7 @@ function recordingSurface(): StrokeSurface & Recording {
   return surface;
 }
 
-function frameAfter(seconds: number): SearchTreeFrame {
+function frameAfter(seconds: number): ArtFrame {
   const tree = new SearchTree({ seed: 417, aspect: 0.5 });
 
   for (let index = 0; index < seconds * 60; index += 1) tree.step(1 / 60);
@@ -96,7 +96,7 @@ describe('the frame is what both renderers read', () => {
   test('the canvas renderer draws every visible stroke and node of a frame, nothing else', () => {
     const frame = frameAfter(12);
     const surface = recordingSurface();
-    const renderer: SearchTreeRenderer = createCanvasRenderer(surface, PALETTE);
+    const renderer: ArtRenderer = createCanvasRenderer(surface, PALETTE);
     renderer.resize(1280, 640, 2);
     renderer.render(frame);
     let visibleStrokes = 0;
@@ -151,7 +151,7 @@ describe('the frame is what both renderers read', () => {
   test('the canvas renderer strokes every pulse with a gradient from a transparent tail to its head', () => {
     const frame = frameAfter(12);
     const surface = recordingSurface();
-    const renderer: SearchTreeRenderer = createCanvasRenderer(surface, PALETTE);
+    const renderer: ArtRenderer = createCanvasRenderer(surface, PALETTE);
     renderer.resize(1280, 640, 2);
     renderer.render(frame);
     let visiblePulses = 0;

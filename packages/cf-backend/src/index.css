@@ -260,6 +260,11 @@ html, body, #root {
   --c-scrim: rgba(10, 8, 5, 0.55);
   --c-shadow-drop: rgba(0, 0, 0, 0.3);
 
+  /* The rail over the living background: the sidebar's own tone, most of the
+     way opaque, so the tissue behind it shows as a faint stir and never as
+     shapes under the rows. Follows the theme through `--c-sidebar`. */
+  --c-sidebar-veil: color-mix(in srgb, var(--c-sidebar) 80%, transparent);
+
   /* elevation — role-named; dark = black-based, heavier */
   /* Dark draws no card shadow at all (the rule above): a card is a rung of
      the ladder plus a hairline. On paper that is not enough, so the token
@@ -464,6 +469,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-bg       { background: var(--c-bg); }
 @utility p-recessed { background: var(--c-recessed); }
 @utility p-sidebar  { background: var(--c-sidebar); }
+@utility p-sidebar-veil { background: var(--c-sidebar-veil); }
 @utility p-surface  { background: var(--c-surface); }
 @utility p-elevated { background: var(--c-elevated); }
 @utility p-fill     { background: var(--c-fill); }
