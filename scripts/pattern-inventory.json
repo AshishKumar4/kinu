@@ -277,7 +277,7 @@
       "file": "packages/cli-backend/tests/local-session.test.ts",
       "kind": "regex-literal",
       "owner": "isDynamicBlock",
-      "sourceSha256": "ee2e907f3d06430e8ed7bc75970c459360236d9ebc1b742b50a37b2554b7a2ae",
+      "sourceSha256": "bb27f6801ea8e2f550822598f178bdafdaf5fc7cf45061c83eeffd12e148957f",
       "decision": "lexical"
     },
     {
