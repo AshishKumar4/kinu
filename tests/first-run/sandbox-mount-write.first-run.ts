@@ -31,7 +31,7 @@ import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
-import { firstRunTurnEvents } from './turn-settlement';
+import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import type { RunEvent } from '../../packages/core/src/index';
 
 const SUITE = 'First-run · sandbox-mount-write';
@@ -93,8 +93,14 @@ describe(SUITE, () => {
       modelCalls: 'expected',
       purpose: 'A terse assistant that carries out file instructions verbatim.',
       async run({ session }) {
-        await session.prompt(ASK);
-        const calls = firstRunTurnEvents(await session.runEvents(), ASK).filter(isToolCallEnd);
+        const landing = await session.prompt(ASK);
+
+        // The ask may have spliced into genesis: the calls that answer it are
+        // the absorbing run's, from the step the splice landed in onward.
+        const calls = firstRunTurnEvents(await session.runEvents(), ASK, {
+          splicedAtStep: firstRunSpliceStep(await session.history(), ASK),
+          absorbedBy: landing.landed === 'mid-turn' ? landing.absorbedBy : undefined,
+        }).filter(isToolCallEnd);
 
         // The create itself, read straight off the tool-call ledger: the
         // mount's write path is what the defect refused.
