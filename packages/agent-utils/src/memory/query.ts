@@ -16,7 +16,17 @@ export interface SanitizeOptions {
 	stopWords?: boolean;
 }
 
-export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): string {
+/**
+ * The terms an FTS query is reduced to before it runs: word tokens with FTS
+ * operators and (unless `stopWords` is off) stop words removed. The fallback —
+ * an unstripped token list when stripping would empty the query — keeps a
+ * stop-words-only search matching the same rows `sanitizeFtsQuery` would.
+ *
+ * Exported on its own so a non-SQL lexical source (the facts store's in-memory
+ * matcher) can apply the exact query-normalization the note index sees,
+ * instead of growing a second idea of what a query term is.
+ */
+export function ftsQueryTerms(query: string, options?: SanitizeOptions): string[] {
 	const useStopWords = options?.stopWords ?? true;
 
 	const tokens = query
@@ -33,12 +43,16 @@ export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): stri
 		});
 
 	if (tokens.length === 0) {
-		const fallback = query.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
-
-		if (fallback.length === 0) return '""';
-
-		return fallback.map((t) => `"${t}"`).join(" ");
+		return query.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
 	}
+
+	return tokens;
+}
+
+export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): string {
+	const tokens = ftsQueryTerms(query, options);
+
+	if (tokens.length === 0) return '""';
 
 	return tokens.map((t) => `"${t}"`).join(" ");
 }

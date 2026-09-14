@@ -689,14 +689,17 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
       + (hasFacts
         ? 'remember/recall hold a small named value; update a stale key rather than adding a contradictory second fact; '
         : '')
-      + 'save/search hold a lesson or note too long to be a value; conversations reads what this agent said before.',
+      + (hasFacts
+        ? 'save/search hold a lesson or note too long to be a value — search spans notes and remembered facts by key or value; '
+        : 'save/search hold a lesson or note too long to be a value; ')
+      + 'conversations reads what this agent said before.',
     whenNotToUse: 'Do not store temporary task progress, stale logs, or anything this turn already carries.',
     // Not a usage rule but a fact about what is already in the store: the
     // harness writes failed work here as lessons, so the search is worth
     // making before the retry rather than after it.
     doctrine: 'Your own failures are recorded as lessons in here — search before retrying similar work.',
     result: hasFacts
-      ? 'Returns save or fact-mutation status, recalled fact values, note search hits, or conversation transcript slices.'
+      ? 'Returns save or fact-mutation status, recalled fact values, note and fact search hits, or conversation transcript slices.'
       : 'Returns save status, note search hits, or conversation transcript slices.',
     example: hasFacts
       ? "memory({action:'remember', key:'deploy.target', value:'staging'})"
