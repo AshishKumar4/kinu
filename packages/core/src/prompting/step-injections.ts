@@ -18,11 +18,15 @@ import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension';
 
 /** A recorded injection: the caller's entry (message + any bookkeeping it
- *  carries) pinned to the base-coordinate index where the model first saw it. */
-export type RecordedInjection<E extends { readonly message: ModelMessage }> =
+ *  carries) pinned to the base-coordinate index where the model first saw it.
+ *  `durable` says whether the entry becomes chat history on replay: the user's
+ *  own words do (a landed steer persists verbatim); an event splice does not —
+ *  its durable record is its own row, and replaying it beside the answer would
+ *  read as an unanswered event next turn. */
+export type RecordedInjection<E extends { readonly message: ModelMessage; readonly durable: boolean }> =
   E & { readonly index: number };
 
-export class StepInjections<E extends { readonly message: ModelMessage }> {
+export class StepInjections<E extends { readonly message: ModelMessage; readonly durable: boolean }> {
   private baseLength = 0;
   private entries: Array<RecordedInjection<E>> = [];
 
@@ -59,13 +63,16 @@ export class StepInjections<E extends { readonly message: ModelMessage }> {
    * Replay the recorded injections into the turn's response messages at the
    * exact positions the model saw them (base-coordinate indices sit at
    * `index - baseLength` relative to the response array) — the durable-history
-   * merge for backends that persist the spliced conversation.
+   * merge for backends that persist the spliced conversation. Non-durable
+   * entries are skipped and do not advance `spliced`: they were never history.
    */
   replayInto(responseMessages: ReadonlyArray<ModelMessage>): ModelMessage[] {
     const merged = [...responseMessages];
     let spliced = 0;
 
     for (const entry of this.entries) {
+      if (!entry.durable) continue;
+
       const at = Math.max(0, Math.min(merged.length, entry.index - this.baseLength + spliced));
       merged.splice(at, 0, entry.message);
       spliced += 1;

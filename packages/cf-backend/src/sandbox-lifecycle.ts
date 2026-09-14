@@ -8,14 +8,15 @@
  * and an agent whose checkpoint has been failing for an hour with nothing at
  * all. So the sandbox's Durable Object calls
  * {@link acceptSandboxLifecycleFailure} on the workspace root stub, and the
- * failure becomes a blocker the agent is woken for.
+ * failure becomes a signal the agent is woken for.
  *
- * ── Why a blocker, and why its own turn ──────────────────────────
+ * ── Why its own announcement, and how it lands ───────────────────
  * Every stage below means work the agent is about to do — or has just done —
- * cannot be relied on. Spliced into a live step it would be read beside the
- * work it is telling the agent to stop, so it goes through the signal seam at
- * `severity: 'blocker'`, and the seam's own policy (`orchestrator/signals.ts`)
- * gives a blocker its own turn. Nothing here picks a delivery mechanism.
+ * cannot be relied on, so the incident goes through the signal seam
+ * (`orchestrator/signals.ts`) as an ordinary event signal: it sets no
+ * severity, and whether it splices into a live step or starts its own turn is
+ * the seam's read of turn state and governing metadata. Nothing here picks a
+ * delivery mechanism.
  *
  * ── Exactly-once, stated exactly ─────────────────────────────────
  * The ledger below is the dedupe, keyed by the caller's `incidentId`. A row is

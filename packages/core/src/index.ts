@@ -1023,13 +1023,14 @@ export {
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
-// The user steer-drain — a message typed while a turn runs, spliced into its
-// next step. Not a signal: it persists verbatim, comes back on interrupt, and
-// reruns as a user-origin turn (see user-steer.ts).
+// The user kind of signal — a message typed while a turn runs, spliced into
+// its next step as a durable user row: it persists verbatim, comes back on
+// interrupt, and reruns as a user-origin turn (see user-steer.ts; delivery
+// itself is orchestrator/signals.ts).
 export {
-  UserSteerDrain, steerUserMessage, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  steerUserMessage, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers,
-  type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
+  type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow,
 } from './orchestrator/user-steer';
 
@@ -1762,7 +1763,9 @@ export {
 
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 
-export { SignalDelivery } from './orchestrator/signals';
+export { SignalDelivery, type UserSteerDeps } from './orchestrator/signals';
+
+export { USER_MESSAGE_SIGNAL_KIND } from './types/signals';
 
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,

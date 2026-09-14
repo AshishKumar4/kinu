@@ -577,6 +577,9 @@ interface QueueItem {
    *  the row the first one wrote (see `persist`). */
   idempotencyKey?: string;
   kind: 'user' | 'programmatic';
+  /** A user turn the seam reran from a settled turn's leftover steers — placed
+   *  at the queue front, behind only earlier reruns of the same settle. */
+  rerun?: true;
   /** A programmatic turn that is a move OFFERED, not an event that must be
    *  heard: if an operator message is admitted ahead of it — queued behind it
    *  here, or already durable — the pump yields the slot and settles it
@@ -1584,6 +1587,25 @@ export class LocalAgentSession implements BackendHost {
   private settlingDepth = 0;
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    // The seam's leftover rerun — the operator's own IMMEDIATE next turn, ahead
+    // of everything else queued. Each call carries one contiguous mode run, so
+    // it goes behind the reruns already at the front to keep typed order.
+    if (input.origin === 'user') {
+      const item: QueueItem = {
+        text: input.text,
+        ...(input.files !== undefined && { files: input.files }),
+        kind: 'user',
+        rerun: true,
+        settle: () => {},
+      };
+
+      const front = this.queue.findIndex((queued) => queued.rerun !== true);
+      this.queue.splice(front === -1 ? this.queue.length : front, 0, item);
+      void this.pump();
+
+      return Promise.resolve({ status: 'queued' });
+    }
+
     if (workModeForTurnMetadata(input.metadata) === 'plan') {
       return Promise.reject(new Error(
         'Plan review is available in the hosted workspace UI; this local session has no review surface.',
@@ -1665,14 +1687,13 @@ export class LocalAgentSession implements BackendHost {
    *  The actor owns the preparing/running boundary; settling has no next step.
    *  A signal received during asynchronous preparation can reach step zero.
    *
-   *  The user steer-drain's USER semantics (each steer persists as a verbatim
-   *  user row for the walk-back fork, interrupt() hands pending steers back to
-   *  the composer, leftover steers rerun as a user-origin turn) are properties
-   *  of core's `UserSteerDrain`, which signals do not touch: they ride the core
-   *  seam's own buffer, are never persisted, and settle back into turns of
-   *  their own.
-   *  Two independent splices land at the same step tail as two adjacent
-   *  user-role messages, which every provider adapter groups into one turn. */
+   *  User steers are the user kind of signal on this same seam: their splices
+   *  persist as verbatim user rows for the walk-back fork, interrupt() hands
+   *  what the model never saw back to the composer, and leftovers rerun as
+   *  user-origin turns through {@link enqueueTurn}'s origin branch.
+   *  A user splice and an event splice land at the same step tail as two
+   *  adjacent user-role messages, which every provider adapter groups into one
+   *  turn. */
   turnInFlight(): boolean {
     return this.actorSession.inFlight;
   }
@@ -3046,22 +3067,6 @@ export class LocalAgentSession implements BackendHost {
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
       persistMeasuredPromptTokens(this.compactionState, cache.sessionKey, this.actorSession.orchestrator.acc.lastPromptTokens, historyLength);
-
-      // Steers that never saw a step boundary (the model was already finishing)
-      // run as the IMMEDIATE next turn — ahead of any programmatic injects.
-      const leftover = this.actorSession.takeLeftoverSteers();
-
-      if (leftover.length > 0) {
-        this.queue.unshift({
-          text: leftover.map((steer) => steer.text).join('\n\n'),
-          files: leftover.flatMap((steer) => steer.files ?? []),
-          kind: 'user',
-          // Nobody is awaiting this one: its send() already resolved on the turn
-          // it was steering into. A refusal is reported by the pump's own
-          // diagnostic, and the steer text is still in the durable transcript.
-          settle: () => {},
-        });
-      }
 
       this.closeRun(facts, lease);
       // Core drives everything the settled turn causes from here: the in-process

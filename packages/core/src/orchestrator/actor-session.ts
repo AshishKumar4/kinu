@@ -6,9 +6,9 @@ import type { WorkMode } from '../types/turn';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { KinuError, renderThrownChain, diagnostics, toKinuError } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
-import { describeLandedSteers, UserSteerDrain, type LandedSteerRow, type UserSteer } from './user-steer';
+import { describeLandedSteers, type LandedSteerRow, type UserSteer } from './user-steer';
 import { startActorTurn } from './actor-turn';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
@@ -19,6 +19,7 @@ import { createActorContextPlane, type ActorContextPlane, type ContextEventRecor
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
 import type { AgentSignal, SignalOutcome } from '../types/signals';
+import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
@@ -123,7 +124,6 @@ export class ActorSession {
   readonly dynamic = new DynamicContextLedger();
   private readonly messages: ModelMessage[] = [];
   private readonly landed: LandedSteerRow[] = [];
-  private readonly userSteer: UserSteerDrain;
   private active: ActiveTurn | null = null;
   private mode: WorkMode = 'build';
   /** The actor's context plane: the working history its requests are built
@@ -134,17 +134,14 @@ export class ActorSession {
   constructor(private readonly options: ActorSessionOptions) {
     this.actorId = options.runtime.actor.actorId;
     this.runtime = options.runtime;
-    this.orchestrator = new AgentOrchestrator(options.orchestration);
-    this.context = createActorContextPlane({ claims: options.claims, events: options.events ?? null });
-    this.userSteer = new UserSteerDrain({
-      turnInFlight: () => this.inFlight,
+
+    this.orchestrator = new AgentOrchestrator(options.orchestration, {
       onDrain: (steers, atStep) => {
-        for (const row of describeLandedSteers(steers, atStep)) {
-          this.landed.push(row);
-          options.orchestration.host.broadcast({ type: 'steer_status', status: 'landed', steerId: row.id, text: row.text, atStep: row.atStep });
-        }
+        for (const row of describeLandedSteers(steers, atStep)) this.landed.push(row);
       },
+      turnId: () => this.active?.lease.turnId ?? null,
     });
+    this.context = createActorContextPlane({ claims: options.claims, events: options.events ?? null });
   }
 
   get history(): readonly ModelMessage[] { return this.messages; }
@@ -306,7 +303,6 @@ export class ActorSession {
     };
     this.mode = mode;
     this.landed.length = 0;
-    this.userSteer.beginTurn();
     this.orchestrator.beginTurn(startedAt, metadata);
     this.orchestrator.restrictTurnWorkMode(mode);
 
@@ -326,25 +322,27 @@ export class ActorSession {
   }
 
   steer(steer: UserSteer & { readonly id: string }): boolean {
-    if (this.userSteer.accept(steer) !== 'mid-turn') return false;
-    this.options.orchestration.host.broadcast({ type: 'steer_status', status: 'queued', steerId: steer.id, text: steer.text });
+    if (!this.inFlight) return false;
+    void this.orchestrator.signals.deliver({
+      kind: USER_MESSAGE_SIGNAL_KIND,
+      text: steer.text,
+      user: {
+        id: steer.id,
+        mode: this.mode,
+        ...(steer.files !== undefined && { files: steer.files }),
+      },
+    }).catch(reportSteerFailure);
 
     return true;
   }
 
   interrupt(): readonly UserSteer[] {
-    const dropped = this.userSteer.interrupt();
-
-    for (const steer of dropped) if (steer.id) {
-      this.options.orchestration.host.broadcast({ type: 'steer_status', status: 'returned', steerId: steer.id, text: steer.text });
-    }
+    const dropped = this.orchestrator.signals.interrupt();
 
     if (this.active?.phase !== 'settling') this.active?.abort.abort();
 
     return dropped;
   }
-
-  takeLeftoverSteers(): readonly UserSteer[] { return this.userSteer.takeLeftover(); }
 
   /**
    * Release the lease.
@@ -403,7 +401,6 @@ export class ActorSession {
     const extensions = new ExtensionHost();
 
     for (const extension of input.extensions) extensions.register(extension);
-    extensions.register({ name: 'kinu.steering', prepareStep: ctx => this.userSteer.prepareStep(ctx) });
     extensions.register(this.orchestrator.turnExtension);
     const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
     let text = '';
@@ -497,7 +494,7 @@ export class ActorSession {
           }
 
           case 'done':
-            this.messages.push(...this.userSteer.replayInto(event.responseMessages));
+            this.messages.push(...this.orchestrator.signals.replayInto(event.responseMessages));
 
             if (!text.trim() && event.text.trim()) text = event.text;
             completed = true;
@@ -507,7 +504,7 @@ export class ActorSession {
         emit(event);
       }
     } catch (cause) {
-      if (!completed) this.messages.push(...this.userSteer.recordedMessages());
+      if (!completed) this.messages.push(...this.orchestrator.signals.recordedMessages());
       failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
       if (failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
@@ -539,4 +536,13 @@ export class ActorSession {
 
     return this.active;
   }
+}
+
+/** A detached steer delivery that failed — the caller got `true` already, so
+ *  the failure is the diagnostics record, not a throw nobody is awaiting. */
+function reportSteerFailure<Failure>(cause: Failure): void {
+  diagnostics.failure(
+    'steer.deliver_failed',
+    toKinuError({ doing: 'deliver a user steer', cause, otherwise: 'io' }),
+  );
 }

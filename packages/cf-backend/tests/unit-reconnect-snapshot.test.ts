@@ -88,7 +88,18 @@ async function workspaceWithQueuedWork(
   // the steer's own frames are asserted by `unit-mid-turn-steer`. What matters
   // here is the row the accept writes.
   Reflect.set(seeded.agent, 'broadcast', () => {});
-  seeded.agent.harnessBeginTurn('turn-n018');
+  // Production opens a turn through beforeTurn; driving the same entry point
+  // gives beforeStep the prepared snapshot it refuses without, and writes the
+  // durable turn identity the steer row binds to.
+  await seeded.agent.beforeTurn({
+    system: 'sys',
+    messages: [{ role: 'user', content: 'deploy the api' }, { role: 'assistant', content: 'starting' }],
+    tools: {},
+    model: new MockLanguageModelV3(),
+    continuation: false,
+    body: {},
+  });
+
   seeded.agent.declareTurnInFlight(true);
   expect(await seeded.agent.steerTurn(STEER)).toEqual({ landed: 'mid-turn' });
 

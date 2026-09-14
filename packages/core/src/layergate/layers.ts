@@ -917,13 +917,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'mid-turn-injection/index-is-stable',
         asserts: 'an injection re-applies at the SAME base-coordinate index on every later step',
         observe: (s) => {
-          const injections = new s.StepInjections<{ readonly message: ModelMessage }>();
+          const injections = new s.StepInjections<{ readonly message: ModelMessage; readonly durable: boolean }>();
           const base = shortHistory();
           const step0 = injections.drain({ stepNumber: 0, messages: base }, []);
 
           const step1 = injections.drain(
             { stepNumber: 1, messages: [...base, assistantToolCall('c1'), toolMessage('c1', 'ok')] },
-            [{ message: { role: 'user', content: 'event arrived' } }],
+            [{ message: { role: 'user', content: 'event arrived' }, durable: true }],
           );
 
           const step2 = injections.drain(
@@ -943,12 +943,12 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'mid-turn-injection/replay-into-history',
         asserts: 'the durable merge puts injections back where the model saw them',
         observe: (s) => {
-          const injections = new s.StepInjections<{ readonly message: ModelMessage }>();
+          const injections = new s.StepInjections<{ readonly message: ModelMessage; readonly durable: boolean }>();
           const base = shortHistory();
-          injections.drain({ stepNumber: 0, messages: base }, [{ message: { role: 'user', content: 'steer-1' } }]);
+          injections.drain({ stepNumber: 0, messages: base }, [{ message: { role: 'user', content: 'steer-1' }, durable: true }]);
           injections.drain(
             { stepNumber: 1, messages: [...base, { role: 'user', content: 'steer-1' }, { role: 'assistant', content: 'a' }] },
-            [{ message: { role: 'user', content: 'steer-2' } }],
+            [{ message: { role: 'user', content: 'steer-2' }, durable: true }],
           );
 
           return injections.replayInto([
@@ -988,7 +988,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           signals.beginTurn(false);
           await signals.deliver({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
 
-          const spliced = signals.prepareStep(
+          const spliced = await signals.prepareStep(
             { stepNumber: 0, messages: shortHistory() },
             [{ kind: 'turn_steering', text: 'nudge' }],
           );
@@ -1039,7 +1039,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             await signals.deliver({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
             // The agent takes it in: a step boundary for the splice, and for
             // the queue the turn it started — which names its own card back.
-            signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
+            await signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
             signals.beginTurn(false, carried);
 
             return { cards, queuedTurnNamesItsCard: carried !== undefined && carried === ids[0] };

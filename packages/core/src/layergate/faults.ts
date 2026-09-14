@@ -72,7 +72,7 @@ class UndedupedLedger extends DynamicContextLedger {
 
 /** Injections drift to the tail of whatever step drains them instead of
  *  holding their entry index — the mid-turn cache-busting regression. */
-class DriftingStepInjections<E extends { readonly message: ModelMessage }> extends StepInjections<E> {
+class DriftingStepInjections<E extends { readonly message: ModelMessage; readonly durable: boolean }> extends StepInjections<E> {
   private own: Array<RecordedInjection<E>> = [];
   override get recorded(): ReadonlyArray<RecordedInjection<E>> {
     return this.own;

@@ -59,7 +59,7 @@ import type { RunEndReason } from './turn-lifecycle';
 import { TurnSteering } from './turn-steering';
 import { CraftCycle } from './craft-cycle';
 import { DrainScheduler } from './drain-scheduler';
-import { SignalDelivery, readSignalId } from './signals';
+import { SignalDelivery, readSignalId, type UserSteerDeps } from './signals';
 import { buildDrainBatch } from '../events/hub/drain';
 import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
@@ -185,7 +185,7 @@ export class AgentOrchestrator {
 
       if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
     },
-    prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
+    prepareStep: (ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> => {
       // The turn's file ledger is the other half of the progress trigger's
       // evidence — what a codemode program actually changed, which no
       // tool-call signature can show. Both live on this object, per turn.
@@ -207,6 +207,10 @@ export class AgentOrchestrator {
   private observeRecoveries = false;
   private turnEvolutionEnabled = false;
   private activeWorkMode: WorkMode = 'build';
+  /** The live turn's mission scope — the second half of the governing metadata
+   *  an event signal must match to splice. Captured in beginTurn, like the
+   *  mode. */
+  private activeMissions: readonly string[] = [];
   private readonly reflectionInterval = DEFAULT_SESSION_REFLECTION_INTERVAL;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -232,14 +236,15 @@ export class AgentOrchestrator {
    *  filled. */
   private shadowTrials: Promise<void> | null = null;
 
-  constructor(private readonly deps: AgentOrchestratorDeps) {
+  constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
     this.signals = new SignalDelivery(
       deps.host,
       (e, d) => deps.sinks?.logActivity?.(e, d),
-      () => this.activeWorkMode,
+      () => ({ mode: this.activeWorkMode, missions: this.activeMissions }),
+      steers,
     );
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
@@ -278,13 +283,14 @@ export class AgentOrchestrator {
     // in-episode loop's absence along with the rest of it.
     const workMode = workModeForTurnMetadata(metadata);
     this.activeWorkMode = workMode;
+    this.activeMissions = readMissionLabels(metadata);
     const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
     this.turnEvolutionEnabled = evolutionEnabled;
     this.craft.reset(evolutionEnabled);
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
     this.signals.beginTurn(continuation, readSignalId(metadata));
-    this.deps.budget?.activate(readMissionLabels(metadata));
+    this.deps.budget?.activate(this.activeMissions);
   }
 
   /** Role resolution can further restrict a Build request after accounting opens.
@@ -861,7 +867,6 @@ export class AgentOrchestrator {
       idempotencyKey: turnId,
       compensate: () => this.returnEventsToPending(ids),
       metadata,
-      requiresOwnTurn: batch.mode !== null,
     };
 
     await this.signals.deliver(signal);
