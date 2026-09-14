@@ -105,7 +105,9 @@ test('a failed scaffold model stream preserves its failure and records one termi
     for await (const event of stream) expect(event.type).toBeDefined();
   };
 
-  await expect(drain()).rejects.toThrow('candidate provider failed');
+  // The boundary message is the classified form; the provider's own words stay
+  // on the cause chain and the diagnostics record (KINU-043).
+  await expect(drain()).rejects.toThrow('the provider refused the request');
   expect(operations.map(event => event.phase)).toEqual(['start', 'end']);
   expect(operations[1]?.outcome).toBe('failed');
   expect(operations[1]?.error).toContain('candidate provider failed');

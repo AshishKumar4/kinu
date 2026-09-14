@@ -248,7 +248,12 @@ describe('definitive provider failures propagate', () => {
     }));
 
     expect(done).toBeUndefined();
-    expect(threw?.message ?? '').toContain('definitive upstream failure');
+    // The boundary message carries the closed facts — HTTP status and the
+    // provider's error type — never the provider's own prose (KINU-043).
+    expect(threw?.message ?? '').toContain('the provider refused the request');
+    expect(threw?.message ?? '').toContain('400');
+    expect(threw?.message ?? '').toContain('transport_error');
+    expect(threw?.message ?? '').not.toContain('definitive upstream failure');
   });
 });
 
