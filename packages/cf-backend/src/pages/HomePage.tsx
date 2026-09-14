@@ -15,7 +15,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
 import { getWorkspaceOverview, type WorkspaceEntry } from "@/lib/user-api";
 import { timeAgo } from "@kinu.run/core";
-import { OverviewLabel } from "@/pages/home-overview-label";
+import { OverviewEvidence, OverviewLabel } from "@/pages/home-overview-label";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
@@ -146,11 +146,6 @@ function HomeWorkspaceRow({ workspace, first }: { workspace: WorkspaceEntry; fir
         className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 p-row-text p-text hover:p-accent"
       >
         <span className="w-full truncate">{workspace.displayName || workspace.name}</span>
-        {overview?.latestRun?.task && (
-          <span className={`min-w-0 truncate p-t-status ${stale ? "p-text-4" : "p-text-3"}`}>
-            {overview.latestRun.task}
-          </span>
-        )}
         <span
           role="status"
           aria-live="polite"
@@ -160,15 +155,11 @@ function HomeWorkspaceRow({ workspace, first }: { workspace: WorkspaceEntry; fir
             <span className="hidden p-text-4 sm:inline">Opened {timeAgo(workspace.lastVisited)}</span>
           )}
           {resource.status === "loading" && <span className="p-text-4">…</span>}
-          {overview !== null && (
-            <>
-              {overview.hasUpdates && <span className="p-text-4">updates</span>}
-              <OverviewLabel overview={overview} stale={stale} />
-            </>
-          )}
+          {overview !== null && <OverviewLabel overview={overview} stale={stale} />}
           {stale && <span className="p-text-4">Last checked {timeAgo(overview.observedAt)}</span>}
           {unavailable && <span className="p-warning">unavailable</span>}
           <span className="p-arrow" aria-hidden="true">→</span>
+          {overview !== null && <OverviewEvidence overview={overview} stale={stale} />}
         </span>
       </Link>
       {(stale || unavailable) && (

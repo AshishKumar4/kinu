@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { workspaceOverviewStatus, type WorkspaceOverview } from "@kinu.run/core";
+import { workspaceOverviewEvidence, workspaceOverviewStatus, type WorkspaceOverview, type WorkspaceOverviewFact } from "@kinu.run/core";
 
 /** The card's one attention line: what to say and which token to say it in. */
 interface LabelText {
@@ -44,4 +44,39 @@ export const OverviewLabel = memo(function OverviewLabel(
   const label = labelText(overview);
 
   return <span className={stale ? "p-text-4" : label.tone}>{label.text}</span>;
+});
+
+/** Core's tone words resolved to this surface's tokens. A fact never decides
+ *  its own class: `workspaceOverviewEvidence` says WHAT is true, the card
+ *  says how loud each truth is drawn. */
+const FACT_TONE = {
+  warning: "p-warning",
+  accent: "p-accent",
+  muted: "p-text-3",
+  quiet: "p-text-4",
+  success: "p-success",
+} satisfies Record<WorkspaceOverviewFact["tone"], string>;
+
+/** The evidence row beneath the lead line: every fact the overview carries,
+ *  in core's fixed order, as small chips. The task is the row's second line,
+ *  not a chip — it is the widest thing here and wrapping beside it would
+ *  read as noise. "No runs yet" appears plainly only when there is no fact
+ *  to show at all: no pill shape for a non-fact, and never a word a sealed
+ *  run did not earn. */
+export const OverviewEvidence = memo(function OverviewEvidence(
+  { overview, stale }: { overview: WorkspaceOverview; stale: boolean },
+) {
+  const toneOf = (fact: WorkspaceOverviewFact): string => stale ? "p-text-4" : FACT_TONE[fact.tone];
+
+  return (
+    <span className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1" data-overview-evidence>
+      {workspaceOverviewEvidence(overview).map((fact) => (
+        <span key={fact.key} data-evidence={fact.key} className={`${toneOf(fact)} ${
+          fact.key === "task" ? "w-full min-w-0 truncate p-meta"
+            : fact.key === "empty" ? "p-meta"
+            : "rounded-full p-fill px-2 py-0.5 p-t-status"
+        }`}>{fact.text}</span>
+      ))}
+    </span>
+  );
 });
