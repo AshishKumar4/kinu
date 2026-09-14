@@ -180,6 +180,44 @@ const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 const NOW = Date.now();
 
+/** `?roster=` selects the home page's account: `empty` is the first-run
+ *  account, `evidence` is the two-workspace rig the card evidence pin shoots —
+ *  anything else is the five-workspace stock roster. */
+const ROSTER = new URLSearchParams(location.search).get("roster") ?? "stock";
+
+/** The evidence rig. `ledger-keeper` carries every kind of fact at once —
+ *  decisions, a live turn, unread updates and a sealed run whose task is long
+ *  enough to wrap — and `quiet-desk` is the idle card: no runs, nothing
+ *  waiting, so "No runs yet" is all it may say and "completed" can never
+ *  appear on it. */
+const EVIDENCE_TASK =
+  "Reconcile the supplier ledger against the bank export for August: match every settlement row to its invoice, flag the three unpriced returns, and post the corrected totals back to the weekly ledger sheet before the payout window closes";
+
+const EVIDENCE_ROSTER = {
+  entries: [
+    { name: "ledger-keeper", displayName: "Ledger reconciliation", createdAt: NOW - 9 * 864e5, lastVisited: NOW - 45e3, archivedAt: null },
+    { name: "quiet-desk", displayName: "Quiet desk", createdAt: NOW - 30 * 864e5, lastVisited: 0, archivedAt: null },
+  ],
+  total: 2,
+};
+
+const STOCK_ROSTER = {
+  entries: [
+    { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
+      ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
+      : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
+    { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
+    { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
+    { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
+    // THE FIRST-RUN ROW. A workspace is titled by its first prompt, so the
+    // one every new account starts with has no title and only its slug. This
+    // row is what the sidebar has to render without passing that slug off as
+    // the workspace's name.
+    { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
+  ],
+  total: 5,
+};
+
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the CLIENT's own parse requires, `displayName` included. It was
   // absent, `UserProfileSchema` refused the body, and the sidebar rendered
@@ -194,24 +232,9 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // "couldn't load" state into every screenshot taken of this gallery.
   // `?frame=home&roster=empty` photographs the first-run account: the form
   // carries the whole page when no workspace has ever existed.
-  "/api/user/workspaces": new URLSearchParams(location.search).get("roster") === "empty"
-    ? { entries: [], total: 0 }
-    : {
-    entries: [
-      { name: "checkout-fixes", displayName: new URLSearchParams(location.search).get("frame") === "coderendering"
-        ? "Investigate intermittent checkout failures in the percentage coupon migration and verify the release"
-        : "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
-      { name: "perf-audit", displayName: "Perf audit — landing", createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
-      { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
-      { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
-      // THE FIRST-RUN ROW. A workspace is titled by its first prompt, so the
-      // one every new account starts with has no title and only its slug. This
-      // row is what the sidebar has to render without passing that slug off as
-      // the workspace's name.
-      { name: "handwrought-walnut-4166c321", displayName: "", createdAt: NOW - 60e3, lastVisited: NOW - 30e3, archivedAt: null },
-    ],
-    total: 5,
-    },
+  "/api/user/workspaces": ROSTER === "empty" ? { entries: [], total: 0 }
+    : ROSTER === "evidence" ? EVIDENCE_ROSTER
+    : STOCK_ROSTER,
   // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
@@ -431,14 +454,17 @@ function deviceConnectFixture(path: string, method: string): Response | null {
   return null;
 }
 
-/* Home-card overview fixture. Five rows, five states the card exists to show:
-   a decision waiting, a live turn, a sealed completed run, durable unfinished
-   work, and a quiet idle row. A gate rewrites a row's answer with
+/* Home-card overview fixture. The stock roster gets five rows, five states
+   the card exists to show: a decision waiting, a live turn, a sealed
+   completed run, durable unfinished work, and a quiet idle row. The evidence
+   roster gets its own pair — `ledger-keeper` answers with every fact at once
+   and `quiet-desk` has never run, which is the state the card must not let a
+   completion word leak into. A gate rewrites a row's answer with
    `gallery:overview` ({name, outcome}) — `{kind:'status'}` answers it with
    that HTTP status, so "unavailable" and "last-known after a refresh failure"
    are reachable without leaving the page. `?overflowRoster=1` adds a sixth
    workspace the cards must never ask about: the page shows five. */
-const OVERVIEW_BODIES = v.parse(JsonObjectSchema, {
+const STOCK_OVERVIEWS = {
   "checkout-fixes": {
     observedAt: NOW - 30e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
     latestRun: { status: "error", task: "Investigate intermittent checkout failures in the coupon migration" },
@@ -459,7 +485,20 @@ const OVERVIEW_BODIES = v.parse(JsonObjectSchema, {
     observedAt: NOW - 60e3, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
     latestRun: null,
   },
-});
+};
+
+const EVIDENCE_OVERVIEWS = {
+  "ledger-keeper": {
+    observedAt: NOW - 20e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
+    latestRun: { status: "completed", task: EVIDENCE_TASK },
+  },
+  "quiet-desk": {
+    observedAt: NOW - 2 * 36e5, activity: "idle", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: null,
+  },
+};
+
+const OVERVIEW_BODIES = v.parse(JsonObjectSchema, ROSTER === "evidence" ? EVIDENCE_OVERVIEWS : STOCK_OVERVIEWS);
 
 /** One card's next answer, tagged so the body/status branch reads a domain
  *  word rather than a representation check. */
@@ -5782,6 +5821,7 @@ async function mount() {
     ["activity", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />],
     ["activityclean", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />],
     ["activityempty", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />],
+    ["activitycache", <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>],
   ]);
 
   const fixtureNode = fixtureFrames.get(frame);
@@ -5952,7 +5992,6 @@ async function mount() {
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
-  else if (frame === "activitycache") node = <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];

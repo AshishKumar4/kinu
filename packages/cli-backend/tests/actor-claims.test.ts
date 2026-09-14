@@ -121,8 +121,10 @@ async function runTurn(bound: Bound, opts: {
     { runId: opts.runId ?? `run-${opts.turnId}`, turnId: opts.turnId }, mode, Date.now(),
   );
 
+  // The grant is enforced at execution: a tool the turn offers must be one the
+  // bound profile resolved, exactly as a backend resolves it from the surface.
   bound.actor.bindProfile(lease, resolveTurnProfile({
-    ...profiles, roleId: 'task', workMode: mode, availableTools: [], activeSkills: [],
+    ...profiles, roleId: 'task', workMode: mode, availableTools: Object.keys(opts.tools ?? {}), activeSkills: [],
   }), profiles);
   bound.actor.appendInput(lease, opts.input);
 
@@ -549,4 +551,65 @@ test('the stored revision decodes through the codec the recorder validates with'
   if (!(decodedBytes instanceof Uint8Array)) throw new Error('the binary part must decode to bytes');
   expect([...decodedBytes]).toEqual([0, 1, 254, 255]);
   expect(url && 'data' in url ? String(url.data) : null).toBe('https://example.invalid/a.pdf');
+});
+
+test('a consumer failure preserves text already emitted by the actor', async () => {
+  const { bind } = await workspace();
+  const left = bind('left');
+  const cause = new Error('consumer rejected partial output');
+
+  const { result } = await runTurn(left, {
+    turnId: 'partial-output', loopVersion: 0, model: answerOnce('partial answer'),
+    input: { role: 'user', content: 'answer' },
+    onEvent: event => {
+
+      if (event.type === 'text-delta') throw cause;
+    },
+  });
+
+  expect(result.text).toBe('partial answer');
+  expect(result.failure).toBe(cause);
+  expect(left.stores.claims.read('partial-output')).toMatchObject({ status: 'settled', outcome: 'error' });
+});
+
+test('a consumer failure after the turn finished does not replay a landed steer', async () => {
+  const { bind } = await workspace();
+  const left = bind('left');
+  let step = 0;
+
+  const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
+    const first = step++ === 0;
+
+    if (first) left.actor.steer({ id: 'land-once', text: 'keep this instruction' });
+
+    return { content: first
+      ? [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input: '{"path":"a"}' }]
+      : [{ type: 'text', text: 'complete answer' }],
+    finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
+  } });
+
+  const tools = { file: tool({
+    inputSchema: jsonSchema<{ path: string }>({ type: 'object', properties: { path: { type: 'string' } } }),
+    execute: async () => 'read',
+  }) };
+
+  const thrown = new Error('consumer rejected the completion frame');
+
+  const { result } = await runTurn(left, {
+    turnId: 'emit-after-done', loopVersion: 0, model, tools,
+    input: { role: 'user', content: 'go' },
+    // The done frame is emitted AFTER the turn completed: a consumer that throws
+    // on it must not undo the landed steer or the text already accepted.
+    onEvent: event => {
+
+      if (event.type === 'done') throw thrown;
+    },
+  });
+
+  expect(result.text).toBe('complete answer');
+  expect(result.failure).toBe(thrown);
+  expect(left.actor.landedSteers.filter((row) => row.id === 'land-once')).toHaveLength(1);
+  expect(left.actor.history.filter((m) => m.role === 'user'
+    && JSON.stringify(m).includes('keep this instruction'))).toHaveLength(1);
+  expect(left.stores.claims.read('emit-after-done')).toMatchObject({ status: 'settled', outcome: 'error' });
 });

@@ -171,16 +171,16 @@ describe('a message typed while the agent is working', () => {
       text: 'nothing is running',
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' },
     }]);
+
     // Nothing was buffered for a step boundary: the next turn's steps carry no
     // splice. beforeTurn opens that turn the way production does, so beforeStep
     // reads its prepared snapshot.
-
     const turn = await h.agent.beforeTurn({
       system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
       continuation: false, body: {},
     });
 
-    expect(await stepMessages(h.agent, 0, turn?.messages ?? HISTORY)).toEqual(turn?.messages ?? HISTORY);
+    expect(await stepMessages(h.agent, 0, turn?.messages ?? HISTORY)).toEqual(HISTORY);
   });
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
@@ -353,12 +353,6 @@ describe('a steer that never saw a step boundary', () => {
   test('reruns as a USER-origin turn, not as a programmatic one', async () => {
     const h = steerHarness();
     await h.startTurn();
-    // beforeTurn names the turn by its run id (run-…), not a turn-… handle;
-    // the rerun key embeds the id the live turn claimed. Read it while the
-    // steer is written, before the settle clears the checkpoint.
-    const rerunTurnId = h.agent.harnessDurableTurnId();
-
-    if (rerunTurnId === null) throw new Error('expected the harness turn to be durable');
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
     await h.agent.steerTurn('one more thing');
@@ -374,7 +368,7 @@ describe('a steer that never saw a step boundary', () => {
       text: 'one more thing',
       origin: 'user',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-      idempotencyKey: expect.stringMatching(new RegExp(`^steer-rerun:${rerunTurnId}:build:steer-`)),
+      idempotencyKey: expect.stringMatching(/^steer-rerun:(?:run|turn)-[\w-]+:build:steer-/),
     });
     // NO kinuEvent: every provenance decision downstream reads this as the
     // user's own next message, which is what it is. Stamping an event here

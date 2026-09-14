@@ -134,8 +134,6 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('converts source reasoning to portable text and removes its signature', async () => {
     const { agent } = orchestratorHarness();
-    // beforeStep refuses an unprepared turn: open it through beforeTurn, the
-    // way production does, so the step reads a real snapshot.
     await agent.beforeTurn({
       system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
       continuation: false, body: {},
@@ -158,8 +156,6 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('pairs the same way on every step, so a re-issued request is stable', async () => {
     const { agent } = orchestratorHarness();
-    // beforeStep refuses an unprepared turn: open it through beforeTurn, the
-    // way production does, so the step reads a real snapshot.
     await agent.beforeTurn({
       system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
       continuation: false, body: {},
