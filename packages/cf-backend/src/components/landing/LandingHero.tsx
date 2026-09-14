@@ -4,8 +4,10 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
+import { HeroDust } from './hero-dust/HeroDust';
 import { CHECKOUT_FRAME_CAPTION } from './landing-fixtures';
 import { SearchTreeHero } from './search-tree/SearchTreeHero';
+import { useWideHero } from './search-tree/stage';
 
 const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to multiple devices.', 'work while your laptop is closed.'] as const;
 
@@ -96,6 +98,7 @@ function Typewriter(): ReactElement {
 
 export function LandingHero({ install }: { install: string }): ReactElement {
   const { status, copy } = useCopy();
+  const wide = useWideHero();
 
   return (
     <section id="top" className="relative overflow-hidden">
@@ -104,9 +107,11 @@ export function LandingHero({ install }: { install: string }): ReactElement {
           and the tree's mask keeps them readable: at 1020px the heading is
           two lines for every phrase in the rotation (measured 2026-09-10
           at 1280 and 1440), so the block the sizers reserve is two lines
-          and nothing under it moves. */}
+          and nothing under it moves. Below `lg` the copy stacks and the
+          dust replaces the tree, which would otherwise run through the
+          paragraph. */}
       <div className="relative">
-        <SearchTreeHero />
+        {wide ? <SearchTreeHero /> : <HeroDust />}
         <div className="landing-shell relative pt-16 lg:pt-20">
           <p className="sr-only">Kinu tries several approaches to a task, checks each, and keeps the one that passes, along with any tool it built along the way.</p>
           <div className="relative">
