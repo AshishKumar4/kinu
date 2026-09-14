@@ -48,7 +48,7 @@ import {
 import { buildDrainBatch } from '../events/hub/drain';
 import { renderForLLM } from '../events/hub/visibility';
 import { StepInjections } from '../prompting/step-injections';
-import { SignalDelivery } from '../orchestrator/signals';
+import { Inbox } from '../orchestrator/inbox';
 import { DrainScheduler } from '../orchestrator/drain-scheduler';
 import { formatApproval, gateExec, reviewCommand } from '../safety/approval-gate';
 import { argumentDigest } from '../safety/argument-digest';
@@ -130,7 +130,7 @@ export interface PipelineSubjects {
   readonly buildDrainBatch: typeof buildDrainBatch;
   readonly renderForLLM: typeof renderForLLM;
   readonly StepInjections: typeof StepInjections;
-  readonly SignalDelivery: typeof SignalDelivery;
+  readonly Inbox: typeof Inbox;
   readonly DrainScheduler: typeof DrainScheduler;
 
   // ── safety gate ──
@@ -219,7 +219,7 @@ export const SUBJECT_SOURCE = {
   buildDrainBatch: 'events/hub/drain.ts',
   renderForLLM: 'events/hub/visibility.ts',
   StepInjections: 'prompting/step-injections.ts',
-  SignalDelivery: 'orchestrator/signals.ts',
+  Inbox: 'orchestrator/inbox.ts',
   DrainScheduler: 'orchestrator/drain-scheduler.ts',
 
   reviewCommand: 'safety/approval-gate.ts',
@@ -302,7 +302,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     buildDrainBatch,
     renderForLLM,
     StepInjections,
-    SignalDelivery,
+    Inbox,
     DrainScheduler,
 
     reviewCommand,

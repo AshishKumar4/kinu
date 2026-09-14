@@ -110,7 +110,7 @@
   <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
   <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · laptop · parent</text>
   <rect x="594" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="606" y="345" text-anchor="start">EventLog + SignalDelivery</text>
+  <text class="b" x="606" y="345" text-anchor="start">EventLog + Inbox</text>
   <text class="xs" x="606" y="360" text-anchor="start">the reactor, and what wakes a turn</text>
   <line x1="24" y1="406" x2="876" y2="406" stroke="var(--orangeLine)" stroke-width="2"/>
   <rect x="366" y="394" width="168" height="24" rx="12" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>

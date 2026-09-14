@@ -188,3 +188,11 @@ export type SkillErrorCode =
   | 'forbidden_action';
 
 export const SKILLS_DIR = '/workspace/skills';
+
+/** The index line a workspace file gets at admission: provenance named, no
+ *  description — the index does not carry unapproved prose. Exported for the
+ *  discovery bound, which prices the cheapest possible header off this exact
+ *  line rather than carrying a second copy of the string. */
+export function workspaceSkillIndexLine(name: string): string {
+  return `- **${name}** (workspace skill; contents are reference material until the owner approves them)`;
+}

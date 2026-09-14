@@ -17,13 +17,19 @@
  * at all, which `normalizeUsage` correctly refuses to guess at. Either way the
  * cache itself works; only the reporting is lost.
  *
- * Repair rule: within one response, `cached_tokens` cannot legitimately
+ * Usage repair rule: within one response, `cached_tokens` cannot legitimately
  * decrease. Track the largest value seen; rewrite any later usage chunk that
  * reports less, or that dropped the field, to that maximum. Untouched lines
  * pass through byte-exactly and nothing is ever fabricated — until a chunk has
  * reported a real cache read there is no maximum to restore, so a stream that
  * only ever reports 0, or never mentions caching at all, is left exactly as it
  * came.
+ *
+ * Structure repair rule: a non-error frame carrying `usage` but omitting
+ * `choices` gains exactly `choices: []` — the AI SDK's chunk schema requires
+ * the field, so the dialect that drops it (a usage-only tail frame) cannot
+ * reach the parser at all. Every other frame, error frames included, is
+ * forwarded byte-identically.
  *
  * The rule and the byte pass are separate exports because the two paths that
  * need the rule differ in exactly one way: this endpoint's SSE bytes reach the
@@ -125,10 +131,21 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
     // `usage` is what distinguishes a usage chunk from a delta.
     if (!v.is(JsonObjectSchema, chunk.usage)) return line;
     const repaired = repairUsage(chunk.usage);
+    // A usage-only frame that omits `choices` cannot cross the SDK's chunk
+    // schema at all (direct-workers-ai-fetch.ts:517 names the same contract),
+    // so the verbatim proxy path adds exactly an empty array — nothing else.
+    // An error frame is not a chunk and is never given one.
+    const needsChoices = !('choices' in chunk) && !('error' in chunk);
 
-    if (!repaired) return line;
+    if (!repaired && !needsChoices) return line;
 
-    return `data: ${JSON.stringify({ ...chunk, usage: repaired })}${crlf ? '\r' : ''}`;
+    const out: JsonObject = { ...chunk };
+
+    if (repaired) out.usage = repaired;
+
+    if (needsChoices) out.choices = [];
+
+    return `data: ${JSON.stringify(out)}${crlf ? '\r' : ''}`;
   };
 
   return new TransformStream({

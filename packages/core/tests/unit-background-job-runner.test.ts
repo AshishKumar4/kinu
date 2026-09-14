@@ -8,7 +8,7 @@ import {
   BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS,
   type JobHarvester, type JobResumer,
 } from '../src/jobs/runner';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
@@ -110,7 +110,7 @@ function setup(opts: {
   let drainSchedules = 0;
 
   const runnerDeps = {
-    store, fiber, signals: new SignalDelivery(host), eventLog,
+    store, fiber, inbox: new Inbox(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
     logActivity: (e: string, d?: string) => logs.push({ e, d }),
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),

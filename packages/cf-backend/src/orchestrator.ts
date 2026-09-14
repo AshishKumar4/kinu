@@ -36,6 +36,7 @@ import {
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
+import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
   createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
@@ -89,6 +90,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
+  type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -3072,7 +3074,7 @@ export class OrchestratorAgent extends ActorAgent {
         store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
         // Read through `this.orch` at DELIVERY time, never captured: this
         // getter is reachable from the runtime's own construction path.
-        signals: { deliver: (signal) => this.orch.signals.deliver(signal) },
+        inbox: { send: (signal) => this.orch.inbox.send(signal) },
         // Where an 'always' answer lands: the same actor_config the approval
         // MODE lives in, read live by the gate on the very next command.
         remember: (grants) => { this.config.grantShellApproval(grants); },
@@ -3388,7 +3390,7 @@ export class OrchestratorAgent extends ActorAgent {
     dispatchRecoveredNotice(
       {
         redrive: (lane, checkpoint, body) => { this.redriveRecoveredLane(lane, checkpoint, body); },
-        deliverSignal: (recovered) => this.orch.signals.deliver(recovered),
+        deliverSignal: (recovered) => this.orch.inbox.send(recovered),
       },
       notice,
     );
@@ -3464,14 +3466,14 @@ export class OrchestratorAgent extends ActorAgent {
         // the QUEUED TURN ends — freight this alarm frame must not carry. The
         // wait is owned, so a failure still classifies and the harness join
         // still sees it.
-        signals: {
+        inbox: {
           // DURABLE before 'queued' is claimed: the fiber row the redrive
           // writes synchronously is the acceptance boundary, and an eviction
           // between the journal's terminal writes and the turn landing replays
           // the DELIVERY through the fork-notice lane — where the signal's
           // idempotency key makes an already-landed replay collide instead of
           // stacking cards.
-          deliver: (signal) => {
+          send: (signal) => {
             this.dispatchForkNotice(signal);
 
             return Promise.resolve('queued');
@@ -3999,7 +4001,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, signals: this.orch.signals },
+      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, inbox: this.orch.inbox },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
@@ -4996,7 +4998,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     if (!trimmed) throw new Error('run_task requires non-empty text');
 
-    const outcome = await this.orch.signals.deliver({
+    const outcome = await this.orch.inbox.send({
       kind: 'mcp', text: trimmed,
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
@@ -5092,7 +5094,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   private _slates: SlateHost | undefined;
 
-  private get slates(): SlateHost {
+  protected get slates(): SlateHost {
     this._slates ??= new SlateHost({
       ctx: this.ctx, env: this.env, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
@@ -5117,6 +5119,30 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async listSlates() {
     return this.slates.list(ROOT_SLATE_CALLER);
+  }
+
+  // Blueprints cross workspaces, so these four are DO-only: the app host
+  // verifies the viewer, the address and the forker's ownership before it
+  // calls, and a browser holds no stub that reaches them.
+
+  /** One published blueprint for a viewer: the row re-read now, refused when revoked. */
+  async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
+    return this.slates.readBlueprint(share);
+  }
+
+  /** The bytes a forker's workspace admits. */
+  async blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return this.slates.blueprintBundle(share);
+  }
+
+  /** Record the users the owner named on a blueprint. */
+  async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
+    return this.slates.shareBlueprintWith(share, users);
+  }
+
+  /** Admit a blueprint into THIS workspace as a new slate with every binding unmapped. */
+  async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
+    return this.slates.admitBlueprint(bundle);
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
@@ -5220,7 +5246,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!signal) return { started: false };
     this.detachOwned(async () => {
       try {
-        await this.keepAliveWhile(() => this.orch.signals.deliver(signal));
+        await this.keepAliveWhile(() => this.orch.inbox.send(signal));
       } catch (cause) {
         diagnostics.failure('genesis.turn_failed', toKinuError({
           doing: "taking the workspace's first turn", cause, otherwise: 'unavailable',
@@ -6472,7 +6498,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     return acceptSandboxLifecycleFailure({
       sql: this.boundSql,
-      signals: this.orch.signals,
+      inbox: this.orch.inbox,
       // The workspace is this object's own name, and it is the only dimension
       // the lifecycle module cannot know. Everything else on the row is decided
       // where the incident is understood.

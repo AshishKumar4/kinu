@@ -110,6 +110,16 @@ export {
 } from './argument-digest';
 
 export {
+  SECRET_PATTERNS,
+  scanText,
+  countDetections,
+  secretSightings,
+  type SecretPattern,
+  type SecretFinding,
+  type SecretSighting,
+} from './secret-patterns';
+
+export {
   InstructionApprovalStore,
   initInstructionApprovalsTable,
   instructionDigest,

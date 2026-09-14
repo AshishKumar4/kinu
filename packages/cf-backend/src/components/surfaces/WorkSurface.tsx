@@ -26,6 +26,8 @@ import { FilesSurface } from "./FilesSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
+import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
+import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import { SLATE_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
@@ -121,6 +123,11 @@ export interface WorkSurfaceProps {
   rpc: Rpc;
   /** Signed-out sample content in place of a network preview. */
   slateBody?: (slate: SlateSummary) => ReactNode;
+  /** The workspace name the share control publishes from. Absent in fixture frames without an owner. */
+  workspace?: string;
+  /** A slate forked from a blueprint whose bindings are still unmapped: its tab opens on the panel, not the preview. */
+  unmappedSlate?: string | null;
+  onUnmappedOpened?: () => void;
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -233,6 +240,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
+        <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button
             type="button"
@@ -324,9 +332,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
-          {openSlate !== null && (openSlateSummary
-            ? (props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />)
-            : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
+          {openSlate !== null && (openSlate === props.unmappedSlate
+            ? <UnmappedBindingsPanel slate={openSlate} title={openSlateSummary?.title ?? openSlate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />
+            : openSlateSummary
+              ? (props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />)
+              : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
         </ErrorBoundary>
       </div>
       <div className={surface === "Diffs" ? "flex-1 min-h-0" : "hidden"}>

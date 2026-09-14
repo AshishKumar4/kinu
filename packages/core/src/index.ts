@@ -300,7 +300,18 @@ export type * from './types/evaluation';
 // touches `node:util` at module scope and cannot load in a browser. Client
 // code value-imports this barrel, so anything exported here executes in the
 // client graph — keep worker-only modules off it.
-export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
+export {
+  parseSlateProject, describeBindings, credentialedBindings,
+  type SlateProject, type SlateBinding, type SlateBindingKind, type SlateBindingDeclaration,
+} from './slates/project';
+
+export {
+  SHARE_KINDS, formatBlueprintId, parseBlueprintId, blueprintPagePath,
+  BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
+  SharedLibrarySchema, SlateShareRecordSchema,
+  type ShareKind, type BlueprintAddress, type BlueprintInspection, type BlueprintView, type BlueprintFork, type BlueprintBundle,
+  type PublishedBlueprint, type SharedLibrary, type SharedRow, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
+} from './slates/sharing';
 
 export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
 
@@ -309,7 +320,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
+  isSlateMethodName, SLATE_METHOD_NAME_SOURCE, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 
@@ -645,10 +656,11 @@ export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } f
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 
 export {
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
+  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
+  buildMcpToolSet,
   SerializableToolDescriptorSchema, McpToolSurfaceSchema,
   type SerializableToolDescriptor, type RemoteMcpTool,
-  type McpSurfaceBudget, type McpDescriptorAdmission,
+  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
 } from './tools/mcp-surface';
 
 export {
@@ -1033,15 +1045,18 @@ export {
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
-// The user steer-drain — a message typed while a turn runs, spliced into its
-// next step. Not a signal: it persists verbatim, comes back on interrupt, and
-// reruns as a user-origin turn (see user-steer.ts).
+// The inbox — the one way anything reaches an agent, and the user kind's
+// vocabulary: a message spliced into the running turn's next step as a
+// durable user row that persists verbatim, comes back on interrupt, and reruns
+// as a user-origin turn.
 export {
-  UserSteerDrain, steerUserMessage, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  Inbox, readSignalId, PromptFileSchema,
+  STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers,
-  type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
+  type UserSteerDeps, type AcceptedSteer,
+  type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow,
-} from './orchestrator/user-steer';
+} from './orchestrator/inbox';
 
 // Where a steer sits in the transcript — the read side of the same drain, and
 // pure, so both backends place it identically.
@@ -1335,8 +1350,8 @@ export {
 // agent_facts — typed, idempotent, keyed world-model store. Built on DO SQL.
 // Top-K recent facts are auto-rendered into the system prompt every turn.
 export {
-  initFactsTable, createFactsStore, renderFactsBlock,
-  type Fact, type FactsStore, type FactUpsertResult,
+  initFactsTable, createFactsStore, renderFactsBlock, searchFacts,
+  type Fact, type FactsStore, type FactSearchHit, type FactUpsertResult,
 } from './memory/facts';
 
 export {
@@ -1653,6 +1668,13 @@ export {
   type PendingDeviceConsent,
   type PendingConsentRow,
   type DeviceConsentNotice,
+  SECRET_PATTERNS,
+  scanText,
+  countDetections,
+  secretSightings,
+  type SecretPattern,
+  type SecretFinding,
+  type SecretSighting,
 } from './safety/index';
 
 export {
@@ -1668,6 +1690,8 @@ export { nanoid } from './utils/nanoid';
 export { abortCause } from './utils/abort';
 
 export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
+
+export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 
 // One POSIX quoting rule for every command this system composes, on either
 // backend — the shells the executors talk to are the same shells.
@@ -1772,7 +1796,7 @@ export {
 
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 
-export { SignalDelivery } from './orchestrator/signals';
+export { USER_MESSAGE_SIGNAL_KIND } from './types/signals';
 
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
@@ -2158,7 +2182,7 @@ export type {
 } from './read-models/config-plane';
 
 // The advisor — one severity-tagged note per turn, the rules that keep it quiet,
-// and the turn-end lane both backends call. Delivery itself is SignalDelivery's.
+// and the turn-end lane both backends call. Delivery itself is the Inbox's.
 export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
@@ -2289,8 +2313,8 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, json, kinuUserAgent,
-  readBounded, readBoundedStream, reoriginateRequest, safeJson,
+  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, firstResponse, json,
+  kinuUserAgent, readBounded, readBoundedStream, reoriginateRequest, safeJson,
 } from './http/http';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';

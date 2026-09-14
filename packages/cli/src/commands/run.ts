@@ -209,7 +209,7 @@ async function runOneShot(
       { cwd: process.cwd() },
     );
 
-    if (result.hadError) failed = true;
+    if (result.landed === 'turn' && result.hadError) failed = true;
     // send() resolves when the task turn resolves, but the task turn is not
     // always the last one: a tool that auto-detached ends the turn early and
     // its result arrives as a wake turn, and the one-shot completion gate
@@ -308,9 +308,10 @@ async function runRpc(
 
         output({ value: { type: 'turn_start', id: cmd.value.id } });
         const result = await client.send(message, { cwd: process.cwd() });
-        output({ value: { type: 'message_end', role: 'assistant', text: result.text } });
+        const turn = result.landed === 'turn' ? result : { text: '', steps: 0 };
+        output({ value: { type: 'message_end', role: 'assistant', text: turn.text } });
         output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
-        output({ value: { type: 'turn_end', steps: result.steps } });
+        output({ value: { type: 'turn_end', steps: turn.steps } });
       }
     } finally {
       unsubscribe();

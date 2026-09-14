@@ -468,6 +468,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // the workspace object's database beside the slate's own rows, so every
     // root that can host a slate must declare it.
     slate_state: EVERYWHERE,
+    // Ownership grants on a published slate — the recipient roster a share
+    // names and revokes. Shared schema like the publication tables above: every
+    // root carries the row so a subordinate reading a share sees the same
+    // owner-only surface the workspace does.
+    slate_shares: EVERYWHERE,
+    slate_share_users: EVERYWHERE,
     // Which workspace instruction bytes the owner approved for system placement
     // (KINU-N028). EVERYWHERE for the same reason prompt_section_versions is:
     // the prompt builder classifies AGENTS.md and skills on every turn on every
@@ -667,6 +673,15 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // Created before any read on BOTH cf roots, because the SDK does not
     // guarantee `onStart` precedes an RPC.
     pending_steers: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
+    },
+    // The file parts of a pending steer (a mid-turn send awaiting its step
+    // drain), one row per part in message order — in their own table because
+    // a shipped table's shape never moves. Same owner and lifecycle as the
+    // steer row above: created in the ActorAgent constructor, retired with it.
+    pending_steer_files: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
       cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },

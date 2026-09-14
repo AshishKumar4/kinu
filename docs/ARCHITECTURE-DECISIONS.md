@@ -52,8 +52,8 @@ C3. External events reach a running turn at its next step, as one spliced user
 message at the step tail, re-applied at the same index on every later step
 and gone at turn end; a queued event becomes its own durable programmatic
 turn. Which path an event takes is decided by delivery (live turn versus idle
-actor, and blocker severity), not by event kind. Reviewed 2026-09-13 against
-`orchestrator/signals.ts` and `prompting/step-injections.ts`; pinned by
+actor), not by event kind. Reviewed 2026-09-13 against
+`orchestrator/inbox.ts` and `prompting/step-injections.ts`; pinned by
 `unit-step-injections.test.ts` and `unit-signals.test.ts`.
 
 C4. Events carry 26-character ULIDs that the agent does not see. The only id

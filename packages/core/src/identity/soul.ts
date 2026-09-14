@@ -68,9 +68,9 @@ export const WORKSPACE_CREATED_EVENT = 'workspace_created';
  * said. What the turn adds is the one fact the prompt cannot carry: that the
  * workspace has just opened and the next move is the agent's.
  *
- * `requiresOwnTurn` because a genesis turn is a turn, not an aside spliced into
- * whatever raced it (a peer's task, an inbound email). `yieldsToUserMessage`
- * because it is also an OFFER: an operator message that lands before the offer
+ * Sent when nothing is running, so it starts the first turn; if something
+ * is running by then it rides that turn's next step as a fact, like any other
+ * message. `yieldsToUserMessage` because it is also an OFFER: an operator message that lands before the offer
  * takes its slot answers "somebody is here" — the message is the turn now and
  * this offer is consumed, never replayed.
  * Null for a placeholder mission — there is nothing to act on, and a first turn
@@ -81,7 +81,6 @@ export function workspaceGenesisSignal(mission: string | null | undefined): Agen
 
   return {
     kind: WORKSPACE_CREATED_EVENT,
-    requiresOwnTurn: true,
     yieldsToUserMessage: true,
     text: [
       'This workspace has just been created. This is its first turn and nobody has typed anything yet.',

@@ -7,12 +7,12 @@
 // Hoisted out of the cf-backend OrchestratorAgent (re-arch P4) so the CLI gets
 // background jobs for free. The platform supplies a durable `fiber` (CF:
 // Agent.runFiber; CLI: createSqlFiber); the wake is a plain
-// SignalDelivery.deliver, so this never picks a delivery mechanism of its own.
+// Inbox.send, so this never picks a delivery mechanism of its own.
 // The @callable control-plane RPCs (jobResult/list/
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.
 
 import type { Schedule } from '../types/primitives';
-import type { AgentSignal, SignalDeliverer, SignalUndeliveredReason } from '../types/signals';
+import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import type { DeviceRequestOwnership } from './device-ownership';
@@ -148,7 +148,7 @@ export interface BackgroundJobRunnerDeps {
   /** Durable fiber — AgentRuntime.schedule.fiber. */
   fiber: Schedule['fiber'];
   /** The one signal-delivery seam — the wake at the end of a settled job. */
-  signals: SignalDeliverer;
+  inbox: AgentInbox;
   /**
    * The DURABLE half of the wake: a breadcrumb the standard event drain picks up
    * when a settle announcement could not be delivered, and the scheduler that
@@ -775,7 +775,7 @@ export class BackgroundJobRunner {
     // activation to compensate into, and offering a callback that would silently
     // drop the wake is worse than not offering one.
     const retry = this.publishWakeRetryIfDurable(job, text);
-    await this.deps.signals.deliver(retry ? { ...base, compensate: retry } : base);
+    await this.deps.inbox.send(retry ? { ...base, compensate: retry } : base);
   }
 
   /** The compensation callback, when this runner has the plane to honour it. */

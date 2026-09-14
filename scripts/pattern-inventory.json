@@ -1093,28 +1093,28 @@
       "decision": "schema"
     },
     {
-      "file": "scripts/secret-scan.ts",
+      "file": "packages/core/src/safety/secret-patterns.ts",
       "kind": "regex-literal",
       "owner": "benign",
       "sourceSha256": "25fa2c23200f4ecc3e39864cfaada76677f7ca980f028f9f87bc4e9c08abed04",
       "decision": "safety"
     },
     {
-      "file": "scripts/secret-scan.ts",
+      "file": "packages/core/src/safety/secret-patterns.ts",
       "kind": "regex-literal",
       "owner": "benign",
       "sourceSha256": "394df264fa214db3331303e2960309a1616d285d4104874a71fc9d59533b89d5",
       "decision": "safety"
     },
     {
-      "file": "scripts/secret-scan.ts",
+      "file": "packages/core/src/safety/secret-patterns.ts",
       "kind": "hand-parser",
       "owner": "scanText",
-      "sourceSha256": "ff555d1e47f35c45683e828c64b1f6033f2212263232ef7cafb41d875e714507",
+      "sourceSha256": "e08801bf3a414945fbc0c16a9d62ea068bd3503501daa5c5e6e6eef305a46d4c",
       "decision": "safety"
     },
     {
-      "file": "scripts/secret-scan.ts",
+      "file": "packages/core/src/safety/secret-patterns.ts",
       "kind": "hand-parser",
       "owner": "scanText",
       "sourceSha256": "d0fb3a06bb482d520a53e77f0bc702113b46cad2eea1bffd5e5944f86fe1210a",
@@ -1203,6 +1203,34 @@
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "relative",
+      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "egress",
+      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "egress",
+      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "relative",
+      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
+      "decision": "protected"
     }
   ]
 }

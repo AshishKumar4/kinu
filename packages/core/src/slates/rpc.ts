@@ -22,12 +22,21 @@ export function isSlateMethodName(name: string): boolean {
   return METHOD_RE.test(name) && name !== 'constructor' && !name.startsWith('_');
 }
 
-/** A forwarded Slate call's JSON value or refusal. */
-export type SlateCallResult =
-  | { readonly ok: true; readonly value: JsonValue }
+/** A slate plane answer: the value, or the refusal as a value, so it crosses
+ *  a Durable Object RPC boundary with its reason intact. */
+export type SlateAnswer<Value> =
+  | { readonly ok: true; readonly value: Value }
   | ({ readonly ok: false } & Refusal);
 
+/** A forwarded Slate call's JSON value or refusal. */
+export type SlateCallResult = SlateAnswer<JsonValue>;
+
 const VersionId = v.pipe(v.string(), v.minLength(1));
+
+const ShareId = v.pipe(v.string(), v.minLength(1));
+
+/** Top-level names of the version's tree the blueprint carries. */
+const IncludedPaths = v.array(v.pipe(v.string(), v.check((name) => name !== '' && !name.includes('/') && name !== '.' && name !== '..', 'An included path is one top-level name')));
 
 export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('list') }),
@@ -37,13 +46,23 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('history'), id: SlateDirectoryName }),
   v.strictObject({ op: v.literal('fork'), version: VersionId }),
   v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
+  // Blueprints: what a version would export, publishing it, and the rows.
+  v.strictObject({ op: v.literal('inspect'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
+  v.strictObject({ op: v.literal('publish'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
+  v.strictObject({ op: v.literal('unshare'), share: ShareId }),
+  v.strictObject({ op: v.literal('shares') }),
 ]);
 
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
 
-/** The parsed operation contract: listing/history inspect; every other operation can change resources or run authored code. */
+const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
+  list: true, history: true, inspect: true, shares: true,
+  preview: false, call: false, commit: false, fork: false, restore: false, publish: false, unshare: false,
+};
+
+/** The parsed operation contract: listing, history, inspection and the share rows read; every other operation can change resources or run authored code. */
 export function requireSlateWorkMode(operation: SlateOperation, mode: WorkMode): void {
-  requireWorkModePermission(mode, operation.op === 'list' || operation.op === 'history', 'workspace.slate.' + operation.op);
+  requireWorkModePermission(mode, READ_ONLY_OPERATIONS[operation.op], 'workspace.slate.' + operation.op);
 }
 
 export interface SlateSummary {

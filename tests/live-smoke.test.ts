@@ -232,6 +232,13 @@ describe('Live Smoke — one real turn per backend', () => {
         () => client.send(SMOKE_PROMPT),
       );
 
+      // A fresh workspace has nothing running, so the send must open the turn
+      // itself; 'mid-turn' would mean the deployment routed it into a turn
+      // nobody here started.
+      if (turn.landed !== 'turn') {
+        throw new Error(`the smoke send landed mid-turn on a fresh workspace: ${JSON.stringify(turn)}`);
+      }
+
       const elapsedMs = Date.now() - startedAt;
 
       // WHAT THIS TURN COST, from the DEPLOYMENT'S OWN read model.

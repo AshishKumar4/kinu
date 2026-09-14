@@ -41,7 +41,7 @@ import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
-import { diagnostics, toKinuError } from './obs/index';
+import { diagnostics, toKinuError, type KinuError } from './obs/index';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 
 export type ChatEvent =
@@ -131,9 +131,9 @@ export interface ChatOptions {
   /**
    * The resolved provider's own count of an assembled request
    * (providers/input-tokens.ts), for exact admission before anything is
-   * submitted. Omitted = the provider publishes no count endpoint, and the turn
-   * is assembled exactly as it was before admission existed. Never a character
-   * estimate: see the module comment there for why an estimate cannot admit.
+   * submitted. Omitted = the provider publishes no count endpoint, and the
+   * shared estimate gates instead — see the module comment there for the
+   *  exact-count-then-estimate contract.
    */
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;
@@ -334,18 +334,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     abortSignal: opts.signal,
   };
 
-  // Exact pre-submission admission, when the caller resolved a provider that
-  // can answer what a request costs. The assembly owns the decision (one
-  // forced compaction, then a re-count, then a refusal) so neither backend
-  // holds a second copy of the policy; the tools that ride every request are
-  // part of what is counted, which is why they are handed over here.
-  if (opts.countInputTokens) {
-    assembly.admission = {
-      count: opts.countInputTokens,
-      tools,
-      limits: { contextWindow, modelOutputLimit },
-    };
-  }
+  // Pre-submission admission. The provider's own counter is used when the
+  // caller resolved one; without it the assembled request is measured by the
+  // shared estimate and the same gate applies — one forced compaction, then a
+  // re-measure, then a refusal (turn-context.ts owns the policy, so neither
+  // backend holds a second copy). The tools that ride every request are part
+  // of what is measured, which is why they are handed over here.
+  assembly.admission = {
+    count: opts.countInputTokens,
+    tools,
+    limits: { contextWindow, modelOutputLimit },
+  };
 
   const turnMessages = await assembleTurnMessages(assembly);
 
@@ -634,17 +633,26 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       interrupted = true;
     }
 
+    /** The streamed failure as a classified KinuError: the provider the request
+     *  went to is the resolved model's when the caller named one, else the cache
+     *  plan's routing — which is where the request was actually sent. */
+    const providerErrorFor = (failure: { readonly cause: unknown }): KinuError =>
+      toProviderError({
+        doing: 'calling the model',
+        cause: failure.cause,
+        provider: opts.modelContext?.provider ?? opts.cache?.providerId,
+      });
+
     // A DEFINITIVE provider or transport failure crosses as a CLASSIFIED failure
     // when the caller did not cancel the turn. Rethrown verbatim it would reach the
     // CLI and the chat surface as an `APICallError` with its raw `responseBody`
     // still attached and its own message saying only "AI_APICallError" — so the
     // overflow-recovery classifier would read nothing usable while the user read
-    // the endpoint's whole body. `toProviderError` puts the provider's own reason
-    // (and its status/code) in the message and keeps the raw failure on `cause`,
-    // where diagnostics can still reach it.
-    if (streamError !== undefined && !interrupted) {
-      throw toProviderError({ doing: 'calling the model', cause: streamError });
-    }
+    // the endpoint's whole body. `toProviderError` carries the closed code and
+    // the structured facts (status, provider code, provider id) in the message,
+    // keeps the raw failure on `cause`, and files the provider's own text on the
+    // diagnostics record.
+    if (streamError !== undefined && !interrupted) throw providerErrorFor({ cause: streamError });
 
     if (deadFinalStep && !interrupted) {
       // Deliberately still a bare throw, unlike the interrupt: this turn was

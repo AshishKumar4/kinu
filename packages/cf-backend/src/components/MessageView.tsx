@@ -36,7 +36,7 @@ import {
   type AnyToolPart,
 } from "@kinu.run/core";
 import { liveTail } from "@kinu.run/core";
-import { redactPayload, segmentBySteers } from "@kinu.run/core";
+import { redactPayload, redactSecrets, segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
   type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
@@ -227,6 +227,17 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   const failed = isError || !!provisionErr;
   const prominent = effect === 'mutate' || isRunning;
 
+  // The free-text previews — an execute_tools program or a run command —
+  // render their argument verbatim rather than as pretty-printed JSON, so the
+  // structured `redactPayload` walk never reaches them. They pass through the
+  // same policy's value-level half (`redactSecrets`) before render: a token
+  // inside a shell command is the same leak as one inside a named field.
+  const codePreview = toolName === "execute_tools"
+    ? jsonString(input, "code")
+    : toolName === "run"
+      ? jsonString(input, "command")
+      : null;
+
   return (
     <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
       <button
@@ -288,7 +299,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           {errorText && (
             <div>
               <div className="p-eyebrow mb-1 p-danger">Error</div>
-              <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{errorText}</pre>
+              <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
             </div>
           )}
           {/* execute_tools is the agent's primary doing-mechanism: render the
@@ -299,10 +310,8 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               unreadable for exactly the multi-line commands worth expanding
               to read. The runtime stays visible in the collapsed row's `@x`
               badge, so nothing is lost by not repeating it here. */}
-          {toolName === "execute_tools" && jsonString(input, "code") ? (
-            <CodeBlock className="language-js">{jsonString(input, "code")}</CodeBlock>
-          ) : toolName === "run" && jsonString(input, "command") ? (
-            <CodeBlock className="language-bash">{jsonString(input, "command")}</CodeBlock>
+          {codePreview !== null ? (
+            <CodeBlock className={toolName === "execute_tools" ? "language-js" : "language-bash"}>{redactSecrets(codePreview)}</CodeBlock>
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>

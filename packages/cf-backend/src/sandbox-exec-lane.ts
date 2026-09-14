@@ -75,6 +75,62 @@ const PREVIEWS_UNPUBLISHABLE =
  */
 export const SANDBOX_TRANSPORT = "rpc" as const;
 
+/**
+ * Re-raise the SDK's file-error shape at the rpc boundary.
+ *
+ * What the wire delivers for a thrown SDK file error is NOT the SDK error.
+ * capnweb sends `["error", name, message]` (node_modules/capnweb/dist/
+ * index-workers.js:1526) and re-materializes with `ERROR_TYPES[name] ||
+ * Error` (:1698) — and `ERROR_TYPES` (:1309) holds only the platform's own
+ * seven plus AggregateError, so `FileNotFoundError` arrives as a plain
+ * `Error`. The SDK's client wrapper then cannot match it back
+ * (sandbox-CPj2jsbz.js `translateRPCError` only re-raises `instanceof
+ * SandboxError`), and the DO hop drops the custom props with it — the same
+ * loss the readiness comment below routes around with data. What core
+ * finally holds is `{ name: 'Error', message: 'FileNotFoundError: File not
+ * found: /workspace/…' }`: the container bakes the kind into its message
+ * (neither dist concatenates name+message anywhere — verified by grep), and
+ * that leading token is the only classification left.
+ *
+ * So this restores the two fields core's taxonomy reads — `name` and an
+ * `errorResponse` carrying the container's code — off that token, for the
+ * file domain only. Anything already shaped, unnamed, or outside the file
+ * errors passes through untouched. Measured live: kinu.run build ac73ffc5e
+ * answered `write /sandbox/workspace/first-run-mount.mjs failed:
+ * FileNotFoundError: File not found: /workspace/first-run-mount.mjs`
+ * through exactly this flattening.
+ */
+const RPC_SDK_FILE_CODE = new Map<string, string>([
+  ["FileNotFoundError", "FILE_NOT_FOUND"],
+  ["FileExistsError", "FILE_EXISTS"],
+  ["FileTooLargeError", "FILE_TOO_LARGE"],
+  ["PermissionDeniedError", "PERMISSION_DENIED"],
+  ["FileSystemError", "FILESYSTEM_ERROR"],
+  ["ValidationFailedError", "VALIDATION_FAILED"],
+]);
+
+function restoreSandboxFileError(cause: Error, path: string): Error {
+  if (cause.name !== "Error") return cause;
+
+  const sdkName = /^([A-Za-z_$][\w$]*Error): /.exec(cause.message)?.[1];
+
+  if (sdkName === undefined) return cause;
+
+  const code = RPC_SDK_FILE_CODE.get(sdkName);
+
+  if (code === undefined) return cause;
+
+  const restored = new Error(cause.message);
+  restored.name = sdkName;
+  restored.cause = cause;
+  Object.defineProperty(restored, "errorResponse", {
+    value: { code, context: { path } },
+    enumerable: true,
+  });
+
+  return restored;
+}
+
 async function jsonResultOrVoid<Result>(result: Promise<Result>) {
   const value = await result;
 
@@ -261,6 +317,23 @@ export function adaptCloudflareSandbox(
     return await run();
   };
 
+  /**
+   * One wrapper for the four file lanes: readiness and egress through
+   * `onContainer`, then the SDK shape restored on failure. Four copies of
+   * this try/catch is the duplication gate's exact finding (same body, only
+   * the inner call renamed), so the inner call is the parameter.
+   */
+  const onFile = async <T>(path: string, run: () => Promise<T>): Promise<T> =>
+    onContainer(async () => {
+      try {
+        return await run();
+      } catch (cause) {
+        if (!(cause instanceof Error)) throw cause;
+
+        throw restoreSandboxFileError(cause, path);
+      }
+    });
+
   return {
     ensureReady: () => onContainer(() => Promise.resolve()),
     // A deadline only when a caller ASKED for one; absent, the process lane,
@@ -268,11 +341,11 @@ export function adaptCloudflareSandbox(
     exec: (command, opts) => onContainer(() => (opts?.timeout === undefined
       ? execWithoutDeadline(handle, command, opts?.cwd, opts?.signal)
       : handle.exec(command, opts))),
-    readFile: (path, opts) => onContainer(() => handle.readFile(path, opts)),
+    readFile: (path, opts) => onFile(path, () => handle.readFile(path, opts)),
     writeFile: (path, content, opts) =>
-      onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts))),
-    listFiles: (path, opts) => onContainer(() => handle.listFiles(path, opts)),
-    deleteFile: (path) => onContainer(() => jsonResultOrVoid(handle.deleteFile(path))),
+      onFile(path, () => jsonResultOrVoid(handle.writeFile(path, content, opts))),
+    listFiles: (path, opts) => onFile(path, () => handle.listFiles(path, opts)),
+    deleteFile: (path) => onFile(path, () => jsonResultOrVoid(handle.deleteFile(path))),
     // EVERY PREVIEW URL THIS LANE HANDS OUT IS PUBLISHED FIRST, because the
     // edge proves a preview hostname against that record before it lets the
     // SDK resolve a container object (`preview-proxy.ts`). The token is read

@@ -60,7 +60,7 @@
  * stale — CompiledWasm modules and `workerLoaders` are wired for the sibling
  * probes in vitest.config.ts.
  */
-import { Agent, getAgentByName } from 'agents';
+import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { subscribe } from 'agents/observability';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
@@ -75,13 +75,19 @@ import {
   setDiagnosticsSink,
   type RecordingLogger,
 } from '@kinu.run/core/obs';
-import type { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
+import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type {
+  AgentLogEvent,
   CallRecord,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
   HttpCall,
+  InputReceipt,
+  PendingSteer,
+  PendingSteerFile,
+  PreparedConversation,
   QueueProbeMode,
 } from './two-turn-shapes';
 import {
@@ -89,6 +95,7 @@ import {
   DriveOnceResultSchema,
   ExerciseResultSchema,
   HttpCallSchema,
+  PreparedConversationSchema,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
 import { ownerCaller } from '@kinu.run/core';
@@ -99,7 +106,135 @@ import { ownerCaller } from '@kinu.run/core';
 // the class measures its own fixture, not the shipped surface.
 export { UserDO } from '../../src/user/user-do';
 
-export { OrchestratorAgent } from '../../src/orchestrator';
+/** The production orchestrator, sealed with its own surface plus the one
+ *  fixture read, bound under the production name so the same service-binding
+ *  wiring runs the actual production lifecycle. It adds NO production method
+ *  and no state: the constructor only retains the given DurableObjectState so
+ *  `inputReceipts` can observe the actor's durable input ledger — the rows the
+ *  real socket path writes — as legitimate external storage, never reaching a
+ *  protected member or a made-up setter. */
+export class ObservedOrchestrator extends ProductionOrchestrator {
+  private readonly actorState: AgentContext;
+
+  constructor(ctx: AgentContext, env: ProbeEnv) {
+    super(ctx, env);
+    this.actorState = ctx;
+    Reflect.deleteProperty(this, 'inputReceipts');
+    Reflect.deleteProperty(this, 'pendingSteers');
+    Reflect.deleteProperty(this, 'pendingSteerFileRows');
+    Reflect.deleteProperty(this, 'agentLogEvents');
+    Reflect.deleteProperty(this, 'seedStaleDrainEvent');
+    Reflect.deleteProperty(this, 'runEventWake');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'seedStaleDrainEvent', 'runEventWake']);
+  }
+
+  /** The request-owned input rows the real chat intake persisted, exactly as
+   *  stored — the admission ledger a reset must hand to the next activation. */
+  async inputReceipts(): Promise<InputReceipt[]> {
+    return this.actorState.storage.sql
+      .exec('SELECT actor_id, request_id, message_ids, settled FROM actor_turn_inputs ORDER BY actor_id, request_id')
+      .toArray()
+      .map((row) => ({
+        actorId: String(row.actor_id),
+        requestId: String(row.request_id),
+        messageIds: v.parse(v.array(v.string()), JSON.parse(String(row.message_ids))),
+        settled: row.settled === 1,
+      }));
+  }
+
+  /** The durable reservations a mid-turn send leaves: each accepted message's
+   *  own client id bound to the turn it will land in — the row a reset must
+   *  restore so a replayed frame keeps its token. */
+  async pendingSteers(): Promise<PendingSteer[]> {
+    return this.actorState.storage.sql
+      .exec('SELECT actor_id, id, turn_id, mode, text FROM pending_steers ORDER BY actor_id, id')
+      .toArray()
+      .map((row) => ({
+        actorId: String(row.actor_id),
+        id: String(row.id),
+        turnId: String(row.turn_id),
+        mode: String(row.mode),
+        text: String(row.text),
+      }));
+  }
+
+  /** The file parts reserved alongside a pending steer — the durable half of
+   *  an attachment that arrived while a turn was live. */
+  async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
+    return this.actorState.storage.sql
+      .exec('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq')
+      .toArray()
+      .map((row) => ({
+        actorId: String(row.actor_id),
+        steerId: String(row.steer_id),
+        filename: String(row.filename),
+        mediaType: String(row.media_type),
+        url: String(row.url),
+      }));
+  }
+
+  /** The event rows an unbindStale sweep sees: which drain turn owns each and
+   *  the lease timestamp it judges staleness on. */
+  async agentLogEvents(): Promise<AgentLogEvent[]> {
+    return this.actorState.storage.sql
+      .exec("SELECT id, turn_id, consumed_at, variant FROM agent_log WHERE kind = 'event' ORDER BY id")
+      .toArray()
+      .map((row) => ({
+        id: String(row.id),
+        turnId: row.turn_id === null ? null : String(row.turn_id),
+        consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
+        variant: String(row.variant),
+      }));
+  }
+
+  /** The state a dead activation leaves behind: an event bound to a drain turn
+   *  whose lease outlived it. `consumed_at = 0` is older than any grace, so the
+   *  next wake's unbindStale must re-pend it rather than skip it as live work. */
+  async seedStaleDrainEvent(marker: string): Promise<void> {
+    this.ensureSchema();
+    this.actorState.storage.sql.exec(
+      `INSERT INTO agent_log
+         (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
+          trust, priority, payload_visibility, payload, received_at,
+          schema_version, dedupe_key, consumed_at)
+       VALUES (?, ?, 'event', 'evt-seeded-dead', 0, NULL, 'tr-seeded', 'webhook_bearer', 'webhook',
+               'authenticated', 'normal', 'full', ?, 1, 1, NULL, 0)`,
+      this.actorHandle().actorId,
+      `ev-seeded-${marker}`,
+      JSON.stringify({
+        webhook_id: 'w-buffered', http_method: 'POST', http_headers: {},
+        body: { mark: marker }, delivery_id: `d-${marker}`,
+      }),
+    );
+  }
+
+  /** The wake frame, driven synchronously for the test: `owedDeliveryWork`
+   *  re-pends the stale leases (the unbindStale half), then the reactor drains
+   *  whatever is pending — the two halves the platform alarm runs in order.
+   *  The drain's model call lands async after admission, so the wake joins on
+   *  the buffered event's marker reaching the wire log before returning. */
+  async runEventWake(marker: string): Promise<void> {
+    await this.owedDeliveryWork();
+    await this.orch.drainPendingEvents({ rethrow: true });
+
+    const began = Date.now();
+
+    for (;;) {
+      // SAFETY: the `/log` handler returns `{ calls: [...log] }` — the same
+      // owner-guaranteed shape `httpCalls` parses against the shared schema.
+      const calls = v.parse(v.array(HttpCallSchema),
+        (await (await fetch('http://probe-control.invalid/log')).json() as { calls: unknown }).calls);
+
+      if (calls.some((call) => call.conversation.some((m) => m.content.includes(marker)))) return;
+
+      if (Date.now() - began > 20000) throw new Error(`the wake never re-delivered the buffered event ${marker}`);
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}
+
+export { ObservedOrchestrator as OrchestratorAgent };
 
 /** The request shape `bindingInputs` hands the binding (direct-workers-ai-
  *  fetch.ts:209-227): the openai-compatible body minus `model`, with `stream`
@@ -236,13 +371,14 @@ export class FakeAI extends WorkerEntrypoint {
       `FakeAI: unrecognized non-stream request shape (keys: ${Object.keys(parsed).join(',')}) — `
       + 'a lane the probe does not satisfy; extend the fake or report the lane',
     );
-}
+  }
 }
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>;
+  'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
+  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'seedStaleDrainEvent' | 'runEventWake'>;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
@@ -307,6 +443,7 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
     }
   }
 }
+
 
 export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Spike 1: does an AbortSignal cross the service binding into `run`?
@@ -469,13 +606,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** Real socket intake and Think queue; only the remote model response is
    * held. Peer ingress queues a durable event-drain submission while both
    * socket inputs are pending, so its inherited lastBody belongs to B. */
-  async queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]> {
+  async queuedConversation(mode: Exclude<QueueProbeMode, 'cold' | 'attach-cold' | 'evt'>): Promise<HttpCall[]> {
     const workspace = `queue-${mode}-workspace`;
     const owner = `queue-${mode}-owner`;
 
-    const target: QueueTarget = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
-      this.env.OrchestratorAgent, workspace,
-    );
+    const target: QueueTarget = await this.queueTarget(workspace);
 
     const caller = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
@@ -511,24 +646,45 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
       socket.accept();
 
-      const send = async (text: string): Promise<void> => {
+      // A busy-routed send answers with its own done frame carrying
+      // `landed:'mid-turn'` — the acceptance a splice gives — while an idle
+      // send only persists its row. send() resolves on WHICHEVER arrives
+      // first, so it never outlives either path.
+      const landedIds = new Set<string>();
+      socket.addEventListener('message', (event) => {
+        const raw = v.is(v.string(), event.data) ? event.data : '';
+
+        const frame = v.safeParse(
+          v.object({ type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()) }),
+          raw.startsWith('{') ? JSON.parse(raw) : {},
+        );
+
+        if (frame.success && frame.output.type === 'cf_agent_use_chat_response' && frame.output.done === true) {
+          landedIds.add(String(frame.output.id));
+        }
+      });
+
+      const send = async (text: string, file?: { filename: string; mediaType: string; url: string }): Promise<void> => {
         if (socket === null) throw new Error('queue probe socket is closed');
         socket.send(JSON.stringify({
           type: 'cf_agent_use_chat_request', id: text,
           init: { method: 'POST', body: JSON.stringify({
-            messages: [{ id: `input-${text}`, role: 'user', parts: [{ type: 'text', text }] }],
+            messages: [{ id: `input-${text}`, role: 'user', parts: [
+              ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
+              { type: 'text', text },
+            ] }],
             trigger: 'submit-message',
           }) },
         }));
         const began = Date.now();
 
         for (;;) {
-          const response = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
-          const history = v.parse(SocketHistorySchema, await response.json());
+          const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+          const history = v.parse(SocketHistorySchema, await page.json());
 
-          if (history.some((row) => row.role === 'user' && row.id === `input-${text}`)) break;
+          if (history.some((row) => row.role === 'user' && row.id === `input-${text}`) || landedIds.has(text)) break;
 
-          if (Date.now() - began > 20000) throw new Error(`socket input ${text} was not persisted`);
+          if (Date.now() - began > 20000) throw new Error(`socket input ${text} neither persisted nor answered landed`);
           await new Promise<void>((resolve) => setTimeout(resolve, 20));
         }
       };
@@ -543,17 +699,21 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         if (!genesis.started) throw new Error('queue probe genesis did not start');
         await fetch('http://probe-control.invalid/queue/arrived');
         await send('QUEUE-A');
-        await send('QUEUE-B');
+        await send('QUEUE-B', mode === 'attach'
+          ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
+          : undefined);
       }
 
       if (mode === 'peer') {
+        // A peer event is not an SDK chat request: it does not splice, it
+        // writes a durable event row and its own event-drain turn drains it.
+        // No socket 'submission:running' frame is issued for it now.
         const peer = await target.receivePeerMessage({
           sender_event_id: 'queue-peer-input', sender_agent_name: 'queue-peer', sender_user_id: owner,
           topic: 'queue-probe', body: 'QUEUE-PROGRAMMATIC', mode: 'build', reply_expected: false,
         });
 
         if (!peer.admitted) throw new Error(`queue probe peer input refused: ${peer.reason}`);
-        await submission.promise;
         await send('QUEUE-C');
       }
 
@@ -564,7 +724,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       if (heldCalls.length !== 1) throw new Error('queued requests ran before the held genesis response was released');
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
 
-      await awaitFactsCompressed(recording, { chat: 3, peer: 5, signal: 4, yield: 1 }[mode]);
+      await awaitFactsCompressed(recording, { chat: 2, peer: 3, signal: 3, yield: 1, attach: 2 }[mode]);
       await awaitQuiet(recording);
 
       return await this.httpCalls();
@@ -575,6 +735,227 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       restore();
     }
   }
+
+  /** The shared workspace+owner claim both queue modes open with: a real
+   *  UserDO registration, the capability token, the compat credential, and the
+   *  queue model pinned so the fake can hold one turn's call. */
+  private async claimQueueWorkspace(mode: QueueProbeMode): Promise<{ target: QueueTarget; workspace: string; owner: string }> {
+    const workspace = `queue-${mode}-workspace`;
+    const owner = `queue-${mode}-owner`;
+
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Queue Probe');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-queue');
+    await target.setSoul('# Queue Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+
+    return { target, workspace, owner };
+  }
+
+  /** One chat frame over a real socket, persisted before it returns, and the
+   *  exact wire it sent — the frame the cold test replays after the reset. */
+  private async sendChatFrame(
+    target: QueueTarget, workspace: string, text: string,
+    file?: { filename: string; mediaType: string; url: string },
+  ): Promise<string> {
+    const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+      headers: { Upgrade: 'websocket' },
+    }));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
+    socket.accept();
+
+    const wire = JSON.stringify({
+      type: 'cf_agent_use_chat_request', id: text,
+      init: { method: 'POST', body: JSON.stringify({
+        messages: [{ id: `input-${text}`, role: 'user', parts: [
+          ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
+          { type: 'text', text },
+        ] }],
+        trigger: 'submit-message',
+      }) },
+    });
+
+    try {
+      socket.send(wire);
+      const began = Date.now();
+
+      for (;;) {
+        const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+        const history = v.parse(SocketHistorySchema, await page.json());
+        const transcript = history.some((row) => row.role === 'user' && row.id === `input-${text}`);
+        const steered = (await target.pendingSteers()).some((row) => row.id === `input-${text}`);
+
+        if (transcript || steered) break;
+
+        if (Date.now() - began > 20000) throw new Error(`socket input ${text} left no durable trace`);
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      socket.close(1000, 'frame sent');
+    }
+
+    return wire;
+  }
+
+
+
+  /** The cold drive's setup: the genesis turn's model call is held from the
+   *  first probe-queue call, then B and C are sent mid-turn — each a
+   *  pending_steers reservation bound to the genesis turn, durable before the
+   *  reset. The replay must re-bind the same client id to the same turn id. */
+  async prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation> {
+    const { target, workspace, owner } = await this.claimQueueWorkspace(mode);
+    await fetch('http://probe-control.invalid/queue/hold', {
+      method: 'POST', body: JSON.stringify({ from: 1 }),
+    });
+
+    const genesis = await target.beginGenesisTurn();
+
+    if (!genesis.started) throw new Error('queue probe genesis did not start');
+
+    // The 'attach' drive sends B with an image part: the reservation that must
+    // survive the reset carries a file row beside the steer row.
+    const attach = mode === 'attach' || mode === 'attach-cold'
+      ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
+      : undefined;
+
+    const bWire = await this.sendChatFrame(target, workspace, 'QUEUE-B', attach);
+    const cWire = await this.sendChatFrame(target, workspace, 'QUEUE-C');
+
+    // Both admissions are durable before the reset: B's and C's mid-turn sends
+    // each wrote a pending_steers row bound to the turn they will land in.
+    const receipts = await target.inputReceipts();
+    const steers = await target.pendingSteers();
+    const steerFiles = await target.pendingSteerFileRows();
+
+    return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, receipts, steers, steerFiles });
+  }
+
+  /** The reset half: a fresh socket to the SAME object replays B's and C's
+   *  exact frames. Each replay is a re-delivery of a reservation the object
+   *  already holds — the durable pending_steers row, not the socket, binds it
+   *  to the turn. Returns the post-reset ledger: input receipts AND the
+   *  pending-steer reservations. */
+  async replayQueuedConversation(prepared: PreparedConversation): Promise<{ receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }> {
+    const target: QueueTarget = await this.queueTarget(prepared.workspace);
+
+    const response = await target.fetch(new Request(
+      `https://probe/agents/orchestrator-agent/${prepared.workspace}`,
+      { headers: { Upgrade: 'websocket' } },
+    ));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error('replay did not receive a real WebSocket');
+    socket.accept();
+
+    try {
+      socket.send(prepared.bFrame);
+      socket.send(prepared.cFrame);
+    } finally {
+      socket.close(1000, 'replayed');
+    }
+
+    return { receipts: await target.inputReceipts(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
+  }
+
+  /** The join: release the held model call and wait on the queued turn's own
+   *  completion evidence, then return the wire log and all three durable
+   *  ledgers — input receipts, the pending-steer reservations, and the file
+   *  rows any attachment left beside them. */
+  async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }> {
+    const target: QueueTarget = await this.queueTarget(prepared.workspace);
+
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    try {
+      await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+      await awaitFactsCompressed(recording, 2); // B's recovered turn + C's own turn
+      await awaitQuiet(recording);
+
+      return { http: await this.httpCalls(), receipts: await target.inputReceipts(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
+    } finally {
+      restore();
+    }
+  }
+
+  /** The orchestrator stub, typed to the fixture class the durableObjects
+   *  binding installs — `env.OrchestratorAgent` is declared against the
+   *  production class in env.d.ts, so the one place the fixture names its own
+   *  class is the one place the type widens. */
+  private queueTarget(workspace: string): Promise<QueueTarget> {
+    return getAgentByName<ProbeEnv, ObservedOrchestrator>(
+      // SAFETY: the durableObjects binding declares ObservedOrchestrator under
+      // the OrchestratorAgent name (the re-export at the top of this file), and
+      // that class extends ProductionOrchestrator and adds inputReceipts, so
+      // every stub the namespace returns carries the member the production
+      // declaration does not name.
+      this.env.OrchestratorAgent as DurableObjectNamespace<ObservedOrchestrator>,
+      workspace,
+    );
+  }
+
+
+
+  async inputReceiptsFor(workspace: string): Promise<InputReceipt[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.inputReceipts();
+  }
+
+  /** The durable mid-turn reservations a named workspace's actor holds — the
+   *  send-path ledger the warm arm reads to prove each socket input bound its
+   *  own request and no second SDK turn ran. */
+  async pendingSteersFor(workspace: string): Promise<PendingSteer[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.pendingSteers();
+  }
+
+  /** The event-redelivery drive's workspace: a real owner claim, compat
+   *  credential and pinned queue model — the same claim every queue mode
+   *  opens with. */
+  async claimEventWorkspace(): Promise<{ workspace: string; owner: string }> {
+    const { workspace, owner } = await this.claimQueueWorkspace('evt');
+
+    return { workspace, owner };
+  }
+
+  /** The event rows an unbindStale sweep would see, for one workspace. */
+  async agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    return await target.agentLogEvents();
+  }
+
+  /** Seed the state a dead activation leaves: an event bound to a drain turn
+   *  whose lease outlived it, stale past every grace. */
+  async seedStaleDrainEventFor(workspace: string, marker: string): Promise<void> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await target.seedStaleDrainEvent(marker);
+  }
+
+  /** Drive the wake frame the platform alarm would run: re-pend the stale
+   *  leases, then drain whatever is pending. */
+  async runEventWakeFor(workspace: string, marker: string): Promise<void> {
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await target.runEventWake(marker);
+  }
+
 
 
   /** One parameterized drive for the lifecycle variants: its own workspace so

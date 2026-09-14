@@ -1060,8 +1060,11 @@ describe('worker wiring', () => {
 
   test('the CSRF gate runs before any authenticated route', () => {
     expect(server).toContain('crossSiteRejection(request)');
+    // The account routes are composed under one `firstResponse`; the gate
+    // must still come first in source order, whatever the call shape.
+    expect(server).toContain('handleUserRequest(req, env, identity, ctx)');
     expect(server.indexOf('crossSiteRejection(request)'))
-      .toBeLessThan(server.indexOf('handleUserRequest(authenticatedRequest'));
+      .toBeLessThan(server.indexOf('handleUserRequest(req, env, identity, ctx)'));
   });
 
   test('Nimbus previews route on the isolated host before app authentication', () => {

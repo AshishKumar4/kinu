@@ -36,6 +36,25 @@ export function err(status: number, message: string): Response {
   return json({ error: message }, { status });
 }
 
+/**
+ * First-match dispatch over a route family's handlers: each is tried in the
+ * order the caller composes, the first non-null Response wins, and no match
+ * answers null so the caller tries the next family. One composed seam costs
+ * the caller one branch however many handlers it joins.
+ */
+export async function firstResponse(
+  request: Request,
+  handlers: readonly ((request: Request) => Promise<Response | null>)[],
+): Promise<Response | null> {
+  for (const handler of handlers) {
+    const response = await handler(request);
+
+    if (response !== null) return response;
+  }
+
+  return null;
+}
+
 export async function safeJson<Schema extends v.GenericSchema>(
   request: Request,
   schema: Schema,

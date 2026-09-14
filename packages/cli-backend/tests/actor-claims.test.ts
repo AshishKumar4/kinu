@@ -580,7 +580,7 @@ test('a consumer failure after the turn finished does not replay a landed steer'
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
     const first = step++ === 0;
 
-    if (first) left.actor.steer({ id: 'land-once', text: 'keep this instruction' });
+    if (first) left.actor.send({ id: 'land-once', text: 'keep this instruction' }).catch(() => { throw new Error('the steer was refused'); });
 
     return { content: first
       ? [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'file', input: '{"path":"a"}' }]

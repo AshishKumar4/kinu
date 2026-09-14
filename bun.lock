@@ -126,6 +126,7 @@
         "@types/react-dom": "^19.2.3",
         "@vgpu/wgsl": "0.4.1",
         "@vitejs/plugin-react": "^6.0.1",
+        "capnweb": "0.8.0",
         "esbuild": "^0.28.1",
         "miniflare": "^5.20260903.0-alpha",
         "oxc-parser": "0.143.0",

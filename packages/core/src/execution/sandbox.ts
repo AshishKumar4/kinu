@@ -23,7 +23,7 @@ import { readExecSignal } from './signal';
 import { commandResult, COMMAND_RESULT_TYPE, refusalText, type CommandResult } from './exec-result';
 import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '../obs/index';
 import type { VFS } from '../types/primitives';
-import { makeVfsError } from '../vfs/errno';
+import { isVfsError, makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
@@ -213,6 +213,13 @@ function parseInput<TSchema extends v.GenericSchema>(
 }
 
 const StringSchema = v.string();
+
+/** Every path-taking member speaks the same path: a NON-EMPTY string. The SDK
+ *  answers `ValidationFailedError` for `''` — a platform refusal worded like a
+ *  tool defect — so the empty path is resolved in core instead: members that
+ *  take a path refuse it here, and the optional ones mean the executor's own
+ *  working directory (below). */
+const PathSchema = v.pipe(v.string(), v.minLength(1));
 
 const OptionalStringSchema = v.optional(v.string());
 
@@ -451,10 +458,10 @@ export function createSandboxExecutor(
       description: 'Read a file from the sandbox.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
-        const path = parseInput(StringSchema, { value: args[0] });
+        const path = parseInput(PathSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox readFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox readFile: path must be a non-empty string'));
         }
 
         try {
@@ -477,11 +484,11 @@ export function createSandboxExecutor(
       description: 'Write content to a file in the sandbox. Creates parent dirs.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
-        const path = parseInput(StringSchema, { value: args[0] });
+        const path = parseInput(PathSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox writeFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox writeFile: path must be a non-empty string'));
         }
 
         if (content === undefined) {
@@ -499,7 +506,7 @@ export function createSandboxExecutor(
     },
     listFiles: {
       planAllowed: true,
-      description: 'List files in a directory. Returns newline-separated entries prefixed "d" or "-".',
+      description: 'List files in a directory — the working directory when `path` is omitted or empty. Returns newline-separated entries prefixed "d" or "-".',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
         const path = parseInput(OptionalStringSchema, { value: args[0] });
@@ -508,8 +515,13 @@ export function createSandboxExecutor(
           return refusalText(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
         }
 
+        // One rule for an absent path, applied before the SDK can refuse `''`:
+        // the executor's working directory — what `'.'` means inside the
+        // container, and what the `/sandbox/workspace` mount root lists.
+        const dir = path === undefined || path === '' ? WORKSPACE_BACKUP_DIR : path;
+
         try {
-          const r = await withSandboxRetry(() => touch(() => handle.listFiles(path ?? '/', { recursive: false })));
+          const r = await withSandboxRetry(() => touch(() => handle.listFiles(dir, { recursive: false })));
 
           if (!r?.files?.length) return '';
 
@@ -522,7 +534,7 @@ export function createSandboxExecutor(
             })
             .join('\n');
         } catch (err) {
-          return refusalText(sandboxFailure({ doing: `sandbox listFiles ${path ?? '/'}`, cause: err }));
+          return refusalText(sandboxFailure({ doing: `sandbox listFiles ${dir}`, cause: err }));
         }
       },
     },
@@ -538,10 +550,10 @@ export function createSandboxExecutor(
       description: 'Delete a file or directory.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
-        const path = parseInput(StringSchema, { value: args[0] });
+        const path = parseInput(PathSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox deleteFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox deleteFile: path must be a non-empty string'));
         }
 
         try {
@@ -558,13 +570,14 @@ export function createSandboxExecutor(
       description: 'Check if a path exists — uses shell test.',
       execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED_REFUSAL;
-        const path = parseInput(StringSchema, { value: args[0] });
+        const path = parseInput(PathSchema, { value: args[0] });
 
         // `'false'` is what this answered, and it is a claim the path is absent
         // — the one thing a caller that could not be asked must never say
-        // (AGENTS.md: an empty read is distinguishable from a failed read).
+        // (AGENTS.md: an empty read is distinguishable from a failed read). An
+        // empty path is the same refusal every other member gives it.
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'sandbox exists: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'sandbox exists: path must be a non-empty string'));
         }
 
         try {
@@ -801,9 +814,10 @@ export function createSandboxExecutor(
 declare namespace sandbox {
   function exec(command: string): Promise<${COMMAND_RESULT_TYPE}>;
   function readFile(path: string): Promise<string>;
-  function writeFile(path: string, content: string): Promise<string>;
-  function listFiles(path: string): Promise<string>;
-  function readdir(path: string): Promise<string>;
+  /** The executor's working directory when path is omitted or empty. */
+  function listFiles(path?: string): Promise<string>;
+  /** Alias for listFiles. */
+  function readdir(path?: string): Promise<string>;
   function deleteFile(path: string): Promise<string>;
   /** "true" or "false" — or a refusal payload, if the container could not be asked. */
   function exists(path: string): Promise<string>;
@@ -974,9 +988,78 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     return p.slice(p.lastIndexOf('/') + 1);
   };
 
+  /**
+   * The SDK's file errors, into this plane's closed taxonomy.
+   *
+   * The container reports every file failure as a TYPED throw — `code` is the
+   * container's own word (`FILE_NOT_FOUND`, `IS_DIRECTORY`), never an exit
+   * code — and a miss used to escape this view as an unclassified error. That
+   * is the defect a create through the mount hit on the deployed build
+   * (b4d2c6001, public-failure-recovery): the file tool's write reads first,
+   * an ENOENT miss means "create", and the untranslated FileNotFoundError was
+   * refused as `io`.
+   *
+   * The wire keeps `name` and `errorResponse` as own properties and drops the
+   * prototype, so `code` — a getter — never survives; the response object does.
+   */
+  const SDK_ERRNO = new Map<string, VfsErrorCode>([
+    ['FILE_NOT_FOUND', 'ENOENT'],
+    ['FILE_EXISTS', 'EEXIST'],
+    ['IS_DIRECTORY', 'EISDIR'],
+    ['NOT_DIRECTORY', 'ENOTDIR'],
+    ['PERMISSION_DENIED', 'EACCES'],
+    ['READ_ONLY', 'EROFS'],
+    ['FILESYSTEM_ERROR', 'EIO'],
+    ['FILE_TOO_LARGE', 'EIO'],
+    ['VALIDATION_FAILED', 'EIO'],
+  ]);
+
+  const SDK_ERRNO_BY_NAME = new Map<string, VfsErrorCode>([
+    ['FileNotFoundError', 'ENOENT'],
+    ['FileExistsError', 'EEXIST'],
+    ['PermissionDeniedError', 'EACCES'],
+    ['FileSystemError', 'EIO'],
+    ['FileTooLargeError', 'EIO'],
+    ['ValidationFailedError', 'EIO'],
+  ]);
+
+  const errnoOf = (cause: Error): VfsErrorCode | null => {
+    if (isVfsError(cause)) return null;
+    const response = 'errorResponse' in cause ? cause.errorResponse : undefined;
+    const code = v.is(v.looseObject({ code: v.string() }), response) ? response.code : undefined;
+
+    if (code !== undefined) return SDK_ERRNO.get(code) ?? 'EIO';
+
+    if (response !== undefined) return 'EIO';
+
+    // Nothing but a name crossed the wire: still an SDK file error when the
+    // name is one, and every named one is a filesystem verdict — EIO covers
+    // the codes the taxonomy has no word for.
+    return SDK_ERRNO_BY_NAME.get(cause.name) ?? null;
+  };
+
+  const serving = async <T>(path: string, op: () => Promise<T>): Promise<T> => {
+    try {
+      return await op();
+    } catch (cause) {
+      if (!(cause instanceof Error)) throw cause;
+
+      const code = errnoOf(cause);
+
+      if (code === null) throw cause;
+
+      const error = makeVfsError(code, `${cause.message} (on '${path}')`, path);
+      // The SDK error stays the cause: it carries the container's code and
+      // context, which the chain renderer and any rethrown diagnosis need.
+      error.cause = cause;
+
+      throw error;
+    }
+  };
+
   return {
     async readFile(path, opts) {
-      const r = await handle.readFile(path);
+      const r = await serving(path, () => handle.readFile(path));
 
       if (r.exitCode != null && r.exitCode !== 0) {
         throw makeVfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
@@ -1017,18 +1100,19 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     },
 
     async writeFile(path, data) {
-      if (v.is(v.string(), data)) await handle.writeFile(path, data);
-      else await handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' });
+      await serving(path, () => v.is(v.string(), data)
+        ? handle.writeFile(path, data)
+        : handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
     },
 
     async readdir(path) {
-      const r = await handle.listFiles(path, { recursive: false });
+      const r = await serving(path, () => handle.listFiles(path, { recursive: false }));
 
       return (r.files ?? []).map(nameOf).filter((n) => n.length > 0);
     },
 
     async readdirStats(path) {
-      const r = await handle.listFiles(path, { recursive: false });
+      const r = await serving(path, () => handle.listFiles(path, { recursive: false }));
 
       return (r.files ?? [])
         .map((f) => ({ name: nameOf(f), entry: f }))
@@ -1046,11 +1130,15 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
       if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, isDir: true };
+
       const name = clean.slice(clean.lastIndexOf('/') + 1);
+
       // Same listing `readdir` above runs uncaught: null is reserved for "the
       // parent has no such entry", so a parent that cannot be listed propagates
       // rather than being reported as a file that simply is not there.
-      const files = (await handle.listFiles(vfsDirname(clean), { recursive: false })).files ?? [];
+      const files = (await serving(clean, () =>
+        handle.listFiles(vfsDirname(clean), { recursive: false }))).files ?? [];
+
       const entry = files.find((f) => nameOf(f) === name);
 
       if (!entry) return null;
@@ -1058,7 +1146,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       return { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) };
     },
 
-    async unlink(path) { await handle.deleteFile(path); },
+    async unlink(path) { await serving(path, () => handle.deleteFile(path)); },
 
     async mkdir(path, opts) {
       const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);

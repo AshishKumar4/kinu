@@ -145,6 +145,11 @@ import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspa
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/pages/UserMcpPage";
+import SharedPage from "@/pages/SharedPage";
+import BlueprintPage from "@/pages/BlueprintPage";
+import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
+import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
+import type { BlueprintInspection, BlueprintView, SharedLibrary, SlateBindingDeclaration } from "@kinu.run/core";
 import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -2970,7 +2975,7 @@ function ComposerFrame() {
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
-          <Composer {...shared} value={value} streaming onSteer={() => {}} onBranch={() => {}}
+          <Composer {...shared} value={value} streaming onBranch={() => {}}
             modelPicker={picker()} />
         </div>
         <div className="space-y-1">
@@ -4095,6 +4100,78 @@ const PENDING_ACTIONS: PendingAction[] = [
 /** The shell oracle carries one owner decision, as the app mock does. */
 const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "release_approval");
 
+
+/* ── Slate sharing: the four Phase 1 surfaces on one blueprint ─────────── */
+
+const BLUEPRINT_BINDINGS: SlateBindingDeclaration[] = [
+  { name: "GITHUB", kind: "mcp", target: "github", credentialed: true },
+  { name: "FILES", kind: "namespace", target: "workspace", credentialed: true },
+  { name: "NOTES", kind: "memory", target: "recall, remember", credentialed: true },
+  { name: "PEER", kind: "app", target: "digest", credentialed: false },
+];
+
+const BLUEPRINT_ID = "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
+
+const BLUEPRINT_VIEW: BlueprintView = {
+  id: BLUEPRINT_ID,
+  title: "Issue triage",
+  description: "Reads the open issues of a repository, groups them by area, and writes a triage note into workspace memory every morning.",
+  bindings: BLUEPRINT_BINDINGS,
+  credentialed: BLUEPRINT_BINDINGS.filter((binding) => binding.credentialed),
+  entries: [
+    { path: "package.json", kind: "file", included: true },
+    { path: "src", kind: "directory", included: true },
+    { path: "src/server.ts", kind: "file", included: true },
+    { path: "src/triage.ts", kind: "file", included: true },
+    { path: "src/config.ts", kind: "file", included: true },
+    { path: "assets", kind: "directory", included: true },
+    { path: "assets/logo.svg", kind: "file", included: true },
+  ],
+  warnings: [{ path: "src/config.ts", line: 4, pattern: "aws-access-key", message: "AWS access key id" }],
+  createdAt: NOW - 3 * 864e5,
+};
+
+const BLUEPRINT_INSPECTION: BlueprintInspection = {
+  slate: "issue-triage", version: "v2k9q1c7xw4m", title: BLUEPRINT_VIEW.title, description: BLUEPRINT_VIEW.description,
+  entries: [...BLUEPRINT_VIEW.entries, { path: "scratch", kind: "directory", included: false }, { path: "scratch/notes.md", kind: "file", included: false }],
+  bindings: BLUEPRINT_BINDINGS, credentialed: BLUEPRINT_VIEW.credentialed, warnings: BLUEPRINT_VIEW.warnings,
+};
+
+const SHARED_LIBRARY: SharedLibrary = {
+  mine: [
+    { id: BLUEPRINT_ID, title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
+  ],
+  received: [
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, owner: "sam@example.com" },
+  ],
+};
+
+/** The share dialog over the Issue triage slate, at the inspection step. */
+function ShareDialogFrame() {
+  return (
+    <div className="h-screen p-bg p-text">
+      <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workRpc} onClose={() => {}}
+        fixture={{ versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
+          { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+        ] }} />
+    </div>
+  );
+}
+
+/** The read-only blueprint page, routed so `useParams` names the id the page
+ *  would fetch. `&viewer=signedout` renders the sign-in branch of its one
+ *  action. */
+function BlueprintFrame() {
+  const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
+
+  return (
+    <Routes>
+      <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} workspaces={STOCK_ROSTER.entries} />} />
+    </Routes>
+  );
+}
+
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
 
@@ -5068,16 +5145,24 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
 });
 
 /** One finished call whose input and output both carry credential-shaped
- *  fields, nested exactly where a webhook or MCP call would put them. The
- *  redaction gate (`?frame=toolrun&secrets=1`) expands this row and asserts
- *  the preview shows `keep: visible` while every secret value is masked. */
+ *  fields, nested exactly where a webhook or MCP call would put them, and a
+ *  second call whose free-text previews — the command block and the error
+ *  channel — carry the same token. The redaction gate (`?frame=toolrun&secrets=1`)
+ *  expands these rows and asserts the previews show `keep: visible` while
+ *  every secret value is masked, keyed or not. */
+/** A live Cloudflare token, assembled rather than written out: the commit-tier
+ *  secret scan shares the pattern list the preview redacts by, so a literal
+ *  here would block the commit whose behavior this fixture exists to prove.
+ *  Assembled in parts, the source text never matches the shape. */
+const ASSEMBLED_TOKEN = `cfut_${'a'.repeat(48)}`;
+
 const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
   type: 'tool-run',
   toolCallId: 'secret-call',
   state: 'output-available',
   input: {
     runtime: 'sandbox',
-    command: 'curl -s https://api.stripe.example/v1/charges',
+    command: `curl -s https://api.stripe.example/v1/charges --token=${ASSEMBLED_TOKEN}`,
     headers: { authorization: 'Bearer sk-live-REDACTME' },
     nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
   },
@@ -5085,7 +5170,18 @@ const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
     status: 200,
     headers: { authorization: 'Bearer sk-live-REDACTME' },
     nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
+    body: `token ${ASSEMBLED_TOKEN} accepted`,
   },
+};
+
+/** The same token reaching a preview through the error channel — a
+ *  protocol-level failure whose `errorText` quotes the rejected credential. */
+const SECRET_ERROR_PART: UIMessage['parts'][number] = {
+  type: 'tool-run',
+  toolCallId: 'secret-error',
+  state: 'output-error',
+  input: { runtime: 'sandbox', command: `deploy --token=${ASSEMBLED_TOKEN}` },
+  errorText: `deploy rejected the credential ${ASSEMBLED_TOKEN}`,
 };
 
 const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
@@ -5093,6 +5189,7 @@ const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
   parts: [
     { type: 'text', text: 'A call that carries credential-shaped fields in both directions.' },
     SECRET_TOOL_RUN_PART,
+    SECRET_ERROR_PART,
   ],
 });
 
@@ -5856,16 +5953,39 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
 
-  const fixtureFrames = new Map<string, React.ReactNode>([
-    ["supervise", <SuperviseFrame />],
-    ["supervisefresh", <SuperviseFrame evolved={false} />],
-    ["activity", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />],
-    ["activityclean", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />],
-    ["activityempty", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />],
-    ["activitycache", <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>],
+  // Frames a name alone fixes — the ones that need no dispatch branch because
+  // their only parameters live in the row itself. `entries` is the routed
+  // location the MemoryRouter opens on for frames that read a route param.
+  const fixtureFrames = new Map<string, { node: React.ReactNode; entries: string[] }>([
+    ["supervise", { node: <SuperviseFrame />, entries: ["/"] }],
+    ["supervisefresh", { node: <SuperviseFrame evolved={false} />, entries: ["/"] }],
+    ["activity", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />, entries: ["/"] }],
+    ["activityclean", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />, entries: ["/"] }],
+    ["activityempty", { node: <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />, entries: ["/"] }],
+    ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
+    // The read-only page a visitor sees, routed the way App.tsx routes it.
+    ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
+    // A slate card inside a chat message, at its inline height.
+    ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
+    ["shared", {
+      node: (
+        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
+        </div>
+      ), entries: ["/"],
+    }],
+    ["sharedialog", { node: <ShareDialogFrame />, entries: ["/"] }],
+    ["unmapped", {
+      node: (
+        <div className="h-screen w-[720px] p-sidebar p-text">
+          <UnmappedBindingsPanel slate="issue-triage" title="Issue triage" rpc={workRpc} onOpen={() => {}} fixture={BLUEPRINT_BINDINGS} />
+        </div>
+      ), entries: ["/"],
+    }],
   ]);
 
-  const fixtureNode = fixtureFrames.get(frame);
+  const fixture = fixtureFrames.get(frame);
 
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Swarms" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
@@ -5998,7 +6118,6 @@ async function mount() {
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "transcript") node = <TranscriptFrame />;
   else if (frame === "slate") node = <SlatePreviewFrame />;
-  else if (frame === "chat-slate") node = <ChatSlateFrame />;
   else if (frame === "workslatefallback") node = <SlateFallbackFrame rpc={workRpc} />;
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
@@ -6030,7 +6149,7 @@ async function mount() {
       </Routes>
     );
   }
-  else if (fixtureNode !== undefined) node = fixtureNode;
+  else if (fixture !== undefined) { node = fixture.node; entries = fixture.entries; }
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;

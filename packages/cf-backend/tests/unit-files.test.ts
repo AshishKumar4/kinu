@@ -270,6 +270,29 @@ describe("deleteExecutorPathOp", () => {
     expect(dirs.has("/home/user/build")).toBe(false);
   });
 
+  test("a tree removal that fails mid-tree reports what was removed and what remains", async () => {
+    // KINU-013: entry-by-entry removal with no failure boundary left a
+    // half-removed directory reported only as an error string. Now the pass
+    // fails closed and the refusal carries the two sets itself.
+    const { deps, files, dirs } = makeTree({
+      "/home/user/build/out.js": "x",
+      "/home/user/build/deep/two.js": "y",
+    }, { unlinkFails: /deep$/ });
+
+    const out = await deleteExecutorPathOp(deps, "workspace", "/home/user/build");
+
+    expect("ok" in out).toBe(false);
+    expect("error" in out && out.error).toContain("/home/user/build/deep");
+    expect("error" in out && out.error).toContain("still present");
+    expect(out).toMatchObject({
+      removed: ["/home/user/build/deep/two.js"],
+      remaining: ["/home/user/build/deep", "/home/user/build/out.js", "/home/user/build"],
+    });
+    expect(files.has("/home/user/build/deep/two.js")).toBe(false);
+    expect(dirs.has("/home/user/build/deep")).toBe(true);
+    expect(files.has("/home/user/build/out.js")).toBe(true);
+  });
+
   test("a missing path and the root both refuse", async () => {
     const { deps } = makeTree({});
     expect("error" in await deleteExecutorPathOp(deps, "workspace", "/gone")).toBe(true);

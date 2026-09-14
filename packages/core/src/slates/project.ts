@@ -68,3 +68,64 @@ export function parseSlateProject<Input>(input: Input): SlateProject {
 
   return project;
 }
+
+export type SlateBindingKind = SlateBinding['kind'];
+
+/** Every binding kind the variant admits, in declaration order, read off the
+ *  variant itself so a kind added there reaches every schema that lists
+ *  kinds. An option wrapped in a pipe (the workspace namespace carries a
+ *  check) is read through its first schema. */
+export const SLATE_BINDING_KINDS: readonly SlateBindingKind[] = Binding.options.map(
+  (option) => ('pipe' in option ? option.pipe[0] : option).entries.kind.literal,
+);
+
+/** One declared binding as a page or a forker reads it: its name, its kind and
+ *  what it names on the other side. `credentialed` is the section-3 rule. */
+export interface SlateBindingDeclaration {
+  readonly name: string;
+  readonly kind: SlateBindingKind;
+  /** The server, tool, namespace, slate or member list the binding names. */
+  readonly target: string;
+  readonly credentialed: boolean;
+}
+
+/** What one binding reaches on the other side, for a reader. */
+function bindingTarget(binding: SlateBinding): string {
+  switch (binding.kind) {
+    case 'namespace': return binding.namespace;
+    case 'rpc': return binding.methods.join(', ');
+    case 'mcp': return binding.server;
+    case 'app': return binding.id;
+    case 'tool': return binding.name;
+    case 'memory':
+    case 'tasks':
+    case 'web': return binding.members?.join(', ') ?? '';
+    case 'agent': return 'send';
+    case 'ai': return binding.tier ?? 'default';
+  }
+}
+
+/**
+ * A binding that acts with the owner's connections or reads the owner's
+ * workspace: `mcp`, `tool`, `web` and `namespace` spend the owner's
+ * credentials; `memory`, `tasks` and `rpc` read the owner's data; `agent`
+ * reaches the owner's own agent and `ai` runs on the owner's model access. An
+ * `app` binding is credentialed exactly when its callee is, and the callee is
+ * another slate's own declaration, so it is not counted here.
+ */
+function isCredentialedBinding(binding: SlateBinding): boolean {
+  return binding.kind !== 'app';
+}
+
+/** Every declared binding, in declaration order. */
+export function describeBindings(project: SlateProject): SlateBindingDeclaration[] {
+  return Object.entries(project.slate.bindings).map(([name, binding]) => ({
+    name, kind: binding.kind, target: bindingTarget(binding), credentialed: isCredentialedBinding(binding),
+  }));
+}
+
+/** The bindings a viewer or a forker must be told about (S4): non-empty exactly
+ *  when the slate reaches something of the owner's. */
+export function credentialedBindings(project: SlateProject): SlateBindingDeclaration[] {
+  return describeBindings(project).filter((binding) => binding.credentialed);
+}

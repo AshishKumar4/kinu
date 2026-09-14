@@ -29,8 +29,8 @@
  *                            CONTINUITY off the transcript — a workspace that
  *                            forgot turn one answers turn two with nothing.
  *   public-steer-correction   a correction submitted WHILE the turn is running,
- *                            through the composer's own `steerTurn`. The DO
- *                            answers `mid-turn` or `queued` and both are
+ *                            through the composer's own `send`. The DO
+ *                            answers `mid-turn` or `turn` and both are
  *                            landings; what is scored is whether the correction
  *                            reached the work.
  *   public-failure-recovery   turn one runs a command that FAILS, turn two
@@ -200,7 +200,7 @@ interface TrajectoryCase {
     readonly session: Pick<KinuPublicSession, 'readFile' | 'execute'>;
     readonly events: readonly RunEvent[];
     readonly history: readonly { readonly role: string; readonly text: string }[];
-    readonly steerLanding: 'mid-turn' | 'queued' | null;
+    readonly steerLanding: 'mid-turn' | 'turn' | null;
   }): Promise<readonly EvalSubgoal[]>;
 }
 
@@ -334,7 +334,7 @@ const CASES: readonly TrajectoryCase[] = [
         {
           what: 'landing',
           reached: steerLanding !== null,
-          detail: `the workspace answered steerTurn with ${String(steerLanding)}`,
+          detail: `the workspace answered send with ${String(steerLanding)}`,
         },
         {
           what: 'correction-applied',
@@ -682,7 +682,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         readFile: async (path: string) => path === 'notes/wal.txt' ? wal : STEER_MARKER,
         execute: async () => ({ exitCode: 0 }),
       },
-      events: [], steerLanding: 'queued' as const, history: [
+      events: [], steerLanding: 'turn' as const, history: [
         { role: 'user', text: entry.steer ?? '' }, { role: 'assistant', text: 'wal.txt\nsteered.txt' },
       ],
     };
@@ -934,7 +934,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         // two writes to one plane are not independent.
         for (const file of entry.seed) await session.writeFile(file.path, file.content);
 
-        let steerLanding: 'mid-turn' | 'queued' | null = null;
+        let steerLanding: 'mid-turn' | 'turn' | null = null;
         const [first, ...rest] = entry.turns;
 
         if (first === undefined) throw new Error(`${entry.id} declares no turns`);
@@ -943,8 +943,8 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           await session.prompt(first);
         } else {
           // The composer's own race, driven deliberately: the turn is submitted
-          // and the correction goes in while it is open. `steerTurn` answers
-          // `mid-turn` when it was spliced into the running turn and `queued`
+          // and the correction goes in while it is open. `send` answers
+          // `mid-turn` when it was spliced into the running turn and `turn`
           // when that turn had already ended — the DO's own statement, recorded
           // rather than asserted, because both are correct behaviour and which
           // one happens is a property of the model's pace.

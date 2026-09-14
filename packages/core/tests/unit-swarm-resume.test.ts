@@ -48,7 +48,7 @@ import { createAgentsTool, type AgentsToolDeps, type AgentsToolInput } from '../
 import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import { readForkRun } from '../src/read-models/fork-runs';
 import {
   reconcileInterruptedForks, FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
@@ -836,7 +836,7 @@ function idleAgent() {
     setTimer: () => {},
   };
 
-  return { enqueued, signals: new SignalDelivery(host) };
+  return { enqueued, inbox: new Inbox(host) };
 }
 
 const MISSION_LABEL = 'nightly';
@@ -932,7 +932,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
-      signals: agent.signals,
+      inbox: agent.inbox,
       resume: (kind, input, mode, signal) =>
         resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
       onSettled: (job) => notified.push(job.status),
@@ -1153,7 +1153,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
-      signals: agent.signals,
+      inbox: agent.inbox,
       resume: (kind, input, mode, signal) =>
         resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
     });
@@ -1168,7 +1168,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     // reconciliation, with the job sweep as its resume gate.
     const retired = await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       search: ledger,
       resume: async () => {
         await runner.recoverOrphans();
@@ -1297,7 +1297,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const runner = new BackgroundJobRunner({
       store: jobs,
       fiber,
-      signals: agent.signals,
+      inbox: agent.inbox,
       resume: (kind, input, mode, signal) =>
         resumeBackgroundJob(() => ({ agents }), kind, input, mode, signal),
     });
@@ -1311,7 +1311,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // consult. Nothing here calls `reenterSwarm`: the gate is the real runner.
     const retired = await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       resume: async () => {
         await runner.recoverOrphans();
 
@@ -1373,7 +1373,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     const retired = await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       // The gate ran and claimed nothing: there was no job to re-drive.
       resume: async () => [],
     });
@@ -1421,7 +1421,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // ACTIVATION TWO: the gate claims the run, so nothing is retired and the rows are
     // left `interrupted` for a re-entry that never lands.
     const claimed = await reconcileInterruptedForks({
-      journal, signals: agent.signals, search: ledger, resume: async () => [rootId],
+      journal, inbox: agent.inbox, search: ledger, resume: async () => [rootId],
     });
 
     expect(claimed).toEqual([]);
@@ -1434,7 +1434,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // is newly marked — the rows are already `interrupted` — and the run must still
     // settle definitively.
     const retired = await reconcileInterruptedForks({
-      journal, signals: agent.signals, search: ledger, resume: async () => [],
+      journal, inbox: agent.inbox, search: ledger, resume: async () => [],
     });
 
     expect(retired.map((run) => run.rootId)).toEqual([rootId]);
@@ -1460,7 +1460,7 @@ describe('the start-of-life sweep reaches registry-only jobs', () => {
         unfinishedRoots: () => [],
         abandonRunning: () => [],
       },
-      signals: idleAgent().signals,
+      inbox: idleAgent().inbox,
       resume: async (roots) => {
         calls += 1;
         expect(roots).toEqual([]);
@@ -1509,7 +1509,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
     const retired = await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       search: ledger,
       // The gate ran and claimed nothing: this job is past its resume cap.
       resume: async () => [],
@@ -1542,7 +1542,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
     await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       search: ledger,
       resume: async () => [rootId],
     });
@@ -1561,7 +1561,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
     await reconcileInterruptedForks({
       journal,
-      signals: idleAgent().signals,
+      inbox: idleAgent().inbox,
       search: ledger,
       resume: async (roots) => {
         offered.push([...roots]);
@@ -1586,7 +1586,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
     await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       search: ledger,
       resume: async () => [],
     });
@@ -1604,7 +1604,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
 
     await reconcileInterruptedForks({
       journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       search: ledger,
       resume: async () => {
         throw new Error('the gate could not answer');

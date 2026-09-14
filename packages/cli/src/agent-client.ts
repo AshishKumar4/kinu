@@ -154,6 +154,12 @@ export interface AgentTranscriptMessage {
   branched?: boolean;
 }
 
+/** Where `send` put the message: spliced into the running turn's next step,
+ *  or run as a turn of its own — with that turn's result. */
+export type AgentSendResult =
+  | { readonly landed: 'mid-turn' }
+  | ({ readonly landed: 'turn' } & AgentTurnResult);
+
 /** A walk-back fork point: a user message identified by its verbatim text and
  *  its occurrence among same-text user messages counted from the newest (1 =
  *  most recent). Robust across surfaces whose message ids don't align with the
@@ -315,14 +321,12 @@ export interface AgentClient {
   /** Observe the full event stream: user turns, programmatic/reactor turns,
    *  evolution markers, and errors. */
   subscribe(listener: (event: AgentClientEvent) => void): () => void;
-  /** Run one user turn. Events stream through subscribe(); the JSONL log is
-   *  appended internally. */
-  send(prompt: AgentPrompt, opts?: AgentClientSendOptions): Promise<AgentTurnResult>;
-  /** Deliver a user message while a turn is in flight. Local sessions inject
-   *  it into the RUNNING turn at the next role-safe step boundary; cloud
-   *  sessions submit it immediately and the DO runs it as the next serialized
-   *  turn. Returns false when no turn is active — use send() instead. */
-  steer(prompt: AgentPrompt, opts?: AgentClientSendOptions): boolean;
+  /** Send the user's message — the one entry, whatever the agent is doing.
+   *  Nothing running: it runs as a user turn, events stream through
+   *  subscribe(), and the answer is that turn's result once it ends. A turn
+   *  running: it reaches that turn's next step boundary (attachments included)
+   *  and the answer says so at once. The JSONL log is appended internally. */
+  send(prompt: AgentPrompt, opts?: AgentClientSendOptions): Promise<AgentSendResult>;
   /** Steer-as-Branch: run the prompt as a parallel budgeted head against the
    *  live turn's input snapshot WITHOUT interrupting it. When both finish the
    *  pair settles into Alternate Takes (progress + settle stream as

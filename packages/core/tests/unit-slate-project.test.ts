@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseSlateProject } from '../src/slates/project';
+import { credentialedBindings, describeBindings, parseSlateProject } from '../src/slates/project';
 import { routeSlateBindingCall } from '../src/slates/bindings';
 import type { JsonValue } from '../src/utils/json';
 
@@ -92,4 +92,35 @@ test('a single-file slate names its browser module as its main module', () => {
 
   expect(project.main).toBe('slate.tsx');
   expect(project.browser).toBe('slate.tsx');
+});
+
+test('credentialedBindings is non-empty exactly for the kinds that reach the owner (S4)', () => {
+  const declared = {
+    namespace: { kind: 'namespace', namespace: 'workspace' },
+    rpc: { kind: 'rpc', methods: ['listBackgroundJobs'] },
+    mcp: { kind: 'mcp', server: 'github' },
+    app: { kind: 'app', id: 'other' },
+    tool: { kind: 'tool', name: 'file' },
+    memory: { kind: 'memory' },
+    tasks: { kind: 'tasks' },
+    web: { kind: 'web' },
+  } as const;
+
+  const credentialedKinds = ['namespace', 'rpc', 'mcp', 'tool', 'memory', 'tasks', 'web'];
+
+  for (const binding of Object.values(declared)) {
+    const project = parseSlateProject({ main: 'server.js', slate: { bindings: { CAP: binding } } });
+    const credentialed = credentialedBindings(project);
+
+    expect(credentialed.length > 0).toBe(credentialedKinds.includes(binding.kind));
+    expect(describeBindings(project)).toEqual([{ name: 'CAP', kind: binding.kind, target: expect.any(String), credentialed: credentialedKinds.includes(binding.kind) }]);
+  }
+
+  expect(credentialedBindings(parseSlateProject({ main: 'server.js' }))).toEqual([]);
+  expect(describeBindings(parseSlateProject({ main: 'server.js', slate: { bindings: {
+    NOTES: { kind: 'mcp', server: 'notes', tools: ['read_note'] }, DATA: { kind: 'rpc', methods: ['getExecutors', 'listTriggers'] },
+  } } }))).toEqual([
+    { name: 'NOTES', kind: 'mcp', target: 'notes', credentialed: true },
+    { name: 'DATA', kind: 'rpc', target: 'getExecutors, listTriggers', credentialed: true },
+  ]);
 });

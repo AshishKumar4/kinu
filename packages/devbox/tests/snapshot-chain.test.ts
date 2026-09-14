@@ -234,6 +234,10 @@ interface Harness {
   /** The store, as key to size. Omitting a key is a missing object; a
    *  disagreeing size is a corrupt one. */
   readonly objects: Map<string, number>;
+  /** Every object-store write attempt a publication made, in order — the
+   *  shape the live publication meter would count: three `put`s for an
+   *  s3fs `dd`, one for the egress publisher. */
+  readonly attempts: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[];
   /** The digest the STORE reports per key, which is how a same-length
    *  replacement is expressed: same size, different digest. */
   readonly digests: Map<string, string>;
@@ -509,6 +513,11 @@ function harness(overrides: {
   let deltaLayerDied = false;
   let liveMark = overrides.upperMark ?? '7:4096:1700000000';
   let writes = 0;
+  /** Every object-store write attempt a publication makes, in order — what
+   *  the live run's publication meter reads, so a test can assert the shape
+   *  the meter would count: three `put`s under s3fs's `dd`, one under the
+   *  egress publisher. */
+  const attempts: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[] = [];
   /** The generation whose subtree is mounted right now, and the prefix a flush
    *  through it lands under. The ONE mount, one setting, held for the
    *  container's life — the shape the SDK's own registry forces, because it
@@ -557,9 +566,22 @@ function harness(overrides: {
     // unless a test says otherwise, which is the lost-tail shape.
     const flushed = overrides.flushedBytes ?? landed;
 
+    // THREE ATTEMPTS, in s3fs's own order — the generation's directory
+    // marker on `mkdir -p`, an empty object on `create`, and the payload on
+    // the fsync flush (the measured shape of `b20260914045438`, and the
+    // floor that made the egress publisher necessary):
+    const parent = key.slice(0, key.lastIndexOf('/') + 1);
+
+    attempts.push({ operation: 'put', key: parent, bytes: 0 });
+    attempts.push({ operation: 'put', key, bytes: 0 });
+
     if (overrides.failPublish === true) {
+      attempts.push({ operation: 'put', key, bytes: landed });
+
       return { stdout: '1 0', stderr: 'dd: fsync failed: Input/output error', exitCode: 0 };
     }
+
+    attempts.push({ operation: 'put', key, bytes: landed });
 
     if (overrides.publishLandsNothing !== true) {
       objects.set(key, landed);
@@ -569,6 +591,65 @@ function harness(overrides: {
 
     return { stdout: `0 ${flushed}`, stderr: '', exitCode: 0 };
   };
+
+  /** The same publication through the mount's own egress host: ONE PUT. The
+   *  URL the strategy PUTs to is relative to the mount's prefix — the SDK's
+   *  `r2EgressHandler` prepends it — so the fake lands the object at
+   *  `${prefix}/${key}` exactly as the handler would. An unheld mount is the
+   *  handler's 403, and a missing archive is the publisher's own refusal. */
+  const publishEgress = (objectUrl: string) => {
+    const mount = table.mounted;
+
+    if (mount === undefined) {
+      calls.push('publishArchive:unmounted-egress');
+
+      return {
+        stdout: '1 ',
+        stderr: 'Access to R2 bucket is not permitted. Call mountBucket() with this bucket before accessing it.',
+        exitCode: 0,
+      };
+    }
+
+    const relative = /^https?:\/\/[^/]+\/[^/]+\/(?<key>.+)$/.exec(objectUrl)?.groups?.key;
+
+    if (relative === undefined || relative.includes('..')) {
+      return { stdout: '1 ', stderr: `PUT answered 403 for ${objectUrl}`, exitCode: 0 };
+    }
+
+    const key = `${mount.prefix}${relative}`;
+
+    calls.push(`publishArchive:${key}`);
+    const landed = overrides.landedBytes ?? DELTA_BYTES;
+    attempts.push({ operation: 'put', key, bytes: landed });
+
+    if (overrides.failPublish === true) {
+      return { stdout: '1 ', stderr: 'PUT answered 500: the store refused the upload', exitCode: 0 };
+    }
+
+    if (overrides.publishLandsNothing !== true) {
+      objects.set(key, landed);
+      digests.set(key, overrides.landedDigest ?? digestOf(key, landed));
+      versions.set(key, overrides.landedVersion ?? versionOf(key, landed));
+    }
+
+    // The publisher's own HEAD afterwards: what the store reports holding,
+    // which is `landed` when it landed and `flushed` when a test wants the
+    // lost-tail shape — the same two readings the s3fs flush compared.
+    const reported = overrides.publishLandsNothing === true
+      ? 0
+      : (overrides.flushedBytes ?? landed);
+
+    if (reported !== landed) {
+      return {
+        stdout: '3 ',
+        stderr: `the store reports ${reported} bytes for ${objectUrl} where ${landed} were sent`,
+        exitCode: 0,
+      };
+    }
+
+    return { stdout: `0 ${landed} "${versionOf(key, landed)}"`, stderr: '', exitCode: 0 };
+  };
+
 
   const ports: SnapshotChainPorts = {
     containerRunning: () => overrides.running ?? true,
@@ -644,12 +725,20 @@ function harness(overrides: {
       }
 
       // THE PUBLICATION IS A COMMAND, which is the whole change: the archive
-      // moves because the container was told to copy it onto a mount, not
+      // moves because the container was told to write it to the store, not
       // because a port handed bytes to the isolate.
-      // THE COPY, whatever precedes it in the same command: the publication
-      // creates the generation's directory on the mount first (s3fs shows no
-      // parent for a key nothing lives under yet), so the matcher reads the `dd`
-      // rather than the start of the line.
+      // THE EGRESS PUT: the publisher runs `bun <runtime>/devbox-publish.mjs
+      // <archive> <object-url> <partBytes>` and lands one object attempt.
+      const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
+        .exec(command)?.groups;
+
+      if (egress !== undefined) return Promise.resolve(publishEgress(egress.url!));
+
+      // THE S3FS COPY, whatever precedes it in the same command: the
+      // publication creates the generation's directory on the mount first
+      // (s3fs shows no parent for a key nothing lives under yet), so the
+      // matcher reads the `dd` rather than the start of the line. Kept so
+      // the three-attempt shape stays a possible fixture answer.
       const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
         .exec(command)?.groups;
 
@@ -710,6 +799,13 @@ function harness(overrides: {
       return next;
     },
     storeRoot: () => STORE_ROOT,
+    storeObjectUrl: (key) => {
+      if (!key.startsWith(`${STORE_ROOT}/`)) {
+        throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${STORE_ROOT}`);
+      }
+
+      return `http://r2.internal/BACKUP_BUCKET/${key.slice(STORE_ROOT.length + 1)}`;
+    },
     mountStore: (at) => {
       calls.push(`mountStore:${at}`);
 
@@ -843,6 +939,7 @@ function harness(overrides: {
     calls,
     objects,
     digests,
+    attempts,
     versions,
     get state() { return state; },
     set state(next) { state = next; },
@@ -2406,29 +2503,31 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
       // ONE MOUNT, ONE SETTING, ONE MOUNT POINT: the chain's subtree, at
-      // /backups, held writable for the container's life — which is what the
-      // publication writes through. A second path mounted writable for one
-      // publication cannot work: the SDK refuses one binding mounted twice
-      // under different settings, measured live on the second checkpoint after
-      // a wake (runs e2e20260902032038, e2e20260902032318).
+      // /backups, held writable for the container's life — its registration
+      // is what routes the egress PUT, and its reads serve the layers. A
+      // second path mounted writable for one publication cannot work: the
+      // SDK refuses one binding mounted twice under different settings,
+      // measured live on the second checkpoint after a wake (runs
+      // e2e20260902032038, e2e20260902032318).
       expect(record.calls).toContain(`mountStore:${storeMountOf(record.calls)}`);
-      // The archive went in through that mount, under the key the record names.
+      // The archive went in through that mount's egress host, under the key
+      // the record names — ONE object attempt, not s3fs's three.
       expect(record.calls).toContain(`publishArchive:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
       expect(record.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
       // And the ONLY thing this side learned about it is metadata.
       expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state))}`);
     });
 
-  test('the flush happens through the held mount, before the record',
+  test('the upload is verified through the held mount\'s registration, before the record',
     async () => {
-      // R2's own precondition, and the one way this step could lose committed
-      // data: a release returns as soon as the mount leaves the namespace and
-      // cannot flush, so bytes still held by s3fs would be gone while the record
-      // already named them. The flush is therefore part of the copy command —
-      // `conv=fsync` — and the mount it flushes through is the one the box
-      // HOLDS, so there is no release window at all: the mount cannot be
-      // released while squashfuse reads layer files through it, which is why the
-      // one-mount design exists.
+      // The one way this step could lose committed data: a record that names
+      // an object the store never fully took. The publisher's own HEAD after
+      // the PUT is the first check — the egress host answers it, so bytes
+      // that did not land are a non-zero exit HERE — and `objectFacts` is
+      // the second, read from the store rather than the mount. The mount is
+      // still the one the box HOLDS: its registration is what routes
+      // `r2.internal`, and releasing it is impossible while squashfuse reads
+      // layer files through it, which is why the one-mount design exists.
       const record = harness({ state: chainState(), mounts: MOUNTED });
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
 
@@ -2439,30 +2538,61 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(mounted).toBeGreaterThan(-1);
       expect(mounted).toBeLessThan(flushed);
       expect(flushed).toBeLessThan(read);
-      // The store is asked what it holds only after the flush answered, so the
-      // answer describes the object rather than a filesystem's view of it.
+      // The store is asked what it holds only after the upload answered, so
+      // the answer describes the object rather than a filesystem's view of it.
       expect(read).toBeLessThan(wrote);
-      // The flush is IN the command, not a separate hope.
-      expect(publishCommand({ archivePath: 'a', mountedPath: 'b' })).toContain('conv=fsync');
-      // AND SO IS THE GENERATION'S DIRECTORY. The mount covers the box's chain
-      // root, so the target is `<mount>/<generation>/<name>`; s3fs shows no
-      // parent for a key nothing lives under yet, and `dd` then refuses with
-      // `No such file or directory` — measured live on the first checkpoint of a
-      // fresh box, run e2e20260902083130.
+      // THE EGRESS COMMAND IS THE PUBLISHER: `bun <runtime>/devbox-publish.mjs
+      // <archive> <object-url> <partBytes>`, not a `dd` through the mount.
       const store = storeMountOf(record.calls);
 
       const command = publishCommand({
         archivePath: '/stage/layer.sqsh',
-        mountedPath: `${store}/${CHAIN_ID}/data.sqsh`,
+        objectUrl: `http://r2.internal/BACKUP_BUCKET/${CHAIN_ID}/data.sqsh`,
       });
 
-      expect(command).toStartWith(`mkdir -p '${store}/${CHAIN_ID}';`);
-      expect(command.indexOf('mkdir -p')).toBeLessThan(command.indexOf('dd if='));
+      expect(command).toContain('devbox-publish.mjs');
+      expect(command).toContain(`'http://r2.internal/BACKUP_BUCKET/${CHAIN_ID}/data.sqsh'`);
+      expect(command).toContain('/stage/layer.sqsh');
+      // And no byte goes through the mount path any more.
+      expect(command).not.toContain('conv=fsync');
       // AND THE MOUNT IS STILL HELD: nothing releases the store path once it
-      // is taken, because the attach's layers are reading through it. A release
-      // BEFORE the mount is the registry entry a replaced container left.
+      // is taken, because the attach's layers are reading through it and the
+      // publication's URL only resolves while its registration stands. A
+      // release BEFORE the mount is the registry entry a replaced container
+      // left.
       expect(record.calls.lastIndexOf(`unmountStore:${store}`)).toBeLessThan(mounted);
     });
+
+  test('a checkpoint publishes in exactly ONE object attempt', async () => {
+    // The C3 contract the live meter enforces: `put` attempts on the box's
+    // keys plus one multipart upload. Under the s3fs `dd` shape this is three
+    // (marker, empty, payload — `b20260914045438`); under the egress PUT it
+    // is one. The fixture's `attempts` row is what the meter counts.
+    const record = harness({ state: chainState(), mounts: MOUNTED });
+    expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+
+    const key = deltaObjectKey(STORE_ROOT, publishedDeltaId(record.state));
+
+    expect(record.attempts).toEqual([{ operation: 'put', key, bytes: DELTA_BYTES }]);
+
+    // THE CONTROL, in the same fake: the s3fs shape the product no longer
+    // issues is still answerable, and the meter-equivalent row has to see
+    // its three attempts — a fixture that could not see three could not
+    // prove one.
+    const store = storeMountOf(record.calls);
+    await record.ports.exec(
+      `mkdir -p '${store}/${CHAIN_ID}'; dd if='/stage/layer.sqsh' of='${store}/${CHAIN_ID}/data.sqsh' `
+      + 'bs=4M conv=fsync; rc=$?; printf \'%s %s\' "$rc" 0',
+    );
+
+    const s3fsAttempts = record.attempts.slice(1);
+
+    expect(s3fsAttempts).toEqual([
+      { operation: 'put', key: `${STORE_ROOT}/${CHAIN_ID}/`, bytes: 0 },
+      { operation: 'put', key: `${STORE_ROOT}/${CHAIN_ID}/data.sqsh`, bytes: 0 },
+      { operation: 'put', key: `${STORE_ROOT}/${CHAIN_ID}/data.sqsh`, bytes: DELTA_BYTES },
+    ]);
+  });
 
   test('a writable mount is released even when the publication fails', async () => {
     // A mount left behind is refused by the SDK's own registry on the next
@@ -2490,12 +2620,11 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
-    expect(outcome.reason).toContain('did not carry every byte');
-    expect(outcome.reason).toContain('512');
+    expect(outcome.reason).toContain('where 512 were sent');
     expect(outcome.reason).toContain('700000');
     // The record still names the generation the box can still attach from.
     expect(record.state?.rev).toBe(1);
-    expect(record.state?.lastFailure?.reason).toContain('did not carry every byte');
+    expect(record.state?.lastFailure?.reason).toContain('the store reports');
   });
 
   test('a publication the store has no object for is REFUSED, not recorded', async () => {
@@ -2510,8 +2639,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const record = harness({ state: null, mounts: MOUNTED, publishLandsNothing: true });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
-    expect(outcome.reason).toContain('the store holds no such object');
-    // Nothing was recorded: no first generation exists to attach from.
+    expect(outcome.reason).toContain('the store reports 0 bytes');
     expect(record.state).toBeNull();
   });
 
@@ -2801,7 +2929,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(outcome.kind).toBe('failed');
       // THE OPERATION's reason, carrying the container's own words, and not the
       // durable-storage failure that swallowed it.
-      expect(outcome.reason).toContain('dd: fsync failed');
+      expect(outcome.reason).toContain('PUT answered 500');
       expect(outcome.reason).not.toContain('durable storage unreachable');
       expect(outcome.bytes).toBeUndefined();
       // Nothing durable moved in either direction: no layer landed, and the
@@ -2809,7 +2937,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.state).toEqual(chainState({ upperMark: 'stale', at: 1 }));
       // Both lines are on the console, which is the only record left.
       expect(record.calls.some(call => call.startsWith(`log:${DEVBOX_WORKDIR} checkpoint failed:`)
-        && call.includes('dd: fsync failed'))).toBe(true);
+        && call.includes('PUT answered 500'))).toBe(true);
       expect(record.calls).toContain(
         `log:${DEVBOX_WORKDIR} that failure could not be stamped on the durable record`,
       );
@@ -2883,7 +3011,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     expect(outcome.bytes).toBeUndefined();
     expect(record.state?.rev).toBe(1);
     expect(record.state?.base).toEqual(baseLayer(CHAIN_ID, BASE_BYTES));
-    expect(record.state?.lastFailure?.reason).toContain('dd: fsync failed');
+    expect(record.state?.lastFailure?.reason).toContain('PUT answered 500');
   });
 
   test('a checkChanges failure is a recorded failure, not a silent skip', async () => {
