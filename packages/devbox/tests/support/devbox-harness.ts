@@ -570,7 +570,12 @@ export class FakeSandbox {
    * `chainStoreRoot` derives, so a `dd` through the store mount lands where
    * the next attach looks. Unset, no chain command reaches the store.
    */
-  chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string } | undefined;
+  chainStore: { readonly objects: Map<string, Uint8Array>; readonly root: string;
+    /** Every object-store write attempt a publication makes, in order —
+     *  what the live run's publication meter reads. s3fs's `dd` publication
+     *  costs three (marker, empty placeholder, payload); the egress PUT
+     *  costs one. */
+    attempts?: { operation: 'put' | 'uploadPart' | 'complete'; key: string; bytes: number }[] } | undefined;
   /**
    * Staged archives by container path: what the box's own `mksquashfs`
    * command measured, which the later `dd` of that same path publishes.
@@ -794,6 +799,8 @@ export class FakeSandbox {
       return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
     }
 
+    if (command.includes('devbox-publish.mjs')) return this.#execPublishEgress(command);
+
     if (command.includes('conv=fsync')) return this.#execPublish(command);
 
     // THE UPPER FINGERPRINT: a hash of what the changed set holds, so an
@@ -832,8 +839,11 @@ export class FakeSandbox {
     return null;
   }
 
-  /** The chain's publish: `dd if='<archive>' of='<mounted path>' conv=fsync`
-   *  lands a staged archive under the object key the store mount exposes. */
+  /** The chain's publish over s3fs: `dd if='<archive>' of='<mounted path>'
+   *  conv=fsync` lands a staged archive under the object key the store mount
+   *  exposes — at THREE object attempts, because `mkdir -p` PUTs the
+   *  generation's marker and `create` PUTs an empty object before the flush
+   *  writes the payload (the measured shape of `b20260914045438`). */
   #execPublish(command: string) {
     const archivePath = /if='([^']+)'/.exec(command)?.[1];
     const mountedPath = /of='([^']+)'/.exec(command)?.[1];
@@ -855,9 +865,51 @@ export class FakeSandbox {
       : undefined;
 
     if (relative === undefined) throw new Error(`the publish target is outside the store mount: ${mountedPath}`);
-    store.objects.set(`${store.root}/${relative}`, bytes.slice());
+
+    const key = `${store.root}/${relative}`;
+    const parent = key.slice(0, key.lastIndexOf('/') + 1);
+
+    store.attempts?.push({ operation: 'put', key: parent, bytes: 0 });
+    store.attempts?.push({ operation: 'put', key, bytes: 0 });
+    store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
+    store.objects.set(key, bytes.slice());
 
     return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
+  }
+
+  /** The chain's publish through the mount's egress host: `bun
+   *  '<runtime>/devbox-publish.mjs' '<archive>' '<object-url>' <partBytes>`
+   *  writes the staged archive in ONE object attempt — what s3fs's `dd`
+   *  cannot do — and the store lands it under the mount's prefix plus the
+   *  URL's key. */
+  #execPublishEgress(command: string) {
+    const archivePath = /devbox-publish\.mjs' '([^']+)'/.exec(command)?.[1];
+    const objectUrl = /devbox-publish\.mjs' '[^']+' '([^']+)'/.exec(command)?.[1];
+    const store = this.chainStore;
+
+    if (archivePath === undefined || objectUrl === undefined || store === undefined) {
+      throw new Error(`the egress publish command names no archive, URL or store: ${command}`);
+    }
+
+    if (this.s3fsMounts.size === 0) {
+      return { stdout: '1 ', stderr: 'Access to R2 bucket is not permitted. Call mountBucket() with this bucket before accessing it.', exitCode: 0 };
+    }
+
+    const relative = /^https?:\/\/[^/]+\/[^/]+\/(.+)$/.exec(objectUrl)?.[1];
+
+    if (relative === undefined) {
+      return { stdout: '1 ', stderr: `PUT answered 403 for ${objectUrl}`, exitCode: 0 };
+    }
+
+    const bytes = this.stagedArchives.get(archivePath);
+
+    if (bytes === undefined) return { stdout: '2 ', stderr: `no archive at ${archivePath}`, exitCode: 0 };
+
+    const key = `${store.root}/${relative}`;
+    store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
+    store.objects.set(key, bytes.slice());
+
+    return { stdout: `0 ${String(bytes.byteLength)} "etag"`, stderr: '', exitCode: 0 };
   }
 
   async exec(

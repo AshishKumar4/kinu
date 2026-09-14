@@ -1014,7 +1014,7 @@ export function restartPlan(
 }
 
 /**
- * Does a self-re-arming callback still need a successor armed?
+ * Does a callback still need a row armed?
  *
  * THE ROW BEING DISPATCHED IS STILL IN THE TABLE. `@cloudflare/containers`
  * deletes a fired row AFTER the callback returns, not before: in its `alarm()`
@@ -1028,15 +1028,29 @@ export function restartPlan(
  * other had already died during an earlier phase, so the next phase found zero
  * rows before any idle had happened.
  *
- * The fix is to count only rows scheduled STRICTLY IN THE FUTURE. The firing row
- * is due now or overdue, so it never counts, and a genuine pending successor
- * always does.
+ * So a DISPATCHING callback counts only rows scheduled STRICTLY IN THE FUTURE:
+ * the firing row is due now or overdue and never counts, and a genuine pending
+ * successor always does.
+ *
+ * ANY OTHER CALLER COUNTS EVERY ROW. A due row the alarm loop has not
+ * delivered yet is pending work, and arming beside it is not idempotent: the
+ * SDK's `schedule()` resets the object's one platform alarm a second out on
+ * every call. A state poll faster than that second re-armed the overdue
+ * startup row on every reading and moved the alarm out of reach each time,
+ * so it never fired and the retry it carried never ran. Measured on
+ * `b20260914070552`, cycles 2, 3, 5 and 6: one admission refusal each, then
+ * 50 seconds of `running:true, restoration:unstarted` with the incident
+ * undelivered, the heartbeat silent, and the platform reporting each alarm
+ * delivery `Canceled`. Only the row's own dispatch may look past it.
  */
 export function needsArming(
   rows: readonly { readonly time: number }[],
   nowSeconds: number,
+  dispatching: boolean,
 ): boolean {
-  return !rows.some(row => row.time > nowSeconds);
+  if (dispatching) return !rows.some(row => row.time > nowSeconds);
+
+  return rows.length === 0;
 }
 
 

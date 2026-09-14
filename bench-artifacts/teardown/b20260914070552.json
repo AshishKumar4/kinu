@@ -1,0 +1,66 @@
+{
+  "schema": "storage-matrix/teardown@1",
+  "runId": "b20260914070552",
+  "createdAt": "2026-09-14T07:05:52.829Z",
+  "updatedAt": "2026-09-14T07:21:53.849Z",
+  "entries": [
+    {
+      "kind": "worker",
+      "name": "kinu-devbox-bench-b20260914070552-snapshot-chain",
+      "detail": "snapshot-chain fixture Worker",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    },
+    {
+      "kind": "container-app",
+      "name": "kinu-devbox-bench-b20260914070552-snapshot-chain-snapshotchainbox",
+      "detail": "snapshot-chain container application",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    },
+    {
+      "kind": "r2-bucket",
+      "name": "kinu-devbox-bench-b20260914070552-snapshot-chain",
+      "detail": "dedicated snapshot-chain bucket",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    },
+    {
+      "kind": "do-state",
+      "name": "ab-snapshot-chain-b20260914070552",
+      "detail": "per-arm durable box state",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    },
+    {
+      "kind": "alarm",
+      "name": "ab-snapshot-chain-b20260914070552",
+      "detail": "per-arm durable alarm",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    },
+    {
+      "kind": "mount",
+      "name": "ab-snapshot-chain-b20260914070552",
+      "detail": "per-arm mounted workspace",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    },
+    {
+      "kind": "local-path",
+      "name": "/tmp/kinu-devbox-bench-b20260914070552",
+      "detail": "generated Wrangler config directory",
+      "done": true,
+      "attempts": 1,
+      "lastError": null
+    }
+  ],
+  "counters": {},
+  "kept": false
+}
