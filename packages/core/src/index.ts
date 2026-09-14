@@ -647,9 +647,10 @@ export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 
 export {
   describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
+  buildMcpToolSet,
   SerializableToolDescriptorSchema, McpToolSurfaceSchema,
   type SerializableToolDescriptor, type RemoteMcpTool,
-  type McpSurfaceBudget, type McpDescriptorAdmission,
+  type McpSurfaceBudget, type McpDescriptorAdmission, type McpToolBuild,
 } from './tools/mcp-surface';
 
 export {
