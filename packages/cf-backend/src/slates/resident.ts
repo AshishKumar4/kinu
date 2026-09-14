@@ -7,7 +7,7 @@ import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import { CRED_KERNEL, type RouteableFacetTarget, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import slateVendor from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
@@ -268,7 +268,10 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '      }});',
     '    }',
     '    const slate = this.#slate;',
-    '    if (slate === undefined || typeof slate.fetch !== "function") return new Response("Not found", { status: 404 });',
+    '    // The header names this refusal as the runner\'s own: the host\'s route',
+    '    // answers the same bare body when nothing listens, and the two must',
+    '    // be told apart from outside.',
+    '    if (slate === undefined || typeof slate.fetch !== "function") return new Response("Not found", { status: 404, headers: { "x-slate-runner": slate === undefined ? "unstarted" : "no-fetch" } });',
     '    return invocations.run(request.headers.get("x-slate-call"), () => slate.fetch(request));',
     '  }',
     '}',
@@ -534,6 +537,13 @@ export class ResidentSlateProcesses {
     if (input.app !== null) await this.deps.registerPort(entry.pid, input.app.port, process, input.owner);
 
     session.processes.setTerminator(entry.pid, () => {
+      // The one door a resident's registration leaves by: whoever ends the
+      // pid is on the stack here, which is what the event records.
+      diagnostics.event('slate.resident.terminated', {
+        pid: entry.pid, owner: input.owner, port: input.app?.port ?? 0,
+        state: session.processes.get(entry.pid)?.state ?? 'absent',
+        by: new Error('resident terminated').stack?.split('\n').slice(2, 8).map((line) => line.trim()).join(' < ') ?? '',
+      });
       this.deps.unregisterPorts(entry.pid);
       this.deps.ctx.waitUntil(process.release());
     });

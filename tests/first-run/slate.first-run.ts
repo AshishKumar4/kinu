@@ -19,10 +19,10 @@ const ID = 'hello';
 
 const ASK = 'Use the file tool to create a slate at /home/user/slates/hello/. '
   + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787,"bindings":{}}. '
-  + 'Write server.ts as a TypeScript module whose default export has fetch(request, env). '
-  + 'The request is an ordinary Request. For GET /ping, respond with JSON '
-  + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname}. '
-  + 'Return HTTP 404 for other paths. Start its preview yourself and verify GET /ping. Reply with pong on its own line and the working preview URL.';
+  + 'Write server.ts so the slate answers GET /ping with JSON '
+  + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname} '
+  + 'and HTTP 404 for other paths. Start its preview yourself and verify GET /ping. '
+  + 'Reply with pong on its own line and the working preview URL.';
 
 const ExpectedResponse = v.strictObject({
   message: v.literal('pong'),
@@ -66,7 +66,13 @@ describe(SUITE, () => {
             const body = await response.text();
             const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), ExpectedResponse), body);
             answered = response.ok && parsed.success;
-            responseDetail = `HTTP ${String(response.status)}: ${body.slice(0, 200)}`;
+
+            const headers = [...response.headers.entries()]
+              .filter(([name]) => name === 'server' || name === 'cache-control' || name.startsWith('x-nimbus') || name.startsWith('x-slate'))
+              .map(([name, value]) => `${name}: ${value}`)
+              .join('; ');
+
+            responseDetail = `HTTP ${String(response.status)}: ${body.slice(0, 200)} [${headers === '' ? 'no diagnostic headers' : headers}]`;
           } catch (error) {
             responseDetail = 'Preview request failed: ' + (error instanceof Error ? error.message : String(error));
           }
