@@ -359,34 +359,56 @@ drive; the same cycle then ran 150 accumulated startup rows in one alarm
 pass. `needsArming` now takes the dispatching flag: a callback looks past
 its own due row, every other caller counts every row. The lifecycle double
 is red before the fix (four polls after the row came due armed it four
-times) and green after; the self-re-arming direction stays red. Not yet
-measured live: the fix's cloud run is the next `--lifecycle` cell, then the
-C3 cell. Evidence: `bench-artifacts/block-attach/b20260914070552/`
-(`observations.json`, `tail.log`, `lifecycle.jsonl`) and its completed
-seven-entry teardown `bench-artifacts/teardown/b20260914070552.json`, zero
-objects and zero multipart uploads, bucket absent.
+times) and green after; the self-re-arming direction stays red. Evidence:
+`bench-artifacts/block-attach/b20260914070552/` (`observations.json`,
+`tail.log`, `lifecycle.jsonl`) and its completed seven-entry teardown
+`bench-artifacts/teardown/b20260914070552.json`, zero objects and zero
+multipart uploads, bucket absent.
 
-H1 (hypothesis, unmeasured live). One object attempt per checkpoint by
-publishing the staged archive with an HTTP PUT to the mount's own egress
-host (`http://r2.internal/<binding>/<key>`) instead of `mkdir -p` and `dd`
-through s3fs. The three attempts of `b20260914045438` are `put
-backups/<id>/ 0`, `put backups/<id>/delta.sqsh 0` and `put
-backups/<id>/delta.sqsh 69632`: s3fs 1.90 (the pinned image) PUTs a
-directory marker on `mkdir` and an empty object on `create` before its
-flush, and has no option to skip either, so the s3fs shape's floor is two.
-A presigned PUT is not direct here: the product runs `enableInternet =
-false` and intercepts all of 80/443, so it would add an R2 API key and a
-SigV4 hop and still pass every byte through the Worker. The egress-host PUT
-uses the credential-less handler the mount already registers, one `put` for
-an archive up to the part size and one multipart upload above it, and s3fs
-stays for reads. Measured locally on 2026-09-14 in the pinned sandbox image
-(Bun 1.3.12): a 69,632-byte archive is one PUT; a 3,149,824-byte archive with
-1 MiB parts is one multipart upload of four parts; a `Bun.file` slice as a
-fetch body sends nothing, a slice `.stream()` with an explicit
-`Content-Length` and a whole `Bun.file` both send with the length. Source of
-the probe: `/tmp/o1-publisher/`, not yet in the tree. Nothing in the product
-publishes this way yet; D4's chunked delta and the record's byte check are
-unchanged by it.
+Measured live on 2026-09-14 on clean `3618e3e0b`, run `b20260914073654`,
+`--lifecycle`, all ten destroy/create cycles: no cycle refused at the
+55-second ceiling with `restoration:unstarted`; every cold cycle attached,
+with `incidents.total` between 3 and 8 and `incidents.undelivered` at 0,
+and `devbox.alarm.enter` rows between the retries the platform was starving.
+The same source's `--c3-only` cell, run `b20260914074243`, restored the C3
+changed file in 12,350 ms (`restoration.ms`, after 2 redrives), paid the
+still-unfixed s3fs shape's three `put` attempts
+(`published.transport.puts: 3`, `putUploadBytes: 69632`), and passed file
+correctness. Both runs' teardown manifests report zero residue objects and
+zero residue multipart uploads. Evidence: `observations.json` and
+`verdict.json` under `bench-artifacts/block-attach/b20260914073654/` and
+`bench-artifacts/block-attach/b20260914074243/`, and
+`bench-artifacts/teardown/b20260914073654.json`,
+`bench-artifacts/teardown/b20260914074243.json`.
+
+D15. One object attempt per checkpoint, by publishing the staged archive
+with an HTTP PUT to the mount's own egress host (2026-09-14, `fix/devbox-o1`,
+`e2cd0eb51`). H1's design, landed and measured live. `storeObjectUrl(key)` in
+`#chainPorts` answers `http://r2.internal/<binding>/<key relative to the
+mount prefix>` and refuses a key outside the prefix; `publishCommand`
+writes the publisher script into `/var/tmp/devbox` and runs it under bun,
+returning `<exit> <bytes> <etag>`; `publishArchive` reads that reply. The
+publisher sends the whole `Bun.file` for a single PUT and `slice.stream()`
+with an explicit `Content-Length` for multipart parts, because the pinned
+image's Bun 1.3.12 sends nothing for a `Bun.file` slice as a fetch body
+(measured locally, `/tmp/o1-publisher/`). Its own HEAD afterwards replaces
+the `conv=fsync` check `dd` owed s3fs; the mount is still held because its
+registration routes `r2.internal` and its reads serve the layers.
+
+Measured live on clean `4a7dd1be6`, run `b20260914082622`, `--c3-only`:
+`published.transport.puts: 1`, `putUploadBytes: 69632`, `correctness:
+passed`, cold restore 13,839 ms — versus three attempts and 12,350 ms on
+the s3fs control `b20260914074243`, and the three attempts of the earlier
+control `b20260914045438`. The one-object-attempt gate under
+`C3_BYTES_BOUND` is green. Errors: none; teardown `finalResidueObjects: 0`,
+`finalResidueMultipartUploads: 0`. Evidence:
+`bench-artifacts/block-attach/b20260914082622/` (`observations.json`,
+`verdict.json`, `tail.log`) and
+`bench-artifacts/teardown/b20260914082622.json`. The cold-restore delta is
+noise-scale between two redrived cells, not a fix claim; what the change
+removes is two of three attempts. s3fs's marker/placeholder/flush three-put
+shape is retired for writes and stays for reads.
+
 
 ## Measurement contract for a strategy comparison
 
@@ -400,15 +422,20 @@ admitted only when every G gate passes; a refused run ranks nothing.
 
 O1. Full live acceptance remains refused by D5's dated settlement. Witness
 registration is complete in `fed2b9d779` and both witnesses passed on
-deployed Containers and R2. D13's boot-window fix (`c0181b5eb`) and the G3
-subshell fix (`9ae255d17`) pass their local red/green checks; three subsequent
-platform-admission refusals prevented their full cloud confirmation. C3's
-one-object-attempt requirement remains red. The bounded C3 and 2 GiB figures
-are storage evidence, not full strategy admission. Earlier controls follow.
+deployed Containers and R2. The two measured blockers are now closed: D14's
+alarm-starvation fix ran ten `--lifecycle` cycles with zero refusals
+(`b20260914073654`) and D15's egress publish is one object attempt live
+(`b20260914082622`, `puts: 1`, correctness passed). What remains red is the
+D5 settlement itself: G3's publication-safety probe, G6's complete-cell
+figures and G9's statistical-validity counts were never re-run under the
+fixed strategy, so the gate ladder has no post-fix settlement. O1 closes
+when a settlement run on this tree re-scores G3, G6 and G9, not before.
+Earlier controls follow.
 
 The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
-`ad8a2346b`, image digest `d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0`)
-was refused before either changed-file restore. The 64 MiB C3 baseline
+`ad8a2346b`, image digest
+`d09be1f3e613173006430cff1b58e5e5d1269dc383fe0404a33f9e3ff8a2d0a0`) was
+refused before either changed-file restore. The 64 MiB C3 baseline
 publication took 656,741 ms and failed at s3fs fsync/close with EIO; the
 2 GiB sparse baseline took 217,663 ms and failed at the same boundary.
 Both requested attach figures and payload counters are unmeasured, not zero.
@@ -482,8 +509,10 @@ PUTs and the payload write. The payload-size gate passes; the one-attempt
 gate remains red. No attempt was hidden or reclassified to admit the run.
 `b20260914045438` on `5d2707ba3` repeated both: three attempts, and a cold
 restore that read `running:true, restoration:unstarted` for 55 s. D14 names
-the startup cause and its fix; H1 names the publication design under
-measurement. O1 therefore remains open as a full strategy-admission claim.
+the startup cause and its fix, now measured live (`b20260914073654`); D15
+names the publication design, landed in `e2cd0eb51` and measured live at
+one attempt (`b20260914082622`). O1 therefore remains open as a full
+strategy-admission claim.
 O2. Storage implementation closed by D7. Deployed latency evidence remains
 part of O1; arbitrary service startup remains outside the storage bound.
 O3. A corrected candidate under the measurement contract above, if one is
