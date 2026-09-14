@@ -21,12 +21,12 @@
  *
  * ## Type
  *
- * Three faces, no web fonts, no bytes over the wire. A Palatino-family serif
- * for display, the system sans for reading, the system mono for labels and
- * commands. Every landing page worth studying uses a display face that is not
- * the UI font (omp.sh sets Fraunces over "Iowan Old Style"; pi.dev sets Plantin
- * over Georgia), and a page that leaves its headline in `-apple-system` reads
- * as a dashboard with marketing copy in it.
+ * Two self-hosted faces over the wire, latin subsets. Schibsted Grotesk is
+ * the display face AND the reading face — the app earns hierarchy with
+ * weight, not typeface swaps — and Fragment Mono carries labels and
+ * commands. Newsreader, the app's serif, is the brand mark only and lives
+ * in the React bundle, so these documents ship neither its face nor a serif
+ * stack.
  */
 
 import { escapeHtml } from './http';
