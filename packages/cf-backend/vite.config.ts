@@ -5,6 +5,7 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import agents from "agents/vite";
+import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from './vite-prompt-text';
 
@@ -85,8 +86,27 @@ const workerSourceMaps = {
   },
 };
 
+/**
+ * WGSL for the landing hero's WebGPU renderer, CLIENT environment only.
+ *
+ * vgpu's loader turns a `.wgsl` file into the shader source object `draw()`
+ * and `effect()` take, resolving its `import`s across modules. Only the
+ * browser graph imports one, and the plugin's transform already ignores every
+ * other id — but a plugin that runs in the worker environment is a plugin
+ * that could one day transform something there, so it is scoped the way the
+ * stub plugin above selects its side: by environment name. The Worker build
+ * never sees vgpu or a shader.
+ */
+const wgslClientOnly = {
+  ...wgslVitePlugin(),
+  name: "kinu:wgsl-client",
+  applyToEnvironment(environment: { name: string }): boolean {
+    return environment.name === "client";
+  },
+};
+
 export default defineConfig({
-  plugins: [promptText(), stubClientNodeBuiltins, workerSourceMaps, agents(), react(), cloudflare(), tailwindcss()],
+  plugins: [promptText(), stubClientNodeBuiltins, workerSourceMaps, wgslClientOnly, agents(), react(), cloudflare(), tailwindcss()],
   // The fabric outbox is the one pre-bundled dep that imports a stubbed
   // builtin; excluded, it serves as source and the resolveId hook reaches it.
   // @plannotator/web-highlighter is the inverse: UMD-only (its `module` field

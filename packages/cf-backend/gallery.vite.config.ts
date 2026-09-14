@@ -9,13 +9,16 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { wgslVitePlugin } from "@vgpu/wgsl/loader-vite";
 import { defineConfig } from "vite";
 import { promptText } from "./vite-prompt-text";
 
 const galleryRoot = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [promptText(), react(), tailwindcss()],
+  // The hero's shaders: this config has no worker environment, so the loader
+  // needs no scoping here.
+  plugins: [promptText(), wgslVitePlugin(), react(), tailwindcss()],
   // @plannotator/web-highlighter ships UMD only (its `module` field points at
   // the same min.js), so served raw it has no `default` export and the plan
   // panel's lazy chunk dies in dev. Prebundle it; builds interop natively.
