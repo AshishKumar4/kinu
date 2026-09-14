@@ -174,10 +174,6 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-chat-input-admission.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
       "key": "private_reach :: packages/cf-backend/tests/unit-device-turn-stop.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 2
     },

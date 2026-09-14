@@ -300,7 +300,18 @@ export type * from './types/evaluation';
 // touches `node:util` at module scope and cannot load in a browser. Client
 // code value-imports this barrel, so anything exported here executes in the
 // client graph — keep worker-only modules off it.
-export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
+export {
+  parseSlateProject, describeBindings, credentialedBindings,
+  type SlateProject, type SlateBinding, type SlateBindingKind, type SlateBindingDeclaration,
+} from './slates/project';
+
+export {
+  SHARE_KINDS, formatBlueprintId, parseBlueprintId, blueprintPagePath,
+  BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
+  SharedLibrarySchema, SlateShareRecordSchema,
+  type ShareKind, type BlueprintAddress, type BlueprintInspection, type BlueprintView, type BlueprintFork, type BlueprintBundle,
+  type PublishedBlueprint, type SharedLibrary, type SharedRow, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
+} from './slates/sharing';
 
 export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
 
@@ -309,7 +320,7 @@ export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 export type { SlateProcess } from './slates/process';
 
 export {
-  isSlateMethodName, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
+  isSlateMethodName, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult, type SlateAnswer,
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 
@@ -1646,6 +1657,13 @@ export {
   type PendingDeviceConsent,
   type PendingConsentRow,
   type DeviceConsentNotice,
+  SECRET_PATTERNS,
+  scanText,
+  countDetections,
+  secretSightings,
+  type SecretPattern,
+  type SecretFinding,
+  type SecretSighting,
 } from './safety/index';
 
 export {
@@ -1661,6 +1679,8 @@ export { nanoid } from './utils/nanoid';
 export { abortCause } from './utils/abort';
 
 export { hmacSha256Hex, randomToken, timingSafeEqual } from './utils/crypto';
+
+export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 
 // One POSIX quoting rule for every command this system composes, on either
 // backend — the shells the executors talk to are the same shells.

@@ -26,6 +26,9 @@ import { FilesSurface } from "./FilesSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
+import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
+import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
+import { ShareNetworkIcon } from "@phosphor-icons/react";
 import { SLATE_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
@@ -121,6 +124,11 @@ export interface WorkSurfaceProps {
   rpc: Rpc;
   /** Signed-out sample content in place of a network preview. */
   slateBody?: (slate: SlateSummary) => ReactNode;
+  /** The workspace name the share control publishes from. Absent in fixture frames without an owner. */
+  workspace?: string;
+  /** A slate forked from a blueprint whose bindings are still unmapped: its tab opens on the panel, not the preview. */
+  unmappedSlate?: string | null;
+  onUnmappedOpened?: () => void;
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -179,6 +187,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
+  // The share control of the open slate's tab: one dialog, owned here.
+  const [sharing, setSharing] = useState(false);
 
   // A surface can be selected without being clicked (a deep link, a restored
   // tab) — keep the current one in view when the strip has to scroll.
@@ -233,6 +243,18 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
+        {openSlateSummary !== undefined && props.workspace !== undefined && (
+          <button
+            type="button"
+            onClick={() => setSharing(true)}
+            data-slate-share
+            title={`Share ${openSlateSummary.title}`}
+            aria-label={`Share ${openSlateSummary.title}`}
+            className={`${tabCls} px-2.5`}
+          >
+            <ShareNetworkIcon size={14} />
+          </button>
+        )}
         {chip !== null && (
           <button
             type="button"
@@ -324,9 +346,11 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
-          {openSlate !== null && (openSlateSummary
-            ? (props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />)
-            : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
+          {openSlate !== null && (openSlate === props.unmappedSlate
+            ? <UnmappedBindingsPanel slate={openSlate} title={openSlateSummary?.title ?? openSlate} rpc={props.rpc} onOpen={() => props.onUnmappedOpened?.()} />
+            : openSlateSummary
+              ? (props.slateBody?.(openSlateSummary) ?? <SlateFrame id={openSlateSummary.id} rpc={props.rpc} reloadKey={openSlateReloadKey} onReady={props.onRefreshPorts} />)
+              : <SlateFrame id={openSlate} rpc={props.rpc} reloadKey={openSlateReloadKey} />)}
         </ErrorBoundary>
       </div>
       <div className={surface === "Diffs" ? "flex-1 min-h-0" : "hidden"}>
@@ -334,6 +358,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
       {props.previewError && <LoadFailure what="preview listings" message={props.previewError} onRetry={props.onRefreshPorts} />}
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
+      {sharing && openSlateSummary !== undefined && props.workspace !== undefined && (
+        <ShareSlateDialog workspace={props.workspace} slate={openSlateSummary.id} title={openSlateSummary.title} rpc={props.rpc} onClose={() => setSharing(false)} />
+      )}
     </div>
   );
 }

@@ -13,7 +13,9 @@
     "./slates": "./src/slates/index.ts",
     "./control-plane": "./src/control-plane/index.ts",
     "./control-plane/store": "./src/control-plane/store.ts",
-    "./workspace": "./src/vfs/nimbus-workspace.ts"
+    "./workspace": "./src/vfs/nimbus-workspace.ts",
+    "./web/hero-art": "./src/web/hero-art.ts",
+    "./web/hero-canvas": "./src/web/hero-canvas.ts"
   },
   "dependencies": {
     "@agent-core/core": "workspace:*",

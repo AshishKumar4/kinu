@@ -21,7 +21,7 @@ import {
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
   craftedToolDescription, toCraftedToolSource, type CraftedTool,
-  CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolFunctions, jsonSchemaToTs,
+  CRAFTED_TOOL_NAMESPACE, renderToolsDeclaration, nativeToolFunctions, jsonSchemaToTs, nativeToolInputSchema,
   attributeCraftedFailure, craftFailureMarker,
   initCompletedTurnTable, createCompletedTurnStore,
   initEventsHubTables, EventLog,
@@ -29,6 +29,7 @@ import {
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
 } from '../src/index';
 import { makeSqlExec } from './helpers';
+import { isJsonObject, type JsonValue } from '../src/utils/json';
 
 // ── Seam 7: the variant picklist and the type are one declaration ────────────
 
@@ -633,7 +634,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
 
     const rendered = renderToolsDeclaration(native, [{ name: 'summarize', description: 'Folds a report' }]);
     expect(rendered).toContain('export declare const tools: {');
-    expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; /** A workspace path. */ path: string }): Promise<unknown>;');
+    expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; path: string }): Promise<unknown>;');
     expect(rendered).toContain('/** The file plane: read | edit | write. Same input as the native `file` tool. */');
     expect(rendered).toContain('/** Folds a report (crafted by you) */');
     expect(rendered).toContain('summarize(...args: unknown[]): Promise<unknown>;');
@@ -669,6 +670,91 @@ describe('the sandbox contract — one namespace for every tool', () => {
     expect(jsonSchemaToTs(undefined)).toBe('unknown');
     expect(jsonSchemaToTs({ type: 'array', items: { type: 'number' } })).toBe('number[]');
     expect(jsonSchemaToTs({ anyOf: [{ type: 'string' }, { type: 'null' }] })).toBe('string | null');
+  });
+
+  /** Deep-freeze, so a renderer that mutated the schema it was handed throws
+   *  on the attempt instead of quietly changing the provider's copy. */
+  function deepFreeze(value: JsonValue | undefined): void {
+    if (Array.isArray(value)) {
+      for (const member of value) deepFreeze(member);
+
+      Object.freeze(value);
+
+      return;
+    }
+
+    if (value === undefined || !isJsonObject(value)) return;
+
+    for (const member of Object.values(value)) deepFreeze(member);
+
+    Object.freeze(value);
+  }
+
+  test('a property description stays on the native schema; the declaration carries only the shape', () => {
+    // The sandbox declaration is a SECOND serialisation of every input schema,
+    // shipped inside the execute_tools docstring on every request. A property's
+    // description already rides the native schema the provider receives, so
+    // repeating it inside the rendered type duplicated that text per request —
+    // the drift this test locks against returning.
+    const markers = ['UNIQACTION', 'UNIQQUERY', 'UNIQPATH', 'UNIQNESTED', 'UNIQTARGET', 'UNIQDEPTH', 'UNIQINCLUDE'];
+
+    const native = {
+      file: tool({
+        description: 'The file plane.',
+        inputSchema: jsonSchema<{ action: string }>({
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['read', 'edit', 'write'],
+              description: 'UNIQACTION which verb runs against the plane. A second sentence nobody needs twice.',
+            },
+            query: {
+              const: 'status',
+              description: 'UNIQQUERY the one lookup this tool answers. A second sentence nobody needs twice.',
+            },
+            path: {
+              type: 'string',
+              description: 'UNIQPATH absolute inside the durable plane. A second sentence nobody needs twice.',
+            },
+            target: {
+              anyOf: [
+                {
+                  type: 'object',
+                  properties: {
+                    depth: { type: 'number', description: 'UNIQDEPTH how many levels to descend.' },
+                    include: { type: 'array', items: { type: 'string' }, description: 'UNIQINCLUDE names to keep.' },
+                  },
+                  required: ['depth'],
+                  description: 'UNIQNESTED a structured descent rather than a path. A second sentence nobody needs twice.',
+                },
+                { type: 'string' },
+              ],
+              description: 'UNIQTARGET either a path or a structured descent. A second sentence nobody needs twice.',
+            },
+          },
+          required: ['action', 'query'],
+        }),
+        execute: async () => 'x',
+      }),
+    };
+
+    const frozen = JSON.stringify(native.file.inputSchema);
+    deepFreeze(nativeToolInputSchema(native.file));
+    Object.freeze(native.file.inputSchema);
+
+    const rendered = renderToolsDeclaration(native, []);
+
+    // Every field, literal and optionality distinction survives...
+    expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; query: "status"; path?: string; target?: { depth: number; include?: string[] } | string }): Promise<unknown>;');
+    // ...while no property description is repeated into the declaration.
+    markers.forEach((marker) => expect(rendered).not.toContain(marker));
+
+    // The provider's copy is untouched: byte-identical after the render and
+    // still carrying every description.
+    expect(JSON.stringify(native.file.inputSchema)).toBe(frozen);
+    const providerSchema = JSON.stringify(nativeToolInputSchema(native.file));
+    markers.forEach((marker) => expect(providerSchema).toContain(marker));
   });
 });
 

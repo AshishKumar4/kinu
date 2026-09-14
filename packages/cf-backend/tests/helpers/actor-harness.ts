@@ -20,6 +20,7 @@ import type { LanguageModel, ToolSet, UIMessage } from 'ai';
 import type { ChatResponseResult, TurnConfig, TurnContext } from '@cloudflare/think';
 import type { UserCaller } from '@kinu.run/core';
 import type { UserDO } from '../../src/user/user-do';
+import type { SlateHost } from '../../src/slates/host';
 import {
   shadowTrialPlan, claimToolEffect, actorReferenceOf,
   type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
@@ -103,6 +104,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeOrch(): AgentOrchestrator { return this.orch; }
   /** The assembled runtime, for the conformance observer's `producer` plane. */
   observeRuntime(): AgentRuntime { return this.rt; }
+  /** The slate host, so a suite can arm its one launch seam (`ensure`) as a tripwire. */
+  observeSlateHost(): SlateHost { return this.slates; }
   /** The profile the last `beforeTurn` resolved, for suites asserting what the
    *  turn runs under. The accessor is `protected` because only the actor's own
    *  lanes read it — a suite reaches it through this observer. */

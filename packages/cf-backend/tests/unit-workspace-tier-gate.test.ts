@@ -293,8 +293,22 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.manage', name: 'acknowledgeUnstoppedDevice', run: (u, c) => u.acknowledgeUnstoppedDevice(c, 'dev-1') },
   { capability: 'device.manage', name: 'renameDevice', run: (u, c) => u.renameDevice(c, 'dev-1', 'studio tower') },
   { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
-  { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
   { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
+  { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
+
+  // A slate share granted to this owner is the owner's receipt — the write
+  // stamps the owner's id on a foreign workspace's share and the read hands
+  // over every blueprint the owner was ever named on. Neither belongs to a
+  // workspace token: the capability floors at owner_only.
+  {
+    capability: 'shares',
+    name: 'sharesReceived_add',
+    run: (u, c) => u.sharesReceived_add(c, {
+      ownerUserId: USER_ID, ownerEmail: 'owner@x', workspace: WORKSPACE,
+      shareId: 'share-1', title: 'a blueprint',
+    }),
+  },
+  { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
 ];
 
 /** Did the boundary refuse this call, as opposed to the call failing for its

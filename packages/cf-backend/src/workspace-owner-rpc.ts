@@ -8,7 +8,10 @@
  * process in another workspace.
  */
 
-import type { SlateBindingRequest, SlateCallResult, SlateOperation } from '@kinu.run/core';
+import type {
+  BlueprintBundle, BlueprintFork, SlateAnswer, SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
+} from '@kinu.run/core';
+import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
 
 /**
@@ -21,6 +24,12 @@ import type { SlateCaller } from './slates/bindings';
 export interface WorkspaceOwnerRpc {
   slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
   slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult>;
+  // Blueprints cross workspaces: the app host reads one from its owner and
+  // admits it into the forker. Each answer is a value, refusal included.
+  readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>>;
+  blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>>;
+  shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>>;
+  admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>>;
 }
 
 interface WorkspaceOwnerNamespace {
@@ -45,8 +54,8 @@ export function workspaceOwner(
     get: (id: DurableObjectId) => env.OrchestratorAgent.get(id),
   });
   // SAFETY: the view above is constructed with exactly the two members
-  // WorkspaceOwnerNamespace declares, and orchestrator.ts declares both slate
-  // methods with these signatures, delegating to SlateHost.
+  // WorkspaceOwnerNamespace declares, and orchestrator.ts declares every
+  // method of WorkspaceOwnerRpc with these signatures, delegating to SlateHost.
   const namespace = view as WorkspaceOwnerNamespace;
 
   return namespace.get(namespace.idFromName(workspaceName));

@@ -111,7 +111,32 @@ export const HttpCallSchema = v.object({
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold';
+
+/** One durable input row `actor_turn_inputs` persisted — the request-owned
+ *  admission ledger the cold test reads across a reset. */
+export const InputReceiptSchema = v.object({
+  actorId: v.string(),
+  requestId: v.string(),
+  messageIds: v.array(v.string()),
+  settled: v.boolean(),
+});
+
+export type InputReceipt = v.InferOutput<typeof InputReceiptSchema>;
+
+export const PreparedConversationSchema = v.object({
+  workspace: v.string(),
+  owner: v.string(),
+  /** The exact client frames that carried B and the still-pending C —
+   *  replayed verbatim after the reset. */
+  bFrame: v.string(),
+  cFrame: v.string(),
+  /** Every durable input row at prepare time (A settled, B and C pending). */
+  receipts: v.array(InputReceiptSchema),
+});
+
+export type PreparedConversation = v.InferOutput<typeof PreparedConversationSchema>;
+
 
 export const ExerciseResultSchema = v.object({
   register: RegisterSchema,
