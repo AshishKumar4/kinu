@@ -116,7 +116,11 @@ export interface ActiveRoster<T> {
  *  count of what was elided — callers order them, the renderer bounds them. */
 export interface DynamicContext {
   mode?: { readonly workMode: WorkMode; readonly planSubmission: boolean };
-  /** Live callable additions; native tool definitions remain byte-stable. */
+  /** Live callable additions; native tool definitions remain byte-stable. An
+   *  EMPTY list still renders its section as one "none yet" line: the doctrine
+   *  has the model check `workspace.listTools()` before building, and silence
+   *  here left that check unanswered — the model probed with a call to learn
+   *  there was nothing to call. */
   craftedTools?: readonly CraftedDeclaration[];
   /** Rendered recent-facts block (renderFactsBlock output). */
   factsBlock?: string;
@@ -604,6 +608,12 @@ const DYNAMIC_SECTION_TITLES = {
   missingCapabilities: '## Configured but not available this turn (plan without these, and say so if asked)',
 } satisfies Record<keyof DynamicContext, string>;
 
+/** What the crafted-tools section says when the source reported an empty set:
+ *  the listing check is answered in-line, so it needs no call. A reported set
+ *  is not the same plane as an unreported one — `undefined` stays silent. */
+const NO_CRAFTED_TOOLS_YET =
+  'No crafted tools exist in this workspace yet — `workspace.listTools()` would return nothing; `workspace.createTool` adds the first.';
+
 /**
  * The ledger-fed dynamic-context block (or null when there is nothing to say).
  *
@@ -620,8 +630,10 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
 
   if (ctx.mode) add('mode', renderWorkMode(ctx.mode));
 
-  if (ctx.craftedTools && ctx.craftedTools.length > 0) {
-    add('craftedTools', `${DYNAMIC_SECTION_TITLES.craftedTools}\n${renderToolsDeclaration({}, ctx.craftedTools)}`);
+  if (ctx.craftedTools !== undefined) {
+    add('craftedTools', `${DYNAMIC_SECTION_TITLES.craftedTools}\n${ctx.craftedTools.length > 0
+      ? renderToolsDeclaration({}, ctx.craftedTools)
+      : NO_CRAFTED_TOOLS_YET}`);
   }
 
   const facts = ctx.factsBlock?.trim();
