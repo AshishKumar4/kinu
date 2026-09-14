@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@cloudflare/kumo';
-import { IdentificationCardIcon } from '@phosphor-icons/react';
+import { BrainIcon, IdentificationCardIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
   BUILTIN_ROLE_DEFINITIONS,
   BUILTIN_SKILL_HEADERS,
@@ -26,7 +26,7 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type ModelMenu } from '../lib/user-api';
 import { ModelPicker } from './ModelPicker';
-import { Card, inputCls } from './ui/form';
+import { Card, Field, inputCls, tabCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
@@ -35,15 +35,23 @@ interface CatalogOperation {
   promise: Promise<void> | null;
 }
 
+/** A select sharing the picker's `size="sm"` box: `inputCls`'s py-2/text-sm is
+ *  written for the base field, so the small row overrides it to the combobox's
+ *  own metrics (h-6.5, px-2, text-xs). `!` because same-property utilities
+ *  resolve by order, not by intent. */
+const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
+
 export function ProfileCatalogSettings() {
   const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
   const [menu, setMenu] = useState<ModelMenu>(EMPTY_MENU);
   const [selectedRole, setSelectedRole] = useState<RoleId>('task');
   const [newRoleId, setNewRoleId] = useState('');
+  const [addingRole, setAddingRole] = useState(false);
   const [newTierId, setNewTierId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const roleNav = useRef<HTMLElement>(null);
 
   const loadOperation = useRef<CatalogOperation | null>(null);
   const saveOperation = useRef<CatalogOperation | null>(null);
@@ -85,6 +93,12 @@ export function ProfileCatalogSettings() {
 
   const dirty = envelope !== null && draft !== null
     && JSON.stringify(envelope.catalog) !== JSON.stringify(draft);
+
+  // A deep selection the phone's strip hasn't scrolled to yet is invisible;
+  // the same bring-into-view the settings rail runs on its own tabs.
+  useEffect(() => {
+    roleNav.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }, [selectedRole, addingRole]);
 
   const replaceRole = (id: RoleId, next: RoleDefinition) => {
     if (!draft) return;
@@ -138,6 +152,7 @@ export function ProfileCatalogSettings() {
     });
     setSelectedRole(id);
     setNewRoleId('');
+    setAddingRole(false);
     setError(null);
   };
 
@@ -208,102 +223,166 @@ export function ProfileCatalogSettings() {
   };
 
   return (
-    <Card title="Agent roles and model tiers" icon={IdentificationCardIcon}>
-      <p className="text-xs p-text-3">
-        The default tier is the model this account runs on and the one a new workspace starts with. Roles select instructions, tools, skills, a tier, and a swarm preset. Tier changes apply account-wide next turn.
-      </p>
-      {error && <div className="rounded-md border border-[var(--c-danger)]/30 bg-[var(--c-danger)]/5 px-3 py-2 text-xs p-danger">{error}</div>}
-      {!draft || !envelope ? (
-        <div className="flex items-center gap-2 text-xs p-text-3">
-          <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
-          {!busy && <Button size="xs" variant="secondary" onClick={load}>Retry</Button>}
-        </div>
-      ) : (
-        <>
-          <div className="space-y-2">
-            <div className="text-xs font-semibold p-text">Model tiers</div>
-            {tierIdsOf(draft).map((tierId) => {
-              const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
-              const resolved = assignment ?? draft.tiers.default;
-              const builtin = TIER_IDS.some((id) => id === tierId);
+    <>
+      <Card title="Model tiers" icon={BrainIcon}
+        description="The default tier is the model this account runs on and the one a new workspace starts with. Tier changes apply account-wide next turn.">
+        {!draft || !envelope ? (
+          <div className="flex items-center gap-2 p-row-text p-text-3">
+            <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
+            {!busy && <Button size="xs" variant="secondary" onClick={load}>Retry</Button>}
+            {error && <span className="p-danger">{error}</span>}
+          </div>
+        ) : (
+          <>
+            {/* One row per tier, ruled like the account's other lists. The top
+                border sits on EVERY row — first included — because a gate
+                reads the default row's borderTopColor to prove the rule is
+                the border token rather than the text colour. */}
+            <div>
+              {tierIdsOf(draft).map((tierId) => {
+                const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
+                const resolved = assignment ?? draft.tiers.default;
+                const builtin = TIER_IDS.some((id) => id === tierId);
 
-              // The levels are the MODEL's, read off its menu entry: a model
-              // that declares xhigh offers it, one that declares only low and
-              // high offers no medium (#9).
-              const efforts = offeredReasoningEfforts(
-                menu.models.find((model) => model.spec === resolved.model)?.reasoningEfforts,
-                assignment?.reasoningEffort,
-              );
+                // The levels are the MODEL's, read off its menu entry: a model
+                // that declares xhigh offers it, one that declares only low and
+                // high offers no medium (#9).
+                const efforts = offeredReasoningEfforts(
+                  menu.models.find((model) => model.spec === resolved.model)?.reasoningEfforts,
+                  assignment?.reasoningEffort,
+                );
 
-              return (
-                <div key={tierId} className="grid gap-2 rounded-md border border-[var(--c-border)] p-2 md:grid-cols-[7rem_1fr_8rem] md:items-center">
-                  <div className="flex items-center gap-2">
-                    <div>
-                      <div className="text-xs font-medium p-text">{tierId}</div>
-                      {assignment === undefined && <div className="p-meta p-text-3">uses default</div>}
-                      {tierId === 'default' && <div className="p-meta p-text-3">account default</div>}
+                return (
+                  <div key={tierId} className="grid gap-x-3 gap-y-2 border-t p-border py-3 first:border-t-0 first:pt-0 md:grid-cols-[8rem_minmax(0,1fr)_9rem] md:items-center">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-xs p-text">{tierId}</div>
+                        {assignment === undefined && <div className="p-meta p-text-3">uses default</div>}
+                        {tierId === 'default' && <div className="p-meta p-text-3">account default</div>}
+                      </div>
+                      {!builtin && (
+                        <Button variant="ghost" size="sm"
+                          icon={<TrashIcon size={12} />}
+                          aria-label={`Remove tier ${tierId}`}
+                          onClick={() => removeTier(tierId)} />
+                      )}
                     </div>
-                    {!builtin && (
-                      <button type="button" className="p-t-status p-text-3 hover:p-danger" aria-label={`Remove tier ${tierId}`} onClick={() => removeTier(tierId)}>
-                        remove
-                      </button>
-                    )}
+                    <ModelPicker
+                      models={menu.models}
+                      failures={menu.failures}
+                      value={assignment?.model ?? ''}
+                      onChange={(model) => setTier(tierId, model)}
+                      clearable={tierId !== 'default'}
+                      placeholder={tierId === 'default' ? resolved.model : `Use default (${resolved.model})`}
+                      label={`${tierId} model`}
+                      size="sm"
+                    />
+                    <select
+                      className={selectSmCls}
+                      value={assignment?.reasoningEffort ?? ''}
+                      onChange={(event) => {
+                        const effort = event.target.value;
+                        setTierEffort(tierId, isReasoningEffort(effort) ? effort : '');
+                      }}
+                      aria-label={`${tierId} reasoning effort`}
+                      title={efforts.length === 0 ? 'This model takes no reasoning effort setting.' : undefined}
+                    >
+                      <option value="">Model default</option>
+                      {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                    </select>
                   </div>
-                  <ModelPicker
-                    models={menu.models}
-                    failures={menu.failures}
-                    value={assignment?.model ?? ''}
-                    onChange={(model) => setTier(tierId, model)}
-                    clearable={tierId !== 'default'}
-                    placeholder={tierId === 'default' ? resolved.model : `Use default (${resolved.model})`}
-                    size="sm"
-                  />
-                  <select
-                    className={inputCls}
-                    value={assignment?.reasoningEffort ?? ''}
-                    onChange={(event) => {
-                      const effort = event.target.value;
-                      setTierEffort(tierId, isReasoningEffort(effort) ? effort : '');
-                    }}
-                    aria-label={`${tierId} reasoning effort`}
-                    title={efforts.length === 0 ? 'This model takes no reasoning effort setting.' : undefined}
-                  >
-                    <option value="">Model default</option>
-                    {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-                  </select>
-                </div>
-              );
-            })}
-            <div className="flex items-center gap-2">
+                );
+              })}
+            </div>
+            <Field inline label="Add a tier"
+              hint="Lowercase letters, digits and hyphens — roles point at the name.">
               <input
-                className={`${inputCls} max-w-[14rem]`}
-                placeholder="new tier id, e.g. review"
+                className={`${selectSmCls} w-56`}
+                placeholder="e.g. review"
                 value={newTierId}
                 aria-label="New tier id"
                 onChange={(event) => setNewTierId(event.target.value)}
                 onKeyDown={(event) => { if (event.key === 'Enter') addTier(); }}
               />
-              <Button size="xs" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add tier</Button>
-            </div>
-          </div>
+              <Button size="sm" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add</Button>
+            </Field>
+          </>
+        )}
+      </Card>
 
-          <div className="space-y-3 border-t border-[var(--c-border)] pt-4">
-            <div className="flex flex-wrap gap-1.5">
-              {Object.keys(roles).sort().map((roleId) => (
+      {(draft && envelope) && (
+        <Card title="Agent roles" icon={IdentificationCardIcon}
+          description="Roles select instructions, tools, skills, a tier, and a swarm preset.">
+          <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
+            {/* The role list is a navigation surface, so it borrows the rail's
+                two registers outright: a scrolling tab strip below md, the
+                accent-tinted list row at md and up. The strip's scroll covers
+                sit on the card, not the page. */}
+            <nav ref={roleNav} aria-label="Agent roles"
+              className="p-tabstrip -mx-5 flex border-b p-border [--scroll-ground:var(--c-surface)] md:mx-0 md:flex-col md:gap-0.5 md:border-b-0 md:overflow-visible">
+              {Object.keys(roles).sort().map((roleId) => {
+                const current = roleId === selectedRole;
+                const entry = roles[roleId];
+
+                return (
+                  <button
+                    key={roleId}
+                    type="button"
+                    aria-current={current ? 'true' : undefined}
+                    className={`${tabCls} ${current ? 'p-tab-active' : ''} md:mb-0 md:w-full md:rounded-md md:border-b-0 md:px-3 md:py-2 ${
+                      current
+                        ? 'md:bg-[var(--c-accent-subtle)] md:text-[var(--c-accent-fg)]'
+                        : 'md:text-[var(--c-text-2)] md:hover:bg-[var(--c-neutral-tint)] md:hover:text-[var(--c-text)]'
+                    }`}
+                    onClick={() => { setSelectedRole(roleId); setAddingRole(false); }}
+                  >
+                    <span className="min-w-0 flex-1 text-left">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate">{entry?.label ?? deriveRoleLabel(roleId)}</span>
+                        {draft !== null && roleId in draft.roles && (
+                          <span title="Customized" aria-label="Customized"
+                            className="p-dot-accent inline-block size-1.5 shrink-0 rounded-full" />
+                        )}
+                      </span>
+                      <span className="hidden truncate p-meta p-text-3 md:block">
+                        {entry?.description ?? ''}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+              {addingRole ? (
+                <div className="flex items-center gap-1.5 px-2.5 py-[9px] md:px-3">
+                  <input
+                    className={`${selectSmCls} min-w-0 flex-1`}
+                    placeholder="new-role-id"
+                    value={newRoleId}
+                    aria-label="New role id"
+                    autoFocus
+                    onChange={(event) => setNewRoleId(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') addRole();
+
+                      if (event.key === 'Escape') { setAddingRole(false); setNewRoleId(''); }
+                    }}
+                  />
+                  <Button size="sm" variant="secondary" disabled={!newRoleId.trim()} onClick={addRole}>Add</Button>
+                  <button type="button" aria-label="Cancel new role"
+                    className="p-text-3 hover:p-text"
+                    onClick={() => { setAddingRole(false); setNewRoleId(''); }}>
+                    <XIcon size={12} />
+                  </button>
+                </div>
+              ) : (
                 <button
-                  key={roleId}
                   type="button"
-                  className={`rounded px-2 py-1 text-xs ${selectedRole === roleId ? 'p-btn' : 'p-surface-2 p-text-2'}`}
-                  onClick={() => setSelectedRole(roleId)}
+                  className="p-btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
+                  onClick={() => setAddingRole(true)}
                 >
-                  {roles[roleId]?.label ?? deriveRoleLabel(roleId)}
+                  <PlusIcon size={12} /> New role
                 </button>
-              ))}
-            </div>
-            <div className="flex gap-2">
-              <input className={inputCls} value={newRoleId} onChange={(event) => setNewRoleId(event.target.value)} placeholder="new-role-id" />
-              <Button size="sm" variant="secondary" onClick={addRole}>Add role</Button>
-            </div>
+              )}
+            </nav>
 
             {role && (
               <RoleEditor
@@ -317,17 +396,26 @@ export function ProfileCatalogSettings() {
               />
             )}
           </div>
+        </Card>
+      )}
 
-          <div className="flex items-center justify-between border-t border-[var(--c-border)] pt-4">
+      {/* One save bar for the whole section: it docks to the bottom edge of
+          the page's own scroll container, so the action is on screen from
+          anywhere in the form instead of waiting at the end of the tallest
+          card. The composer shadow lifts it off the rows scrolling under it. */}
+      {(draft && envelope) && (
+        <div className="sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]">
+          {error && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
+          <div className="flex items-center justify-between gap-3">
             <span className="p-meta p-text-3">Catalog version {envelope.version}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
               <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
             </div>
           </div>
-        </>
+        </div>
       )}
-    </Card>
+    </>
   );
 }
 
@@ -346,70 +434,90 @@ function RoleEditor(props: {
     props.onChange({ ...props.role, [key]: value });
 
   return (
-    <div className="grid gap-3 rounded-md border border-[var(--c-border)] p-3 md:grid-cols-2">
-      <label className="space-y-1 text-xs p-text-2">
-        <span>Label</span>
-        <input className={inputCls} value={props.role.label ?? deriveRoleLabel(props.id)} onChange={(event) => set('label', event.target.value)} />
-      </label>
-      <label className="space-y-1 text-xs p-text-2">
-        <span>Default tier</span>
-        <select className={inputCls} value={props.role.tier} onChange={(event) => {
-          const tier = props.tiers.find((value) => value === event.target.value);
-
-          if (tier) set('tier', tier);
-        }}>
-          {props.tiers.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
-        </select>
-      </label>
-      <label className="space-y-1 text-xs p-text-2 md:col-span-2">
-        <span>Description</span>
-        <input className={inputCls} value={props.role.description} onChange={(event) => set('description', event.target.value)} />
-      </label>
-      <label className="space-y-1 text-xs p-text-2 md:col-span-2">
-        <span>Instructions</span>
-        <textarea rows={16} className={`${inputCls} resize-y`} value={props.role.instructions} onChange={(event) => set('instructions', event.target.value)} />
-      </label>
-      <label className="space-y-1 text-xs p-text-2">
-        <span>Default swarm preset</span>
-        <select className={inputCls} value={props.role.preset} onChange={(event) => {
-          const preset = NAMED_SWARM_PRESETS.find((value) => value === event.target.value);
-
-          if (preset) set('preset', preset);
-        }}>
-          {NAMED_SWARM_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
-        </select>
-      </label>
-      <label className="flex items-center gap-2 self-end pb-2 text-xs p-text-2">
-        <input type="checkbox" checked={props.role.plan === true} onChange={(event) => set('plan', event.target.checked ? true : undefined)} />
-        Start in Plan mode
-      </label>
-      <MemberSet
-        label="Tools"
-        about="Every tool unless narrowed. Unchecking one takes it away from this role."
-        options={BUILTIN_TOOLS.map((name) => ({ id: name, about: BUILTIN_TOOL_SPECS[name].summary }))}
-        selected={props.role.allowedTools}
-        onChange={(next) => set('allowedTools', next)}
-      />
-      <MemberSet
-        label="Skills"
-        about="Shipped skills this role loads. A workspace's own skills are enabled in that workspace."
-        options={BUILTIN_SKILL_HEADERS.map((skill) => ({ id: skill.name, about: skill.description }))}
-        selected={props.role.skills ?? []}
-        onChange={(next) => set('skills', next !== undefined && next.length > 0 ? next : undefined)}
-        emptyMeansNone
-      />
-      <MemberSet
-        label="Roles this role can hire"
-        about="Every role unless narrowed."
-        options={props.roleIds.map((id) => ({ id, about: null }))}
-        selected={props.role.spawns === '*' ? undefined : props.role.spawns}
-        onChange={(next) => set('spawns', next)}
-        wide
-      />
-      <div className="md:col-span-2">
+    <div className="min-w-0 space-y-5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="p-annotation p-text-3">{props.id}</span>
         <Button size="xs" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
           {props.id in BUILTIN_ROLE_DEFINITIONS ? 'Reset built-in role' : 'Delete custom role'}
         </Button>
+      </div>
+      <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
+        <Field label="Label">
+          <input className={inputCls} aria-label="Label"
+            value={props.role.label ?? deriveRoleLabel(props.id)}
+            onChange={(event) => set('label', event.target.value)} />
+        </Field>
+        <Field label="Default tier" hint="The tier this role runs on.">
+          <select className={inputCls} aria-label="Default tier"
+            value={props.role.tier}
+            onChange={(event) => {
+              const tier = props.tiers.find((value) => value === event.target.value);
+
+              if (tier) set('tier', tier);
+            }}>
+            {props.tiers.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
+          </select>
+        </Field>
+        <div className="sm:col-span-2">
+          <Field label="Description" hint="One line in the role list: when an agent should use this role.">
+            <input className={inputCls} aria-label="Description"
+              value={props.role.description}
+              onChange={(event) => set('description', event.target.value)} />
+          </Field>
+        </div>
+        <div className="sm:col-span-2">
+          <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
+            <textarea rows={10} aria-label="Instructions"
+              className={`${inputCls} p-t-code max-h-[33rem] min-h-56 resize-y overflow-y-auto`}
+              value={props.role.instructions}
+              onChange={(event) => set('instructions', event.target.value)} />
+          </Field>
+        </div>
+        <Field label="Default swarm preset">
+          <select className={inputCls} aria-label="Default swarm preset"
+            value={props.role.preset}
+            onChange={(event) => {
+              const preset = NAMED_SWARM_PRESETS.find((value) => value === event.target.value);
+
+              if (preset) set('preset', preset);
+            }}>
+            {NAMED_SWARM_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+          </select>
+        </Field>
+        <Field label="Plan mode" hint="This role opens its workspace in Plan mode.">
+          <label className="flex w-fit items-center gap-2 p-row-text p-text-2">
+            <input type="checkbox" aria-label="Start in Plan mode"
+              className="accent-[var(--c-accent)]"
+              checked={props.role.plan === true}
+              onChange={(event) => set('plan', event.target.checked ? true : undefined)} />
+            Start in Plan mode
+          </label>
+        </Field>
+      </div>
+      <div className="grid gap-x-6 gap-y-5 md:grid-cols-2">
+        <MemberSet
+          label="Tools"
+          about="Every tool unless narrowed. Unchecking one takes it away from this role."
+          options={BUILTIN_TOOLS.map((name) => ({ id: name, about: BUILTIN_TOOL_SPECS[name].summary }))}
+          selected={props.role.allowedTools}
+          onChange={(next) => set('allowedTools', next)}
+        />
+        <MemberSet
+          label="Skills"
+          about="Shipped skills this role loads. A workspace's own skills are enabled in that workspace."
+          options={BUILTIN_SKILL_HEADERS.map((skill) => ({ id: skill.name, about: skill.description }))}
+          selected={props.role.skills ?? []}
+          onChange={(next) => set('skills', next !== undefined && next.length > 0 ? next : undefined)}
+          emptyMeansNone
+        />
+        <MemberSet
+          label="Roles this role can hire"
+          about="Every role unless narrowed."
+          options={props.roleIds.map((id) => ({ id, about: null }))}
+          selected={props.role.spawns === '*' ? undefined : props.role.spawns}
+          onChange={(next) => set('spawns', next)}
+          wide
+        />
       </div>
     </div>
   );
@@ -445,29 +553,28 @@ function MemberSet(props: {
   };
 
   return (
-    <fieldset className={`min-w-0 space-y-1 text-xs p-text-2 ${props.wide ? 'md:col-span-2' : ''}`}>
-      <legend className="min-w-0">
-        <span>{props.label}</span>
-        <span className="block p-meta p-text-3">{props.about}</span>
-      </legend>
-      <div className={`grid gap-x-3 gap-y-1 ${props.wide ? 'md:grid-cols-3' : ''}`}>
-        {props.options.map((option) => (
-          <label key={option.id} className="flex min-w-0 items-start gap-2 py-0.5" title={option.about ?? undefined}>
-            <input
-              type="checkbox"
-              className="mt-0.5 shrink-0 accent-[var(--c-accent)]"
-              checked={current.includes(option.id)}
-              onChange={(event) => toggle(option.id, event.target.checked)}
-              aria-label={`${props.label}: ${option.id}`}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="p-text">{option.id}</span>
-              {option.about && <span className="block truncate p-meta p-text-3">{option.about}</span>}
-            </span>
-          </label>
-        ))}
-        {props.options.length === 0 && <span className="p-meta p-text-3">none shipped</span>}
-      </div>
-    </fieldset>
+    <div className={props.wide ? 'md:col-span-2' : 'min-w-0'}>
+      <Field label={props.label} hint={props.about}>
+        <div role="group" aria-label={props.label}
+          className={`grid gap-x-3 gap-y-1 ${props.wide ? 'sm:grid-cols-2 md:grid-cols-3' : ''}`}>
+          {props.options.map((option) => (
+            <label key={option.id} className="flex min-w-0 items-start gap-2 py-0.5" title={option.about ?? undefined}>
+              <input
+                type="checkbox"
+                className="mt-0.5 shrink-0 accent-[var(--c-accent)]"
+                checked={current.includes(option.id)}
+                onChange={(event) => toggle(option.id, event.target.checked)}
+                aria-label={`${props.label}: ${option.id}`}
+              />
+              <span className="min-w-0 flex-1">
+                <span className="p-row-text p-text">{option.id}</span>
+                {option.about && <span className="line-clamp-2 p-meta p-text-3">{option.about}</span>}
+              </span>
+            </label>
+          ))}
+          {props.options.length === 0 && <span className="p-meta p-text-3">none shipped</span>}
+        </div>
+      </Field>
+    </div>
   );
 }
