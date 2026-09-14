@@ -100,6 +100,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   drivePreview(url: string): Promise<PreviewAnswer>;
   rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
   removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
+  runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }>;
 }
 
 
