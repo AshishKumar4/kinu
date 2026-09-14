@@ -4,11 +4,11 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { createCanvasRenderer, type StrokeSurface } from '../src/components/landing/search-tree/renderer-canvas';
-import type { HeroPalette, SearchTreeRenderer } from '../src/components/landing/search-tree/renderer';
 import {
-  NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER, type SearchTreeFrame,
-} from '../src/components/landing/search-tree/simulation';
+  NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+  type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer,
+} from '@kinu.run/core/web/hero-art';
+import { createCanvasRenderer, type StrokeSurface } from '../src/components/landing/search-tree/SearchTreeHero';
 
 const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
 
@@ -115,7 +115,7 @@ describe('the frame is what both renderers read', () => {
 
   test('the WGSL palette resolves the same four tones the canvas renderer does', () => {
     const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
-    const canvas = readFileSync(resolve(TREE_DIR, 'renderer-canvas.ts'), 'utf8');
+    const canvas = readFileSync(resolve(TREE_DIR, 'SearchTreeHero.tsx'), 'utf8');
 
     // Tone 0 is the ordinary attempt, the fall-through of both rules.
     expect([TONE_BRIGHT, TONE_ASH, TONE_EMBER]).toEqual([1, 2, 3]);

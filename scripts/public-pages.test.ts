@@ -68,6 +68,8 @@ interface HeroBackdropFact {
   readonly dust: boolean;
   /** Column tracks of the hero copy's grid: one where the copy stacks, two beside the tree. */
   readonly columns: number;
+  /** The mounted backdrop's canvas holds painted pixels — the still counts: it must exist, not merely mount. */
+  readonly painted: boolean;
 }
 
 interface MovieFact {
@@ -744,6 +746,23 @@ beforeAll(async () => {
         // second column: a phone must never mount the tree (it runs through
         // the stacked paragraph) and a desktop must never mount the dust.
         await page.waitForSelector('[data-hero-graph] canvas[data-renderer], [data-hero-dust] canvas[data-renderer]', { timeout: 10_000 });
+        // Mounted is not drawn: the still counts as the backdrop, so the
+        // canvas must hold painted pixels, whichever renderer owns it.
+        await page.waitForFunction(() => {
+          const canvas = document.querySelector('[data-hero-graph] canvas, [data-hero-dust] canvas');
+
+          if (!(canvas instanceof HTMLCanvasElement)) return false;
+          const context = canvas.getContext('2d');
+
+          if (context === null || canvas.width === 0 || canvas.height === 0) return false;
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+
+          for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] !== 0) return true;
+          }
+
+          return false;
+        }, { polling: 100, timeout: 10_000 });
         facts.heroBackdrop[label] = await page.evaluate(() => {
           const grid = document.querySelector('#top [class*="lg:grid-cols-"]');
 
@@ -751,6 +770,7 @@ beforeAll(async () => {
             tree: document.querySelector('[data-hero-graph]') !== null,
             dust: document.querySelector('[data-hero-dust] canvas')?.getAttribute('data-renderer') === 'canvas',
             columns: grid === null ? 0 : getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+            painted: true,
           };
         });
       }
@@ -907,8 +927,8 @@ describe('the landing frames reuse the app rail', () => {
 
 describe('the hero backdrop follows the copy', () => {
   test('a phone gets the dust under one column, a desktop the tree beside two', () => {
-    expect(required(facts.heroBackdrop['390'], 'phone hero backdrop')).toEqual({ tree: false, dust: true, columns: 1 });
-    expect(required(facts.heroBackdrop['1280'], 'desktop hero backdrop')).toEqual({ tree: true, dust: false, columns: 2 });
+    expect(required(facts.heroBackdrop['390'], 'phone hero backdrop')).toEqual({ tree: false, dust: true, columns: 1, painted: true });
+    expect(required(facts.heroBackdrop['1280'], 'desktop hero backdrop')).toEqual({ tree: true, dust: false, columns: 2, painted: true });
   });
 });
 

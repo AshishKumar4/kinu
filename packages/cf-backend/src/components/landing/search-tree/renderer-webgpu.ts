@@ -3,8 +3,7 @@ import {
   type Draw, type Effect, type Geometry, type Gpu, type Surface, type Target,
 } from 'vgpu';
 
-import { NODE_STRIDE, STROKE_STRIDE, type SearchTreeFrame } from './simulation';
-import type { HeroPalette, SearchTreeRenderer } from './renderer';
+import { NODE_STRIDE, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
 import compositeSource from './composite.wgsl';

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_EMBER, type SearchTreeFrame,
-} from '../src/components/landing/search-tree/simulation';
+} from '@kinu.run/core/web/hero-art';
 
 const ASPECT = 700 / 1280;
 

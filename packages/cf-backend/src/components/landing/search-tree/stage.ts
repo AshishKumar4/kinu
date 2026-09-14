@@ -1,5 +1,5 @@
 import { useMediaQuery } from '@/hooks/use-media-query';
-import type { HeroPalette, Rgb } from './renderer';
+import type { HeroPalette, Rgb } from '@kinu.run/core/web/hero-art';
 
 function cssRgb(name: string): Rgb {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
