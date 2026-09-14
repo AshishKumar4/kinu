@@ -23,6 +23,9 @@ const SlateMetadata = v.strictObject({
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535))),
   title: v.optional(Name),
   bindings: v.optional(v.record(Name, Binding), () => ({})),
+  inline: v.optional(v.strictObject({
+    height: v.optional(v.pipe(v.number(), v.integer(), v.minValue(120), v.maxValue(720)), 320),
+  }), () => ({ height: 320 })),
 });
 
 const Project = v.object({
@@ -45,7 +48,7 @@ export function parseSlateProject<Input>(input: Input): SlateProject {
   const project = parsed.output;
 
   if (project.slate.runtime === 'worker' && project.main === undefined) {
-    throw new KinuError('bad_input', 'package.json main must name the Worker module that exports a fetch handler');
+    throw new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
   }
 
   if (project.slate.runtime === 'node') {

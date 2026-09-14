@@ -15,3 +15,5 @@ export { SqliteSlateInvocations, type SlateInvocationAuthority } from './invocat
 export { SlateFiles, slateDirectory } from './files';
 
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
+
+export { initSlateStateTable, SLATE_STORAGE_BINDING, SqliteSlateStateStore, routeSlateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
