@@ -70,7 +70,6 @@ const SchemaObjectSchema = v.looseObject({
   const: v.optional(JsonValueSchema),
   anyOf: v.optional(v.array(JsonValueSchema)),
   oneOf: v.optional(v.array(JsonValueSchema)),
-  description: v.optional(v.string()),
 });
 
 /**
@@ -111,13 +110,8 @@ export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string
 
         const fields = Object.entries(properties).map(([key, value]) => {
           const field = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
-          const doc = v.safeParse(SchemaObjectSchema, value);
 
-          const comment = doc.success && doc.output.description
-            ? `/** ${firstSentence(doc.output.description).replace(/\*\//g, '* /')} */ `
-            : '';
-
-          return `${comment}${field}${required.has(key) ? '' : '?'}: ${jsonSchemaToTs(value, depth + 1)}`;
+          return `${field}${required.has(key) ? '' : '?'}: ${jsonSchemaToTs(value, depth + 1)}`;
         });
 
         return fields.length === 0 ? 'Record<string, unknown>' : `{ ${fields.join('; ')} }`;
