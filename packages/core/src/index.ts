@@ -1042,7 +1042,7 @@ export {
 export {
   Inbox, readSignalId, PromptFileSchema,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
-  describeLandedSteers,
+  describeLandedSteers, initPendingSendTables,
   type UserSteerDeps, type AcceptedSteer,
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow,

@@ -648,7 +648,23 @@
     "media_type",
     "url"
   ],
+  "pending_steer_files@packages/core/src/orchestrator/inbox.ts": [
+    "seq",
+    "actor_id",
+    "steer_id",
+    "filename",
+    "media_type",
+    "url"
+  ],
   "pending_steers@packages/cf-backend/src/actor-agent.ts": [
+    "seq",
+    "actor_id",
+    "id",
+    "turn_id",
+    "mode",
+    "text"
+  ],
+  "pending_steers@packages/core/src/orchestrator/inbox.ts": [
     "seq",
     "actor_id",
     "id",

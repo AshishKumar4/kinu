@@ -73,7 +73,7 @@ import {
   scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
   // Durable admission — the claim a turn is issued under, and the per-step
   // context plane its revisions are recorded on.
-  initActorClaimTables, programIdentityOf, ActorClaimStore,
+  initActorClaimTables, programIdentityOf, ActorClaimStore, initPendingSendTables,
   type ActorTurnClaim, type ClaimOutcome,
   createActorContextPlane, type ActorContextPlane,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory,
@@ -822,31 +822,13 @@ export abstract class ActorAgent extends Think<Env> {
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
     )`);
-    // ACTOR-SCOPED, and this DDL is the only declaration of it: core declares
-    // no `pending_steers`, so the column is cf's to add. The UNIQUE widens with
-    // it — a bare `id UNIQUE` is a workspace-wide key, so two actors whose
-    // steers happened to share an id would collide on INSERT, and every read
-    // below would return a sibling's chips.
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pending_steers (
-      seq      INTEGER PRIMARY KEY AUTOINCREMENT,
-      actor_id TEXT NOT NULL,
-      id       TEXT NOT NULL,
-      turn_id  TEXT NOT NULL,
-      mode     TEXT NOT NULL CHECK (mode IN ('plan','build')),
-      text     TEXT NOT NULL,
-      UNIQUE (actor_id, id)
-    )`);
-    // The attachments of a pending steer, in their own table because a
-    // shipped table's shape never moves: one row per file part, in the order
-    // the message carried them, retired with the steer row they belong to.
-    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pending_steer_files (
-      seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-      actor_id   TEXT NOT NULL,
-      steer_id   TEXT NOT NULL,
-      filename   TEXT NOT NULL,
-      media_type TEXT NOT NULL,
-      url        TEXT NOT NULL
-    )`);
+    // ONE pending-send ledger, declared once in core (`initPendingSendTables`)
+    // because the CLI backend carries the same-named tables with a nullable
+    // `turn_id` (NULL = idle-queued — a state this backend does not have; cf
+    // admits the send as an `assistant_messages` row first). Two declarations
+    //  would let first-creation order pick the shape, so the shared function
+    //  is the only writer.
+    initPendingSendTables((ddl: string) => this.ctx.storage.sql.exec(ddl));
     // The admission ledger records the issued actor, run, execution epoch,
     // selected program and admitted context; one workspace-wide turn pointer
     // cannot distinguish concurrent actors or evicted activations. Initialize

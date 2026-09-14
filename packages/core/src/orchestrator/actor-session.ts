@@ -8,7 +8,7 @@ import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
 import { KinuError, renderThrownChain } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
-import { describeLandedSteers, type LandedSteerRow, type UserSteer } from './inbox';
+import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
@@ -142,6 +142,32 @@ export class ActorSession {
       turnId: () => this.active?.lease.turnId ?? null,
     });
     this.context = createActorContextPlane({ claims: options.claims, events: options.events ?? null });
+  }
+
+  /** Bind the backend's durable steer persistence onto this actor's inbox.
+   *  Called once, when the session that owns the actor is built — the actor
+   *  itself is created inside `createActorHost`, which has no opinion about
+   *  where a CLI workspace keeps its accepted sends.
+   *
+   *  `onDrain` sees the DESCRIBED rows (the same shape `landedSteers`
+   *  records), so the backend writes exactly the ids the durable transcript
+   *  will carry; `landed` is only recorded after it returns, so a failed
+   *  write cannot leave a row the backend never saw. `turnId` defaults to
+   *  the live turn's id when the binding does not need a queue-aware view. */
+  bindSteerPersistence(deps: {
+    readonly onAccept?: (steer: AcceptedSteer) => void;
+    readonly onDrain?: (rows: readonly LandedSteerRow[], atStep: number) => void | Promise<void>;
+    readonly turnId?: () => string | null;
+  }): void {
+    this.orchestrator.inbox.bindSteerDeps({
+      onAccept: deps.onAccept,
+      onDrain: async (steers, atStep) => {
+        const rows = describeLandedSteers(steers, atStep);
+        await deps.onDrain?.(rows, atStep);
+        this.landed.push(...rows);
+      },
+      turnId: () => deps.turnId?.() ?? this.active?.lease.turnId ?? null,
+    });
   }
 
   get history(): readonly ModelMessage[] { return this.messages; }

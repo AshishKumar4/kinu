@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-14",
-  "files": 2232,
-  "functions": 55554,
+  "files": 2262,
+  "functions": 56433,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -166,10 +166,6 @@
       "complexity": 39
     },
     {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
-      "complexity": 38
-    },
-    {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
       "complexity": 38
     },
@@ -191,6 +187,10 @@
     },
     {
       "key": "packages/cf-backend/src/server.ts#route",
+      "complexity": 37
+    },
+    {
+      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
       "complexity": 37
     },
     {
