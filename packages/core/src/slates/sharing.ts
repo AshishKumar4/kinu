@@ -13,11 +13,154 @@
 import * as v from 'valibot';
 import type { SecretSighting } from '../safety/secret-patterns';
 import { SLATE_BINDING_KINDS, type SlateBindingDeclaration } from './project';
+import { LiveShareVisibilitySchema } from './live-share-visibility';
 
-/** The share kinds the row discriminates on. Phase 1 ships blueprints only. */
-export const SHARE_KINDS = ['blueprint'] as const;
+
+/** The share kinds the row discriminates on: a blueprint exports a committed
+ *  version's bytes; a live share admits viewers to the running slate under a
+ *  grant. */
+export const SHARE_KINDS = ['blueprint', 'live'] as const;
 
 export type ShareKind = (typeof SHARE_KINDS)[number];
+
+export { type LiveShareVisibility } from './live-share-visibility';
+
+
+const SlateMemberEffectSchema = v.picklist(['read', 'mutate']);
+
+/** One member of one binding on one slate that a live share grants. */
+const ShareGrantMemberSchema = v.object({
+  slate: v.string(),
+  binding: v.string(),
+  member: v.string(),
+  effect: SlateMemberEffectSchema,
+});
+
+export type ShareGrantMember = v.InferOutput<typeof ShareGrantMemberSchema>;
+
+/** What a live share admits: the slates a viewer may enter (the root plus
+ *  every slate it reaches through an app binding) and the members each may
+ *  call. */
+export const ShareGrantSchema = v.object({
+  slates: v.array(v.string()),
+  members: v.array(ShareGrantMemberSchema),
+});
+
+export type ShareGrant = v.InferOutput<typeof ShareGrantSchema>;
+
+/** The other side of one binding, as the capability graph names it. */
+const SlateCapabilitySchema = v.variant('kind', [
+  v.object({ kind: v.literal('executor'), namespace: v.string() }),
+  v.object({ kind: v.literal('mcp'), server: v.string(), title: v.string() }),
+  v.object({ kind: v.literal('tool'), name: v.string() }),
+  v.object({ kind: v.literal('memory') }),
+  v.object({ kind: v.literal('tasks') }),
+  v.object({ kind: v.literal('web') }),
+  v.object({ kind: v.literal('rpc') }),
+  v.object({ kind: v.literal('agent') }),
+  v.object({ kind: v.literal('model'), tier: v.string() }),
+  v.object({ kind: v.literal('slate'), id: v.string() }),
+]);
+
+export type SlateCapability = v.InferOutput<typeof SlateCapabilitySchema>;
+
+/** One callable member of a graphed binding. `risk` says what a viewer
+ *  triggering it does, once per visibility; a read member carries no risk
+ *  text because there is nothing to warn about. */
+const SlateGraphMemberSchema = v.object({
+  member: v.string(),
+  effect: SlateMemberEffectSchema,
+  risk: v.object({ public: v.string(), users: v.string() }),
+});
+
+export type SlateGraphMember = v.InferOutput<typeof SlateGraphMemberSchema>;
+
+/** One declared binding rendered for the share dialog: what it reaches, the
+ *  members a grant could name, and the reason it cannot be granted when the
+ *  workspace cannot honour it. */
+const SlateGraphBindingSchema = v.object({
+  slate: v.string(),
+  name: v.string(),
+  kind: v.picklist(SLATE_BINDING_KINDS),
+  capability: SlateCapabilitySchema,
+  members: v.array(SlateGraphMemberSchema),
+  problem: v.optional(v.string()),
+});
+
+export type SlateGraphBinding = v.InferOutput<typeof SlateGraphBindingSchema>;
+
+/** The whole grant surface of a share: the root slate's bindings plus every
+ *  slate an app binding reaches, in walk order, root first. */
+export const SlateCapabilityGraphSchema = v.object({
+  slate: v.string(),
+  slates: v.array(v.string()),
+  bindings: v.array(SlateGraphBindingSchema),
+});
+
+export type SlateCapabilityGraph = v.InferOutput<typeof SlateCapabilityGraphSchema>;
+
+/** A `slate_live_shares` row as the owner's surfaces read it. */
+export const LiveShareRecordSchema = v.object({
+  id: v.string(),
+  slate: v.string(),
+  visibility: LiveShareVisibilitySchema,
+  handle: v.string(),
+  grant: ShareGrantSchema,
+  createdAt: v.number(),
+  revokedAt: v.nullable(v.number()),
+  /** Emails the owner named on this share, in the order they were added. */
+  users: v.array(v.string()),
+});
+
+export type LiveShareRecord = v.InferOutput<typeof LiveShareRecordSchema>;
+
+export const LiveShareCreatedSchema = v.object({
+  share: LiveShareRecordSchema,
+  url: v.nullable(v.string()),
+});
+
+export type LiveShareCreated = v.InferOutput<typeof LiveShareCreatedSchema>;
+
+/** One binding call a viewer made inside a request, as the audit row records
+ *  it. */
+export const ViewerCallSchema = v.object({
+  slate: v.string(),
+  binding: v.string(),
+  member: v.string(),
+  effect: SlateMemberEffectSchema,
+  ok: v.boolean(),
+});
+
+export type ViewerCall = v.InferOutput<typeof ViewerCallSchema>;
+
+/** A `slate_viewer_requests` row: one open preview request and the calls it
+ *  made, newest settled state on the row itself. */
+export const ViewerRequestRecordSchema = v.object({
+  id: v.number(),
+  share: v.string(),
+  viewer: v.string(),
+  slate: v.string(),
+  path: v.string(),
+  calls: v.array(ViewerCallSchema),
+  outcome: v.string(),
+  createdAt: v.number(),
+  settledAt: v.nullable(v.number()),
+});
+
+export type ViewerRequestRecord = v.InferOutput<typeof ViewerRequestRecordSchema>;
+
+/** Who a request on a share origin belongs to: the account a valid viewer
+ *  cookie names, or null, plus the anonymous opener attributed by a signed
+ *  hash of its source. The edge builds it, the socket upgrade carries it
+ *  URL-encoded past the RPC boundary, and the host parses it back through
+ *  this schema — so it lives in core, where both sides can name it without
+ *  a worker-only import. */
+export const ShareViewerClaimSchema = v.object({
+  userId: v.nullable(v.string()),
+  source: v.string(),
+});
+
+export type ShareViewerClaim = v.InferOutput<typeof ShareViewerClaimSchema>;
 
 /**
  * A blueprint's public address: the workspace that holds the row, the row's
@@ -133,14 +276,20 @@ export const BlueprintViewSchema = v.object({
 
 export type BlueprintView = v.InferOutput<typeof BlueprintViewSchema>;
 
-/** One row of the Shared page. `workspace` and `users` are set on the owner's
- *  own rows; `owner` names who shared a received row. */
+/** One row of the Shared page: `kind` says whether it opens a blueprint page
+ *  or a running slate, `share` is the row id in the owner's workspace, and
+ *  `workspace` names that workspace wherever the app host needs to open the
+ *  row — the owner's own rows, received rows and public rows alike. `owner`
+ *  names who shared a received row. */
 const SharedRowSchema = v.object({
   id: v.string(),
+  kind: v.picklist(SHARE_KINDS),
+  share: v.string(),
   title: v.string(),
   description: v.string(),
   createdAt: v.number(),
   bindings: v.number(),
+  visibility: v.optional(LiveShareVisibilitySchema),
   workspace: v.optional(v.string()),
   users: v.optional(v.array(v.string())),
   owner: v.optional(v.string()),
@@ -148,11 +297,13 @@ const SharedRowSchema = v.object({
 
 export type SharedRow = v.InferOutput<typeof SharedRowSchema>;
 
-/** The two Phase 1 lists. Public and "from people I know" are later lists on
- *  the same page. */
+/** The four lists of the Shared page: the owner's own rows, rows shared with
+ *  the owner, public rows, and rows from people the owner knows. */
 export const SharedLibrarySchema = v.object({
   mine: v.array(SharedRowSchema),
   received: v.array(SharedRowSchema),
+  public: v.array(SharedRowSchema),
+  known: v.array(SharedRowSchema),
 });
 
 export type SharedLibrary = v.InferOutput<typeof SharedLibrarySchema>;
