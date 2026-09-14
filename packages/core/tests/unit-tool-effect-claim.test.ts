@@ -14,9 +14,12 @@ import { describe, expect, test } from 'bun:test';
 import { createTestActors, createTestSql, toolExecute } from '@kinu.run/test-utils';
 import { jsonSchema, tool } from 'ai';
 import {
-  claimToolEffect, initToolEffectClaimTable, releaseTurnEffectClaims, settleToolEffect,
+  buildMcpToolSet, claimToolEffect, initToolEffectClaimTable, releaseTurnEffectClaims,
+  settleToolEffect, TurnContextBudget,
   withEffectClaims, replayPolicyFor, type EffectClaimDeps, type JsonValue,
+  type SerializableToolDescriptor,
 } from '../src/index';
+import { createMemoryVfs } from '@kinu.run/test-utils';
 
 /** A workspace's claim table over a real SQLite, the actor whose turn is
  *  making the calls, and the deps the wrapper reads. `turnId` is mutable so a
@@ -277,5 +280,108 @@ describe('tool effect claims', () => {
     // its replay safety, so it goes through the claim.
     expect(replayPolicyFor('mcp__stripe__create_charge')).toBe('claimed');
     expect(replayPolicyFor('run')).toBe('claimed');
+  });
+
+  describe('buildMcpToolSet — an admitted remote surface is claimed before it merges', () => {
+    // KINU-019: the adapter used to arrive as a bare `tool({})`, so the
+    // claim boundary the natives ran behind ended at them — an MCP effect
+    // started unclaimed, and a reset replayed it. The builder is the public
+    // shape every backend now composes its call through.
+    const descriptor = (name: string, extra?: Partial<SerializableToolDescriptor>): SerializableToolDescriptor => ({
+      serverId: 'srv',
+      serverName: 'srv',
+      name,
+      toolKey: `mcp__srv__${name}`,
+      ...extra,
+    });
+
+    test('a remote tool without a readOnly annotation is claimed, then replayed', async () => {
+      const { sql, execRaw } = createTestSql();
+
+      initToolEffectClaimTable(execRaw);
+
+      const actor = createTestActors(sql, execRaw).main;
+      let dispatched = 0;
+
+      const tools = buildMcpToolSet(
+        [descriptor('charge')],
+        {
+          call: async (_d, args) => {
+            // The claim is written before the server sees the call: count
+            // rows at the moment dispatch runs.
+            const rows = sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`;
+
+            expect(rows[0].n).toBe(1);
+            dispatched += 1;
+
+            return `charged-${String(args.amount)}`;
+          },
+          effectClaims: { sql, actor, turnId: () => 'turn-1' },
+          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(4096), producer: 'external_tool' },
+        },
+      );
+
+      // SAFETY: a ToolSet entry is the tool() builder's own shape — a declared
+      // ExecutableTool whose input is the admitted schema's JsonObject.
+      const call = toolExecute(tools['mcp__srv__charge'] as never);
+
+      expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [] })).toBe('charged-5');
+
+      // Same (turn, call, digest): the settled row answers, the server does not.
+      expect(await call({ amount: 5 }, { toolCallId: 'call-1', messages: [] })).toBe('charged-5');
+      expect(dispatched).toBe(1);
+    });
+
+    test('an absent annotation is not read-only — it is claimed', async () => {
+      const { sql, execRaw } = createTestSql();
+
+      initToolEffectClaimTable(execRaw);
+
+      const actor = createTestActors(sql, execRaw).main;
+
+      const tools = buildMcpToolSet(
+        [descriptor('quiet')],
+        {
+          call: async () => 'ok',
+          effectClaims: { sql, actor, turnId: () => 'turn-1' },
+          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(4096), producer: 'external_tool' },
+        },
+      );
+
+      // SAFETY: same ToolSet entry shape as above — the adapter always carries
+      // execute.
+      expect(await toolExecute(tools['mcp__srv__quiet'] as never)({}, { toolCallId: 'c1', messages: [] })).toBe('ok');
+      expect(sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`[0].n).toBe(1);
+    });
+
+    test('a readOnly tool runs straight through — no claim row, no replay', async () => {
+      const { sql, execRaw } = createTestSql();
+
+      initToolEffectClaimTable(execRaw);
+
+      const actor = createTestActors(sql, execRaw).main;
+      let dispatched = 0;
+
+      const tools = buildMcpToolSet(
+        [descriptor('lookup', { readOnly: true })],
+        {
+          call: async () => {
+            dispatched += 1;
+
+            return `lookup-${String(dispatched)}`;
+          },
+          effectClaims: { sql, actor, turnId: () => 'turn-1' },
+          clamp: { vfs: createMemoryVfs().vfs, budget: new TurnContextBudget(4096), producer: 'external_tool' },
+        },
+      );
+
+      // SAFETY: same ToolSet entry shape as above — the adapter always carries
+      // execute.
+      const call = toolExecute(tools['mcp__srv__lookup'] as never);
+
+      expect(await call({}, { toolCallId: 'c1', messages: [] })).toBe('lookup-1');
+      expect(await call({}, { toolCallId: 'c1', messages: [] })).toBe('lookup-2');
+      expect(sql<{ n: number }>`SELECT count(*) AS n FROM tool_effect_claims`[0].n).toBe(0);
+    });
   });
 });

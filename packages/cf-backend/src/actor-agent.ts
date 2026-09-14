@@ -49,7 +49,7 @@ import {
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
 import { Think, Session } from "@cloudflare/think";
-import { streamText, generateText, tool, jsonSchema, convertToModelMessages } from "ai";
+import { streamText, generateText, convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage, TextStreamPart } from "ai";
 import {
   McpToolSurfaceCache,
@@ -87,7 +87,7 @@ import {
   advisorWorkspaceGuidance,
   // canonical tool + prompt surface — single source of truth
   buildActorTools, buildBuiltinTools,
-  withClampedToolResults,
+  buildMcpToolSet,
   type WebSearchProvider,
   buildSystemPromptSync,
   type PromptIdentity,
@@ -233,7 +233,7 @@ import {
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, renderToolResult, successfulToolOutcome,
-  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
+  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
@@ -3696,37 +3696,33 @@ export abstract class ActorAgent extends Think<Env> {
   private _mcpUnavailable: MissingCapability[] = [];
 
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
-    this._mcpToolsCache ??= new McpToolSurfaceCache<ToolSet>(async (descriptors) => {
-      const tools: ToolSet = {};
+    this._mcpToolsCache ??= new McpToolSurfaceCache<ToolSet>(async (descriptors) =>
+      // The admitted surface arrives already claimed: `buildMcpToolSet` puts
+      // every non-readOnly tool behind the same durable claim the natives run
+      // under, with the same turn deps — the ambient closure, because this
+      // cache is content-keyed and shared across turns. KINU-019: building
+      // the adapters here and merging them unwrapped let an MCP effect start
+      // unclaimed and replay after a reset.
+      buildMcpToolSet(descriptors, {
+        call: async (d, args) => {
+          const rawResult = await this.requireOwnerUserDO()
+            .userMcp_callTool(await this.userCaller(), d.serverId, d.name, args);
 
-      for (const d of descriptors) {
-        const serverId = d.serverId;
-        const mcpName = d.name;
+          const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
 
-        const entry = tool({
-          description: d.description ?? `${d.serverName}/${mcpName}`,
-          inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
-          execute: async (args) => {
-            const rawResult = await this.requireOwnerUserDO()
-              .userMcp_callTool(await this.userCaller(), serverId, mcpName, args);
+          if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
 
-            const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
-
-            if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
-
-            return response;
-          },
-        });
-
-        tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
-      }
-
-      // An MCP server is a bulk producer like any other. Apply the same result
-      // clamp and spill path as built-in tools.
-      return withClampedToolResults(tools, {
-        vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
-      });
-    });
+          return response;
+        },
+        effectClaims: {
+          actor: this.actorHandle(),
+          sql: this.rt.storage.sql,
+          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID,
+        },
+        clamp: {
+          vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
+        },
+      }));
 
     return this._mcpToolsCache;
   }

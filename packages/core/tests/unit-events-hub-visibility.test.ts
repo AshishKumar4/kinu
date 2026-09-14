@@ -4,7 +4,7 @@ import { createMemoryVfs } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
-  renderForLLM, spillEventContent,
+  redactPayload, redactSecrets, renderForLLM, spillEventContent,
 } from '../src/events/hub/index';
 import type { BaseEvent } from '../src/events/hub/index';
 
@@ -97,6 +97,41 @@ describe('applyVisibilityForStorage — redact', () => {
     expect(stored.session.monkey).toBe('not-a-secret');
     expect(stored.session.turkey).toBe('also-visible');
     expect(stored.data).toBe('visible');
+  });
+});
+
+describe('redactSecrets — secret-shaped VALUES in free text', () => {
+  // KINU-011: `redactPayload` saw field names only, so a token inside a
+  // free-form string survived every preview that renders one — a tool result
+  // carrying a `cfut_` token, a run command with `--token=…`, an errorText.
+  // The assembled literals keep this file clean under the commit-tier scan
+  // that shares the same pattern list.
+  const TOKEN = `cfut_${'a'.repeat(48)}`;
+
+  test('a token inside a free-form string is masked, and only the token', () => {
+    expect(redactSecrets(`deploy --token=${TOKEN} now`)).toBe('deploy --token=<redacted> now');
+  });
+
+  test('redactPayload reaches secret values inside named fields, not just the names', () => {
+    const stored = redactPayload({ result: `token ${TOKEN} accepted`, keep: 'visible' });
+
+    expect(stored).toEqual({ result: 'token <redacted> accepted', keep: 'visible' });
+  });
+
+  test('a bare string payload is free text too', () => {
+    expect(redactPayload(`API key: ${TOKEN}`)).toBe('API key: <redacted>');
+  });
+
+  test('a benign line is left verbatim — the same adjudication the scan applies', () => {
+    const line = `sk_live_${'x'.repeat(16)} — a documented example placeholder`;
+
+    expect(redactSecrets(line)).toBe(line);
+  });
+
+  test('a masked value stays masked on a second pass', () => {
+    const once = redactSecrets(`token ${TOKEN}`);
+
+    expect(redactSecrets(once)).toBe(once);
   });
 });
 

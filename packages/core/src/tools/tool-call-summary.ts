@@ -16,6 +16,7 @@
  * on the web. One vocabulary, one home, both surfaces.
  */
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { redactSecrets } from '../events/hub/visibility';
 import * as v from 'valibot';
 
 /** Chip budget — long enough for a command or a short task, short enough to
@@ -540,7 +541,12 @@ export function describeToolCall<Input>(toolName: string, input: Input): string 
 
   if (!parsed.success) return "";
 
-  return DESCRIBERS.get(toolName)?.(parsed.output) ?? "";
+  const description = DESCRIBERS.get(toolName)?.(parsed.output) ?? "";
+
+  // A description can still carry an argument verbatim — the one-line chip is
+  // a preview of the same call, so it answers to the same redaction the
+  // expanded card applies.
+  return redactSecrets(description);
 }
 
 
@@ -565,5 +571,5 @@ export function summarizeToolCall<Input>(toolName: string, input: Input): string
   if (!parsed.success) return "";
   const summarize = SUMMARIZERS.get(toolName);
 
-  return summarize ? summarize(parsed.output) : summarizeUnknownTool(parsed.output);
+  return redactSecrets(summarize ? summarize(parsed.output) : summarizeUnknownTool(parsed.output));
 }

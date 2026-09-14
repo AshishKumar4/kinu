@@ -153,8 +153,18 @@ export interface EffectClaimDeps {
 /**
  * Put every `claimed` tool of a set behind its claim. `safe` tools are handed
  * back untouched — no wrapper, no row, no cost.
+ *
+ * `options.safe` is the caller's own replay-safety evidence: a name the
+ * registry does not know defaults to `claimed`, and a remote tool that
+ * declared itself read-only is the one case the builder of an MCP surface can
+ * prove safe itself. Everything not proven safe — by the registry or by the
+ * caller — is claimed, so a missing annotation can never open the window.
  */
-export function withEffectClaims(tools: ToolSet, deps: EffectClaimDeps): ToolSet {
+export function withEffectClaims(
+  tools: ToolSet,
+  deps: EffectClaimDeps,
+  options?: { readonly safe?: ReadonlySet<string> },
+): ToolSet {
   // Built by assignment rather than `Object.fromEntries(...) as ToolSet`.
   // `fromEntries` erases the value type, so the cast that followed it was
   // load-bearing and unchecked — it would have accepted a wrapper that had
@@ -163,7 +173,7 @@ export function withEffectClaims(tools: ToolSet, deps: EffectClaimDeps): ToolSet
   const claimed: ToolSet = {};
 
   for (const [name, entry] of Object.entries(tools)) {
-    claimed[name] = replayPolicyFor(name) === 'safe'
+    claimed[name] = replayPolicyFor(name) === 'safe' || options?.safe?.has(name) === true
       ? entry
       : withEffectClaim(name, entry, deps);
   }
