@@ -5,10 +5,10 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BENCH_ACCOUNT_ID, CELL_STARTUP_MS, SANDBOX_IMAGE, boxName, boxState, checkpointOperation,
-  cleanupObservationProbes, createFixtureResources, deployFixture, destroyBox,
-  drainBucketResidue, execInBox, measureLiveC3, r2ResiduePlane, readBlockAttachMetrics,
+  cleanupObservationProbes, createFixtureResources, deployFixture, describeIncidentReasons, destroyBox,
+  drainBucketResidue, execInBox, measureLiveC3, r2ResiduePlane, readBlockAttachMetrics, readIncidentReasons,
   readRestoreProbe, sourceRevision, startupOperation, teardownLiveArms, writeFileInBox,
-  type Fixture, type StartupCompletion,
+  type Fixture, type IncidentReasonRow, type StartupCompletion, type StartupObservation, type StateReply,
 } from './bench-devbox-strategies';
 import { evaluateLiveC3, type BlockAttachMetrics, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import type { RestorePhaseStamps } from '../packages/devbox/src/durability/contracts';
@@ -150,6 +150,19 @@ try {
   return row;
 }
 
+/** One destroy/create cycle of the `--lifecycle` run. A refused cycle keeps
+ *  its observations, its last state reading and the incident reasons, and the
+ *  loop goes on to the next cycle: the hang under study is intermittent, so
+ *  one sample is not a measurement. */
+interface LifecycleCycle {
+  initial: StartupCompletion | null;
+  exec: Awaited<ReturnType<typeof execInBox>> | null;
+  observations: StartupObservation[];
+  refusal: string | null;
+  lastState: StateReply | null;
+  incidents: IncidentReasonRow[] | null;
+}
+
 async function run(): Promise<number> {
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
@@ -188,7 +201,7 @@ async function run(): Promise<number> {
   let live: Awaited<ReturnType<typeof deployFixture>> | null = null;
   let c3: LiveC3Observation | null = null;
   let large: LargeObservation | null = null;
-  const lifecycle: { initial: StartupCompletion; exec: Awaited<ReturnType<typeof execInBox>> }[] = [];
+  const lifecycle: LifecycleCycle[] = [];
   let tail: ReturnType<typeof Bun.spawn> | undefined;
   let capture: Promise<void> | undefined;
 
@@ -267,6 +280,10 @@ async function run(): Promise<number> {
         pending = lines.pop() ?? '';
 
         for (const line of lines) {
+          // Every tailed line is kept: `b20260914045438` filtered to the
+          // `devbox.` events alone and lost the console lines that named
+          // why its startup never settled.
+          appendFileSync(join(artifacts, 'tail.log'), line + '\n');
           const begin = line.indexOf('{"event":"devbox.');
 
           if (begin >= 0) appendFileSync(join(artifacts, 'lifecycle.jsonl'), line.slice(begin) + '\n');
@@ -277,15 +294,29 @@ async function run(): Promise<number> {
 
     if (lifecycleOnly) {
       for (let attempt = 0; attempt < 10; attempt += 1) {
+        const observations: StartupObservation[] = [];
+        const cycle: LifecycleCycle = { initial: null, exec: null, observations, refusal: null, lastState: null, incidents: null };
+        lifecycle.push(cycle);
         await destroyBox(fixture, box);
-        const initial = await startupOperation(fixture, box, '/create', 'lifecycle empty baseline', ['empty'], { deadlineMs: CELL_STARTUP_MS });
-        const exec = await execInBox(fixture, box, 'mkdir -p /tmp/devbox-first-exec-witness');
-        lifecycle.push({ initial, exec });
+
+        try {
+          cycle.initial = await startupOperation(fixture, box, '/create', `lifecycle empty baseline ${attempt + 1}`, ['empty'], { deadlineMs: CELL_STARTUP_MS, observations });
+          cycle.exec = await execInBox(fixture, box, 'mkdir -p /tmp/devbox-first-exec-witness');
+        } catch (cause) {
+          cycle.refusal = cause instanceof Error ? cause.message : String(cause);
+        }
+
+        cycle.incidents = (await readIncidentReasons(fixture, box, errors)) ?? null;
+
+        try {
+          cycle.lastState = await boxState(fixture, box);
+        } catch (cause) {
+          errors.push(`lifecycle ${attempt + 1} final state: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+
+        if (cycle.refusal !== null) errors.push(`lifecycle ${attempt + 1}: ${cycle.refusal}; incident reasons: ${describeIncidentReasons(cycle.incidents ?? undefined)}`);
+        else if (cycle.exec?.ok !== true || cycle.exec.exitCode !== 0) errors.push(`lifecycle ${attempt + 1}: ${cycle.exec?.error ?? 'first exec failed'}`);
         save();
-
-        if (exec.ok !== true || exec.exitCode !== 0) { errors.push(exec.error ?? 'first exec failed'); break; }
-
-        await destroyBox(fixture, box);
       }
     } else {
       if (!largeOnly) {
