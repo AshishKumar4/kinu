@@ -106,10 +106,12 @@ export function describeMcpTool(
     inputSchema: v.parse(JsonObjectSchema, tool.inputSchema),
   };
 
-  const description = nonBlank(tool.description);
+  const description = nonBlank(sanitizeRemoteProse(tool.description));
 
   if (description !== undefined) descriptor.description = description;
-  const title = nonBlank(tool.title) ?? nonBlank(tool.annotations?.title);
+
+  const title = nonBlank(sanitizeRemoteProse(tool.title))
+    ?? nonBlank(sanitizeRemoteProse(tool.annotations?.title));
 
   if (title !== undefined) descriptor.title = title;
 
@@ -122,6 +124,62 @@ export function describeMcpTool(
 
 function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+/** The prompt's own directive shapes, at the start of a line: the `## `
+ *  headings that bound system-prompt sections (prompting/sections.ts splits on
+ *  exactly that) and the `<word>` blocks that wrap live context
+ *  (`<directives>`, `<workspace_instructions>`, `<dynamic_context>`). Prose
+ *  mid-line is content; prose at a line start is what a reader can mistake
+ *  for structure the host wrote. */
+const HEADING_LINE = /^#{1,6}[ \t]+/gm;
+
+const TAG_LINE = /^<(?=\/?[a-zA-Z])/gm;
+
+/** C0 except \t and \n, then DEL and the C1 range — a loop rather than a
+ *  character-class regex, which lint forbids for control bytes. */
+function dropControlChars(text: string): string {
+  let out = '';
+
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    const kept = code === 0x09 || code === 0x0a || (code > 0x1f && !(code >= 0x7f && code <= 0x9f));
+
+    if (kept) out += ch;
+  }
+
+  return out;
+}
+
+/**
+ * The boundary between a remote server's words and this agent's instructions.
+ *
+ * A description or title is a third party's prose riding the tool channel,
+ * which is part of every request the turn makes. Before the budget clamps it,
+ * three normalizations keep that channel a carrier of FACTS, not of structure:
+ *
+ *   - control characters are dropped (except newline and tab, which carry
+ *     ordinary prose layout);
+ *   - whitespace runs collapse, so no amount of padding re-shapes the text;
+ *   - directive SHAPES at a line start are neutralized: an ATX heading loses
+ *     its marks and an XML-ish tag gets the `&lt;` escape `sealDelimiters`
+ *     already uses, so either still reads as the server's words and neither
+ *     reads as a section or block the host wrote.
+ *
+ * This is not a prompt-injection filter — it touches only the structural
+ * markers this prompt's own conventions make meaningful. The sentence "you
+ * must comply" survives untouched; `## System` at a line start does not.
+ */
+function sanitizeRemoteProse(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+
+  return dropControlChars(text)
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n[ \t]+|[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim()
+    .replace(HEADING_LINE, '')
+    .replace(TAG_LINE, '&lt;');
 }
 
 /**
