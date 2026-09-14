@@ -16,12 +16,12 @@
 import { normalizePath } from '@kinu.run/agent-utils';
 import {
   MOUNT_EXECUTORS, carryFileWithVfsOps, listWithVfsOps, readBoundedWithVfsOps,
-  removeTreeWithVfsOps, type VfsNativeMutations,
+  partialTreeRemovalMessage, removeTreeWithVfsOps, type VfsNativeMutations,
 } from '../vfs/mounts';
 import { isVfsError } from '../vfs/errno';
 import { inlineFileType } from './file-types';
 import type { VFS } from '../types/primitives';
-import { diagnostics, renderThrownChain } from '../obs/index';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 
 /** Just enough of the router to find one executor's files, and to ask that
@@ -97,7 +97,11 @@ export type ExecutorWriteResult =
   | { ok: true; revision?: number }
   | { conflict: true; revision: number }
   | { unsupported: true; error: string }
-  | { error: string };
+  | { error: string }
+  /** A partial tree removal: the refusal shape plus the two sets it names —
+   *  what was removed and what is still there — so the file manager reports
+   *  the boundary the removal itself recorded, not a re-read that could move. */
+  | (Refusal & { removed: readonly string[]; remaining: readonly string[] });
 
 const CONDITIONAL_WRITE_UNSUPPORTED =
   'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
@@ -644,8 +648,10 @@ export async function renameExecutorPathOp(
 /**
  * Delete one entry inside an executor's plane. A file is one unlink; a
  * directory uses the plane's native tree removal where it has one and goes
- * entry by entry where it does not, so a plane whose unlink refuses
- * directories fails naming its own refusal.
+ * entry by entry where it does not — a pass that fails CLOSED: enumeration
+ * first, then deletions that stop at the first failure, and the result is a
+ * structured refusal naming both halves of the tree it left rather than a
+ * silent half-removal that reports only that something went wrong.
  */
 export async function deleteExecutorPathOp(
   router: ExecutorFileLookup,
@@ -670,8 +676,27 @@ export async function deleteExecutorPathOp(
 
     const native = nativeMutations(vfs).removeRecursive;
 
-    if (native) await native.call(vfs, path);
-    else await removeTreeWithVfsOps(vfs, path);
+    if (native) {
+      await native.call(vfs, path);
+
+      return { ok: true };
+    }
+
+    const removal = await removeTreeWithVfsOps(vfs, path);
+
+    if (!removal.ok) {
+      // The message already carries the cause's own words
+      // (`partialTreeRemovalMessage` inlines them for the VFS throw, which
+      // cannot attach a cause); attaching it here would render the same
+      // sentence a second time at the end of the refusal text.
+      const reason = classifyErrorCode({ cause: removal.failed.cause }) ?? 'io';
+
+      return {
+        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, removal))),
+        removed: removal.removed,
+        remaining: removal.remaining,
+      };
+    }
 
     return { ok: true };
   } catch (err) {

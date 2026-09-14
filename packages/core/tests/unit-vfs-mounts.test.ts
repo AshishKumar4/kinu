@@ -496,6 +496,79 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(await device.exists('/home/dev/build')).toBe(false);
 	});
 
+	test('a mid-tree unlink failure stops the pass and reports both halves', async () => {
+		// KINU-013: the fallback removed entry by entry and a mid-tree failure
+		// left a half-removed directory reported as an opaque failure. The pass
+		// now stops at the first refusal and its result partitions the tree:
+		// what was removed, what remains.
+		const base = fakeTree({
+			'/build/out.js': 'x',
+			'/build/deep/two.js': 'y',
+		});
+
+		const realUnlink = base.unlink;
+		let calls = 0;
+
+		base.unlink = async (path) => {
+			calls += 1;
+
+			if (calls === 3) {
+				throw Object.assign(new Error(`EACCES: ${path} is held open`), { code: 'EACCES' });
+			}
+
+			return realUnlink(path);
+		};
+
+		const removal = await removeTreeWithVfsOps(base, '/build');
+
+		if (removal.ok) throw new Error('expected a partial removal, got a completed one');
+
+		// Deletion runs deepest-first: the leaf file and its directory went;
+		// the third unlink refused and the pass stopped there.
+		expect(removal.removed).toEqual(['/build/deep/two.js', '/build/deep']);
+		expect(removal.remaining).toEqual(['/build/out.js', '/build']);
+		expect(removal.failed.path).toBe('/build/out.js');
+		expect(await base.exists('/build/deep/two.js')).toBe(false);
+		expect(await base.exists('/build/deep')).toBe(false);
+		expect(await base.exists('/build/out.js')).toBe(true);
+		expect(await base.exists('/build')).toBe(true);
+	});
+
+	test('a mounted tree removal that stops partway throws naming both halves', async () => {
+		const device = fakeTree({
+			'/home/dev/build/out.js': 'x',
+			'/home/dev/build/deep/two.js': 'y',
+		});
+
+		const realUnlink = device.unlink;
+
+		device.unlink = async (path) => {
+			if (path === '/home/dev/build/deep') {
+				throw Object.assign(new Error(`EACCES: ${path} is held open`), { code: 'EACCES' });
+			}
+
+			return realUnlink(path);
+		};
+
+		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
+
+		let error: unknown;
+
+		try { await mounted.removeRecursive('/pc/home/dev/build'); } catch (caught) { error = caught; }
+
+		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
+
+		// The failing entry keeps its own code, and the refusal names the tree's
+		// two halves — what the pass removed and what is still present.
+		expect(error.code).toBe('EACCES');
+		expect(error.message).toContain('/home/dev/build/deep/two.js');
+		expect(error.message).toContain('/home/dev/build/out.js');
+		expect(error.message).toContain('still present');
+		expect(await device.exists('/home/dev/build/deep/two.js')).toBe(false);
+		expect(await device.exists('/home/dev/build/deep')).toBe(true);
+		expect(await device.exists('/home/dev/build/out.js')).toBe(true);
+	});
+
 	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {
 		await expect(removeTreeWithVfsOps(fakeTree({}), '/gone')).rejects.toMatchObject({ code: 'ENOENT' });
 	});

@@ -239,23 +239,99 @@ export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListed
 }
 
 /**
- * Depth-first tree removal spelled in base VFS ops, for planes with no native
- * removal. Children first, the directory itself last via `unlink`, so a plane
- * whose unlink refuses directories fails naming its own refusal instead of
- * half-working silently.
+ * What the fallback tree removal did. `removed` and `remaining` partition the
+ * enumeration exactly: every path the walk listed is in one of them, so a
+ * caller reporting a partial removal never has to re-ask the plane what is
+ * still there — the answer is the one the removal itself recorded.
  */
-export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<void> {
+export type TreeRemoval =
+	| { readonly ok: true; readonly removed: readonly string[]; readonly remaining: readonly string[] }
+	| {
+		readonly ok: false;
+		readonly removed: readonly string[];
+		readonly remaining: readonly string[];
+		readonly failed: { readonly path: string; readonly cause: unknown };
+	};
+
+/**
+ * Depth-first tree removal spelled in base VFS ops, for planes with no native
+ * removal.
+ *
+ * ENUMERATE FIRST, THEN DELETE. A walk that discovers children while it
+ * deletes them reads a directory it is simultaneously emptying, so the
+ * listing it acts on is the one the operation started from, not whatever a
+ * half-removed tree still answers. Children unlink before their parents, and
+ * the first unlink that fails ends the pass: the result names what was
+ * removed and what remains, because an unlink cannot be rolled back and the
+ * honest record is the only thing a caller can act on. An entry that vanished
+ * between the listing and its own unlink is counted removed — the operation
+ * wanted it gone and it is — the same reading `listWithVfsOps` gives a gap.
+ */
+export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<TreeRemoval> {
 	const st = await files.stat(path);
 
 	if (!st) throw makeVfsError('ENOENT', 'no such file or directory', path);
 
-	if (st.isDir) {
-		for (const name of await files.readdir(path)) {
-			await removeTreeWithVfsOps(files, path === '/' ? `/${name}` : `${path}/${name}`);
+	const pending: string[] = [path];
+	const order: string[] = [];
+
+	while (pending.length > 0) {
+		const current = pending.pop();
+
+		if (current === undefined) break;
+		const currentStat = current === path ? st : await files.stat(current);
+
+		// A child that vanished between the listing and its own stat is already
+		// the end state the removal wants — a gap, not a failure.
+		if (currentStat === null) continue;
+
+		order.push(current);
+
+		if (currentStat.isDir) {
+			for (const name of await files.readdir(current)) {
+				pending.push(current === '/' ? `/${name}` : `${current}/${name}`);
+			}
 		}
 	}
 
-	await files.unlink(path);
+	// Deepest first: a directory unlinks after everything beneath it, the same
+	// order the recursive descent reached children before parents.
+	order.sort((a, b) => b.split('/').length - a.split('/').length);
+
+	const removed: string[] = [];
+
+	for (const entry of order) {
+		try {
+			await files.unlink(entry);
+			removed.push(entry);
+		} catch (cause) {
+			if (isVfsError(cause) && cause.code === 'ENOENT') {
+				removed.push(entry);
+				continue;
+			}
+
+			return {
+				ok: false,
+				removed,
+				remaining: order.slice(removed.length),
+				failed: { path: entry, cause },
+			};
+		}
+	}
+
+	return { ok: true, removed, remaining: [] };
+}
+
+/** The refusal text of a removal that stopped: where it stopped, why, and
+ *  which entries are gone versus still present. Shared by the composite
+ *  plane's throw and the file manager's error value, so both name the same
+ *  two sets off the one record. */
+export function partialTreeRemovalMessage(path: string, removal: Extract<TreeRemoval, { ok: false }>): string {
+	const gone = removal.removed.length === 0 ? 'none' : removal.removed.join(', ');
+	const left = removal.remaining.join(', ');
+
+	return `removing ${removal.failed.path} failed (${renderThrownChain({ cause: removal.failed.cause })}), `
+		+ `so ${path} was only partly removed: gone [${gone}]; still present [${left}]`;
 }
 
 /** One side of a carry: the plane that holds the bytes, and the path inside
@@ -617,13 +693,25 @@ export function withMountTable(
 			);
 		},
 		removeRecursive(path) {
-			return mutate(path, 'removed', (files, native) => {
+			return mutate(path, 'removed', async (files, native) => {
 				const remove = nativeOps(files).removeRecursive;
 
-				return remove ? remove.call(files, native) : removeTreeWithVfsOps(files, native);
+				if (remove) return remove.call(files, native);
+
+				const removal = await removeTreeWithVfsOps(files, native);
+
+				// The VFS surface reports by throwing, so the record of a partial
+				// removal rides the error: the failing entry keeps its own code
+				// and the message names both halves of the tree it left.
+				if (!removal.ok) {
+					throw makeVfsError(
+						isVfsError(removal.failed.cause) ? removal.failed.cause.code : 'EIO',
+						partialTreeRemovalMessage(native, removal),
+						native,
+					);
+				}
 			});
 		},
-		// Routed, for the reason the mutations are: the workspace tree and a
 		// mounted machine answer differently, and no caller should have to know
 		// which plane a path landed on.
 		//
