@@ -129,6 +129,7 @@ export const PATTERN_REVIEWS = {
   handbook: 'DEFERRED: the handbook indexes a flat scaffold and its bridge references. A complete AST replacement must preserve notes and declaration ownership; this inventory records the limitation.',
   schema: 'DEFERRED: reads a restricted DDL corpus without executing it. Replacing it with SQLite changes validation and side effects; preserve the schema gate contract first.',
   protected: 'DEFERRED: layergate and devbox are explicit non-goals. The inventory includes their candidates without changing their checks.',
+  bundleResolver: 'DEFERRED: rewrites the bare specifiers left in an esbuild output because the VFS plugin Nimbus installs resolves before esbuild\'s alias step, so a resolver cannot answer them in the build. Replacing it needs an embedder-supplied onResolve hook in Nimbus\'s EsbuildService; the rewrite is anchored to statement position and pinned by the bundle tests.',
 };
 
 const ReviewedSiteSchema = v.object({
