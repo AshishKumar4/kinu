@@ -320,6 +320,8 @@ const USER_DO_METHODS = [
   'verifySocketSession',
   'revokeAllCliTokens',
   'getCredentialsRevision',
+  'sharesReceived_add',
+  'sharesReceived_list',
 ] as const satisfies readonly (keyof UserDO)[];
 
 /** A method name on the UserDO surface above, for typing a stub of it. */
@@ -417,6 +419,12 @@ const ORCHESTRATOR_METHODS = [
   'abortExecutorFileDownload',
   'abortExecutorFileWrite',
   'acceptContainerEvent',
+  // Blueprints cross workspaces: the app host reads one from its owner's
+  // object and admits it into the forker's. Never `@callable`.
+  'admitBlueprint',
+  'blueprintBundle',
+  'readBlueprint',
+  'shareBlueprintWith',
   'acceptEmailDelivery',
   'acceptSandboxLifecycleFailure',
   'acceptWebhookDelivery',

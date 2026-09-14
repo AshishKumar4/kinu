@@ -22,6 +22,7 @@
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initActorTables, initWorkspaceOwnershipTables } from '../identity/schema';
+import { initSlateShareTables } from '../slates/shares';
 import { initWorkspaceActorTable } from '../identity/workspace-actors';
 import { initEffectTombstoneTable } from '../identity/effect-tombstones';
 import { initAgentConfigTable } from '../config/store';
@@ -157,6 +158,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
     attempt INTEGER NOT NULL, outcome TEXT NOT NULL, error TEXT, finished_at INTEGER NOT NULL,
     UNIQUE (invocation_id, attempt)
   )`);
+  initSlateShareTables(execRaw);
 }
 
 /** Initialize actor state without workspace ownership or root publication tables. */

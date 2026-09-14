@@ -15,3 +15,7 @@ export { SqliteSlateInvocations, type SlateInvocationAuthority } from './invocat
 export { SlateFiles, slateDirectory } from './files';
 
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
+
+export { SlateShareStore, initSlateShareTables, type NewSlateShare, type ShareUser } from './shares';
+
+export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReading } from './blueprints';
