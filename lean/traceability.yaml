@@ -935,6 +935,10 @@ requirements:
     statement: V2 storage attach processes bounded namespace and layer metadata with zero file payload; balanced authenticated indexes resolve blocks logarithmically and compose size-clipped base, holes and chunks; readiness requires matching composed mounts and copy-up is file-local.
     status: proved-in-abstract-model
     theorems:
+      - Kinu.Storage.BlockLayer.opacity_keeps_directory_record_count
+      - Kinu.Storage.BlockLayer.opaque_hides_base_names
+      - Kinu.Storage.BlockLayer.opaque_preserves_whole_records
+      - Kinu.Storage.BlockLayer.opaque_preserves_chunked_records
       - Kinu.Storage.BlockLayer.attach_metadata_bound
       - Kinu.Storage.BlockLayer.attach_payload_bytes
       - Kinu.Storage.BlockLayer.median_children_half
