@@ -26,18 +26,17 @@ import {
   type CompactionStateStore,
 } from '@kinu.run/compaction';
 import type {
-  ChatOptions, ChatEvent,
-  CompletedTurn, TurnContinuity, FiberCtx,
+  ChatOptions,
+  TurnContinuity, FiberCtx,
   LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
-  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, UserSteer,
-  LandedSteerRow,
+  BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding,
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
   AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   MissingCapability, DynamicApproval,
-  RunEvent, RunEventInput, RunEventQuery, SettledSignals,
+  RunEvent, RunEventInput, RunEventQuery,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
@@ -92,22 +91,16 @@ import { TierIdSchema,
   buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
-  turnProvenanceForMetadata, workModeForTurnMetadata,
-  runChat, estimateTokens, type CountableRequest,
+  turnProvenanceForMetadata,
+  runChat, type CountableRequest,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
-  openTurnRun, closeTurnRun, snapshotCompletedTurn, creditedTurnId,
-  classifyRunEnd, type RunEndFacts, type RunEndReason,
   normalizeUsage,
-  persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
-  CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
+  measureCompactionTrigger,
+  observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
-  type JsonObject,
-  // Steer rows are stamped by core's `describeLandedSteers`; the durable row
-  // the drain writes carries exactly that metadata, so this file needs no key.
   createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
@@ -156,13 +149,13 @@ import { TierIdSchema,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, runOperationProfile,
+  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
-  readSoul, operatorMessageAdmitted,
+  readSoul,
   type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue, JsonValueSchema,
   createAgentSelfProvider,
@@ -176,10 +169,13 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, runWorkModeInvocation, type ToolOutcome,
+  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
+  // The ONE turn loop, and the transcript store the local backend keeps it over.
+  ChatSession, ActorMessagesTranscript,
+  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -326,30 +322,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
   };
 }
 
-/**
- * The head of a transcript that could not be restored whole.
- *
- * A restore bounded by the context window can still leave older turns behind
- * on a long-lived session. Saying so is the difference between an agent that
- * knows it is reading the tail of its own conversation and one that believes
- * the conversation started there — and the session store is still queryable,
- * so the notice names where the rest is rather than only that it is gone.
- */
-function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
-  return {
-    role: 'user',
-    content:
-      `[Runtime note — written by the Kinu harness, not by the user.]\n\n`
-      + `${omitted} earlier message${omitted === 1 ? '' : 's'} from this session `
-      + `are not in your context: the transcript is longer than this model's context window, `
-      + `so it was restored from the newest end. They are not lost — they are in this `
-      + `workspace's local session store under session id "${sessionId}", readable with your `
-      + `normal tools. Say so rather than guessing if something earlier in the conversation matters.`,
-  };
-}
-
-type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
-
 type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
 
 type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
@@ -374,19 +346,6 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
  */
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
-/**
- * The grace this backend allows a stranded event delivery: none.
- *
- * `EventLog.unbindStale` takes a grace because a Durable Object activation can
- * be racing its own predecessor and has no way to exclude it. This backend
- * does: {@link LocalAgentSession.reclaimStrandedEventDeliveries} runs under the
- * single-driver lease, so no other process is driving this conversation and this
- * session has not drained yet — every OPEN lease is a dead process's by
- * construction. Waiting out a clock would only delay work that is already
- * provably abandoned.
- */
-const NO_STRANDED_DELIVERY_GRACE = 0;
-
 /** The bun:sqlite handle this session needs: prepared statements for the
  *  EventsHub SqlExec adapter, and the real `transaction` — the approval
  *  migration writes its baseline and marker under one, and so does a settled
@@ -409,28 +368,6 @@ const RecordedAdvisorSchema = v.object({
 });
 
 type RecordedAdvisor = v.InferOutput<typeof RecordedAdvisorSchema>;
-
-/**
- * One response's answer and everything it owes, as one durable commit.
- *
- * `facts` travel rather than the classification, because the run row is sealed
- * AFTER this commit while the roster is frozen inside it. `classifyRunEnd` is a
- * pure function of these facts, so the reason the roster carries and the reason
- * the run row is sealed with cannot disagree: there is one value behind both.
- */
-interface CommittedTurn {
-  readonly messageId: string;
-  readonly facts: RunEndFacts;
-  readonly turn: CompletedTurn;
-  readonly owed: readonly OwedEffect[];
-  /** What core claims this sequence under. Null for a response whose turn has
-   *  no durable identity: that sequence runs unledgered and records no intent. */
-  readonly transition: TerminalTransition | null;
-}
-
-/** Whether the turn reached disk. A failure is reported rather than thrown,
- *  because the signal settle after it must run either way. */
-type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: KinuError };
 
 /**
  * The answer a subordinate's turn owes its parent, as the terminal roster sees
@@ -472,27 +409,7 @@ export interface LocalParentRelay {
 // with the plane that answers it (profile-authority.ts); it is re-exported
 // below because callers of this module name it.
 
-/** What the frontends render. A superset of runChat's ChatEvent with the
- *  lifecycle + side-channel (evolution, broadcast, background) events. */
-export type SessionEvent =
-  | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode }
-  | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
-  | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
-  | { type: 'turn-end'; turn: CompletedTurn }
-  | { type: 'error'; message: string }
-  | { type: 'evolution'; event: string; message: string }
-  // Job, event-delivery and connection lifecycle — the machinery AROUND a
-  // turn, kept apart from `evolution` so "the agent changed itself" and
-  // "a background job settled" never share a channel: `kinu exec
-  // --no-auto-evolve` pins evolution silent while jobs may still settle.
-  | { type: 'background'; event: string; message: string }
-  | { type: 'broadcast'; event: BroadcastEvent }
-  /** One durable run-event, forwarded live as the recorder writes it. The
-   *  run_events table is the agent's instrumentation ledger (nudges, context
-   *  budget, refused budgets); a container-scoped database dies with the
-   *  container, so the stream is the only way an outside observer sees it. */
-  | { type: 'run-event'; event: RunEvent };
+export type { SessionEvent } from '@kinu.run/core';
 
 /** An interactive answer to a gated shell command. Resolving null declines to
  *  decide, leaving the standing approval mode's own answer in force. */
@@ -583,49 +500,6 @@ function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | unde
   return parsed.success ? parsed.output.profile_tier : undefined;
 }
 
-interface QueueItem {
-  text: string;
-  /** Attachments for a user turn — forwarded to the model as file parts. */
-  files?: ReadonlyArray<PromptFile>;
-  metadata?: ProgrammaticTurn['metadata'];
-  /** The producer's name for the fact this programmatic turn announces. The
-   *  durable row's id is derived from it, so a re-announcement collides with
-   *  the row the first one wrote (see `persist`). */
-  idempotencyKey?: string;
-  kind: 'user' | 'programmatic';
-  /** The turn's durable id, minted at admission — not when the pump happens
-   *  to reach it. A steer accepted while the item sits queued binds to it,
-   *  the same way a cf steer binds to the turn whose message already exists. */
-  turnId?: string;
-  /** The pending_steers row this user item was admitted as: present when the
-   *  accepted send itself is the message, retired when its user row is durable. */
-  pendingSendId?: string;
-  /** The durable ids of the pending rows a user-origin rerun merges into its
-   *  one row — retired with that row, so a restart cannot re-deliver them. */
-  steerIds?: readonly string[];
-  /** A user turn the seam reran from a settled turn's leftover steers — placed
-   *  at the queue front, behind only earlier reruns of the same settle. */
-  rerun?: true;
-  /** A programmatic turn that is a move OFFERED, not an event that must be
-   *  heard: if an operator message is admitted ahead of it — queued behind it
-   *  here, or already durable — the pump yields the slot and settles it
-   *  'yielded' without running a turn. See ProgrammaticTurn.yieldsToUserMessage. */
-  yieldsToUserMessage?: boolean;
-  /**
-   * Settle whoever queued this item — exactly once, and told whether the turn
-   * RAN.
-   *
-   * A refusal is the driver lease saying another process owns this
-   * conversation, which means this turn did not happen. That has to reach the
-   * producer, because the producer is the only one who can put things back: an
-   * event drain has rows bound to a turn nobody will run, and a person has a
-   * message that was never sent. Reporting a refused item as a completed one —
-   * which a success-only `resolve()` cannot help doing — loses the event and
-   * discards the message in silence.
-   */
-  settle: (refusal: Refusal | null, yielded?: boolean) => void;
-}
-
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
 export class LocalAgentSession implements BackendHost {
@@ -638,6 +512,10 @@ export class LocalAgentSession implements BackendHost {
   private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly actorSession: ActorSession;
+  /** The turn loop, from core — see {@link ChatSession} for the invariants.
+   *  This session is its adapter: the driver API below delegates to it, and
+   *  the ports it was built over are this session's own methods. */
+  private readonly chat: ChatSession;
   private readonly deferrals: DeferredApprovalQueue;
   /**
    * The host every LOGICAL ACTOR this session creates is acquired from —
@@ -735,12 +613,6 @@ export class LocalAgentSession implements BackendHost {
    *  the `agent.*` self-direction namespace declares and reads budgets through
    *  the same object the two enforcement seams hold. */
   readonly budget: MissionGovernor;
-  /** The run the in-flight turn belongs to; null between turns. */
-  private currentRunId: string | null = null;
-  /** The id the in-flight turn's opening row carries — minted at turn start,
-   *  written by `persist`, and the scope every effect claim this turn makes is
-   *  keyed to. Null between turns. */
-  private currentTurnId: string | null = null;
   /**
    * Where every non-turn model call in this workspace reports what it cost.
    *
@@ -765,7 +637,7 @@ export class LocalAgentSession implements BackendHost {
     // a workspace title before the first turn exists — and the log is keyed by
     // run, so those calls are filed under the reserved workspace run rather than
     // dropped. Dropping them is the dishonesty this row type exists to remove.
-    this.recordRunEvent(event, currentOperationProfile(this.rt.actor)?.runId ?? this.currentRunId ?? WORKSPACE_RUN_ID);
+    this.recordRunEvent(event, currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID);
   };
 
   /**
@@ -776,18 +648,16 @@ export class LocalAgentSession implements BackendHost {
    */
   private readonly modelOperations: ModelOperationSink = recordModelOperations(
     { emit: (runId, input): void => { this.recordRunEvent(input, runId); } },
-    () => currentOperationProfile(this.rt.actor)?.runId ?? this.currentRunId ?? WORKSPACE_RUN_ID,
+    () => currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID,
   );
   private readonly triggerRegistry: TriggerRegistry;
   private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
-  private ended = false;
   /** Branching-heads runtime — local heads run in-process over isolated
    *  ephemeral runtimes. */
   private _headRuntime: HeadRuntime;
-  private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
   private pendingShellApproval: DynamicApproval | null = null;
   private shellApprovalSequence = 0;
@@ -795,10 +665,6 @@ export class LocalAgentSession implements BackendHost {
   /** True when this process runs one task turn and exits — see the `oneShot`
    *  option. Decides turn continuity and whether the cadence lane may start. */
   private readonly oneShot: boolean;
-  /** The mechanical completion gate (core completion-gate.ts). Armed only by a
-   *  one-shot task turn: on the interactive surface the human reading the
-   *  answer is the check, so it never arms and costs nothing. */
-  private readonly completionGate = new CompletionGate();
   /** Whether a message arriving in THIS process can be a verdict on the turn
    *  before it. A one-shot process holds no conversation: its prompt came from
    *  a caller who never saw the previous answer. */
@@ -845,18 +711,6 @@ export class LocalAgentSession implements BackendHost {
   private extraTools: ToolSet = {};
   private mcpClose: (() => Promise<void>) | null = null;
 
-  /** FIFO of turns to run — user inputs + programmatic injects (reactor / job
-   *  wake), drained by a single serialized pump so turns never interleave. */
-  private readonly queue: QueueItem[] = [];
-  private pumping = false;
-  /** The idempotency key of the turn the pump is running RIGHT NOW, or null.
-   *  An item is shifted out of the queue before it runs and its durable row
-   *  lands at the end, so this is the only thing that says "already being said"
-   *  for the whole length of a turn. */
-  private runningAnnouncement: string | null = null;
-  /** The active pump run's completion, or null when idle — the awaitable
-   *  settleBackgroundWork() joins so a one-shot run can wait for wake turns. */
-  private pumpPromise: Promise<void> | null = null;
   /** Steer-as-Branch redirects launched against the in-flight turn — each runs
    *  as one budgeted head and settles into Alternate Takes at turn end. */
   private pendingBranches: PendingBranch[] = [];
@@ -865,10 +719,6 @@ export class LocalAgentSession implements BackendHost {
    *  committed inside, and what core's terminal claim commits its roster
    *  inside. */
   private readonly db: LocalSessionDb;
-  /** The ONE pending-send ledger's store — every acknowledged send's row read
-   *  and write goes through core's PendingSendStore, the same object the cf
-   *  actor holds. Bound to this session's own actor id at construction. */
-  private readonly pendingSends: PendingSendStore;
   /** Reads the title of the workspace this session works in, on a SUBAGENT
    *  session. Null on a workspace's own chat, where this session's own config
    *  already holds that title. */
@@ -877,7 +727,6 @@ export class LocalAgentSession implements BackendHost {
   constructor(opts: LocalAgentSessionOpts) {
     this.db = opts.db;
     this.rt = opts.rt;
-    this.onEvent = opts.onEvent;
     this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
@@ -930,7 +779,7 @@ export class LocalAgentSession implements BackendHost {
     initPendingSendTables(this.rt.storage.execRaw);
     // The store over that ledger — one instance per actor, the same object the
     // cf actor lazily builds over its own executor.
-    this.pendingSends = new PendingSendStore(this.rt.storage.sql, this.rt.actor.actorId);
+    const pendingSends = new PendingSendStore(this.rt.storage.sql, this.rt.actor.actorId);
 
     // Instruction approvals are keyed by the directory on THIS disk, because on
     // a local CLI that directory IS the authority — there is no owner/workspace
@@ -1035,18 +884,36 @@ export class LocalAgentSession implements BackendHost {
       orchestration: orchestration.deps,
     });
 
-    // THE ONE SEND RULE, this backend's half: every send the session
-    // acknowledges is a pending_steers row first and a landed row or retired
-    // row after — never a buffer the process alone can lose. Bound here, not
-    // on the ActorSession's own wiring, because the hosted actor's session is
-    // built by the host without a view of this workspace's queue.
-    this.actorSession.bindSteerPersistence({
-      onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
-      onDrain: (rows) => { this.commitLandedSteers(rows); },
-      turnId: () => this.steerTurnId(),
-    });
-    this.restorePendingSends();
     this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
+    // THE ONE TURN LOOP, from core, over this backend's seams. The pump, the
+    // send rule, the durable admission and the transcript are its; what this
+    // session supplies is the turn's assembly, the effect bodies and their
+    // ledger, the driver lease, the process the close holds open, and the
+    // in-process callback the events reach the frontend through.
+    this.chat = new ChatSession({
+      actorSession: this.actorSession,
+      sessionId: this.sessionId,
+      transcript: new ActorMessagesTranscript(this.rt.storage.sql, this.rt.actor, this.sessionId),
+      pendingSends,
+      eventLog: this.eventLog,
+      eventRecorder: this.eventRecorder,
+      compactionState: this.compactionState,
+      // The raw handle's transaction: `rt.storage.sql` and this session's
+      // `db` are the same connection — the runtime is built over it.
+      transaction: (body) => this.db.transaction(body)(),
+      transport: { deliver: opts.onEvent },
+      ports: {
+        prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        owedTerminalEffects: (input) => this.owedTerminalEffects(input),
+        terminal: () => this.terminal,
+        holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
+        driverGate: () => this.driverGate?.() ?? null,
+        modelWindow: () => ({
+          contextWindow: this.sessionContextWindow(),
+          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        }),
+      },
+    });
     this.compactionExtension = createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
@@ -1082,7 +949,7 @@ export class LocalAgentSession implements BackendHost {
       inbox: this.actorSession.orchestrator.inbox,
       remember: (grants) => { this.config.grantShellApproval(grants); },
       audit: (record) => {
-        this.eventRecorder.emit(this.currentRunId || WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
+        this.eventRecorder.emit(this.chat.currentRunId || WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.broadcast({ type: 'pending_actions_changed' }); },
     });
@@ -1126,7 +993,7 @@ export class LocalAgentSession implements BackendHost {
     // tracked so end()/settleEvolution joins it before the process exits.
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
 
-    if (opts.historySeed === undefined) this.restoreHistory();
+    if (opts.historySeed === undefined) this.chat.restoreHistory();
     else this.actorSession.restoreHistory(opts.historySeed);
     this.ensureModelState();
     this.rearmLocalAlarm();
@@ -1461,7 +1328,7 @@ export class LocalAgentSession implements BackendHost {
   /** The local clock's half of timer ingress: fire what is due, then re-arm
    *  the process timer that will call this again. */
   async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
-    if (this.ended) return { fired: 0, nextAlarmAt: null };
+    if (this.chat.closed) return { fired: 0, nextAlarmAt: null };
 
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
     const { fired } = await fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
@@ -1554,7 +1421,7 @@ export class LocalAgentSession implements BackendHost {
 
     writeActivityLog(() => ({ sql: this.rt.storage.sql, actor: this.rt.actor }), {
       event, detail: detail ?? null, createdAt: now,
-      elapsedMs: this.currentRunId !== null && startedAt > 0 ? now - startedAt : 0,
+      elapsedMs: this.chat.currentRunId !== null && startedAt > 0 ? now - startedAt : 0,
     });
   }
 
@@ -1589,7 +1456,7 @@ export class LocalAgentSession implements BackendHost {
    *  bound to a turn a dead pump will not run. */
   setTimer(fn: () => Promise<void>, ms: number): void {
     setTimeout(async () => {
-      if (this.ended) return;
+      if (this.chat.closed) return;
 
       try {
         await fn();
@@ -1603,243 +1470,24 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Inject a programmatic turn into the same serialized loop the user drives —
-   *  backs the reactor + background-job wake. Self-starts the pump when idle so
-   *  a job that settles mid-idle wakes the agent immediately.
-   *
-   *  A producer that named the fact it is announcing (`idempotencyKey`) gets
-   *  that name carried onto the durable row, and a re-announcement of a fact
-   *  this session already recorded starts no turn at all: the row is already
-   *  there and already answered, so 'queued' is the truth the producer needs
-   *  (nothing was lost, do not compensate) without a second turn spent saying
-   *  it again. The check reads the same durable table the write lands in — the
-   *  ledger IS the store here — so a later process reaches the same answer. */
-  /**
-   * Terminal transitions running right now, on the PUMP's own stack.
-   *
-   * A terminal effect settles a turn from inside the pump that ran it, and one
-   * of them (`event_drain`) delivers signals — which for a settling turn take
-   * the QUEUE arm, because the turn has no steps left to splice into. Awaiting
-   * that queued turn's EXECUTION from here cannot resolve: the executor is the
-   * caller. Settle -> inline drain -> enqueue -> wait for the pump -> pump
-   * waits for settle, with nothing timing out.
-   *
-   * So while this is non-zero, {@link enqueueTurn} answers at ADMISSION rather
-   * than at execution. That is the answer the drain actually wants — the signal
-   * seam compensates on anything but `queued`, and `queued` means accepted, not
-   * started. A caller outside the pump keeps the execution-awaiting contract,
-   * which the fiber wake path depends on.
-   *
-   * The terminal roster runs inside the pump, so an inline event drain must
-   * wait only for queue admission, not for execution by that same pump. A
-   * debounced drain runs outside this stack and does not exercise that
-   * re-entrant wait.
-   */
-  private settlingDepth = 0;
-
+   *  backs the reactor + background-job wake. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    // The operator's own words, from the inbox — a settled turn's leftovers
-    // rerun, or a message that reached the inbox between one turn's settle
-    // and the next send. Either way the operator's IMMEDIATE next turn, ahead
-    // of everything else queued, behind only earlier user-origin turns, and
-    // answered at admission: the settle that reruns leftovers is on this
-    // pump's own stack, so its execution cannot be awaited from here.
-    if (input.origin === 'user') {
-      const item: QueueItem = {
-        text: input.text,
-        kind: 'user',
-        ...(input.files !== undefined && { files: input.files }),
-        metadata: input.metadata,
-        rerun: true,
-        turnId: crypto.randomUUID(),
-        // The pending rows this rerun merges are spent by ITS durable row —
-        // retired with it in the same transaction, so a restart cannot
-        // re-deliver steers the rerun already carries.
-        steerIds: input.steerIds,
-        settle: () => {},
-      };
-
-      // A send that reached the queue while another user turn held the pump is
-      // still a send the session acknowledged: each id it merges gets a row
-      // bound to THIS turn's id before the item is admitted — `OR IGNORE`
-      // because a leftover rerun's ids already carry theirs.
-      const mode: WorkMode = workModeForTurnMetadata(input.metadata) === 'plan' ? 'plan' : 'build';
-
-      for (const steerId of item.steerIds ?? []) {
-        this.pendingSends.ensureReserved({ id: steerId, turnId: item.turnId ?? null, mode, text: input.text });
-      }
-
-      const front = this.queue.findIndex((queued) => queued.rerun !== true);
-      this.queue.splice(front === -1 ? this.queue.length : front, 0, item);
-      void this.pump();
-
-      return Promise.resolve({ status: 'queued' });
-    }
-
-    if (workModeForTurnMetadata(input.metadata) === 'plan') {
-      return Promise.reject(new Error(
-        'Plan review is available in the hosted workspace UI; this local session has no review surface.',
-      ));
-    }
-
-    // A job settling during shutdown must not start a turn the ending session
-    // will never drain: 'skipped' sends the caller down its durable-breadcrumb
-    // path instead, and the next run drains it from the event log.
-    if (this.ended) return Promise.resolve({ status: 'skipped' });
-
-    if (input.idempotencyKey !== undefined && this.hasAnnounced(input.idempotencyKey)) {
-      return Promise.resolve({ status: 'queued' });
-    }
-
-    const { promise, resolve } = Promise.withResolvers<EnqueueTurnResult>();
-
-    const item: QueueItem = {
-      text: input.text,
-      metadata: input.metadata,
-      kind: 'programmatic',
-      // 'skipped' is what a producer with a durable retry plane acts on: the
-      // signal seam compensates on anything but 'queued', which is how an event
-      // drain gets its rows back when another process holds the driver lease.
-      // 'yielded' is neither: the offer was consumed at its slot, so nothing
-      // comes back and nothing is retried.
-      settle: (refusal, yielded) => resolve({
-        status: yielded === true ? 'yielded' : refusal ? 'skipped' : 'queued',
-      }),
-    };
-
-    if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
-
-    if (input.yieldsToUserMessage === true) item.yieldsToUserMessage = true;
-    this.queue.push(item);
-
-    if (this.settlingDepth > 0) {
-      // Accepted, not started. `item.settle` still runs when the pump reaches
-      // it; resolving twice is harmless, and the caller gets an answer it can
-      // act on instead of a promise only it could complete.
-      void this.pump();
-
-      return Promise.resolve({ status: 'queued' });
-    }
-
-    void this.pump();
-
-    return promise;
+    return this.chat.enqueueTurn(input);
   }
 
-  /** Is this fact already recorded in the durable transcript, already queued to
-   *  be, or being said right now? All three matter: a cold activation asks the
-   *  table, a second delivery inside one activation (recover + recoverOrphans
-   *  naming the same job) asks the queue, and a producer whose retry falls due
-   *  mid-turn asks the running key — neither of the others shows a turn that has
-   *  started and not yet persisted. */
-  private hasAnnounced(identity: string): boolean {
-    return this.announcementInFlight(identity) || this.announcementOnDisk(identity);
-  }
-
-  /** Queued, or running right now. */
-  private announcementInFlight(identity: string): boolean {
-    return this.runningAnnouncement === identity
-      || this.queue.some((item) => item.idempotencyKey === identity);
-  }
-
-  /** Recorded in the durable transcript — the half a later process can read. */
-  private announcementOnDisk(identity: string): boolean {
-    const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`;
-
-    return this.rt.storage.sql<{ id: string }>`
-      SELECT id FROM actor_messages
-      WHERE actor_id = ${this.rt.actor.actorId} AND id = ${id} AND session_id = ${this.sessionId}
-    `.length > 0;
-  }
-
-  /** BackendHost seam — will there be a next step for a message to land on?
-   *
-   *  The actor owns the preparing/running boundary; settling has no next step.
-   *  A message received during asynchronous preparation can reach step zero.
-   *  A user turn this session has queued and not yet opened counts too: a
-   *  message arriving behind it rides that turn's first step rather than
-   *  queueing a turn of its own behind it.
-   *
-   *  A user splice and an event splice land at the same step tail as two
-   *  adjacent user-role messages, which every provider adapter groups into one
-   *  turn. */
+  /** BackendHost seam — will there be a next step for a message to land on? */
   turnInFlight(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
+    return this.chat.turnInFlight();
   }
 
   // ── Public driver API ──────────────────────────────────────────────
 
-  /**
-   * Send the user's message — the one entry, whatever the session is doing.
-   *
-   * A turn is running (or one this session queued has not yet opened): the
-   * message goes through the inbox and lands at that turn's next step, where
-   * everything pending drains into one merged user message; the answer is
-   * `'mid-turn'`, at once. Input that never sees a step boundary (the model
-   * was already writing its final answer) reruns as the immediate next turn.
-   *
-   * Nothing is running: the message starts a user turn (and any programmatic
-   * turns it cascades) and the answer is `'turn'` when that turn has finished.
-   * Attachments (data-URL PromptFiles) become file parts on the turn's user
-   * message either way.
-   *
-   * REJECTS when another process holds this conversation's driver lease. The
-   * message was not sent and no turn ran, so resolving would tell the person
-   * their words landed when they were dropped; the rejection names the holder
-   * and what to do about it.
-   */
-  async send(
+  /** Send the user's message — the one entry, whatever the session is doing. */
+  send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: { tier?: TierId } = {},
   ): Promise<SendLanding> {
-    const { text, files } = normalizePromptInput(input);
-
-    if (this.turnInFlight()) {
-      // Identity is assigned on ACCEPTANCE, so the queued announcement, the
-      // landed one and the durable row are all the same message to a surface —
-      // which is what stops one being rendered twice under two names.
-      const id = `steer-${crypto.randomUUID().slice(0, 12)}`;
-      const steer: UserSteer & { readonly id: string } = { text, id };
-
-      if (files !== undefined && files.length > 0) Object.assign(steer, { files });
-      const outcome = await this.actorSession.send(steer);
-
-      if (outcome === 'mid-turn') return 'mid-turn';
-
-      if (outcome === 'queued') return 'turn';
-      throw new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.');
-    }
-
-    const { promise, resolve, reject } = Promise.withResolvers<SendLanding>();
-    const metadata = opts.tier === undefined ? undefined : { profile_tier: opts.tier };
-    // The acceptance and the row are the same fact: the pending_steers insert
-    // runs BEFORE the pump can begin the turn, so a process that dies after
-    // this line still owes the person the message it acknowledged.
-    const pendingSendId = `steer-${crypto.randomUUID().slice(0, 12)}`;
-    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode: 'build', text, files });
-    this.queue.push({
-      text, files, metadata, kind: 'user',
-      turnId: crypto.randomUUID(), pendingSendId,
-      settle: (refusal) => {
-        // A refusal means this process never owed the message — another driver
-        // took it — so the reservation goes with the refusal. Leaving it
-        // would re-deliver the words under the next session after the caller
-        // was already told no.
-        if (refusal) {
-          this.pendingSends.retire([pendingSendId]);
-          reject(new KinuError(
-            refusal.reason,
-            `${refusal.error}. Close that session, or send this from it.`,
-          ));
-
-          return;
-        }
-
-        resolve('turn');
-      },
-    });
-    this.pump();
-
-    return promise;
+    return this.chat.send(input, opts);
   }
 
   /**
@@ -1851,7 +1499,7 @@ export class LocalAgentSession implements BackendHost {
    * turn is in flight — callers should send() instead.
    */
   branch(text: string): boolean {
-    if (!this.pumping) return false;
+    if (!this.chat.pumping) return false;
     const task = text.trim();
 
     if (!task) return false;
@@ -1868,19 +1516,10 @@ export class LocalAgentSession implements BackendHost {
     return true;
   }
 
-  /** Abort the in-flight turn (Ctrl+C / Esc). Pending steers are dropped —
-   *  an interrupt means "stop", not "stop and do what I typed" — but the
-   *  dropped texts are RETURNED so the surface can hand them back to the
-   *  user (the composer restore), never lose them silently: the chat already
-   *  rendered them as sent. */
+  /** Abort the in-flight turn (Ctrl+C / Esc). The dropped steers' texts are
+   *  returned so the surface can hand them back to the user. */
   interrupt(): string[] {
-    const returned = this.actorSession.interrupt();
-    // The words came back to the surface: the reservation they were held under
-    // is spent, or a restart would re-deliver a steer the operator watched come
-    // back as text. A steer that carries no id never wrote a row to spend.
-    this.pendingSends.retire(returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]));
-
-    return returned.map((steer) => steer.text);
+    return this.chat.interrupt();
   }
 
   /** Fold the history at this point: the next turn's context transform runs
@@ -1933,7 +1572,7 @@ export class LocalAgentSession implements BackendHost {
       effectClaims: {
         sql: this.rt.storage.sql,
         actor: this.rt.actor,
-        turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.currentTurnId ?? WORKSPACE_RUN_ID,
+        turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
       },
       clamp: {
         vfs: this.rt.storage.vfs,
@@ -1969,65 +1608,16 @@ export class LocalAgentSession implements BackendHost {
   /** Configured MCP servers whose tools are not on this session's surface. */
   private mcpUnavailable: MissingCapability[] = [];
 
-  /** Run any pending event drain to completion NOW, bypassing the ~250ms
-   *  debounce window. The scheduler daemon fires due triggers then ends the
-   *  session immediately, so the debounced drain fireDueTriggers armed would
-   *  never fire (end() sets `ended`, and the drain timer skips when ended) —
-   *  the fired trigger's autonomous turn would be silently dropped. A batch
-   *  tick calls this before end() to flush its work synchronously. A direct
-   *  drain is safe: pending events are durable in the EventLog until
-   *  markConsumed, so drainPendingEvents consumes-or-returns them exactly once.
-   *  Interactive sessions keep the debounced path untouched — end() on Ctrl-C
-   *  must not suddenly run an autonomous turn. */
-  async flushPendingDrains(): Promise<void> {
-    if (this.ended) return;
-    // Gated HERE as well as at the pump, because the drain BINDS the rows it
-    // selects (markConsumed) on its way to the pump. A refusal one step later
-    // is recoverable — the queue item settles refused and the drain hands the
-    // rows back — but a refusal here means they were never bound at all, which
-    // is the outcome to prefer when the answer is already knowable. The gate is
-    // the same object either way, and re-asking it costs one row read.
-    const refusal = this.driverGate?.();
-
-    if (refusal) {
-      diagnostics.event('driver.drain_deferred', { reason: refusal.reason });
-
-      return;
-    }
-
-    await this.actorSession.orchestrator.drainPendingEvents();
+  /** Run any pending event drain to completion NOW, bypassing the debounce
+   *  window — the scheduler daemon's batch tick calls this before end(). */
+  flushPendingDrains(): Promise<void> {
+    return this.chat.flushPendingDrains();
   }
 
-  /**
-   * Re-pend the event deliveries a dead process left leased.
-   *
-   * A drain BINDS its selected events to a synthetic `evt-…` turn and opens a
-   * recovery lease on them (`consumed_at`), then hands them to the signal seam,
-   * which either splices them into the live turn or queues one. Everything from
-   * that point until the turn's answer is on disk lives in ONE process's memory:
-   * kill it there and the rows stay bound to a turn nobody will ever run —
-   * invisible to `pending()`, so no later drain, wake or restart can see them.
-   * An event the log admitted then simply never happens.
-   *
-   * There is no clock here and there does not need to be one — see
-   * {@link NO_STRANDED_DELIVERY_GRACE} for why the lease this runs under is the
-   * whole argument. An answered delivery is never open, because a turn that
-   * reached disk closes its own lease ({@link closeEventDeliveryLeases}), which
-   * is what makes reclaiming the rest a recovery rather than a re-delivery.
-   *
-   * Call once at startup, before the recovery drain, so the rows it hands back
-   * are in that same drain's selection.
-   */
+  /** Re-pend the event deliveries a dead process left leased. Call once at
+   *  startup, before the recovery drain. */
   reclaimStrandedEventDeliveries(): void {
-    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
-
-    if (reclaimed.length === 0) return;
-    diagnostics.event('event.deliveries_reclaimed', { count: reclaimed.length });
-    this.emit({
-      type: 'background',
-      event: 'events_reclaimed',
-      message: `${reclaimed.length} event delivery/ies were bound to a turn a previous process did not finish — re-queued`,
-    });
+    this.chat.reclaimStrandedEventDeliveries();
   }
 
   /**
@@ -2042,7 +1632,7 @@ export class LocalAgentSession implements BackendHost {
    * its own failures and the window carries forward.
    */
   async runDueEvolution(): Promise<void> {
-    if (this.ended) return;
+    if (this.chat.closed) return;
     await this.actorSession.orchestrator.runDueSessionEvolution();
   }
 
@@ -2051,7 +1641,7 @@ export class LocalAgentSession implements BackendHost {
    *  durable, so whatever does not finish carries over to the next run rather
    *  than being force-closed here. */
   async end(): Promise<void> {
-    this.ended = true;
+    this.chat.close();
     this.lifetime.abort();
     this.clearLocalAlarm();
     // The live wake dies with the process either way; clearing it here is what
@@ -2373,7 +1963,7 @@ export class LocalAgentSession implements BackendHost {
     // verdict by arriving early — and it cannot: the gate state the
     // review is judged against travels in the improvement-lanes row rather than
     // being re-read from a RAM gate this process never armed.
-    this.pump();
+    this.chat.pump();
   }
 
   /**
@@ -2437,22 +2027,11 @@ export class LocalAgentSession implements BackendHost {
   // ── Internals ──────────────────────────────────────────────────────
 
   private emit(event: SessionEvent): void {
-    try {
-      this.onEvent(event);
-    } catch (error) {
-      // A frontend render error must not kill the agent loop — but it is still a
-      // defect, and the event stream that would have shown it is the thing that
-      // just failed, so stderr is the only channel left.
-      diagnostics.failure(
-        'session.event_listener_failed',
-        toKinuError({ doing: 'delivering a session event to the frontend listener', cause: error, otherwise: 'io' }),
-        { eventType: event.type },
-      );
-    }
+    this.chat.emit(event);
   }
 
   private scheduleLocalAlarm(ts: number): void {
-    if (this.ended) return;
+    if (this.chat.closed) return;
 
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= ts) return;
     this.clearLocalAlarm();
@@ -2483,7 +2062,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private rearmLocalAlarm(): void {
-    if (this.ended) return;
+    if (this.chat.closed) return;
     const next = this.nextScheduledTriggerAt();
 
     if (next === null) {
@@ -2524,90 +2103,6 @@ export class LocalAgentSession implements BackendHost {
     this.driverGate = gate;
   }
 
-  /** Kick the serialized turn pump if idle — idempotent, so a concurrent
-   *  enqueueTurn just appends and the running pump picks it up. The active
-   *  run's promise is tracked (pumpPromise) so settleBackgroundWork() can
-   *  await wake turns to completion. */
-  private pump(): void {
-    if (this.pumping) return;
-    this.pumping = true;
-    const running = this.runPump();
-
-    // Assigned only if the pump is STILL running. `runPump` on an empty queue
-    // reaches no await, so it runs to completion inside this call and clears both
-    // fields on its way out — an unconditional assignment would reinstate a
-    // resolved promise as the live one, which every later `settleBackgroundWork`
-    // spins on forever. An empty kick is legitimate (a startup replay makes one),
-    // so the guard belongs here rather than at each caller.
-    if (this.pumping) this.pumpPromise = running;
-  }
-
-  private async runPump(): Promise<void> {
-    try {
-      let item: QueueItem | undefined;
-
-      while ((item = this.queue.shift())) {
-        // Checked per ITEM, immediately before the turn runs. A turn is the
-        // longest thing this process does and it writes the conversation, so
-        // two processes running turns over one database interleave them. An
-        // interactive gate takes the lease from a daemon here, which is what
-        // stops a user's turn landing inside a daemon-driven one; a gate that
-        // refuses means another process of this same kind is driving, and
-        // there is nothing to wait for.
-        //
-        // Settled with the refusal rather than emitted as an error: this turn
-        // did not run, and the ONE thing that must happen is that its producer
-        // hears so — an event drain compensates its rows back to pending, a
-        // person's send fails loudly. The producer owns what to say about it.
-        const refusal = this.driverGate?.();
-
-        if (refusal) {
-          diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
-          item.settle(refusal);
-          continue;
-        }
-
-        // A turn that was OFFERED yields inside its slot: the check is here,
-        // at dequeue, never at admission — a user item queued after the offer
-        // was taken, or an operator row already durable, means somebody spoke
-        // first and that message is the turn now. Nothing runs, nothing is
-        // persisted; the offer is consumed.
-        if (item.yieldsToUserMessage === true
-          && (this.queue.some((queued) => queued.kind === 'user')
-            || operatorMessageAdmitted(this.rt.storage.sql, this.rt.actor, this.sessionId))) {
-          diagnostics.event('genesis.yielded_to_message', {
-            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
-          });
-          item.settle(null, true);
-          continue;
-        }
-
-        // The key of the turn about to run, so a producer asking whether this
-        // fact is already being said gets a truthful answer while it is.
-        this.runningAnnouncement = item.idempotencyKey ?? null;
-
-        try {
-          await this.processTurn(item);
-        } catch (err) {
-          diagnostics.failure(
-            'turn.processing_failed',
-            toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
-          );
-        } finally {
-          this.runningAnnouncement = null;
-          item.settle(null);
-        }
-      }
-    } finally {
-      // Cleared synchronously as the loop exits — NOT in a .finally() callback,
-      // whose microtask would run after a just-resolved send()'s continuation
-      // and leave `pumping` stale-true, so the next send()'s pump() would no-op
-      // and orphan its queued turn.
-      this.pumping = false;
-      this.pumpPromise = null;
-    }
-  }
-
   /**
    * Drain in-flight background work: await detached job fibers, run the wake
    * turns their settlement enqueues, and repeat until nothing is detached,
@@ -2631,7 +2126,7 @@ export class LocalAgentSession implements BackendHost {
     for (;;) {
       // A queued turn always has a live pump (enqueueTurn kicks it), so awaiting
       // the pump drains the queue too.
-      if (this.pumpPromise) { await this.pumpPromise; continue; }
+      if (this.chat.pumpPromise) { await this.chat.pumpPromise; continue; }
 
       if (this.backgroundFibers.size === 0) return;
 
@@ -2644,7 +2139,7 @@ export class LocalAgentSession implements BackendHost {
    *  explicitly so the row lands on that run once the calling turn has moved
    *  on. Never throws: losing a history row must not fail a turn. */
   private recordRunEvent(input: RunEventInput, runId?: string | null): void {
-    const id = runId !== undefined ? runId : this.currentRunId;
+    const id = runId !== undefined ? runId : this.chat.currentRunId;
 
     if (!id) return;
 
@@ -2655,48 +2150,6 @@ export class LocalAgentSession implements BackendHost {
         toKinuError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
       );
     }
-  }
-
-  /**
-   * Seal the in-flight run via the shared core turn-lifecycle bracket.
-   * Idempotent per run — clearing the id makes a second call a no-op.
-   *
-   * FACTS in, name out. `classifyRunEnd` owns the vocabulary; this method
-   * reports what it saw and returns the reason it was given. Computing
-   * `hadError ? 'error' : 'completed'` here instead would seal a Stop as
-   * `'error'` — an interrupt throws `INTERRUPTED_TURN` and the catch folds that
-   * into `hadError` — while the cloud seals it `'aborted'`, counting the same
-   * user action as a failure on one backend and a choice on the other.
-   */
-  private closeRun(facts: RunEndFacts, lease: ActorTurnLease): RunEndReason {
-    const end = classifyRunEnd(facts);
-
-    // The durable claim closes under the SAME name the run does. It is settled
-    // before the early return below, because a second `closeRun` for one run is
-    // a no-op on the run row and must not leave the claim open either — and the
-    // claim's own settle is idempotent per turn.
-    if (this.actorSession.turnClaim !== null) this.actorSession.settleTurnClaim(lease, end.reason);
-
-    if (!this.currentRunId) return end.reason;
-
-    const outcome: Parameters<typeof closeTurnRun>[2] = {
-      turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
-      usage: this.actorSession.orchestrator.acc.reportedUsage(),
-      context: this.actorSession.orchestrator.acc.context,
-      files: this.actorSession.orchestrator.acc.files,
-      escalations: this.actorSession.orchestrator.acc.escalations,
-      steering: this.actorSession.orchestrator.steering.snapshot(),
-      completionGate: this.completionGate.take(),
-      craft: this.actorSession.orchestrator.craft.snapshot(),
-      recoveries: this.actorSession.orchestrator.recoverySnapshot(),
-      reason: end.reason,
-    };
-
-    if (end.error) outcome.error = end.error;
-    closeTurnRun(this.eventRecorder, this.currentRunId, { ...outcome, workMode: this.actorSession.workMode });
-    this.currentRunId = null;
-
-    return end.reason;
   }
 
   /** A single run's durable events — the local peer of the DO's getRunEvents,
@@ -2710,128 +2163,12 @@ export class LocalAgentSession implements BackendHost {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  /**
-   * Run one queued turn under the guarantee every surface above depends on: a
-   * turn that starts always terminates — exactly one `turn-end`, and a run that
-   * is always closed.
-   *
-   * The turn's own stream has a failure path that emits `error`, flags the
-   * accumulator and finalizes normally. Everything BEFORE that stream exists —
-   * resolving the model, the skills, the system prompt — had no such path and
-   * threw straight out of the method, past an opened run and before any
-   * `turn-end`. The pump then logged it to stderr and resolved the caller, so a
-   * turn that never ran a step was reported as a turn that succeeded.
-   */
-  private async processTurn(item: QueueItem): Promise<void> {
-    const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
-    const event = parsedEvent.success ? parsedEvent.output : undefined;
-    const mode = workModeForTurnMetadata(item.metadata);
-    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode });
-
-    const startedAt = Date.now();
-    // Open this turn's run in the durable event log (core turn-lifecycle).
-    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
-    // one names its trigger.
-    this.currentRunId = `run-${crypto.randomUUID()}`;
-    // The id the turn's opening row will carry, decided HERE rather than at
-    // persist time: the effect claims a tool makes mid-turn are keyed to it, and
-    // a re-announced programmatic turn must key to the same one its first
-    // announcement did — which is exactly what its idempotency key gives it.
-    this.currentTurnId = item.kind === 'programmatic'
-      ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
-      : item.turnId ?? crypto.randomUUID();
-
-    // A USER turn's opening row is durable at admission, not at commit — a
-    // steer landed mid-turn is written when the drain sees it (before the
-    // turn's commit could exist), so the row it parents to must already be on
-    // disk, and a turn the process kills leaves the question it was asked
-    // rather than an answer-less steer. A PROGRAMMATIC turn writes at commit
-    // exactly as before: `announcementOnDisk` is its dedup — an admitted-but-
-    // unfinished gate turn must read as not-yet-said so the retry re-queues it.
-    if (item.kind === 'user') {
-      void this.rt.storage.sql`INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, role, content)
-        VALUES (${this.rt.actor.actorId}, ${this.currentTurnId}, ${this.sessionId}, ${'user'}, ${item.text})`;
-    }
-
-    const lease = this.actorSession.beginTurn(
-      { runId: this.currentRunId, turnId: this.currentTurnId }, mode, startedAt, item.metadata,
-    );
-
-    openTurnRun(this.eventRecorder, this.currentRunId, {
-      agentId: lease.actorId,
-      causedBy: event ?? 'chat',
-      userMessage: item.text,
-      turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
-    });
-
-    try {
-      await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
-    } catch (error) {
-      const message = renderThrownChain({ cause: error });
-      const interrupted = lease.signal.aborted;
-
-      if (!interrupted) this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun({ completed: false, interrupted, errorText: message.slice(0, 500) }, lease);
-      this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
-    } finally {
-      // Detached lanes retain the runtime profile of the turn they belong to.
-      this.actorSession.finishTurn(lease);
-    }
-  }
-
-  /**
-   * Close the recovery lease on every event delivery THIS turn answered.
-   *
-   * A drain stamps the synthetic turn its rows are bound to onto whatever
-   * absorbed them: `drainTurnId` on the turn it queued, `replyTurnId` on the
-   * signal a live turn spliced. Both are read here, because both are ways an
-   * event gets answered and only one of them starts a turn of its own.
-   *
-   * The BINDING stays — it is what stops a second drain re-delivering the same
-   * event, and reply-channel and audit reads find the rows by it. The LEASE is
-   * the separable claim "a running turn still owes this delivery an answer",
-   * and closing it is the whole difference between an answered delivery and one
-   * {@link reclaimStrandedEventDeliveries} must hand back. The cloud backend
-   * closes it in `completeEventBatch`, after the outbound replies its turn owed;
-   * a local session has no transport in front of its reply channels, so the
-   * durable answer is all of what it owes.
-   */
-  private closeEventDeliveryLeases(item: QueueItem, absorbed: SettledSignals['absorbed']): void {
-    const drainTurns = new Set<string>();
-    const queued = v.safeParse(v.string(), item.metadata?.drainTurnId);
-
-    if (queued.success) drainTurns.add(queued.output);
-
-    for (const signal of absorbed) {
-      if (signal.replyTurnId) drainTurns.add(signal.replyTurnId);
-    }
-
-    for (const turnId of drainTurns) this.eventLog.markTurnCompleted(turnId);
-  }
-
-  /** The turn as it stands — the one shape the normal end and both failure
-   *  paths report. */
-  private snapshotTurn(item: QueueItem, assistantResponse: string, turnId?: string | null): CompletedTurn {
-    const completedTurn: Parameters<typeof snapshotCompletedTurn>[1] = {
-      userMessage: item.text,
-      assistantResponse,
-      sessionId: this.sessionId,
-      origin: item.kind,
-    };
-
-    if (turnId) completedTurn.turnId = turnId;
-
-    return snapshotCompletedTurn(this.actorSession.orchestrator.acc, completedTurn);
-  }
-
-
   /** A hired-for-context turn opens on an empty history but names the turn
    *  whose conversation it inherits (`metadata.drainTurnId`): seed those rows
    *  before the live prompt so the child reads its parent context in place. */
   /** A delegated turn opens on the actor's working revision through the shared
    *  rule; a root turn appends its input as before. */
-  private openTurnInput(item: QueueItem, lease: ActorTurnLease, message: ModelMessage): void {
+  private openTurnInput(item: ChatTurnInput, lease: ActorTurnLease, message: ModelMessage): void {
     const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
 
     if (drainTurn.success) {
@@ -2843,9 +2180,16 @@ export class LocalAgentSession implements BackendHost {
       this.actorSession.appendInput(lease, message);
     }
   }
-  /** The turn itself: assemble it, stream it, finalize it. Everything here may
-   *  throw; processTurn owns what that means. */
-  private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
+
+  /**
+   * Assemble one admitted turn — the ChatSession's `prepareTurn` port.
+   *
+   * Everything here is this backend's composition of the turn: the profile
+   * from the local authority, the skills and MCP tools on this surface, the
+   * AGENTS.md chain under this directory, the prompt, the cache identity and
+   * the model the local resolver bound. The loop that runs it is core's.
+   */
+  private async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     // Checkpoints name the admitted turn whose file effects they can restore.
     this.rt.checkpoints?.beginTurn({ turnId: lease.turnId, sessionId: this.sessionId });
     // Before anything reads the tool surface: the report gate is a property of
@@ -2862,7 +2206,7 @@ export class LocalAgentSession implements BackendHost {
     // invocation, so this prompt is a fresh task, not a verdict on it.
     if (item.kind === 'user') this.actorSession.orchestrator.observeUserTurn(item.text, this.turnContinuity);
 
-    if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
+    if (item.kind === 'user' && this.oneShot) this.chat.completionGate.arm(item.text);
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
 
     const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(
@@ -3095,266 +2439,18 @@ export class LocalAgentSession implements BackendHost {
         resolver.countInputTokens(this.effectiveModelSpec(), request);
     }
 
-    const execution = await this.actorSession.execute(lease, {
-      task: item.text,
-      loopVersion: await this.rt.identity.scaffold.version(),
-      chat: liveTurn,
-      extensions: [this.compactionExtension],
-      dynamic: (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools),
-      scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
-    }, (event) => {
-      if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
-    });
-
-    const fullText = execution.text;
-    const interrupted = execution.interrupted;
-    let runError: string | null = null;
-    let overflowRetry = false;
-
-    if (execution.failure !== null) {
-      const message = renderThrownChain({ cause: execution.failure });
-      runError = message.slice(0, 500);
-      overflowRetry = applyOverflowRecovery({
-        error: message,
-        lastPromptTokens: this.actorSession.orchestrator.acc.lastPromptTokens,
-        contextWindow,
-        turnWasOverflowRetry: item.metadata?.kinuEvent === OVERFLOW_RETRY_EVENT,
-        state: this.compactionState,
-        sessionKey: cache.sessionKey,
-      }).enqueueRetry;
-    }
-
-    // The turn's whole durable record, in ONE commit — see {@link commitTurn}.
-    const commit = this.commitTurn({
-      item,
-      event,
-      startedAt,
-      assistantText: fullText,
-      runError,
-      interrupted,
-      trialContext: execution.admittedMessages,
-      reachableTools: Object.keys(liveTurn.tools ?? {}),
-      overflowRetry,
-    });
-
-    // Turn over for signal delivery — the same spine the cf backend runs, and
-    // for the same reason: exactly once per turn, after the actor enters
-    // settling, so late signals re-deliver rather than target a nonexistent step,
-    // outside every failure path, so nothing that throws can skip it.
-    //
-    // The verdict includes DURABILITY. A turn whose answer never reached disk
-    // did not answer the events its signals carried, so `completed: false` is
-    // the honest report: the seam re-queues them, and a re-delivery that cannot
-    // be queued hands their bound event rows back to pending. Settling them as
-    // answered leaves those rows bound forever to a turn nothing can read back.
-    const durable = runError === null && 'committed' in commit;
-    const settled = this.actorSession.orchestrator.inbox.settle({ completed: durable });
-
-    if (durable) this.closeEventDeliveryLeases(item, settled.absorbed);
-
-    if (!('committed' in commit)) {
-      const message = renderThrownChain({ cause: commit.failure });
-      this.actorSession.orchestrator.acc.hadError = true;
-      this.closeRun({
-        completed: false,
-        interrupted: false,
-        errorText: runError ?? message.slice(0, 500),
-      }, lease);
-      diagnostics.failure('turn.persist_failed', commit.failure);
-      // The answer is not durable, so it is not published as one. The stream's
-      // deltas already went out — they are what the operator watched happen —
-      // but the terminal event carries no final answer, because a restart reads
-      // this turn back as a turn that produced nothing.
-      this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
-
-      return;
-    }
-
-    const { facts, turn, owed, transition } = commit.committed;
-
-    try {
-      // The NEXT turn's measured compaction trigger (core turn-lifecycle).
-      persistMeasuredPromptTokens(this.compactionState, cache.sessionKey, this.actorSession.orchestrator.acc.lastPromptTokens, historyLength);
-
-      this.closeRun(facts, lease);
-      // Core drives everything the settled turn causes from here: the in-process
-      // guard, the durable claim, the roster, the run and the close are ONE
-      // state machine, and this backend supplies only what it owns — the effect
-      // bodies below and the fiber that keeps the process alive for the
-      // detached tail. Until this existed the CLI released its claims the
-      // moment the transcript was persisted and had no recovery at all, so a
-      // laptop killed here lost the whole suffix.
-      //
-      // The core ledger already holds the roster committed with the answer.
-      this.settlingDepth += 1;
-
-      try {
-        await this.terminal.settle({
-          transition,
-          declare: () => owed,
-          hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
-        });
-      }
-      finally { this.settlingDepth -= 1; }
-
-      this.emit({ type: 'turn-end', turn });
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      this.actorSession.orchestrator.acc.hadError = true;
-      // Finalization threw, so whatever the stream reported is superseded by a
-      // turn that could not be closed out — and an interrupt does not reach
-      // here, since `interrupted` is sealed on the arm above.
-      this.closeRun({
-        completed: false,
-        interrupted: false,
-        errorText: runError ?? message.slice(0, 500),
-      }, lease);
-      diagnostics.failure(
-        'turn.finalization_failed',
-        toKinuError({ doing: 'finalizing the turn', cause: err, otherwise: 'io' }),
-      );
-      // The answer IS durable here — the commit ran above, before the signal
-      // settle, so what failed is the bookkeeping around a turn a restart can
-      // still read back. That is why this path still reports the answer it
-      // reports: the failure is stated, and the turn is terminal either way.
-      // The intent row STAYS: the transition may never have been claimed.
-      this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn });
-    }
-  }
-
-  /**
-   * Make this turn durable — the answer, the verdict its run row is sealed with
-   * and the frozen roster of everything the answer owes — as ONE commit.
-   *
-   * The roster is the only thing a later start can recover the suffix FROM, so
-   * it lands in the SAME commit as the answer. A whole finalization later — the
-   * assistant row here, core's claim after the signal settle, the compaction
-   * bookkeeping and the run seal — a process killed anywhere in between leaves
-   * a durable answer with no claim, and `resumeAll()` finds CLAIMS, so it finds
-   * nothing and that turn's takes, branches, recording, drain, trial and title
-   * are lost with nothing on disk saying they were owed. The intent row written
-   * inside this transaction is what closes that window.
-   *
-   * The transaction is the raw handle's, because `rt.storage.sql` and this
-   * session's `db` are the same connection — the runtime is built over it — so
-   * the messages, the intent and nothing else commit or roll back together.
-   *
-   * Never throws. A failure here is a turn whose answer did not reach disk, and
-   * the caller reports that as a turn that produced nothing.
-   */
-  private commitTurn(input: {
-    readonly item: QueueItem;
-    readonly event: string | undefined;
-    readonly startedAt: number;
-    readonly assistantText: string;
-    readonly runError: string | null;
-    readonly interrupted: boolean;
-    /** The turn's inference history, for the shadow trial's recorded replay. */
-    readonly trialContext: readonly ModelMessage[];
-    /** The tool surface the turn could reach, for the advisor's snapshot. */
-    readonly reachableTools: readonly string[];
-    readonly overflowRetry: boolean;
-  }): TurnCommit {
-    const { item, runError } = input;
-
-    try {
-      // One durable row PER steer (not per drain): the walk-back fork pivot
-      // matches individual user messages verbatim, exactly as surfaces and the
-      // JSONL transcript recorded them. A turn the harness enqueued opens on a
-      // `programmatic:`-prefixed row that also carries its provenance — the
-      // stamped metadata is what states authorship at rest; the prefix only keys
-      // the idempotency.
-      const turnId = this.currentTurnId ?? crypto.randomUUID();
-      // Minted HERE rather than inside `persist`, because the roster keys on it
-      // and the roster is frozen before the write.
-      const messageId = crypto.randomUUID();
-
-      // The confirming turn is over: what the agent did with its free re-look
-      // IS the gate's conversion number, and the run row carries it. Before the
-      // roster, so the turn that ANSWERED a gate cannot be gated again.
-      if (input.event === COMPLETION_GATE_EVENT) {
-        this.completionGate.settle({ toolCalls: this.actorSession.orchestrator.acc.toolCalls.length });
-      }
-
-      const facts: RunEndFacts = {
-        completed: runError === null,
-        interrupted: input.interrupted,
-        errorText: runError ?? undefined,
-        // Unbounded here (runChat hands `stopWhen` straight to streamText), so
-        // this reads 'stop' on a turn that finished by itself. Reported anyway:
-        // a caller that does pass a real stop condition gets the same honest
-        // 'truncated' seal the cloud loop gets, from the same classifier.
-        lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
-      };
-
-      const status = classifyRunEnd(facts).reason;
-      const turn = this.snapshotTurn(item, input.assistantText, messageId);
-
-      const owed = this.owedTerminalEffects({
-        turn,
-        status,
-        // Alternate Takes and steer branches were both captured mid-turn, before
-        // this id existed, and both are attributed to it — one decision, made by
-        // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
-        // here and again in the cf backend's onChatResponse.
-        credited: creditedTurnId({
-          messageId, completed: runError === null, workMode: this.actorSession.workMode,
-        }),
-        messageId,
-        userText: item.text,
-        assistantText: input.assistantText,
-        completed: runError === null,
-        interrupted: facts.interrupted,
-        startedAt: input.startedAt,
-        trialContext: input.trialContext,
-        reachableTools: input.reachableTools,
-        overflowRetry: input.overflowRetry,
-      });
-
-      // A response with no durable identity runs without a ledger key.
-      const transition: TerminalTransition | null = this.currentTurnId === null
-        ? null
-        : { turnId, messageId };
-
-      this.db.transaction(() => {
-        this.persist(
-          turnId,
-          messageId,
-          item.text,
-          // The landed ledger, not `drainedTexts()`: same steers in the same
-          // order, but each still carrying the id its queued/landed
-          // announcements used and the step index it was spliced into — which is
-          // what the durable row's parent chain is ordered by. The rows
-          // themselves were written by their own drains, at the step boundary.
-          this.actorSession.landedSteers,
-          input.assistantText,
-          item.kind === 'programmatic' ? item.metadata : undefined,
-        );
-
-        // The reservation the queue item was admitted as is spent by its own
-        // durable row — same transaction, so a restart sees one or neither.
-        this.pendingSends.retire([
-          ...(item.pendingSendId === undefined ? [] : [item.pendingSendId]),
-          ...(item.steerIds ?? []),
-        ]);
-
-        this.terminal.record(transition, owed);
-      })();
-
-      return { committed: { messageId, facts, turn, owed, transition } };
-    } catch (cause) {
-      // Classified AT the boundary that caught it rather than stored raw and
-      // interpreted later: this is the only place that knows what it was doing.
-      return {
-        failure: toKinuError({
-          doing: 'committing the finished turn and the roster its answer owes',
-          cause,
-          otherwise: 'io',
-        }),
-      };
-    }
+    return {
+      execution: {
+        loopVersion: await this.rt.identity.scaffold.version(),
+        chat: liveTurn,
+        extensions: [this.compactionExtension],
+        dynamic: (profile, tools) => this.dynamicContextSnapshot(memoryTail, profile, tools),
+        scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
+      },
+      sessionKey: cache.sessionKey,
+      contextWindow,
+      historyLength,
+    };
   }
 
   // ── The terminal transition ───────────────────────────────────────────
@@ -3381,26 +2477,7 @@ export class LocalAgentSession implements BackendHost {
    * the improvement lanes?" differently from the Durable Object, which is
    * exactly how two backends drift when each spells its own sequence out.
    */
-  private owedTerminalEffects(input: {
-    readonly turn: CompletedTurn;
-    readonly status: RunEndReason;
-    readonly credited: string | null;
-    readonly messageId: string;
-    readonly userText: string;
-    readonly assistantText: string;
-    readonly completed: boolean;
-    /** Whether the turn was CUT rather than failing. A task child's caller is
-     *  told which, because "interrupted" and "errored" are different answers to
-     *  the question it is blocked on. */
-    readonly interrupted: boolean;
-    readonly startedAt: number;
-    /** The turn's inference history, for the shadow trial's recorded replay. */
-    readonly trialContext: readonly ModelMessage[];
-    /** The tool surface the turn could reach, for the advisor's reachability
-     *  check. A cold replay has no live toolset to ask. */
-    readonly reachableTools: readonly string[];
-    readonly overflowRetry: boolean;
-  }): OwedEffect[] {
+  private owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
     const mission = localActorMission(this.rt, makeSqlExec(this.db));
     // WHICH candidate this turn is sampled against, decided ONCE, here. The
     // plan re-reads the pending version on every call, so a replay that asked
@@ -3420,7 +2497,7 @@ export class LocalAgentSession implements BackendHost {
     // replay. Plan turns are not gated — a plan produces no state to check.
     const gated = this.rt.shell !== undefined
       && this.actorSession.workMode !== 'plan'
-      && this.completionGate.shouldGate({
+      && this.chat.completionGate.shouldGate({
         completed: input.completed, toolCalls: this.actorSession.orchestrator.acc.toolCalls.length,
       });
 
@@ -3479,7 +2556,7 @@ export class LocalAgentSession implements BackendHost {
 
     if (input.overflowRetry) parts.overflowRetry = true;
 
-    if (gated) parts.completionGate = { text: this.completionGate.task };
+    if (gated) parts.completionGate = { text: this.chat.completionGate.task };
     // EVERY input the review's verdict reads, recorded — not just the tool
     // surface. The severity floor, the dedupe window and the completion gate
     // were re-read from the live session when the row replayed, so a process
@@ -3494,7 +2571,7 @@ export class LocalAgentSession implements BackendHost {
         // whether it is waiting now: the row that fires it runs earlier in
         // this same sequence, so `gated` is the answer for this turn and the
         // live `open` is the answer for a gate some earlier turn opened.
-        gateOpen: gated || this.completionGate.open,
+        gateOpen: gated || this.chat.completionGate.open,
       },
     });
 
@@ -3591,7 +2668,7 @@ export class LocalAgentSession implements BackendHost {
           // The confirming turn's OWN durable row, whose id `processTurn` derives
           // from the key this effect queues it under. Its presence is the
           // admission this row waits for.
-          if (this.announcementOnDisk(identity)) {
+          if (this.chat.announcementOnDisk(identity)) {
             return { status: 'completed', detail: 'the confirming turn is on disk' };
           }
 
@@ -3600,7 +2677,7 @@ export class LocalAgentSession implements BackendHost {
           // and its queue item is already shifted out, so an unchecked enqueue
           // appends a second turn under the same key and the model and tool work
           // is done twice.
-          if (this.announcementInFlight(identity)) {
+          if (this.chat.announcementInFlight(identity)) {
             return { status: 'owed', held: true, detail: 'the confirming turn is queued and not yet on disk' };
           }
 
@@ -3622,29 +2699,18 @@ export class LocalAgentSession implements BackendHost {
             return { status: 'completed', detail: 'the working directory showed nothing to check' };
           }
 
-          this.completionGate.fire();
-          this.queue.push({
+          this.chat.completionGate.fire();
+          // This sequence's own name for the confirmation. `processTurn`
+          // derives the durable message id from it, so a replay that reaches
+          // here before the turn ran queues the same turn rather than a second
+          // randomly-identified one. Arriving early cannot change the
+          // advisor's verdict — the gate state the review is judged against is
+          // recorded on the improvement-lanes row.
+          this.chat.appendOwedTurn({
             text: completionGateText({ task: text, observed }),
-            kind: 'programmatic',
-            // This sequence's own name for the confirmation. `processTurn`
-            // derives the durable message id from it, so a replay that reaches
-            // here before the turn ran queues the same turn rather than a second
-            // randomly-identified one.
             idempotencyKey: identity,
-            metadata: { kinuEvent: COMPLETION_GATE_EVENT },
-            // The gate fired for THIS process's one-shot turn; a driver that no
-            // longer owns the conversation has nothing to confirm, and `fire()`
-            // already recorded the gate so it does not re-ask.
-            settle: () => {},
+            event: COMPLETION_GATE_EVENT,
           });
-          // Appended rather than unshifted, so anything already queued runs
-          // first — it verifies FINAL state. The pump is a no-op while one is
-          // running, which is the live case; on a startup replay there is no
-          // pump yet, and without this kick the confirming turn would sit in the
-          // queue until some unrelated message arrived. Arriving early cannot
-          // change the advisor's verdict — the gate state the review is
-          // judged against is recorded on the improvement-lanes row.
-          this.pump();
 
           return {
             status: 'owed',
@@ -3661,19 +2727,12 @@ export class LocalAgentSession implements BackendHost {
             ? `overflow-retry:${crypto.randomUUID()}`
             : `overflow-retry:${effectScope}`;
 
-          if (this.announcementOnDisk(identity)) {
+          if (this.chat.announcementOnDisk(identity)) {
             return { status: 'completed', detail: 'the retry turn is on disk' };
           }
 
-          if (!this.announcementInFlight(identity)) {
-            this.queue.push({
-              text: OVERFLOW_RETRY_TEXT,
-              kind: 'programmatic',
-              idempotencyKey: identity,
-              metadata: { kinuEvent: OVERFLOW_RETRY_EVENT },
-              settle: () => {},
-            });
-            this.pump();
+          if (!this.chat.announcementInFlight(identity)) {
+            this.chat.appendOwedTurn({ text: OVERFLOW_RETRY_TEXT, idempotencyKey: identity, event: OVERFLOW_RETRY_EVENT });
           }
 
           return { status: 'owed', detail: 'the retry turn is queued and not yet on disk' };
@@ -3778,7 +2837,7 @@ export class LocalAgentSession implements BackendHost {
         // the first's detached close counts open terminal claims and finds none
         // for it. Without this the close deleted the live claim and the next
         // interruption replayed an external tool with no guard.
-        turnIsLive: (turnId) => this.pumping && this.currentTurnId === turnId,
+        turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
         scheduleRetry: (atMs) => this.scheduleTerminalRetry(atMs),
       });
     }
@@ -3807,7 +2866,7 @@ export class LocalAgentSession implements BackendHost {
    * describes.
    */
   private async scheduleTerminalRetry(atMs: number): Promise<void> {
-    if (this.ended || this.terminalRetryAt <= atMs) return;
+    if (this.chat.closed || this.terminalRetryAt <= atMs) return;
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
 
@@ -4741,50 +3800,6 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** Persist the exchange: the user row, any mid-turn steers, the assistant row.
-   *
-   *  `assistantId` is MINTED BY THE CALLER, because the roster the same
-   *  transaction freezes keys on it — a turn cannot record what it owes under an
-   *  id this method has not handed back yet.
-   *
-   *  `turnId` is the identity of the row that OPENS the exchange: derived from
-   *  the producer's name for the fact when the harness enqueued this turn, a
-   *  fresh uuid when the operator typed it. `INSERT OR IGNORE` is what makes the
-   *  first form idempotent — the primary key refuses a second announcement of
-   *  the same fact — and is a no-op for the second, whose id is unique by
-   *  construction.
-   *
-   *  A programmatic row also STATES its provenance: `metadata` is stamped here,
-   *  at the one seam every durable CLI turn is written through, so authorship
-   *  and event kind live in the row itself. The `programmatic:` id prefix
-   *  remains only as the read-side fallback for rows that carry no stamp —
-   *  never the thing a new row leans on.
-   *
-   *  A steer row states its provenance the same way, under the two keys core
-   *  declares for both backends: that it WAS a steer, and the step it was
-   *  spliced into. Its ROW is not written here — the drain wrote it when the
-   *  steer landed, inside the running turn; what the `steers` list still does
-   *  here is order the parent chain the assistant row hangs off. */
-  private persist(
-    turnId: string,
-    assistantId: string,
-    userText: string,
-    steers: ReadonlyArray<{ id: string; text: string; atStep: number }>,
-    assistantText: string,
-    metadata?: JsonObject,
-  ): void {
-    const stamp = metadata === undefined ? null : JSON.stringify(stampTurnAuthor(metadata));
-    const actorId = this.rt.actor.actorId;
-    void this.rt.storage.sql`INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, role, content, metadata)
-      VALUES (${actorId}, ${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
-    // The chain only: user → steers → assistant. Each steer row was committed
-    // by its own drain at the step boundary it landed on, parented to this
-    // turn's opening row.
-    const parentId = steers.length > 0 ? steers[steers.length - 1]!.id : turnId;
-
-    void this.rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
-      VALUES (${actorId}, ${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
-  }
   /** One routed non-turn lane as an {@link LLM}: the tier's model, its effort,
    *  and its spend filed under the lane's own source name.
    *
@@ -4847,90 +3862,6 @@ export class LocalAgentSession implements BackendHost {
 
     return providerOptions ? { model, providerOptions } : { model };
   }
-  // ─── The pending-send ledger ─────────────────────────────────────────────
-  // One rule, one store, both backends: a send is a row before the client
-  // hears it. `this.pendingSends` is core's PendingSendStore over the
-  // workspace's own bun:sqlite database; the cf actor holds the same object
-  // over its Durable Object storage.
-
-  /** The two facts one drain makes durable, in one transaction: the landed
-   *  user rows a surface reads, and the retirement of the reservations they
-   *  spent. Either both exist or neither does. The row's parent is the turn's
-   *  opening message — durable at admission, so it is always on disk here —
-   *  and its stamp is the one `describeLandedSteers` already gave it. */
-  private commitLandedSteers(rows: readonly LandedSteerRow[]): void {
-    this.db.transaction(() => {
-      for (const row of rows) {
-        void this.rt.storage.sql`INSERT OR IGNORE INTO actor_messages (actor_id, session_id, id, parent_id, role, content, metadata)
-                                 VALUES (${this.rt.actor.actorId}, ${this.sessionId}, ${row.id}, ${this.currentTurnId},
-                                         'user', ${row.text}, ${JSON.stringify(row.metadata)})`;
-        this.pendingSends.retire([row.id]);
-      }
-    })();
-  }
-
-  /** The turn a steer's reservation is bound to: the live turn when one is
-   *  running, else the user turn already admitted at the head of the queue —
-   *  the steer will land in its first step, so its row must name it. */
-  private steerTurnId(): string | null {
-    if (this.actorSession.inFlight) return this.currentTurnId;
-
-    return this.queue.find((item) => item.kind === 'user')?.turnId ?? this.currentTurnId;
-  }
-
-  /** Session start's half of the send rule: the rows a dead process left
-   *  acknowledged, restored before any new work runs. Mid-turn rows re-enter
-   *  the inbox (they land in the next turn's first step); idle-queued rows
-   *  re-enter the pump in sequence order as turns of their own — the same
-   *  sweep the cf backend runs on wake, over this workspace's own store. */
-  private restorePendingSends(): void {
-    const rows = this.pendingSends.restore();
-
-    if (rows.length === 0) return;
-
-    const midTurn: (UserSteer & { mode: WorkMode })[] = [];
-    let queued = 0;
-
-    for (const row of rows) {
-      if (row.turnId === null) {
-        this.queue.push({
-          text: row.text, kind: 'user', turnId: crypto.randomUUID(),
-          // Re-run of an acknowledgement, not a fresh send: kept ahead of
-          // anything the new session admits, in the order they were accepted.
-          rerun: true,
-          pendingSendId: row.id,
-          metadata: { kinuMode: row.mode },
-          files: this.pendingSends.files(row.id),
-          settle: () => {},
-        });
-        queued += 1;
-      } else {
-        midTurn.push({
-          id: row.id, text: row.text, mode: row.mode,
-          files: this.pendingSends.files(row.id),
-        });
-      }
-    }
-
-    if (midTurn.length > 0) this.actorSession.orchestrator.inbox.restorePending(midTurn);
-
-    this.emit({
-      type: 'background', event: 'pending_sends_restored',
-      message: `restored ${rows.length} acknowledged send${rows.length === 1 ? '' : 's'} the last process left`,
-    });
-
-    if (queued > 0) {
-      // Not synchronous: the driver gate is installed by the caller that
-      // owns this session, after the constructor returns. A microtask lands
-      // after that hand-off; pumping from inside the constructor would run a
-      // turn under no lease at all.
-      queueMicrotask(() => {
-        if (this.ended) return;
-        this.pump();
-      });
-    }
-  }
-
   /** The profile a non-turn lane routes against. The PRECEDENCE is core's
    *  (`resolveRoutingProfile`), shared with the Cloudflare backend so the two
    *  cannot disagree about when a lane inherits the open turn; what is local is
@@ -4941,69 +3872,6 @@ export class LocalAgentSession implements BackendHost {
       actor: this.rt.actor,
       resolve: () => this.profiles().resolvePreTurn(availableTools),
     });
-  }
-
-  /**
-   * Restore the working revision on open, falling back to the transcript only
-   * when the actor has never recorded a working revision.
-   */
-  private restoreHistory(): void {
-    this.actorSession.restoreWorkingHistory(() => this.restoreTranscript());
-  }
-
-  /**
-   * The transcript fallback is bounded by the model's context window.
-   *
-   * Bounded by what the model could ever be shown at once — the resolved
-   * context window, LESS what is held back for the answer, since a restore that
-   * fills the window leaves nothing to reply with and hands the compaction
-   * ladder a request that is already over — rather than by a message count.
-   * The count was 40, was
-   * never overridden by anything, and was applied on EVERY reconnect: a
-   * session past 40 messages silently lost everything older each time the CLI
-   * restarted, with no marker in the transcript and no way for the model to
-   * ask what it had lost. Restoring to the window instead hands the whole
-   * conversation to the compaction ladder, which is the thing that actually
-   * knows how to shed it (summarize, archive verbatim, cite the archive).
-   *
-   * A session larger than the window still cannot be restored whole, so what
-   * did not fit is STATED: the count, and where it is still readable from.
-   */
-  private restoreTranscript(): readonly ModelMessage[] {
-    const rows = this.rt.storage.sql<{ role: string; content: string }>`
-      SELECT role, content
-      FROM actor_messages
-      WHERE actor_id = ${this.rt.actor.actorId}
-        AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
-      ORDER BY created_at DESC, rowid DESC`;
-
-    const budget = stepContextLimit({
-      contextWindow: this.sessionContextWindow(),
-      modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-    });
-
-    const restored: ModelMessage[] = [];
-    let tokens = 0;
-    let omitted = 0;
-
-    for (const row of rows) {
-      if (row.role !== 'user' && row.role !== 'assistant') continue;
-
-      if (omitted > 0) { omitted++; continue; }
-
-      const cost = estimateTokens(row.content.length);
-
-      // The newest message is always restored. A single over-window message
-      // belongs to the compaction ladder, not an empty-history fallback.
-      if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
-
-      tokens += cost;
-      restored.push({ role: row.role, content: row.content });
-    }
-
-    return omitted > 0
-      ? [olderHistoryNotice(omitted, this.sessionId), ...restored.reverse()]
-      : restored.reverse();
   }
 
   /**
@@ -5259,7 +4127,7 @@ export class LocalAgentSession implements BackendHost {
 
     return {
       actor,
-      runId: this.currentRunId ?? WORKSPACE_RUN_ID,
+      runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
       profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
       dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
       release: async () => {
@@ -5322,7 +4190,7 @@ export class LocalAgentSession implements BackendHost {
 
     return {
       actor,
-      runId: this.currentRunId ?? WORKSPACE_RUN_ID,
+      runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
       profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
       dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
     };
@@ -5381,7 +4249,7 @@ export class LocalAgentSession implements BackendHost {
         mode,
         // A CLOSURE, because this toolset is rebuilt only on a model change while
         // the turn changes every turn.
-        () => currentOperationProfile(this.rt.actor)?.turnId ?? this.currentTurnId ?? WORKSPACE_RUN_ID,
+        () => currentOperationProfile(this.rt.actor)?.turnId ?? this.chat.currentTurnId ?? WORKSPACE_RUN_ID,
       ));
 
       this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
@@ -5477,25 +4345,6 @@ export class LocalAgentSession implements BackendHost {
 }
 
 export { serializeContentForHeads } from '@kinu.run/core';
-
-interface PromptInputParts {
-  text: string;
-  files?: ReadonlyArray<PromptFile>;
-}
-
-function normalizePromptInput(
-  input: string | { text: string; files: ReadonlyArray<PromptFile> },
-): PromptInputParts {
-  const text = v.safeParse(v.string(), input);
-
-  if (text.success) return { text: text.output };
-
-  return v.parse(v.object({
-    text: v.string(),
-    files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
-  }), input);
-}
-
 
 /** Resolve when `work` settles or `ms` elapses, whichever comes first. The timer
  *  is always cleared, so a fast settle leaves nothing holding the event loop. */

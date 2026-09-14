@@ -26,5 +26,5 @@
   "logged_default/wire packages/core/src/steer-branch.ts#settlePendingBranch",
   "logged_default/wire packages/core/src/vfs/observe.ts#baselineFor",
   "message_only/other packages/agent-utils/src/vfs/addressing.ts#vfsAddressingHint",
-  "voided_promise/wire packages/cli-backend/src/local-session.ts#enqueueTurn"
+  "voided_promise/wire packages/core/src/orchestrator/chat-session.ts#enqueueTurn"
 ]

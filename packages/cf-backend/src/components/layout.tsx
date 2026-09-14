@@ -5,12 +5,20 @@ import Sidebar from "./Sidebar";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
+import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
+import { AppBackground } from "./AppBackground";
 
 /**
  * Top-level shell — left rail (Sidebar with user info + agent list) +
  * right pane (route outlet). Below md the rail becomes a drawer summoned
  * from the mobile header, so phones get the same roster, New-agent flow,
  * theme toggle and sign-out as desktop.
+ *
+ * The living background sits behind both, fixed, under the root's own
+ * ground: the root isolates its stacking so the negative-z canvas paints
+ * above that ground and under every in-flow child. The desktop rail wears
+ * the veil rather than the solid sidebar tone so the tissue shows through
+ * it faintly; the page's own surfaces stay as they are.
  */
 export default function Layout() {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -22,7 +30,9 @@ export default function Layout() {
 
   return (
     <WorkspaceRosterProvider>
-    <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+    <WorkspaceOverviewsProvider>
+    <div className="isolate flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+      <AppBackground />
       <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden">
         <div className="flex items-center gap-1">
           <button
@@ -49,7 +59,7 @@ export default function Layout() {
       </header>
 
       {/* Desktop rail */}
-      <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block">
+      <aside className="hidden w-60 shrink-0 p-sidebar-veil border-r p-border md:block">
         <Sidebar />
       </aside>
 
@@ -68,6 +78,7 @@ export default function Layout() {
       </main>
 
     </div>
+    </WorkspaceOverviewsProvider>
     </WorkspaceRosterProvider>
   );
 }
