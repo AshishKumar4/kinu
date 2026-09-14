@@ -1149,6 +1149,7 @@ export class LocalAgentSession implements BackendHost {
       skillsVfs: skillsVfsOver(this.rt.storage.vfs),
       trust: this.instructionTrust,
       decisions: this.instructionApprovals.list(),
+      admissionTokens: stepContextLimit(limits),
     });
   }
 

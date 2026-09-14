@@ -7,7 +7,7 @@ import { withRateLimitRetry } from './rate-limit-retry';
 import { evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
 import {
-  KinuError, classifyErrorCode, tolerate, type ErrorCode,
+  KinuError, classifyErrorCode, diagnostics, tolerate, type ErrorCode,
 } from '../obs/index';
 
 export interface AuthedFetchOptions {
@@ -345,25 +345,68 @@ function codeForStatus(status: number): ErrorCode | null {
 
 /**
  * A provider failure as a classified Kinu error: the code the rest of the
- * system switches on, safe actionable prose, and the raw failure retained on
- * `cause` for diagnostics.
+ * system switches on, the closed facts it may carry, and the raw failure
+ * retained on `cause` for diagnostics.
  *
- * This is the boundary. Above it a provider failure is an opaque SDK object
- * carrying a response body; below it, it is a {@link KinuError} like every
- * other failure in the process, and `renderCauseChain` renders messages only —
- * so the body stays available to an observability sink that inspects `cause`
- * and never reaches a terminal or a chat surface.
+ * This is the boundary, and the message is the part that crosses it: a
+ * terminal, a chat surface, a turn ledger all render `error.message`, and the
+ * provider's own prose is not safe to put there — a credential echo, an
+ * injected instruction, a signed URL all ride that channel verbatim. So the
+ * message carries only what the boundary can vouch for: the classified code,
+ * the structured facts (HTTP status, provider code, provider id — protocol
+ * identifiers, never wording), and one generic bounded sentence.
+ *
+ * The provider's own text is preserved on the diagnostics record —
+ * `provider.request_failed` — bounded by {@link describeProviderError}, and on
+ * `cause` for any sink that inspects the chain.
  */
-export function toProviderError(input: { doing: string; cause: unknown }): KinuError {
+export function toProviderError(input: {
+  doing: string;
+  cause: unknown;
+  /** The provider the request was sent to, when the caller resolved one. */
+  provider?: string;
+}): KinuError {
   const facts = providerFailureFacts({ cause: input.cause });
 
   const code = classifyErrorCode({ cause: input.cause })
     ?? (facts.status === undefined ? null : codeForStatus(facts.status))
     ?? 'unavailable';
 
-  return new KinuError(code, `${input.doing}: ${describeProviderError({ cause: input.cause })}`, {
-    cause: input.cause,
-  });
+  const tags: string[] = [];
+
+  if (facts.status !== undefined) tags.push(`HTTP ${String(facts.status)}`);
+
+  if (facts.providerCode !== undefined) tags.push(facts.providerCode);
+
+  if (input.provider !== undefined) tags.push(input.provider);
+
+  /** The fields the diagnostics record carries beside the error itself. */
+  interface ProviderFailureFields {
+    detail: string;
+    status?: number;
+    providerCode?: string;
+    provider?: string;
+  }
+
+  const fields: ProviderFailureFields = {
+    detail: describeProviderError({ cause: input.cause }),
+  };
+
+  if (facts.status !== undefined) fields.status = facts.status;
+
+  if (facts.providerCode !== undefined) fields.providerCode = facts.providerCode;
+
+  if (input.provider !== undefined) fields.provider = input.provider;
+
+  const error = new KinuError(
+    code,
+    `${input.doing}: the provider refused the request${tags.length > 0 ? ` (${tags.join(', ')})` : ''}.`,
+    { cause: input.cause },
+  );
+
+  diagnostics.failure('provider.request_failed', error, fields);
+
+  return error;
 }
 
 /** "131k" / "1M" / "1.05M" — compact context-window text shared by the web

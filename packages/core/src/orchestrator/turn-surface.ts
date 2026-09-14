@@ -86,7 +86,7 @@ export async function resolveTurnSkills(opts: {
     // The built-in floor: those bodies are module constants, so this surface
     // needs no VFS at all and cannot fail the way the walk just did.
     return {
-      available: admitSkillsIndex({ skills: [...BUILTIN_SKILL_HEADERS], unread: [] }, admissionTokens),
+      available: admitSkillsIndex({ skills: [...BUILTIN_SKILL_HEADERS], unread: [], omitted: 0 }, admissionTokens),
       activeSkills: undefined,
     };
   }

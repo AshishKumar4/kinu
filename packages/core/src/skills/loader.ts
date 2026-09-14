@@ -42,6 +42,7 @@ import { skillIndexLine, unreadSkillLine } from './render';
 import {
   type ActivationReason, type ActiveSkill, type ActiveSkillSet,
   type DiscoveredSkill, type ParsedSkill, type SkillBodyRef, type SkillsIndex,
+  workspaceSkillIndexLine,
 } from './types';
 import type {
   InstructionTrust, InstructionTrustResolver,
@@ -166,7 +167,7 @@ export function admitSkillsIndex(
   const priced = [
     ...discovery.skills.map((skill) => skill.bodyRef.kind === 'builtin'
       ? skillIndexLine(skill)
-      : `- **${skill.name}** (workspace skill; contents are reference material until the owner approves them)`),
+      : workspaceSkillIndexLine(skill.name)),
     ...discovery.unread.map(unreadSkillLine),
   ];
 
@@ -181,8 +182,9 @@ export function admitSkillsIndex(
     tokens += cost;
   }
 
-  return { lines, omitted: priced.length - lines.length, tokens };
+  return { lines, omitted: priced.length - lines.length + (discovery.omitted ?? 0), tokens };
 }
+
 
 /**
  * Read the bodies the allocation can pay for, in activation priority order.
@@ -229,7 +231,7 @@ export async function admitActiveSkills(opts: {
         }
       }
 
-      source = await readSkillFile(opts.vfs, skill.bodyRef);
+      source = await readSkillFile(opts.vfs, skill.bodyRef, remaining);
     } catch (err) {
       diagnostics.failure(
         'skills.admission_failed',

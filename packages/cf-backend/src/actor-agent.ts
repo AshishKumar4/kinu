@@ -4402,6 +4402,10 @@ export abstract class ActorAgent extends Think<Env> {
       skillsVfs: this.getSkillsVfs(),
       trust: this.instructionTrust(),
       decisions: this.instructionApprovals().list(),
+      admissionTokens: stepContextLimit({
+        contextWindow: this.sessionContextWindow(),
+        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+      }),
     });
   }
 

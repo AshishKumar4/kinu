@@ -236,6 +236,15 @@ export function estimateTokens(chars: number): number {
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
+/** The byte ceiling a token allocation implies — the inverse of
+ *  `estimateTokens`. One derivation for every admission that bounds a file by
+ *  a prompt budget: agents-md's `agentsMdCharBudget` and skill discovery both
+ *  derive their read ceiling here, so "the whole skills/instructions
+ *  allocation" is the same number of bytes everywhere it is asked. */
+export function admissionBytes(tokens: number): number {
+  return tokens * CHARS_PER_TOKEN;
+}
+
 export function estimateUsdCost(tokens: number): number {
   return (tokens / 1000) * BLENDED_USD_PER_1K_TOKENS;
 }
