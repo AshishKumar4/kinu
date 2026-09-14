@@ -15,13 +15,10 @@
  * isotropic on screen, so a radius reads the same in both directions.
  */
 
-export const STROKE_STRIDE = 12;
-
-/** Seven fields and one pad, so a node is two vec4 attributes on the GPU. */
-export const NODE_STRIDE = 8;
-
-/** A pulse is four vec4 attributes: the curve it rides, its span on it, its look, and its identity. */
-export const PULSE_STRIDE = 16;
+import {
+  type ArtFrame, clamp, grown, viewDistance, type KeepOut, NODE_STRIDE, PULSE_STRIDE, seededRandom, STROKE_STRIDE, TONE_ACCENT, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+} from './art';
+import { movePulse, type Pulse, pulseTail, writePulse } from './pulse';
 
 /** How far the pointer may displace a tip, in view width units. */
 const MAX_BEND = 0.028;
@@ -30,15 +27,6 @@ const MAX_BEND = 0.028;
 const POINTER_RADIUS = 0.17;
 
 export type BranchPhase = 'growing' | 'alive' | 'ember' | 'ash';
-
-/** The stroke tone a renderer resolves through the palette. */
-const TONE_ACCENT = 0;
-
-export const TONE_BRIGHT = 1;
-
-export const TONE_ASH = 2;
-
-export const TONE_EMBER = 3;
 
 interface Branch {
   readonly id: number;
@@ -80,22 +68,6 @@ interface Branch {
   outCy: number;
   outX1: number;
   outY1: number;
-}
-
-/** Information moving along the tree: a bright head with a soft tail,
- *  travelling one edge at a time. Forward from the seed toward the tips,
- *  the way attempts are made; back from a scored tip toward the seed,
- *  the way a score returns, rarer and dimmer. */
-interface Pulse {
-  readonly id: number;
-  readonly layer: number;
-  /** The branch whose curve the pulse is on. */
-  edge: number;
-  /** Where the head is along the edge, 0 at the parent's tip, 1 at this one. */
-  head: number;
-  /** +1 toward the tip, -1 toward the seed. */
-  readonly direction: 1 | -1;
-  readonly strength: number;
 }
 
 interface Spark {
@@ -181,8 +153,9 @@ const PAN_SPEED = 0.25;
 const PAN_ACCEL = 0.6;
 
 /** How fast a branch's drawn look follows its phase: a prune or a restart
- *  reads as a fade of about a quarter second, never a one-frame cut. */
-const LOOK_RATE = 4;
+ *  is an event and reads in a quarter second, never a one-frame cut —
+ *  faster than the connectome's activity fade, which tracks a mood. */
+const BRANCH_FADE_RATE = 4;
 
 const BEND_RATE = 7;
 
@@ -222,12 +195,6 @@ const Y_MAX = 0.93;
 /** How far outside the keep-out a tip must land, in view units. */
 const KEEP_OUT_MARGIN = 0.03;
 
-/** Every stroke colour recedes this far toward the page's ground before it
- *  is drawn, on the GPU and on the CPU alike: the art sits behind the copy.
- *  Measured 2026-09-14 on the dark ground: the kept path's gold reads 8.9:1
- *  against the ground unmixed and 4.6:1 at this mix. */
-export const RECESS = 0.32;
-
 interface LayerState {
   readonly rules: LayerRules;
   readonly branches: Map<number, Branch>;
@@ -245,19 +212,10 @@ interface LayerState {
   hidden: number;
 }
 
-export interface SearchTreeFrame {
-  /** `count` strokes of STROKE_STRIDE floats: x0 y0 cx cy x1 y1 t width glow tone alpha layer. */
-  readonly strokes: Float32Array<ArrayBuffer>;
-  readonly count: number;
-  /** `nodeCount` points of NODE_STRIDE floats: x y radius glow tone alpha layer pad. */
-  readonly nodes: Float32Array<ArrayBuffer>;
-  readonly nodeCount: number;
-  /** `pulseCount` pulses of PULSE_STRIDE floats: x0 y0 cx cy | x1 y1 tail head | width glow tone alpha | id layer direction pad.
-   *  The curve is the edge's whole quadratic in view units; the pulse occupies
-   *  it from `tail` to `head` (either may be the larger), bright at the head. */
-  readonly pulses: Float32Array<ArrayBuffer>;
-  readonly pulseCount: number;
-  readonly time: number;
+/** The drawn frame plus what the search did to reach it. Pulses run forward
+ *  from the seed toward the tips, the way attempts are made, and back from
+ *  a scored tip toward the seed, the way a score returns, rarer and dimmer. */
+export interface SearchTreeFrame extends ArtFrame {
   readonly generation: number;
   /** Cumulative branches the search pruned, foreground layer. */
   readonly pruned: number;
@@ -271,16 +229,6 @@ export interface SearchTreeOptions {
   readonly aspect: number;
 }
 
-/** A box in view units no tip may land in: the headline's, so no branch
- *  crosses behind the copy. Growth that would enter it turns away, the
- *  way it turns at the top and bottom of the view. */
-export interface KeepOut {
-  readonly left: number;
-  readonly top: number;
-  readonly right: number;
-  readonly bottom: number;
-}
-
 /** The pointer's contract: it reaches this far and displaces at most this much. */
 export interface PointerReach {
   readonly radius: number;
@@ -290,23 +238,6 @@ export interface PointerReach {
 /** The camera's contract: the picture never moves faster than this, in view widths per second. */
 export interface PanReach {
   readonly maxSpeed: number;
-}
-
-/** mulberry32: small, fast, and identical on every engine. */
-export function seededRandom(seed: number): () => number {
-  let state = seed >>> 0;
-
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let mixed = Math.imul(state ^ (state >>> 15), 1 | state);
-    mixed = (mixed + Math.imul(mixed ^ (mixed >>> 7), 61 | mixed)) ^ mixed;
-
-    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4_294_967_296;
-  };
-}
-
-function clamp(value: number, low: number, high: number): number {
-  return value < low ? low : value > high ? high : value;
 }
 
 /** Growth eased so a branch shoots out and settles, as a stroke of ink would. */
@@ -530,12 +461,7 @@ export class SearchTree {
   }
 
   private pushStroke(count: number, branch: Branch, t: number, width: number, glow: number, tone: number, alpha: number): number {
-    if ((count + 1) * STROKE_STRIDE > this.strokes.length) {
-      const grown = new Float32Array(new ArrayBuffer(this.strokes.byteLength * 2));
-      grown.set(this.strokes);
-      this.strokes = grown;
-    }
-
+    this.strokes = grown(this.strokes, (count + 1) * STROKE_STRIDE);
     const at = count * STROKE_STRIDE;
     const strokes = this.strokes;
     strokes[at] = branch.outX0;
@@ -555,12 +481,7 @@ export class SearchTree {
   }
 
   private pushNode(count: number, x: number, y: number, radius: number, glow: number, tone: number, alpha: number, layer: number): number {
-    if ((count + 1) * NODE_STRIDE > this.nodes.length) {
-      const grown = new Float32Array(new ArrayBuffer(this.nodes.byteLength * 2));
-      grown.set(this.nodes);
-      this.nodes = grown;
-    }
-
+    this.nodes = grown(this.nodes, (count + 1) * NODE_STRIDE);
     const at = count * NODE_STRIDE;
     const nodes = this.nodes;
     nodes[at] = x;
@@ -582,10 +503,7 @@ export class SearchTree {
   }
 
   private distance(x0: number, y0: number, x1: number, y1: number): number {
-    const dx = x1 - x0;
-    const dy = (y1 - y0) * this.aspect;
-
-    return Math.sqrt(dx * dx + dy * dy);
+    return viewDistance(this.aspect, x0, y0, x1, y1);
   }
 
   private seedLayer(rules: LayerRules, index: number, seed: number): LayerState {
@@ -760,7 +678,7 @@ export class SearchTree {
    *  or a restart is a fade and never a one-frame cut. */
   private settleLooks(layer: LayerState, dt: number): void {
     const bestValue = this.bestValueOf(layer);
-    const ease = 1 - Math.exp(-dt * LOOK_RATE);
+    const ease = 1 - Math.exp(-dt * BRANCH_FADE_RATE);
 
     for (const branch of layer.branches.values()) this.dress(layer, branch, bestValue, ease);
   }
@@ -1055,40 +973,32 @@ export class SearchTree {
       const edge = layer?.branches.get(pulse.edge);
 
       if (layer === undefined || edge === undefined) continue;
-      const span = PULSE_TAIL / Math.max(1e-6, this.distance(edge.x0, edge.y0, edge.x1, edge.y1));
-      const tail = clamp(pulse.head - pulse.direction * span, 0, 1);
-      const grown = easeGrowth(edge.progress);
+      const tail = pulseTail(pulse, PULSE_TAIL, this.distance(edge.x0, edge.y0, edge.x1, edge.y1));
+      const drawn = easeGrowth(edge.progress);
       const recede = clamp((edge.outX1 + 0.04) / HISTORY_X, 0, 1);
       const ride = clamp(edge.alpha + edge.boost * 0.3, 0, 1) * layer.rules.alpha * recede;
       const lifted = clamp(ride * PULSE_LIFT, PULSE_FLOOR * layer.rules.alpha * recede, PULSE_CEILING);
       const alpha = lifted * pulse.strength * (pulse.direction > 0 ? 1 : PULSE_RETURN_DIM);
 
-      if (alpha <= 0.004 || Math.max(tail, pulse.head) > grown + 1e-6) continue;
+      if (alpha <= 0.004 || Math.max(tail, pulse.head) > drawn + 1e-6) continue;
 
-      if ((count + 1) * PULSE_STRIDE > this.pulseData.length) {
-        const wider = new Float32Array(new ArrayBuffer(this.pulseData.byteLength * 2));
-        wider.set(this.pulseData);
-        this.pulseData = wider;
-      }
-
-      const at = count * PULSE_STRIDE;
-      const data = this.pulseData;
-      data[at] = edge.outX0;
-      data[at + 1] = edge.outY0;
-      data[at + 2] = edge.outCx;
-      data[at + 3] = edge.outCy;
-      data[at + 4] = edge.outX1;
-      data[at + 5] = edge.outY1;
-      data[at + 6] = tail;
-      data[at + 7] = pulse.head;
-      data[at + 8] = edge.width * 1.15;
-      data[at + 9] = pulse.direction > 0 ? 0.9 : 0.6;
-      data[at + 10] = pulse.direction > 0 ? TONE_BRIGHT : TONE_ACCENT;
-      data[at + 11] = alpha;
-      data[at + 12] = pulse.id;
-      data[at + 13] = pulse.layer;
-      data[at + 14] = pulse.direction;
-      data[at + 15] = 0;
+      this.pulseData = writePulse(this.pulseData, count, {
+        x0: edge.outX0,
+        y0: edge.outY0,
+        cx: edge.outCx,
+        cy: edge.outCy,
+        x1: edge.outX1,
+        y1: edge.outY1,
+        tail,
+        head: pulse.head,
+        width: edge.width * 1.15,
+        glow: pulse.direction > 0 ? 0.9 : 0.6,
+        tone: pulse.direction > 0 ? TONE_BRIGHT : TONE_ACCENT,
+        alpha,
+        id: pulse.id,
+        layer: pulse.layer,
+        direction: pulse.direction,
+      });
       count += 1;
     }
 
@@ -1183,8 +1093,7 @@ export class SearchTree {
       }
 
       const length = Math.max(1e-6, this.distance(edge.x0, edge.y0, edge.x1, edge.y1));
-      const speed = PULSE_SPEED * layer.rules.stepLength / 0.062;
-      pulse.head += pulse.direction * speed * dt / length;
+      movePulse(pulse, PULSE_SPEED * layer.rules.stepLength / 0.062, dt, length);
       let alive = true;
 
       if (pulse.direction > 0 && pulse.head >= easeGrowth(edge.progress)) {
@@ -1213,41 +1122,4 @@ export class SearchTree {
       spark.y += spark.vy * dt;
     }
   }
-}
-
-export type Rgb = readonly [red: number, green: number, blue: number];
-
-/** The theme's own tokens, read from the document: accent is the gold,
- *  bright is `--c-accent-fg` (silk on dark, deep gold on paper), ash is the
- *  dim text role a pruned branch fades into, ground is the page behind the
- *  art, which every tone recedes toward by RECESS. No colour is invented here. */
-export interface HeroPalette {
-  readonly mode: 'dark' | 'light';
-  readonly accent: Rgb;
-  readonly bright: Rgb;
-  readonly ash: Rgb;
-  readonly ground: Rgb;
-}
-
-/** The CSS colour string a Canvas2D fill or stroke takes. */
-export function cssRgba(rgb: Rgb, alpha: number): string {
-  const [red, green, blue] = rgb;
-
-  return `rgba(${String(Math.round(red))},${String(Math.round(green))},${String(Math.round(blue))},${String(alpha)})`;
-}
-
-/** What the hero asks of whichever renderer it picked: both draw the same
- *  `SearchTreeFrame`, and neither knows how the frame came to be. */
-export interface SearchTreeRenderer {
-  readonly kind: 'canvas' | 'webgpu';
-  /** CSS pixel size of the box and the device pixel ratio to draw at. */
-  resize(width: number, height: number, ratio: number): void;
-  setPalette(palette: HeroPalette): void;
-  render(frame: SearchTreeFrame): void;
-  /** A renderer that can die after it has started — the GPU half — takes one
-   *  fault handler; a fault that landed before the call replays at subscribe.
-   *  The renderer has already disposed itself by then. A renderer that cannot
-   *  fault leaves this absent. */
-  onFault?(handler: (error: Error) => void): void;
-  dispose(): void;
 }
