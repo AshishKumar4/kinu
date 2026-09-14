@@ -880,5 +880,10 @@ export interface SearchTreeRenderer {
   resize(width: number, height: number, ratio: number): void;
   setPalette(palette: HeroPalette): void;
   render(frame: SearchTreeFrame): void;
+  /** A renderer that can die after it has started — the GPU half — takes one
+   *  fault handler; a fault that landed before the call replays at subscribe.
+   *  The renderer has already disposed itself by then. A renderer that cannot
+   *  fault leaves this absent. */
+  onFault?(handler: (error: Error) => void): void;
   dispose(): void;
 }

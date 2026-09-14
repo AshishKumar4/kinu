@@ -3,6 +3,7 @@ import {
   type Draw, type Effect, type Geometry, type Gpu, type Surface, type Target,
 } from 'vgpu';
 
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { NODE_STRIDE, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
@@ -22,7 +23,8 @@ const BLOOM_STRENGTH: Record<HeroPalette['mode'], number> = { dark: 1.15, light:
 
 export type WebGpuRendererOutcome =
   | { readonly kind: 'renderer'; readonly renderer: SearchTreeRenderer }
-  | { readonly kind: 'unsupported'; readonly reason: string };
+  | { readonly kind: 'unsupported'; readonly reason: string }
+  | { readonly kind: 'failed'; readonly reason: string };
 
 function paletteUniform(palette: HeroPalette) {
   const unit = ([red, green, blue]: HeroPalette['accent']): readonly number[] => [red / 255, green / 255, blue / 255, 1];
@@ -49,8 +51,11 @@ function bloomSize(width: number, height: number): readonly [number, number] {
  * over a transparent canvas so the page's ground shows through.
  *
  * `init()` throwing `VGPU-RING1-UNSUPPORTED` is the one absence this module
- * expects — no WebGPU, or no adapter — and it comes back as an outcome the
- * hero falls back on. Any other failure is a defect and is rethrown.
+ * expects — no WebGPU, or no adapter — and it comes back `unsupported`. Every
+ * other way starting up can fail (no device, a shader the driver rejects,
+ * init's own defect) comes back `failed` with the cause attached: the hero
+ * falls back to Canvas2D on both, so nothing in here throws. A fault that
+ * lands after a renderer exists is `onFault`'s, never a thrown listener.
  */
 export async function createWebGpuRenderer(
   canvas: HTMLCanvasElement,
@@ -59,97 +64,91 @@ export async function createWebGpuRenderer(
   height: number,
   ratio: number,
 ): Promise<WebGpuRendererOutcome> {
-  let gpu: Gpu;
+  // `attempted` lets the catch release a gpu `init` already produced.
+  let attempted: Gpu | null = null;
 
   try {
-    gpu = await init();
-  } catch (cause) {
-    if (cause instanceof VGPUError && cause.code === 'VGPU-RING1-UNSUPPORTED') {
-      return { kind: 'unsupported', reason: cause.message };
-    }
+    const gpu = await init();
+    attempted = gpu;
 
-    throw new Error('the hero could not start WebGPU', { cause });
-  }
+    const physical = (w: number, h: number): readonly [number, number] => [Math.max(1, Math.round(w * ratio)), Math.max(1, Math.round(h * ratio))];
+    let size = physical(width, height);
 
-  const stopListening = gpu.onError((error) => {
-    throw new Error('the hero renderer failed on the GPU', { cause: error });
-  });
+    const canvasSurface: Surface = surface(gpu, canvas, {
+      size, alphaMode: 'premultiplied', clearColor: [0, 0, 0, 0], label: 'hero',
+    });
 
-  const physical = (w: number, h: number): readonly [number, number] => [Math.max(1, Math.round(w * ratio)), Math.max(1, Math.round(h * ratio))];
-  let size = physical(width, height);
+    const scene: Target = target(gpu, { size, format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-scene' });
+    const bloomA: Target = target(gpu, { size: bloomSize(size[0], size[1]), format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-bloom-a' });
+    const bloomB: Target = target(gpu, { size: bloomSize(size[0], size[1]), format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-bloom-b' });
+    const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
 
-  const canvasSurface: Surface = surface(gpu, canvas, {
-    size, alphaMode: 'premultiplied', clearColor: [0, 0, 0, 0], label: 'hero',
-  });
+    const strokeData = new Float32Array(new ArrayBuffer(4 * STROKE_CAPACITY * STROKE_STRIDE));
+    const nodeData = new Float32Array(new ArrayBuffer(4 * NODE_CAPACITY * NODE_STRIDE));
 
-  const scene: Target = target(gpu, { size, format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-scene' });
-  const bloomA: Target = target(gpu, { size: bloomSize(size[0], size[1]), format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-bloom-a' });
-  const bloomB: Target = target(gpu, { size: bloomSize(size[0], size[1]), format: 'rgba16float', clearColor: [0, 0, 0, 0], label: 'hero-bloom-b' });
-  const linear = sampler(gpu, { minFilter: 'linear', magFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+    const strokeGeometry: Geometry = geometry(gpu, {
+      buffers: [{ attributes: { curve: 'float32x4', tip: 'float32x4', look: 'float32x4' }, data: strokeData, stepMode: 'instance' }],
+      vertexCount: (STROKE_SEGMENTS + 1) * 2,
+      topology: 'triangle-strip',
+      label: 'hero-strokes',
+    });
 
-  const strokeData = new Float32Array(new ArrayBuffer(4 * STROKE_CAPACITY * STROKE_STRIDE));
-  const nodeData = new Float32Array(new ArrayBuffer(4 * NODE_CAPACITY * NODE_STRIDE));
+    const nodeGeometry: Geometry = geometry(gpu, {
+      buffers: [{ attributes: { point: 'float32x4', look: 'float32x4' }, data: nodeData, stepMode: 'instance' }],
+      vertexCount: 6,
+      label: 'hero-nodes',
+    });
 
-  const strokeGeometry: Geometry = geometry(gpu, {
-    buffers: [{ attributes: { curve: 'float32x4', tip: 'float32x4', look: 'float32x4' }, data: strokeData, stepMode: 'instance' }],
-    vertexCount: (STROKE_SEGMENTS + 1) * 2,
-    topology: 'triangle-strip',
-    label: 'hero-strokes',
-  });
+    const view = () => ({ resolution: size, ratio, time: 0 });
 
-  const nodeGeometry: Geometry = geometry(gpu, {
-    buffers: [{ attributes: { point: 'float32x4', look: 'float32x4' }, data: nodeData, stepMode: 'instance' }],
-    vertexCount: 6,
-    label: 'hero-nodes',
-  });
+    const strokes: Draw = draw(gpu, {
+      shader: strokesSource,
+      geometry: strokeGeometry,
+      blend: 'premultiplied',
+      label: 'hero-strokes',
+      set: { view: view(), palette: paletteUniform(initialPalette) },
+    });
 
-  const view = () => ({ resolution: size, ratio, time: 0 });
+    const nodes: Draw = draw(gpu, {
+      shader: nodesSource,
+      geometry: nodeGeometry,
+      blend: 'premultiplied',
+      label: 'hero-nodes',
+      set: { view: view(), palette: paletteUniform(initialPalette) },
+    });
 
-  const strokes: Draw = draw(gpu, {
-    shader: strokesSource,
-    geometry: strokeGeometry,
-    blend: 'premultiplied',
-    label: 'hero-strokes',
-    set: { view: view(), palette: paletteUniform(initialPalette) },
-  });
+    const bright: Effect = effect(gpu, brightSource, { label: 'hero-bright', set: { scene, samp: linear } });
 
-  const nodes: Draw = draw(gpu, {
-    shader: nodesSource,
-    geometry: nodeGeometry,
-    blend: 'premultiplied',
-    label: 'hero-nodes',
-    set: { view: view(), palette: paletteUniform(initialPalette) },
-  });
+    const blurH: Effect = effect(gpu, blurSource, {
+      label: 'hero-blur-h',
+      set: { source: bloomA, samp: linear, blur: { direction: [1, 0], texel: bloomA.texelSize } },
+    });
 
-  const bright: Effect = effect(gpu, brightSource, { label: 'hero-bright', set: { scene, samp: linear } });
+    const blurV: Effect = effect(gpu, blurSource, {
+      label: 'hero-blur-v',
+      set: { source: bloomB, samp: linear, blur: { direction: [0, 1], texel: bloomB.texelSize } },
+    });
 
-  const blurH: Effect = effect(gpu, blurSource, {
-    label: 'hero-blur-h',
-    set: { source: bloomA, samp: linear, blur: { direction: [1, 0], texel: bloomA.texelSize } },
-  });
+    const composite: Effect = effect(gpu, compositeSource, {
+      label: 'hero-composite',
+      set: { scene, bloom: bloomA, samp: linear, composite: { strength: BLOOM_STRENGTH[initialPalette.mode], pad0: 0, pad1: 0, pad2: 0 } },
+    });
 
-  const blurV: Effect = effect(gpu, blurSource, {
-    label: 'hero-blur-v',
-    set: { source: bloomB, samp: linear, blur: { direction: [0, 1], texel: bloomB.texelSize } },
-  });
+    // A surface is only a target inside a frame; its signature pre-warms the
+    // composite pipeline the same way.
+    await Promise.all([
+      strokes.compile(scene), nodes.compile(scene), bright.compile(bloomA),
+      blurH.compile(bloomB), blurV.compile(bloomA), composite.compile({ colors: [canvasSurface.format] }),
+    ]);
 
-  const composite: Effect = effect(gpu, compositeSource, {
-    label: 'hero-composite',
-    set: { scene, bloom: bloomA, samp: linear, composite: { strength: BLOOM_STRENGTH[initialPalette.mode], pad0: 0, pad1: 0, pad2: 0 } },
-  });
+    let disposed = false;
 
-  // A surface is only a target inside a frame; its signature pre-warms the
-  // composite pipeline the same way.
-  await Promise.all([
-    strokes.compile(scene), nodes.compile(scene), bright.compile(bloomA),
-    blurH.compile(bloomB), blurV.compile(bloomA), composite.compile({ colors: [canvasSurface.format] }),
-  ]);
+    /** The fault the renderer died of, until `onFault` hands it to the mount. */
+    let fault: Error | null = null;
 
-  let disposed = false;
+    let faultHandler: ((error: Error) => void) | null = null;
 
-  return {
-    kind: 'renderer',
-    renderer: {
+    const renderer: SearchTreeRenderer = {
       kind: 'webgpu',
       resize(nextWidth, nextHeight, nextRatio) {
         if (disposed) return;
@@ -190,6 +189,11 @@ export async function createWebGpuRenderer(
           pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
         });
       },
+      onFault(handler) {
+        faultHandler = handler;
+
+        if (fault !== null) handler(fault);
+      },
       dispose() {
         if (disposed) return;
         disposed = true;
@@ -199,6 +203,33 @@ export async function createWebGpuRenderer(
         canvasSurface.dispose();
         gpu.dispose();
       },
-    },
-  };
+    };
+
+    // Registered once the renderer exists: a fault before this point is a
+    // start failure the catch below already owns; after it, the renderer
+    // stops itself and hands the mount its swap. A listener may not throw —
+    // nothing out there catches it.
+    const stopListening = gpu.onError((error) => {
+      if (disposed) return;
+      fault = error;
+      renderer.dispose();
+      faultHandler?.(error);
+    });
+
+    return { kind: 'renderer', renderer };
+  } catch (cause) {
+    if (cause instanceof VGPUError && cause.code === 'VGPU-RING1-UNSUPPORTED') {
+      return { kind: 'unsupported', reason: cause.message };
+    }
+
+    let reason = `the hero could not start WebGPU: ${renderThrownChain({ cause })}`;
+
+    try {
+      attempted?.dispose();
+    } catch (disposal) {
+      reason = `${reason}; releasing it failed too: ${renderThrownChain({ cause: disposal })}`;
+    }
+
+    return { kind: 'failed', reason };
+  }
 }
