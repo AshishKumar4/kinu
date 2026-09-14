@@ -106,7 +106,10 @@ function slateVendorBundle(): SlateVendor {
   return vendor;
 }
 
-const SLATE_VENDOR_ID = 'virtual:kinu-slate-vendor';
+/** The id `vite.config.ts`'s plugin answers with generated data — a module
+ *  with no imports of its own, which is how a graph walk outside Vite must
+ *  read it too. */
+export const SLATE_VENDOR_ID = 'virtual:kinu-slate-vendor';
 
 const RESOLVED_ID = '\0virtual:kinu-slate-vendor';
 
