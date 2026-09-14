@@ -409,6 +409,38 @@ noise-scale between two redrived cells, not a fix claim; what the change
 removes is two of three attempts. s3fs's marker/placeholder/flush three-put
 shape is retired for writes and stays for reads.
 
+D16. The post-fix settlement run is refused at cold attach
+(2026-09-14). Run `20260914220919` on clean `e060e360f` reproduced D5's
+shape on the current tree — one `snapshot-chain` arm, `--decisive`,
+`--fault-cuts`, seed 20260824, loop budget 8,000 ms, two repetitions —
+with D14's alarm fix and D15's one-attempt publish in place. The fixture
+Worker deployed at version `1d6af079-a325-4a23-a1c5-b60e56e1a0c8`; the
+cold attach then held `restoration:unstarted` through nine readiness
+drives and was refused at its 54,540 ms ceiling (8 incidents, 0
+undelivered, `startupMs` 4,010). No cell ran; `admission.admitted` is
+false. The run's recorded verdicts, without combining observations from
+other runs:
+
+| Gate | Verdict | Deciding evidence |
+| --- | --- | --- |
+| G3 Publication safety | Refused | No completed fault-cut evidence: the interruption at the publication cut never ran to completion; observers did not confirm all-old-or-all-new state across the cut; barrier-ack loss across the cut was never counted; post-publication references were never swept for absent objects; rollback and phantom-root behaviour was never checked |
+| G6 Complete cells | Refused | Cell T0/C0/K0 (blank) did not complete; arm `snapshot-chain` recorded no required live C3 observation; cold attach reported kind "none" and was never timed; second attach did not observe the unchanged generation; wake did not attach durable bytes; 0 of 6 ladder checkpoints |
+| G9 Statistical validity | Refused | Deciding cell T0/C0/K0 censored: fewer than two repetitions; all 40 decisive segments incomplete with no unique priced observation; `small-stat-1k` measured 0 of 2 requested times |
+
+All seven teardown entries completed with zero objects and zero
+multipart uploads remaining; Worker, container application, bucket and
+generated configuration are absent. Raw driver output:
+`kinu-logs/devbox-settle/run-20260914220918.log`; artifact
+`bench-artifacts/devbox-strategies-20260914220919.json`; per-arm
+observations `bench-artifacts/20260914220919/snapshot-chain.json`;
+receipt `bench-artifacts/teardown/20260914220919.json`. The D14
+redrive evidence (`b20260914073654`, ten cycles, zero refusals) and the
+D15 one-attempt cell (`b20260914082622`) measured the fixes on their own
+cells; this settlement shows the same `running:true,
+restoration:unstarted` reading still ends a full run. Whether the
+54,540 ms refusal is the D14 alarm shape recurring under settlement
+timing or a new admission failure is unmeasured. O1 stays open.
+
 
 ## Measurement contract for a strategy comparison
 
@@ -425,11 +457,13 @@ registration is complete in `fed2b9d779` and both witnesses passed on
 deployed Containers and R2. The two measured blockers are now closed: D14's
 alarm-starvation fix ran ten `--lifecycle` cycles with zero refusals
 (`b20260914073654`) and D15's egress publish is one object attempt live
-(`b20260914082622`, `puts: 1`, correctness passed). What remains red is the
-D5 settlement itself: G3's publication-safety probe, G6's complete-cell
-figures and G9's statistical-validity counts were never re-run under the
-fixed strategy, so the gate ladder has no post-fix settlement. O1 closes
-when a settlement run on this tree re-scores G3, G6 and G9, not before.
+(`b20260914082622`, `puts: 1`, correctness passed). The post-fix
+settlement ran on 2026-09-14 (D16, run `20260914220919`, clean
+`e060e360f`): the cold attach was refused at its 54,540 ms ceiling with
+`restoration:unstarted`, no cell ran, and G3, G6 and G9 all scored
+Refused for missing measurements. O1 therefore remains open: the gate
+ladder still has no admitted post-fix settlement, and the cold-attach
+refusal under settlement timing is now the measured blocker.
 Earlier controls follow.
 
 The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
