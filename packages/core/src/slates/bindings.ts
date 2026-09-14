@@ -75,6 +75,8 @@ export type SlateBindingRoute =
   | { readonly kind: 'tool'; readonly name: string; readonly input: JsonObject }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject }
+  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue }
+  | { readonly kind: 'ai'; readonly prompt: string; readonly system?: string; readonly tier?: string }
   | {
     readonly kind: 'app';
     readonly id: string;
@@ -126,7 +128,79 @@ export function routeSlateBindingCall(input: {
         throw new KinuError('denied', `${name} does not offer ${binding.namespace}.${member}`);
       }
 
+      // A `paths`-scoped workspace binding narrows to the file members, and
+      // every call's first argument must resolve inside one declared prefix.
+      if (binding.paths !== undefined) {
+        const prefixes = binding.paths;
+        const FILE_MEMBERS = ['readFile', 'writeFile', 'editFile', 'readdir', 'exists'];
+
+        if (!FILE_MEMBERS.includes(member)) {
+          throw new KinuError('denied', 'a path-scoped workspace binding offers only file members');
+        }
+
+        const target = v.safeParse(v.string(), args[0]);
+
+        if (!target.success || !target.output.startsWith('/') || target.output.split('/').includes('..')
+          || !prefixes.some((prefix) => target.output === prefix || target.output.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
+          throw new KinuError('denied',
+            `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`);
+        }
+      }
+
       return { kind: 'namespace', namespace: binding.namespace, member, args };
+    case 'agent': {
+      const payload = args[0];
+
+      if (member !== 'send') throw new KinuError('denied', `${name} offers send({ text, data? }) for the calling agent's inbox`);
+
+      if (args.length !== 1 || !isJsonObject(payload)) throw new KinuError('bad_input', `${name}.send takes one { text, data? } object`);
+
+      const parsed = v.safeParse(v.strictObject({ text: v.pipe(v.string(), v.minLength(1)), data: v.optional(JsonValueSchema) }), payload);
+
+      if (!parsed.success) throw new KinuError('bad_input', `${name}.send takes one { text, data? } object`);
+
+      const data = parsed.output.data;
+
+      return data === undefined
+        ? { kind: 'agent', slate: id, text: parsed.output.text }
+        : { kind: 'agent', slate: id, text: parsed.output.text, data };
+    }
+
+    case 'ai': {
+      const payload = args[0];
+
+      if (member !== 'run') throw new KinuError('denied', `${name} offers run({ prompt, system?, tier? }) for one model call`);
+
+      if (args.length !== 1 || !isJsonObject(payload)) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
+
+      const parsed = v.safeParse(v.strictObject({
+        prompt: v.pipe(v.string(), v.minLength(1)),
+        system: v.optional(v.string()),
+        tier: v.optional(v.string()),
+      }), payload);
+
+      if (!parsed.success) throw new KinuError('bad_input', `${name}.run takes one { prompt, system?, tier? } object`);
+
+      // The binding's declared tier is the default a call can override only
+      // when the binding declares none; a declared tier the call tries to
+      // change is refused rather than silently kept.
+      if (binding.tier !== undefined && parsed.output.tier !== undefined && parsed.output.tier !== binding.tier) {
+        throw new KinuError('bad_input', `${name} pins tier ${binding.tier}; the call's tier cannot change it`);
+      }
+
+      const tier = binding.tier ?? parsed.output.tier;
+      const prompt = parsed.output.prompt;
+      const system = parsed.output.system;
+
+      if (system !== undefined && tier !== undefined) return { kind: 'ai', prompt, system, tier };
+
+      if (system !== undefined) return { kind: 'ai', prompt, system };
+
+      if (tier !== undefined) return { kind: 'ai', prompt, tier };
+
+      return { kind: 'ai', prompt };
+    }
+
     case 'rpc': {
       const method = binding.methods.find((declared) => declared === member);
 

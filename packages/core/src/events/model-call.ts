@@ -55,6 +55,7 @@ export const SPEND_SOURCES = [
   'swarm',
   'platform',
   'advisor',
+  'slate',
 ] as const;
 
 export type SpendSource = (typeof SPEND_SOURCES)[number];
@@ -73,6 +74,7 @@ export const SPEND_SOURCE_LABEL = {
   swarm: 'Swarm expansions',
   platform: 'Platform AI',
   advisor: 'Advisor',
+  slate: 'Slates',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 /** One sentence per producer saying what actually fires it — the difference
@@ -93,6 +95,7 @@ export const SPEND_SOURCE_DETAIL = {
     + 'repair. Neither returns a usage field of any kind, so these are counted '
     + 'and never measured — which is what the coverage fraction below is made of',
   advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
+  slate: 'an authored slate\'s `ai` binding: one call per `run`, at the tier the binding or the call named',
 } as const satisfies Readonly<Record<SpendSource, string>>;
 
 
