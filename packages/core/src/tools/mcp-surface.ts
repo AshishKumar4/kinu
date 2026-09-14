@@ -20,9 +20,13 @@
  */
 
 import * as v from 'valibot';
+import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import { estimateTokens } from '../llm';
 import { stepContextLimit } from '../prompting/step-prune';
-import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { permitInPlan } from '../execution/work-mode';
+import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
+import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey } from './mcp-naming';
 
 /** What an MCP tool looks like once it has crossed the RPC seam. Mirrors the
@@ -368,3 +372,61 @@ function clampProse(text: string | undefined, tokens: number): string | undefine
 
   return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}…`;
 }
+
+/**
+ * The admitted MCP catalog as a callable surface — the part BOTH backends
+ * built by hand before, which is how the replay claim ended up on neither.
+ * `call` is the one backend-owned piece: cf's closure RPCs into the owning
+ * UserDO and turns a protocol failure into `McpToolError`; the CLI's reaches
+ * its stdio client. Everything around it is policy this module owns:
+ *
+ *   readOnly: true on the descriptor (the server's `readOnlyHint` annotation)
+ *   is the only admission a remote tool gets — `permitInPlan` for the plan
+ *   mode and, through `withEffectClaims`' `safe` set, exemption from the
+ *   claim. An absent annotation is CLAIMED, never presumed read-only.
+ *
+ *   The clamp rides INSIDE the claim, so the result a replay returns is the
+ *   value the first attempt actually published — a stored raw output would
+ *   hand a replay bytes the budget had already refused to spend.
+ */
+export interface McpToolBuild {
+  /** Dispatch one call to the server, under the descriptor's own identity. */
+  readonly call: (
+    descriptor: SerializableToolDescriptor,
+    args: JsonObject,
+    options: ToolExecutionOptions,
+  ) => Promise<JsonValue>;
+  /** The same deps the turn's native tools claim under. */
+  readonly effectClaims: EffectClaimDeps;
+  /** The per-result clamp the builtins already run under. */
+  readonly clamp: ClampToolResultOptions;
+}
+
+export function buildMcpToolSet(
+  descriptors: readonly SerializableToolDescriptor[],
+  build: McpToolBuild,
+): ToolSet {
+  const tools: ToolSet = {};
+  const readOnly = new Set<string>();
+
+  for (const d of descriptors) {
+    const entry = tool({
+      description: d.description ?? `${d.serverName}/${d.name}`,
+      inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
+      execute: async (args, options) => build.call(d, args, options),
+    });
+
+    if (d.readOnly === true) readOnly.add(d.toolKey);
+    tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
+  }
+
+  // An MCP server is a bulk producer like any other. Same result clamp and
+  // spill path as built-in tools, then the claim outermost — the order the
+  // native surface composes them in (`buildActorTools`).
+  return withEffectClaims(
+    withClampedToolResults(tools, build.clamp),
+    build.effectClaims,
+    { safe: readOnly },
+  );
+}
+

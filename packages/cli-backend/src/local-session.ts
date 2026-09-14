@@ -15,7 +15,7 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  generateText, stepCountIs, tool, jsonSchema,
+  generateText, stepCountIs,
   type LanguageModel, type ModelMessage, type ToolSet,
 } from 'ai';
 import type { Database } from 'bun:sqlite';
@@ -88,7 +88,7 @@ import { TierIdSchema,
   shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnParts, type OwedEffect,
-  buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
+  buildActorTools, buildMcpToolSet, buildSystemPromptSync, currentDateForPrompt,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
   turnProvenanceForMetadata, workModeForTurnMetadata,
@@ -174,7 +174,7 @@ import { TierIdSchema,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID,
   recordModelOperations, type ModelOperationSink,
-  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, permitInPlan, runWorkModeInvocation, type ToolOutcome,
+  stepContextLimit, admitMcpDescriptors, toolSurfaceTokens, toolsInWorkMode, runWorkModeInvocation, type ToolOutcome,
   createActorHost, defaultLoopOrigin, createDbCodemodeProvider,
   type ActorHost, type AgentRuntime, type HostedActor, type SqlExec, type ProfileAuthorityInputs,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
@@ -1807,22 +1807,23 @@ export class LocalAgentSession implements BackendHost {
       nativeToolTokens: toolSurfaceTokens(this.tools),
     });
 
-    const tools: ToolSet = {};
-
-    for (const d of admission.admitted) {
-      const entry = tool({
-        description: d.description ?? `${d.serverName}/${d.name}`,
-        inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
-        execute: async (args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
-      });
-
-      tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
-    }
-
-    // MCP servers are bulk producers like any other tool — same clamp, same
-    // spill path, same turn budget as the builtins.
-    this.extraTools = withClampedToolResults(tools, {
-      vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context, producer: 'external_tool',
+    // ONE builder, both backends: the admitted descriptors arrive already
+    // claimed — every tool without a readOnly annotation goes behind the same
+    // durable claim the natives run under, keyed by the same turn deps this
+    // session's toolsets claim with. KINU-019: adapters merged unwrapped let
+    // an MCP effect start unclaimed and replay after a reset.
+    this.extraTools = buildMcpToolSet(admission.admitted, {
+      call: (d, args, options) => conn.call(d.serverName, d.name, args, options.abortSignal),
+      effectClaims: {
+        sql: this.rt.storage.sql,
+        actor: this.rt.actor,
+        turnId: () => currentOperationProfile(this.rt.actor)?.turnId ?? this.currentTurnId ?? WORKSPACE_RUN_ID,
+      },
+      clamp: {
+        vfs: this.rt.storage.vfs,
+        budget: this.actorSession.orchestrator.acc.context,
+        producer: 'external_tool',
+      },
     });
     this.mcpClose = conn.close;
     // A server that never came up is stated in the turn's live context, not
