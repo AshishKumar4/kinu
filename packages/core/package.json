@@ -24,8 +24,8 @@
     "@ai-sdk/openai-compatible": "2.0.54",
     "@ai-sdk/provider-utils": "^4.0.33",
     "@kinu.run/agent-utils": "workspace:*",
-    "@nimbus-sh/core": "0.6.0",
-    "@nimbus-sh/fabric": "0.2.0",
+    "@nimbus-sh/core": "0.8.0",
+    "@nimbus-sh/fabric": "0.4.0",
     "acorn": "^8.17.0",
     "ai": "6.0.214",
     "valibot": "^1.4.1"
