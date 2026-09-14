@@ -932,6 +932,21 @@
     "owner_epoch",
     "state"
   ],
+  "slate_live_share_users@packages/core/src/slates/live-shares.ts": [
+    "share_id",
+    "user_id",
+    "email",
+    "created_at"
+  ],
+  "slate_live_shares@packages/core/src/slates/live-shares.ts": [
+    "id",
+    "slate_id",
+    "visibility",
+    "handle",
+    "grant_json",
+    "created_at",
+    "revoked_at"
+  ],
   "slate_previews@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
@@ -995,6 +1010,17 @@
     "slate_id",
     "parent_id",
     "bytes"
+  ],
+  "slate_viewer_requests@packages/core/src/slates/live-shares.ts": [
+    "id",
+    "share_id",
+    "viewer",
+    "slate_id",
+    "path",
+    "calls",
+    "outcome",
+    "created_at",
+    "settled_at"
   ],
   "slates@packages/core/src/state/workspace-schema.ts": [
     "id",

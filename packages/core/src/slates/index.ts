@@ -17,7 +17,7 @@ export { SlateFiles, slateDirectory } from './files';
 
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
 
-export { initSlateStateTable, SLATE_STORAGE_BINDING, SqliteSlateStateStore, routeSlateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
+export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteSlateStateStore, routeSlateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
 
@@ -32,3 +32,7 @@ export { SlateShareStore, initSlateShareTables, type NewSlateShare, type ShareUs
 export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReading } from './blueprints';
 
 export type { DurableAppIdentity, DurableApps } from './durable-app';
+
+export { SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
+
+export { WorkspaceLiveShares, type WorkspaceLiveSharesDeps } from './live-sharing';
