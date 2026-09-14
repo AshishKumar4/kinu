@@ -123,7 +123,7 @@ Methods whose names start with \`_\`, the constructor, \`fetch\`, and anything s
 State lives in two places:
 
 - \`this.storage\` is a key-value store: \`get(key)\`, \`put(key, value)\`, \`delete(key)\`, \`list({ prefix?, limit? })\` returns \`[key, value]\` pairs sorted by key. It lives in the workspace's own database, so it persists today across code edits, restarts and eviction. Use it for anything the user expects to keep.
-- \`this.sql\` is the slate's own SQLite, the Durable Object \`SqlStorage\` API: \`this.sql.exec("SELECT ...", ...params).toArray()\`. Today it persists only for the life of the running process; it persists across restarts once Nimbus retains the facet. Use it for tables, joins and caches, and rebuild them from \`this.storage\` on start if the user must not lose them.
+- \`this.sql\` is the slate's own SQLite, the Durable Object \`SqlStorage\` API: \`this.sql.exec("SELECT ...", ...params).toArray()\`. It persists across code edits, restarts and eviction: the slate is a durable Nimbus application and keeps its facet until you remove the slate. Use it for tables, joins and caches.
 
 Memory on the class (\`this.count = 0\`) is a cache, nothing more.
 
@@ -205,7 +205,8 @@ Seed the options with \`workspace.slate({ op: "call", id, method: "seed", args: 
 
 ## Working with a slate
 
-- \`workspace.slate({ op: "preview", id })\` compiles and boots it and returns the URL; the chat and the work surface load the same URL. Compile errors come back as \`bad_input\` with the file and line: fix and preview again. Edits reload the running slate; \`this.storage\` keeps its data across the reload.
+- \`workspace.slate({ op: "preview", id })\` compiles and boots it and returns the URL; the chat and the work surface load the same URL. The URL is durable: it is the same on every launch and keeps working after eviction. Compile errors come back as \`bad_input\` with the file and line: fix and preview again. Edits reload the running slate; \`this.storage\` and \`this.sql\` keep their data across the reload.
+- \`workspace.slate({ op: "remove", id })\` ends a slate: its process, its URL, its \`this.sql\` and its files. Committed versions stay.
 - \`workspace.slate({ op: "call", id, method, args })\` calls a method yourself, the way the client does.
 - \`commit\` freezes the source as a version, \`fork\` copies one, \`restore\` puts a version's source back.
 - Make the UI usable on a phone: one column, large touch targets. Never \`alert()\` or \`confirm()\`; the sandbox blocks them.
