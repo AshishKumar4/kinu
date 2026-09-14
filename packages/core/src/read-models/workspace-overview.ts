@@ -164,3 +164,24 @@ export function workspaceOverviewEvidence(overview: WorkspaceOverview): readonly
 
   return facts.length === 0 ? [{ key: 'empty', text: 'No runs yet', tone: 'quiet' }] : facts;
 }
+
+/** What the workspaces a shell watches add up to: whether any turn is live,
+ *  and how many decisions wait on the owner across them. The shell's living
+ *  background reads this and nothing else — a workspace's own card still
+ *  speaks for itself. */
+export interface RosterActivity {
+  readonly working: boolean;
+  readonly decisions: number;
+}
+
+export function rosterActivity(overviews: readonly WorkspaceOverview[]): RosterActivity {
+  let working = false;
+  let decisions = 0;
+
+  for (const overview of overviews) {
+    if (overview.activity === 'working') working = true;
+    decisions += overview.decisionsWaiting;
+  }
+
+  return { working, decisions };
+}
