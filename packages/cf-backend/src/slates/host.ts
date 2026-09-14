@@ -4,10 +4,10 @@ import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory,
+  SlateFiles, SqliteSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceSlates, slateDirectory,
 } from '@kinu.run/core/slates';
 import {
-  parseSlateProject,
+  parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING,
   SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateProject,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
@@ -41,6 +41,7 @@ export class SlateHost {
   private readonly content: SqliteSlateContentStore;
   private readonly resident: ResidentSlateProcesses;
   private readonly store: SqliteSlateStore;
+  private readonly state: SqliteSlateStateStore;
   private readonly sourceRuntimes = new Map<string, WorkspaceSlates>();
   private readonly running = new Map<string, RunningSlate>();
   private readonly starting = new Map<string, Promise<ResidentSlateProcess>>();
@@ -52,6 +53,7 @@ export class SlateHost {
     this.content = new SqliteSlateContentStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.resident = new ResidentSlateProcesses({ ...deps, content: this.content });
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
+    this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
   }
 
   private async project(cred: VfsCred, id: string): Promise<SlateProject> {
@@ -218,6 +220,29 @@ export class SlateHost {
 
       if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
       const chain = resolveSlateChain({ invocations: this.invocations, id, invocation: parsed.output.invocation });
+
+      // The reserved binding is the slate's own durable KV on this object —
+      // answered here rather than dispatched: it carries no actor capability.
+      if (name === SLATE_STORAGE_BINDING) {
+        const operation = routeSlateStorageCall(parsed.output);
+
+        if (operation.op === 'put' || operation.op === 'delete') {
+          requireWorkModePermission(caller.workMode, false, 'slate storage write');
+        }
+
+        switch (operation.op) {
+          case 'get': return { ok: true, value: this.state.get(id, operation.key) };
+          case 'put': {
+            this.state.put(id, operation.key, operation.value);
+
+            return { ok: true, value: null };
+          }
+
+          case 'delete': return { ok: true, value: this.state.delete(id, operation.key) };
+          case 'list': return { ok: true, value: this.state.list(id, { prefix: operation.prefix, limit: operation.limit }) };
+        }
+      }
+
       const project = await this.project(caller.cred, id);
 
       return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain }));

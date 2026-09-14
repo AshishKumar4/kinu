@@ -52,3 +52,20 @@ test('tool bindings accept native JSON input and projection bindings retain code
   expect(call('TASKS', 'list')).toMatchObject({ kind: 'codemode', namespace: 'tasks', member: 'list' });
   expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { AGENT: { kind: 'agent' } } } })).toThrow('slate.bindings.AGENT.kind');
 });
+
+test('the class contract is what a missing main names, and inline height is bounded', () => {
+  expect(() => parseSlateProject({ name: 'notes' })).toThrow('class Slate extends SlateObject');
+  expect(parseSlateProject({ main: 'server.ts' }).slate.inline).toEqual({ height: 320 });
+  expect(parseSlateProject({ main: 'server.ts', slate: { inline: { height: 480 } } }).slate.inline).toEqual({ height: 480 });
+
+  for (const height of [719.5, 800, 100]) {
+    expect(() => parseSlateProject({ main: 'server.ts', slate: { inline: { height } } })).toThrow('slate.inline.height');
+  }
+});
+
+test('a single-file slate names its browser module as its main module', () => {
+  const project = parseSlateProject({ main: 'slate.tsx', browser: 'slate.tsx' });
+
+  expect(project.main).toBe('slate.tsx');
+  expect(project.browser).toBe('slate.tsx');
+});

@@ -313,6 +313,8 @@ export {
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 
+export { initSlateStateTable, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
+
 // Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
 export {
   assertReleaseTransition,
