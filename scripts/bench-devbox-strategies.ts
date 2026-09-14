@@ -46,8 +46,8 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
-  WRANGLER_FAILED, armSignalTeardown, containerAppIds, delay, deleteContainerApps,
-  describeThrown, publishTeardown, runTeardownOnce, runWrangler,
+  WRANGLER_FAILED, armSignalTeardown, awaitApplicationRollout, containerAppIds, delay, deleteContainerApps,
+  describeThrown, publishTeardown, runTeardownOnce, runWrangler, type ApplicationRollout,
 } from './fixtures/r2-bench/deploy-substrate';
 import * as v from 'valibot';
 import {
@@ -1468,15 +1468,30 @@ function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
   ];
 }
 
+export interface DeployedFixture {
+  readonly fixture: Fixture;
+  readonly workerVersion: string;
+  /** The container application's rollout, waited out here so no cold attach
+   *  contains it. One application per arm (`ArmFixture.containerApps`). */
+  readonly rollouts: readonly ApplicationRollout[];
+  readonly stop: () => readonly string[];
+}
+
+/** Deploy one arm and hold it until the Worker accepts this run's token AND
+ *  its container application has a provisioned instance. The second wait is
+ *  the rollout `wrangler deploy` returns before; see `awaitApplicationRollout`
+ *  for the measurement that put it here. */
 export async function deployFixture(
   token: string,
   fixture: ArmFixture,
   faultCuts = false,
-): Promise<{ fixture: Fixture; workerVersion: string; stop: () => readonly string[] }> {
+): Promise<DeployedFixture> {
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
     '--var', `BENCH_PUBLICATION_CUT:${faultCuts ? '1' : '0'}`,
   ]);
+
+  const deployedAt = Date.now();
 
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
 
@@ -1529,9 +1544,16 @@ export async function deployFixture(
     await delay(3_000);
   }
 
+  const rollouts: ApplicationRollout[] = [];
+
+  for (const application of fixture.containerApps) {
+    rollouts.push(await awaitApplicationRollout({ repoRoot: REPO_ROOT, application, log, since: deployedAt }));
+  }
+
   return {
     fixture: { origin, token },
     workerVersion,
+    rollouts,
     stop: () => deleteFixtureResources(fixture),
   };
 }
@@ -7061,6 +7083,9 @@ export interface RunIdentity {
   readonly image: string;
   /** OCI manifest digest for the exact sandbox image the generated config pins. */
   readonly imageSha256: string;
+  /** Each deployed arm's container application rollout, waited out before
+   *  its first cold attach, so no startup figure below contains it. */
+  readonly rollouts: readonly ApplicationRollout[];
 }
 
 /** Commit plus the digest that distinguishes its dirty source tree. */
@@ -7637,6 +7662,7 @@ interface ArmLaneState {
   stop: (() => readonly string[]) | null;
   workerStopped: boolean;
   workerVersion: string;
+  rollouts: readonly ApplicationRollout[];
   /** Why this arm never reached its measured pipeline, if it did not. */
   refusal: string | null;
 }
@@ -8021,6 +8047,7 @@ async function main(): Promise<number> {
     stop: null,
     workerStopped: false,
     workerVersion: '',
+    rollouts: [],
     refusal: null,
   }));
 
@@ -8176,6 +8203,7 @@ async function main(): Promise<number> {
           lane.stop = started.stop;
           lane.live = { ...started.fixture, identity: { ...revision, workerVersion: started.workerVersion, image: SANDBOX_IMAGE } };
           lane.workerVersion = started.workerVersion;
+          lane.rollouts = started.rollouts;
         } catch (error) {
           lane.refusal = `deploy failed: ${describeThrown({ cause: error })}`;
           log(lane.refusal);
@@ -8303,6 +8331,7 @@ async function main(): Promise<number> {
     finishedAt: new Date().toISOString(),
     image: SANDBOX_IMAGE,
     ...fixtures.digests,
+    rollouts: lanes.flatMap((lane) => lane.rollouts),
   };
 
   const admission = devboxAdmission({
