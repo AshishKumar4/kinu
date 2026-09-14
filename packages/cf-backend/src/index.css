@@ -87,8 +87,8 @@
    warm-brown hairlines (#262019) instead of alpha glows, one gold accent
    (#E0A458) rationed to intent, silk (#E3D2AE) as the bright end of the
    same thread, and three self-hosted faces — Schibsted Grotesk for
-   everything that reads, Newsreader for the two moments where the product
-   speaks in its own voice, Fragment Mono for labels and commands.
+   everything that reads, Newsreader for the brand mark alone, Fragment
+   Mono for labels and commands.
 
    Rules the tokens encode:
    · Hairlines are SOLID colours from the ground's own family. The mock
@@ -116,9 +116,9 @@
 
 /* Three webfonts, latin subsets, self-hosted from public/assets — no font
    CDN at runtime. Schibsted Grotesk is the variable [wght 400-900] cut:
-   one file carries every UI weight. Newsreader is the app's serif voice,
-   variable [wght 400-700] at a fixed optical size — it appears at exactly
-   two sizes (the brand mark, the new-workspace headline), so the opsz axis
+   one file carries every UI weight. Newsreader is the brand mark: the
+   KinuLogo lockup is its only consumer, a variable [wght 400-700] cut at a
+   fixed optical size — it appears at exactly one size, so the opsz axis
    bought nothing and cost 74 KB. Fallback stacks stay intact, so an
    unloaded font degrades to the face this product shipped before. Each
    licence travels with the files because OFL requires it. */
@@ -160,9 +160,9 @@ html, body, #root {
      hierarchy with weight, not typeface swaps. They stay two tokens because
      the roles can diverge later without touching call sites.
 
-     `--font-serif` is Newsreader, rationed to the two moments where the
-     product speaks in first person: the brand mark and the new-workspace
-     headline. The signed-out shell declares the same stacks and
+     `--font-serif` is Newsreader, and the brand mark is its only reader:
+     `KinuLogo.tsx` is the one `font-serif` call site. The signed-out
+     shell declares the same display and mono stacks and
      `unit-public-shell` asserts the two are identical, because the two
      surfaces are one product.
 
@@ -509,9 +509,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-t-status   { font-family: var(--font-ui); font-size: 0.75rem; line-height: 1.5; font-weight: 500; } /* status labels — 12/18, sans */
 .p-t-code     { font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.5714; } /* code — 14/22 Fragment Mono */
 
-/* A page title, and nothing smaller. The display face at UI sizes is a serif
-   pretending to be an interface; at 24px and up it is the product's voice, and
-   it is the same voice the signed-out pages speak in. */
+/* A page title, and nothing smaller. The display face at UI sizes is a
+   heading pretending to be an interface; at 24px and up it is the product's
+   voice, and it is the same voice the signed-out pages speak in. */
 .p-display  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.02em; }
 /* Mono, because a label is a name for the thing beside it and should not
    compete with it for the same font. Letter-spacing is lower than a
@@ -526,8 +526,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-title    { font-size: 0.9375rem; line-height: 22px; font-weight: 600; letter-spacing: -0.01em; } /* panel heading — 15/22 */
 /* A panel heading — the display face at UI weight. `.p-display` is rationed
    to page titles at 24px+; this is the same voice for the headings inside a
-   working surface (workspace name, section heads), where 15-17px of the serif
-   reads as the product speaking rather than a dashboard label. */
+   working surface (workspace name, section heads), where 15-17px of the
+   display face reads as the product speaking rather than a dashboard label. */
 .p-heading  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.015em; }
 /* A numeral *treatment*, not a type role — size comes from the role next to
    it. (These classes are unlayered and so outrank Tailwind's utilities: a
