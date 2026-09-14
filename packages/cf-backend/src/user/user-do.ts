@@ -468,6 +468,17 @@ export interface WorkspaceEntry {
   archivedAt: number | null;
 }
 
+/** One `user_shares_received` row: who shared which blueprint, and the title
+ *  cached at the time. `createdAt` is absent on the write side. */
+export interface SharedBlueprintReceipt {
+  ownerUserId: string;
+  ownerEmail: string;
+  workspace: string;
+  shareId: string;
+  title: string;
+  createdAt?: number;
+}
+
 /** One bounded page of the workspace roster. `total` is the whole active
  *  roster; `nextCursor` walks to the following page and is null past the end,
  *  so the roster's tail is reachable instead of silently dropped. */
@@ -4756,6 +4767,38 @@ export class UserDO extends Agent<Env> {
     );
 
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
+  }
+
+  // ── Shared library ────────────────────────────────────────────────
+
+  /**
+   * Record that another account named this owner on a blueprint. A projection:
+   * the owner's workspace object is the authority, and every read of the row
+   * asks it again, so a share revoked after this write lists once and refuses.
+   * Idempotent per (owner, workspace, share); the cached title follows the
+   * latest write.
+   */
+  async sharesReceived_add(caller: UserCaller, row: SharedBlueprintReceipt): Promise<void> {
+    await this.requireTier(caller, 'shares');
+    this.sqlx(
+      `INSERT INTO user_shares_received (owner_user_id, owner_email, workspace, share_id, title)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET title = excluded.title, owner_email = excluded.owner_email`,
+      row.ownerUserId, row.ownerEmail, row.workspace, row.shareId, row.title,
+    );
+  }
+
+  /** Every blueprint this owner was named on, newest first. */
+  async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
+    await this.requireTier(caller, 'shares');
+
+    return this.sqlx<{ owner_user_id: string; owner_email: string; workspace: string; share_id: string; title: string; created_at: number }>(
+      `SELECT owner_user_id, owner_email, workspace, share_id, title, created_at
+       FROM user_shares_received ORDER BY created_at DESC, share_id`,
+    ).map((row) => ({
+      ownerUserId: row.owner_user_id, ownerEmail: row.owner_email, workspace: row.workspace,
+      shareId: row.share_id, title: row.title, createdAt: row.created_at,
+    }));
   }
 
   // ── MCP servers ────────────────────────────────────────────────────

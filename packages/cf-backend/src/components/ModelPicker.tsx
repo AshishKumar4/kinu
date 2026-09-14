@@ -47,6 +47,10 @@ export interface ModelPickerProps {
   size?: "xs" | "sm" | "base";
   /** Input placeholder while nothing is selected. */
   placeholder?: string;
+  /** Accessible name for the trigger input — a picker inside a labelled row
+   *  names what it picks ("fast model"), a standalone one defaults to the
+   *  component's own name. */
+  label?: string;
   /** Allow clearing the selection back to '' (= inherit the default). */
   clearable?: boolean;
   className?: string;
@@ -54,7 +58,7 @@ export interface ModelPickerProps {
 
 export function ModelPicker({
   models, failures, value, onChange,
-  size = "base", placeholder = "Select a model…", clearable = false, className,
+  size = "base", placeholder = "Select a model…", label = "Model", clearable = false, className,
 }: ModelPickerProps) {
   const items = useMemo(
     () => groupModelMenu(models, value).map((g) => ({ value: g.provider, items: g.models })),
@@ -84,6 +88,7 @@ export function ModelPicker({
     >
       <Combobox.TriggerInput
         placeholder={placeholder}
+        aria-label={label}
         // Kumo renders the clear button unconditionally and offers no prop to
         // suppress it, so a non-clearable picker ships an X that does nothing
         // (onValueChange(null) is ignored below) and eats 8px of a label that

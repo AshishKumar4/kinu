@@ -144,6 +144,11 @@ import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspa
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/pages/UserMcpPage";
+import SharedPage from "@/pages/SharedPage";
+import BlueprintPage from "@/pages/BlueprintPage";
+import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
+import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
+import type { BlueprintInspection, BlueprintView, SharedLibrary, SlateBindingDeclaration } from "@kinu.run/core";
 import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -4054,6 +4059,65 @@ const PENDING_ACTIONS: PendingAction[] = [
 /** The shell oracle carries one owner decision, as the app mock does. */
 const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "release_approval");
 
+
+/* ── Slate sharing: the four Phase 1 surfaces on one blueprint ─────────── */
+
+const BLUEPRINT_BINDINGS: SlateBindingDeclaration[] = [
+  { name: "GITHUB", kind: "mcp", target: "github", credentialed: true },
+  { name: "FILES", kind: "namespace", target: "workspace", credentialed: true },
+  { name: "NOTES", kind: "memory", target: "recall, remember", credentialed: true },
+  { name: "PEER", kind: "app", target: "digest", credentialed: false },
+];
+
+const BLUEPRINT_ID = "checkout-fixes~k7Qm2pV9xRt3aB4c~mfrq6zk3p2xw7ha";
+
+const BLUEPRINT_VIEW: BlueprintView = {
+  id: BLUEPRINT_ID,
+  title: "Issue triage",
+  description: "Reads the open issues of a repository, groups them by area, and writes a triage note into workspace memory every morning.",
+  bindings: BLUEPRINT_BINDINGS,
+  credentialed: BLUEPRINT_BINDINGS.filter((binding) => binding.credentialed),
+  entries: [
+    { path: "package.json", kind: "file", included: true },
+    { path: "src", kind: "directory", included: true },
+    { path: "src/server.ts", kind: "file", included: true },
+    { path: "src/triage.ts", kind: "file", included: true },
+    { path: "src/config.ts", kind: "file", included: true },
+    { path: "assets", kind: "directory", included: true },
+    { path: "assets/logo.svg", kind: "file", included: true },
+  ],
+  warnings: [{ path: "src/config.ts", line: 4, pattern: "aws-access-key", message: "AWS access key id" }],
+  createdAt: NOW - 3 * 864e5,
+};
+
+const BLUEPRINT_INSPECTION: BlueprintInspection = {
+  slate: "issue-triage", version: "v2k9q1c7xw4m", title: BLUEPRINT_VIEW.title, description: BLUEPRINT_VIEW.description,
+  entries: [...BLUEPRINT_VIEW.entries, { path: "scratch", kind: "directory", included: false }, { path: "scratch/notes.md", kind: "file", included: false }],
+  bindings: BLUEPRINT_BINDINGS, credentialed: BLUEPRINT_VIEW.credentialed, warnings: BLUEPRINT_VIEW.warnings,
+};
+
+const SHARED_LIBRARY: SharedLibrary = {
+  mine: [
+    { id: BLUEPRINT_ID, title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
+  ],
+  received: [
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, owner: "sam@example.com" },
+  ],
+};
+
+/** The share dialog over the Issue triage slate, at the inspection step. */
+function ShareDialogFrame() {
+  return (
+    <div className="h-screen p-bg p-text">
+      <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workRpc} onClose={() => {}}
+        fixture={{ versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
+          { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+        ] }} />
+    </div>
+  );
+}
+
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
 
@@ -6041,6 +6105,33 @@ async function mount() {
       <Routes>
         <Route path="/control" element={<div className="h-screen p-bg p-text"><ControlPage /></div>} />
       </Routes>
+    );
+  }
+  else if (frame === "shared") {
+    node = (
+      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} /></main>
+      </div>
+    );
+  }
+  // The read-only page a visitor sees: `&viewer=signedout` renders the sign-in
+  // branch of its one action.
+  else if (frame === "blueprint") {
+    const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
+    entries = [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`];
+    node = (
+      <Routes>
+        <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} workspaces={STOCK_ROSTER.entries} />} />
+      </Routes>
+    );
+  }
+  else if (frame === "sharedialog") node = <ShareDialogFrame />;
+  else if (frame === "unmapped") {
+    node = (
+      <div className="h-screen w-[720px] p-sidebar p-text">
+        <UnmappedBindingsPanel slate="issue-triage" title="Issue triage" rpc={workRpc} onOpen={() => {}} fixture={BLUEPRINT_BINDINGS} />
+      </div>
     );
   }
   else if (frame === "home") {

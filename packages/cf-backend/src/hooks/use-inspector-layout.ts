@@ -23,6 +23,7 @@ import {
   type PanelProps,
 } from "react-resizable-panels";
 import { getProfile } from "@/lib/user-api";
+import { useMediaQuery } from "./use-media-query";
 
 const INSPECTOR_DEFAULT_PX = 340;
 
@@ -167,18 +168,7 @@ export function useInspectorLayout(input: {
 }): InspectorLayout {
   const { desktopPanels, mobileDefault, workspace, worthShowing } = input;
 
-  const [widePanels, setWidePanels] = useState(
-    () => globalThis.window === undefined || globalThis.window.matchMedia(INSPECTOR_WIDE_QUERY).matches,
-  );
-
-  useEffect(() => {
-    const media = window.matchMedia(INSPECTOR_WIDE_QUERY);
-    const onChange = () => setWidePanels(media.matches);
-    onChange();
-    media.addEventListener("change", onChange);
-
-    return () => media.removeEventListener("change", onChange);
-  }, []);
+  const widePanels = useMediaQuery(INSPECTOR_WIDE_QUERY);
 
   const [account, setAccount] = useState<string | null>(
     () => localStorage.getItem("kinu.inspector.account"),

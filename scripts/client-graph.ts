@@ -188,7 +188,7 @@ function collapse(base: string): string {
 }
 
 /** A relative-or-aliased base path to a corpus file, or undefined for a stylesheet,
- *  image, font, or data asset — leaves with no runtime edge. A non-asset that
+ *  image, font, shader, or data asset — leaves with no runtime edge. A non-asset that
  *  resolves to nothing is FATAL rather than skipped: a dropped local edge
  *  shrinks the graph in silence, which is exactly how this defect class
  *  survived every gate. */
@@ -196,7 +196,8 @@ function probe(base: string, from: string, specifier: string, universe: Readonly
   const collapsed = collapse(base);
 
   if (collapsed.endsWith('.css') || collapsed.endsWith('.json') || collapsed.endsWith('.svg')
-    || collapsed.endsWith('.png') || collapsed.endsWith('.webp') || collapsed.endsWith('.woff2')) {
+    || collapsed.endsWith('.png') || collapsed.endsWith('.webp') || collapsed.endsWith('.woff2')
+    || collapsed.endsWith('.wgsl')) {
     return undefined;
   }
 

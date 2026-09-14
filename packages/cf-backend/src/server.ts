@@ -53,6 +53,7 @@ import { handleUserRequest } from "./user/routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
+import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
 import { handleHubRequest, handleWebhookDeliveryRequest } from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
 import { handleTerminalRequest } from "./terminal-route";
@@ -559,6 +560,13 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (healthResp) return healthResp;
 
+  // 6a. A blueprint's page data — public by link. The id carries a signature
+  //     checked inside the handler before any object is touched, and the
+  //     owner's object re-reads the share row on every call.
+  const blueprintResp = await handleSharedPublicRequest(request, env);
+
+  if (blueprintResp) return blueprintResp;
+
   // 6b. MCP server — its own auth (CLI bearer token for external MCP
   //     clients, which can never pass the browser-session gate below;
   //     session/dev identity otherwise) + per-agent ownership inside.
@@ -662,6 +670,12 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
 
   if (userResp) return userResp;
+
+  // 9a. /api/shared/* — the shared library: publish, list, fork. Ownership of
+  //     every workspace named in a body is claimed inside.
+  const sharedResp = await handleSharedRequest(authenticatedRequest, env, identity);
+
+  if (sharedResp) return sharedResp;
 
   // 10. Per-agent routes — reject every namespace/facet path outside the
   // closed public actor grammar before ownership lookup or SDK routing.

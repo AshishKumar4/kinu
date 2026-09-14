@@ -8,8 +8,6 @@ import { orchestratorHarness, reactivateOrchestratorHarness, type ActorHarness, 
 
 const GENESIS = { role: 'user', content: 'Read your standing brief and ask what to do first.' } satisfies ModelMessage;
 
-const GENESIS_REPLY = { role: 'assistant', content: 'What should I do first?' } satisfies ModelMessage;
-
 const Envelope = v.pipe(v.string(), v.parseJson(), v.object({ init: v.object({
   body: v.pipe(v.string(), v.parseJson(), v.looseObject({ kinuRequestId: v.optional(v.string()) })),
 }) }));
@@ -45,12 +43,6 @@ function config(messages: ModelMessage[], body: JsonObject = {}, continuation = 
   return { system: 'sys', messages, tools: {}, model: 'harness-model', continuation, body };
 }
 
-function texts(messages: readonly ModelMessage[] = []): string[] {
-  return messages.map((message) => Array.isArray(message.content)
-    ? message.content.filter((part) => part.type === 'text').map((part) => part.text).join('')
-    : message.content);
-}
-
 async function settle(harness: Harness, id: string, text: string): Promise<void> {
   await harness.agent.onChatResponse({
     message: { id, role: 'assistant', parts: [{ type: 'text', text }] },
@@ -61,18 +53,22 @@ async function settle(harness: Harness, id: string, text: string): Promise<void>
 async function opening(): Promise<Harness> {
   const harness = orchestratorHarness();
   harness.db.run(SDK_SESSION_DDL);
-  harness.agent.harnessAdmitChat();
   await harness.agent.beforeTurn(config([GENESIS]));
 
   return harness;
 }
 
 describe('request-owned chat inputs', () => {
-  // Ordering of two socket-queued asks and a programmatic turn's exclusion of a
-  // still-pending chat token are proven end to end through the real socket in
+  // The socket-admission properties the harness once simulated are now proven
+  // end to end over a real socket and the installed Think queue in
   // tests/workerd/two-turn.test.ts: 'admits two websocket asks after held
-  // genesis through the installed Think queue' and 'a durable programmatic
-  // submission excludes a later pending chat from its provider prefix'.
+  // genesis through the installed Think queue' (queued ordering + per-request
+  // binding), 'a durable programmatic submission excludes a later pending chat
+  // from its provider prefix' (a programmatic turn cannot consume pending B),
+  // and 'keeps a queued chat on its durable token through a cold reset and
+  // replay' (durable token identity, continuation never consumes pending, and a
+  // settled token is not replayed). The cases kept here exercise the
+  // synchronous bindChatInput read and the alarm/conversion lifecycle directly.
   test('alarm recovery leaves the live Think root claim with its foreground owner', async () => {
     const harness = await opening();
     const turn = claims(harness).latestTurn();
@@ -115,39 +111,9 @@ describe('request-owned chat inputs', () => {
     await cold.agent._kinuTerminalRetryTick();
     expect(claims(cold).read(turn.turnId)).toMatchObject({ status: 'settled', outcome: 'indeterminate' });
   });
-
-  test.each([
-    ['every-tool', 'List every tool you can call right now, one per line, names only, nothing else.'],
-    ['slate', 'Create the hello slate and start its preview.'],
-    ['codemode-craft', 'Build a digit-sum tool, use it on 4827516390 and reply with the result.'],
-  ])('%s opens after the genesis answer, not before it', async (name, ask) => {
-    const harness = await opening();
-    const input = capturedInput(harness, name, ask);
-    input.persist();
-    await settle(harness, 'genesis-answer', 'What should I do first?');
-    const prepared = await harness.agent.beforeTurn(config([GENESIS, { role: 'user', content: ask }, GENESIS_REPLY], input.body));
-    expect(texts(prepared?.messages)).toEqual([GENESIS.content, GENESIS_REPLY.content, ask]);
-    expect(claims(harness).latestTurn()?.turnId).toBe(name);
-  });
-
-
-  test('interleaved persistence cannot attach an intake to another request', async () => {
-    const harness = await opening();
-    const a = capturedInput(harness, 'ask-a', 'ask A');
-    const b = capturedInput(harness, 'ask-b', 'ask B');
-    // A's asynchronous persistence is held while B finishes and takes a slot.
-    b.persist();
-    await settle(harness, 'genesis-answer', 'What should I do first?');
-    const first = await harness.agent.beforeTurn(config([GENESIS, { role: 'user', content: 'ask B' }, GENESIS_REPLY], b.body));
-    expect(texts(first?.messages).at(-1)).toBe('ask B');
-    a.persist();
-    await settle(harness, 'answer-b', 'answer B');
-    const second = await harness.agent.beforeTurn(config([GENESIS, { role: 'user', content: 'ask A' }, GENESIS_REPLY], a.body));
-    expect(texts(second?.messages)).toEqual([GENESIS.content, GENESIS_REPLY.content, 'ask B', 'answer B', 'ask A']);
-  });
-
   test('input binding reserves each frame before asynchronous persistence interleaves', async () => {
-    const harness = await opening();
+    const harness = orchestratorHarness();
+    harness.db.run(SDK_SESSION_DDL);
     const delayed = Promise.withResolvers<void>();
     const entered = Promise.withResolvers<void>();
     const seen: JsonObject[] = [];
@@ -180,7 +146,8 @@ describe('request-owned chat inputs', () => {
   });
 
   test('full browser history cannot reserve old or already pending inputs again', async () => {
-    const harness = await opening();
+    const harness = orchestratorHarness();
+    harness.db.run(SDK_SESSION_DDL);
     const old = capturedInput(harness, 'old', 'old');
     old.persist();
     const pending = capturedInput(harness, 'pending', 'same text');
@@ -197,20 +164,5 @@ describe('request-owned chat inputs', () => {
     const body = v.parse(Envelope, bound).init.body;
     expect(claims(harness).input(String(body.kinuRequestId))).toEqual(['new']);
     expect(claims(harness).input(String(pending.body.kinuRequestId))).toEqual(['pending']);
-  });
-
-  test('continuation leaves pending inputs alone and stale customBody cannot replay a settled input', async () => {
-    const harness = await opening();
-    const a = capturedInput(harness, 'ask-a', 'ask A');
-    a.persist();
-    await settle(harness, 'genesis-answer', 'What should I do first?');
-    const continuation = await harness.agent.beforeTurn(config([GENESIS, GENESIS_REPLY], a.body, true));
-    expect(texts(continuation?.messages)).toEqual([GENESIS.content, GENESIS_REPLY.content]);
-    expect(claims(harness).input(String(a.body.kinuRequestId))).toEqual(['ask-a']);
-    await settle(harness, 'continuation-answer', 'continued');
-    await harness.agent.beforeTurn(config([GENESIS, { role: 'user', content: 'ask A' }], a.body));
-    await settle(harness, 'answer-a', 'answer A');
-    expect(claims(harness).input(String(a.body.kinuRequestId))).toBeNull();
-    expect(a.body.kinuRequestId).not.toBe('forged');
   });
 });

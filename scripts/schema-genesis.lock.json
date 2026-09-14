@@ -952,6 +952,21 @@
     "parent_id",
     "bytes"
   ],
+  "slate_share_users@packages/core/src/slates/shares.ts": [
+    "share_id",
+    "user_id",
+    "email",
+    "created_at"
+  ],
+  "slate_shares@packages/core/src/slates/shares.ts": [
+    "id",
+    "slate_id",
+    "kind",
+    "publication_id",
+    "included_paths",
+    "created_at",
+    "revoked_at"
+  ],
   "slate_versions@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
@@ -1178,6 +1193,14 @@
   "user_schema_meta@packages/core/src/state/user-schema.ts": [
     "key",
     "value"
+  ],
+  "user_shares_received@packages/core/src/state/user-schema.ts": [
+    "owner_user_id",
+    "owner_email",
+    "workspace",
+    "share_id",
+    "title",
+    "created_at"
   ],
   "user_workspaces@packages/core/src/state/user-schema.ts": [
     "name",

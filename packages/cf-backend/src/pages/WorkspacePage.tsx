@@ -756,6 +756,16 @@ export default function WorkspacePage() {
 
   const visiblePlan = subName === undefined ? state.activePlan : subordinateReview?.plan ?? null;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
+  // `?slate=<id>&unmapped=1` is where a blueprint fork lands: the slate's tab,
+  // on its unmapped-bindings panel. The tab exists only once the listing names
+  // the slate, so the jump waits for it.
+  const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("slate"));
+  const [unmappedSlate, setUnmappedSlate] = useState<string | null>(() => new URLSearchParams(location.search).get("unmapped") === "1" ? new URLSearchParams(location.search).get("slate") : null);
+  useEffect(() => {
+    if (landingSlate === null || !state.slates.some((slate) => slate.id === landingSlate)) return;
+    setSurface(`slate:${landingSlate}`);
+    setLandingSlate(null);
+  }, [landingSlate, state.slates]);
   // Draft, Auto/Plan and reading position belong to THIS conversation — the
   // orchestrator's — and survive tab switches and revisits without leaking
   // into any additional agent's composer.
@@ -1441,6 +1451,9 @@ export default function WorkspacePage() {
             slateReloads={state.slateReloads}
             tabPresence={state.tabPresence}
             rpc={state.rpc}
+            workspace={agentId}
+            unmappedSlate={unmappedSlate}
+            onUnmappedOpened={() => setUnmappedSlate(null)}
           />
         </Panel>
         {inspector.expandVisible && (

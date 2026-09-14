@@ -41,7 +41,7 @@ export default function HomePage() {
       <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
           {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
-          <h1 className="font-serif text-[clamp(38px,4vw,46px)] font-medium leading-[1.12] tracking-[-.015em] p-text">
+          <h1 className="p-display text-[clamp(38px,4vw,46px)] font-semibold leading-[1.12] p-text">
             What do you wanna work on?
           </h1>
         </header>
