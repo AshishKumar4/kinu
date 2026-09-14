@@ -174,6 +174,8 @@ describe('LocalAgentClient', () => {
     await client.connect();
 
     const result = await client.send('hi', { cwd: '/work' });
+
+    if (result.landed !== 'turn') throw new Error('an idle agent runs the message as its own turn');
     expect(result.text, JSON.stringify(events)).toBe('hello there');
     expect(result.hadError).toBe(false);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -267,34 +269,56 @@ describe('LocalAgentClient', () => {
     // sealed the durable run 'error' here and 'aborted' in the cloud — pinned
     // now in cli-backend local-session.test.ts, "a user's Stop seals the run
     // 'aborted'". The turn still ENDS abruptly, and the surface is still told.
-    expect(result.hadError).toBe(false);
+    expect(result).toMatchObject({ landed: 'turn', hadError: false });
     expect(events.some((event) => event.type === 'error')).toBe(true);
     await client.close();
   });
 
-  test('steer mid-turn records a steered user entry and reaches the agent', async () => {
-    // Single-step model held open until release() — a deterministic steer window.
+  test('send mid-turn records a steered user entry and reaches the agent', async () => {
+    // The 'start' turn's first model call is a gated tool call — the
+    // deterministic window for a mid-turn send — and its finish opens the
+    // step boundary the message lands at. The gate is ARMED, not always on:
+    // every other call (the 'too early' turn, the post-tool step) answers at
+    // once, which is what lets 'too early' resolve before the gate exists.
+    const prompts: LanguageModelV2Prompt[] = [];
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let armed = false;
 
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
-      doStream: async () => ({
-        stream: new ReadableStream({
-          async start(controller) {
-            controller.enqueue({ type: 'stream-start', warnings: [] });
-            controller.enqueue({ type: 'text-start', id: '0' });
-            controller.enqueue({ type: 'text-delta', id: '0', delta: 'working on it' });
-            await gate;
-            controller.enqueue({ type: 'text-end', id: '0' });
-            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-            controller.close();
-          },
-        }),
-        response: { headers: {} },
-      }),
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+        const gated = armed;
+        armed = false;
+
+        return {
+          stream: new ReadableStream({
+            async start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+
+              if (gated) {
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
+                  input: JSON.stringify({ action: 'search', query: 'probe' }),
+                });
+                await gate;
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              } else {
+                controller.enqueue({ type: 'text-start', id: '0' });
+                controller.enqueue({ type: 'text-delta', id: '0', delta: 'working on it' });
+                controller.enqueue({ type: 'text-end', id: '0' });
+                controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              }
+
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
     });
 
     const { client } = setup(model);
@@ -302,24 +326,32 @@ describe('LocalAgentClient', () => {
     client.subscribe((event) => events.push(event));
     await client.connect();
 
-    expect(client.steer('too early')).toBe(false);
+    // Nothing running: the message is a turn of its own, not a splice.
+    expect(await client.send('too early')).toMatchObject({ landed: 'turn' });
 
+    armed = true;
     const turn = client.send('start');
     const deadline = Date.now() + 2_000;
 
-    while (!events.some((event) => event.type === 'text-delta') && Date.now() < deadline) {
+    while (!events.some((event) => event.type === 'tool-call') && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
-    expect(client.steer('actually, use yaml')).toBe(true);
+    expect(await client.send('actually, use yaml')).toEqual({ landed: 'mid-turn' });
     release();
     await turn;
-    // The undrained steer cascades as the immediate next turn.
-    const settled = Date.now() + 2_000;
 
-    while (events.filter((event) => event.type === 'turn-end').length < 2 && Date.now() < settled) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    // The send spliced into the running turn's second step as one user
+    // message — the model read it, and no second turn ran for it.
+    const seen = (prompts.at(-1) ?? [])
+      .filter((message) => message.role === 'user')
+      .flatMap((message) => message.content)
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text);
+
+    expect(seen).toContain('actually, use yaml');
+    expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(2);
 
     const history = await client.history();
     const steered = history.find((message) => message.content === 'actually, use yaml');

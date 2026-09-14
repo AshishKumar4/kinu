@@ -36,9 +36,9 @@
  *               `USE_CHAT_RESPONSE` frames back until `done`. Frame NAMES come
  *               from the SDK constant, so a rename there is a compile error here
  *               rather than a silent hang.
- *   steer       the socket RPC `steerTurn` (actor-agent.ts:4580), which is
- *               exactly what the composer calls mid-turn (hooks/use-kinu.ts:1229)
- *               and answers `'mid-turn'` or `'queued'` — the DO's own statement
+ *   steer       the socket RPC `send` (actor-agent.ts), which is
+ *               exactly what the composer calls mid-turn (hooks/use-kinu.ts:2000)
+ *               and answers `'mid-turn'` or `'turn'` — the DO's own statement
  *               about which of the two happened.
  *   history     `GET /agents/<slug>/<name>/get-messages`, the SDK's transport
  *               endpoint the pane is seeded from (agent-routing.ts:24-40).
@@ -546,7 +546,12 @@ export interface PublicTurnRecorder {
  */
 export function recordPublicTurn(): PublicTurnRecorder {
   let settled: PublicTurn | null = null;
-  const stream = new CloudTurnStream(() => {}, (result) => { settled = result; });
+
+  const stream = new CloudTurnStream(() => {}, (result) => {
+    // A mid-turn send carries no turn of its own — it spliced into one this
+    // recorder is not tracking, so the settled record stays null.
+    if (result.landed === 'turn') settled = result;
+  });
 
   return {
     apply(frame) {
@@ -647,7 +652,7 @@ const RunEventsSchema = v.array(RunEventSchema);
 
 const SetModelSchema = v.object({ spec: v.string() });
 
-const SteerSchema = v.object({ landed: v.picklist(['mid-turn', 'queued']) });
+const SteerSchema = v.object({ landed: v.picklist(['mid-turn', 'turn']) });
 
 /** The executor's display fields and its producer-owned command refusal.
  * Success omits refusal; historical responses may lack classification. */
@@ -988,14 +993,14 @@ export class KinuPublicSession {
    *
    * The answer is the DO's own statement about what happened to the words:
    * `'mid-turn'` means they were spliced into the running turn's next step,
-   * `'queued'` means that turn had already ended and they became the next
-   * ordinary turn (actor-agent.ts:4565-4584). Both are landings, and a caller
-   * that treated `'queued'` as a failure would be failing on a race the product
+   * `'turn'` means that turn had already ended and they became the next
+   * ordinary turn (actor-agent.ts:5461). Both are landings, and a caller
+   * that treated `'turn'` as a failure would be failing on a race the product
    * resolves correctly.
    */
-  async steer(text: string): Promise<'mid-turn' | 'queued'> {
-    const landed = await infraBoundary(`steerTurn on ${this.input.origin}/${this.workspace}`, () =>
-      this.rpc('steerTurn', [text, 'build']));
+  async steer(text: string): Promise<'mid-turn' | 'turn'> {
+    const landed = await infraBoundary(`send on ${this.input.origin}/${this.workspace}`, () =>
+      this.rpc('send', [text, [], 'build']));
 
     return v.parse(SteerSchema, landed).landed;
   }

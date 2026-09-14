@@ -175,12 +175,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
     const payload = resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text;
 
-    if (client.steer(payload, { cwd: process.cwd() })) {
-      console.log(DIM('  ↪ steering the running turn'));
-    } else {
-      queuedInputs.push(input);
-      console.log(DIM('  ⧗ the turn just finished. Queued to send next.'));
-    }
+    const sent = await client.send(payload, { cwd: process.cwd() });
+
+    if (sent.landed === 'mid-turn') console.log(DIM('  ↪ steering the running turn'));
+    else console.log(DIM('  ⧗ the turn had just finished, so this ran as the next message.'));
   };
 
   rl.on('line', async (line) => {

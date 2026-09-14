@@ -22,10 +22,10 @@ import {
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import { createAcpAgent } from '../src/acp/agent';
 import { createCliSession } from '../src/session';
-import type { AgentClient, AgentClientEvent, AgentPrompt, AgentTurnResult } from '../src/agent-client';
+import type { AgentClient, AgentClientEvent, AgentPrompt, AgentSendResult } from '../src/agent-client';
 import * as v from 'valibot';
 
-const TURN: AgentTurnResult = { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+const TURN: AgentSendResult = { landed: 'turn', text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
 interface FakeOptions {
   /** Emitted, in order, while send() runs. */
@@ -97,7 +97,6 @@ function fakeClient(opts: FakeOptions = {}): Fake {
 
       return TURN;
     },
-    steer: () => false,
     branch: () => false,
     fork: async () => ({ client: agentClient, label: 'test' }),
     stop: () => {
