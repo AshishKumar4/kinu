@@ -121,6 +121,15 @@ describe('workspaceOverviewEvidence', () => {
     ]);
   });
 
+  test('an idle card with unread updates lists them — the empty row is the last resort', () => {
+    const overview = buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('unseen_changes')] });
+
+    expect(workspaceOverviewStatus(overview)).toEqual({ kind: 'idle' });
+    expect(workspaceOverviewEvidence(overview)).toEqual([
+      { key: 'updates', text: 'Updates to read', tone: 'muted' },
+    ]);
+  });
+
   test('waiting, working, updates and the sealed run each list, in order', () => {
     const overview = buildWorkspaceOverview({
       ...EMPTY,

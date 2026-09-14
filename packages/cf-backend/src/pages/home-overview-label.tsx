@@ -60,8 +60,9 @@ const FACT_TONE = {
 /** The evidence row beneath the lead line: every fact the overview carries,
  *  in core's fixed order, as small chips. The task is the row's second line,
  *  not a chip — it is the widest thing here and wrapping beside it would
- *  read as noise. An idle card shows only "No runs yet", plainly: no pill
- *  shape for a non-fact, and never a word a sealed run did not earn. */
+ *  read as noise. "No runs yet" appears plainly only when there is no fact
+ *  to show at all: no pill shape for a non-fact, and never a word a sealed
+ *  run did not earn. */
 export const OverviewEvidence = memo(function OverviewEvidence(
   { overview, stale }: { overview: WorkspaceOverview; stale: boolean },
 ) {
