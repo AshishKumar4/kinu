@@ -19,7 +19,7 @@ it('runs an authored class: the prototype is the surface and the reserved storag
   }
 });
 
-it('this.storage survives a process restart while the facet SQLite does not', async () => {
+it('the durable application keeps this.sql and this.storage across a process restart', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('storage-survival'));
 
   const source = [
@@ -41,7 +41,40 @@ it('this.storage survives a process restart while the facet SQLite does not', as
   try {
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":1}' });
     await subject.stop();
+    // The durable application re-attaches to its pinned facet's SQLite, so the
+    // probe table survives the release exactly as this.storage does.
     await subject.start(source);
+    expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":2,"stored":2}' });
+  } finally {
+    await subject.stop();
+  }
+});
+
+it('a private process gets an ephemeral facet: this.storage survives, this.sql does not', async () => {
+  const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('storage-survival-private'));
+
+  const source = [
+    'import { SlateObject } from "kinu:slate";',
+    'export class Slate extends SlateObject {',
+    '  async bump() {',
+    '    this.sql.exec("CREATE TABLE IF NOT EXISTS probe (n INTEGER NOT NULL)");',
+    '    this.sql.exec("INSERT INTO probe (n) VALUES (1)");',
+    '    const rows = this.sql.exec("SELECT count(*) AS n FROM probe").toArray()[0].n;',
+    '    const stored = (await this.storage.get("n")) ?? 0;',
+    '    await this.storage.put("n", stored + 1);',
+    '    return { rows, stored: stored + 1 };',
+    '  }',
+    '}',
+  ].join('\n');
+
+  // The defaults spelled out: a private process is the durable application's
+  // call surface minus the port and the pinned facet — `app: null`.
+  await subject.start(source, true, undefined, undefined, undefined, null);
+
+  try {
+    expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":1}' });
+    await subject.stop();
+    await subject.start(source, true, undefined, undefined, undefined, null);
     expect(await subject.call('bump', [])).toEqual({ ok: true, value: '{"rows":1,"stored":2}' });
   } finally {
     await subject.stop();

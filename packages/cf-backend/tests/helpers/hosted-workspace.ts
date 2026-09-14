@@ -177,15 +177,17 @@ export async function hostedWorkspace(
   const env = makeEnv();
 
   // Both optional deps are ANSWERED, not cast past: `previewUrl` answers a
-  // PROMISE of a preview verdict and `refreshPreview` a promise of void, and an
-  // `as never` over them hides a signature mismatch nothing here would surface,
-  // because nothing here exposes a port. A workspace with no signing key
-  // genuinely has no preview URL, and `unavailable` is how the contract says so.
+  // PROMISE of a preview verdict and `ensureSlate` the promise of `null` that
+  // says the slate is already up — nothing here boots one for a preview to
+  // re-drive. An `as never` over them hides a signature mismatch nothing here
+  // would surface, because nothing here exposes a port. A workspace with no
+  // signing key genuinely has no preview URL, and `unavailable` is how the
+  // contract says so.
   const workspace = createHostedWorkspace({
     ctx, env,
     previewUrl: (port) => Promise.resolve({ unavailable: `port ${String(port)} has no preview host in this fixture` }),
     onFilesChanged: () => undefined,
-    refreshPreview: () => Promise.resolve(),
+    ensureSlate: () => Promise.resolve(null),
   });
 
   // Main is acquired up front, and its runtime is what `rootRuntime` answers:

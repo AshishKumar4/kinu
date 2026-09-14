@@ -159,6 +159,15 @@ const twoTurnProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const slateDurabilityProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-durability-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-durability-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 let forbiddenEgressHits = 0;
 
 export default defineConfig({
@@ -285,6 +294,30 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
+        }, {
+          // The durable-slate probe: the production preview edge
+          // (`handleNimbusPreviewHostRequest`) driven against a real
+          // OrchestratorAgent across `abortAllDurableObjects()`. The workspace
+          // object holds Nimbus's port reservations in its own storage, so the
+          // URL outlives the isolate that served it — which is exactly what
+          // the test asserts. `ObservedOrchestrator` is the production class
+          // plus the `portReservations` fixture read, bound under the
+          // production name as in two-turn-probe.
+          name: 'slate-durability-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: slateDurabilityProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          bindings: {
+            PREVIEW_HOST_SUFFIX: 'preview.test',
+            DEV_USER_EMAIL: 'probe@local',
+            CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=',
+          },
+          durableObjects: {
+            SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
         }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -316,6 +349,7 @@ export default defineConfig({
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
           TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
+          SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
         },
       },
     }),

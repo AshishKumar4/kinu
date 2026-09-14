@@ -16,7 +16,7 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
     this._workspace ??= (async () => {
       const workspace = await NimbusWorkspace.create({
         sql: this.ctx.storage.sql,
-        transactions: this.ctx,
+        transactions: { storage: this.ctx.storage },
       });
 
       // The same call the hosted boot makes after its runtime provisioning —

@@ -45,7 +45,8 @@ import { buildWorkspacePreviewHost, parseWorkspacePreviewLabel } from '@kinu.run
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { labelSigner } from '@kinu.run/core';
 import { reoriginateRequest } from '@kinu.run/core';
-import { PREVIEW_CAPABILITY_HANDLE_LENGTH, type WorkspacePreviewUrl } from './workspace-host';
+import type { WorkspacePreviewUrl } from '@kinu.run/core';
+import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from './workspace-host';
 
 /** The v4 preview signer: its own HKDF salt and info, so a preview token
  *  verifies nowhere else (`lib/label-signer.ts` states the key discipline). */

@@ -46,7 +46,6 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import { _rpcReadFile, _rpcWriteFile } from '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
 
 const databases: Database[] = [];
 
@@ -98,14 +97,29 @@ async function openFixture(): Promise<Fixture> {
     },
   };
 
+  const processes = new SessionProcessSupervisor();
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
+    processes,
   });
 
   const durable = new Map<string, unknown>();
-  const processes = new SessionProcessSupervisor();
+
+  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
+    const entries = new Map<string, unknown>();
+
+    for (const [key, value] of durable) {
+      if (key.startsWith(options.prefix)) entries.set(key, value);
+    }
+
+    // SAFETY: the storage list contract types each row by the caller's T,
+    // which the untyped stand-in rows cannot name; `never` keeps the Map
+    // assignable to every T.
+    return entries as Map<string, never>;
+  };
 
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
@@ -117,6 +131,13 @@ async function openFixture(): Promise<Fixture> {
         delete: async (key) => { durable.delete(key); },
         deleteAll: async () => { durable.clear(); },
         deleteAlarm: async () => undefined,
+        list: listDurable,
+        transaction: async (body) => body({
+          get: async (key) => durable.get(key),
+          put: async (key, value) => { durable.set(key, value); },
+          delete: async (key) => { durable.delete(key); },
+          list: listDurable,
+        }),
       },
     },
     shell: workspace.shell,
@@ -346,13 +367,22 @@ describe('/tmp is private at the shared path, on both planes', () => {
     const nodeA = f.join('node-a');
     const nodeB = f.join('node-b');
 
-    // Written by the shell, read by the file RPC, under the same identity.
     await rpcExec(f.host, 'echo via-shell > /tmp/both.txt', { cred: nodeA });
-    const sameAgent = await _rpcReadFile(f.host, '/tmp/both.txt', f.pidFor(nodeA));
+
+    // Written by the shell, read back through the workspace's supervisor op —
+    // the same file plane the session's file RPC serves — under the same
+    // identity.
+    const sameAgent = v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/both.txt'], pid: f.pidFor(nodeA),
+    }));
+
     expect(sameAgent).toContain('via-shell');
 
     // And the sibling's file plane does not see it at the identical path.
-    await _rpcWriteFile(f.host, '/tmp/both.txt', 'b-only', f.pidFor(nodeB));
+    await f.workspace.supervisorOp({
+      op: 'writeFile', args: ['/tmp/both.txt', 'b-only'], pid: f.pidFor(nodeB),
+    });
+
     const backAsA = await rpcExec(f.host, 'cat /tmp/both.txt', { cred: nodeA });
     expect(backAsA.stdout).toContain('via-shell');
     expect(backAsA.stdout).not.toContain('b-only');

@@ -56,16 +56,16 @@ per-viewer limit, no audit row, and revocation means unexposing the port.
 **URL durability.** Routing is by Durable Object name (`nimbus-route.ts:10-15`).
 Kinu currently routes its two slate configurations differently:
 
-- A Worker slate is a Nimbus resident. Its port capability is persisted with
-  an owner string and restored when the same slate re-registers
-  (`workspace-host.ts:345-358`, `@nimbus-sh/worker/dist/session/port-capability.js`).
-  Kinu's embedded host omits Nimbus's resident recovery, and its refresh path
-  walks an in-memory map (`workspace-host.ts:286-292`,
-  `host.ts:172-180`). A visit after eviction gets 410
-  `RECYCLED_WORKSPACE_PREVIEW` until my UI opens the slate again
-  (`workspace-host.ts:378-395`). Ports are allocated from an in-memory counter
-  unless `slate.port` is declared (`host.ts:47-49,345`), so with two slates the
-  URL bytes can change after eviction.
+- A Worker slate is a durable Nimbus application (`@nimbus-sh/worker@0.6.0`).
+  Its owner is the slate id; `ensureDurableApp` reserves its port and mints
+  its capability in the workspace object's storage before the first launch
+  (`workspace-host.ts` `apps.ensure`, `host.ts` `boot`), and answers the same
+  pair on every later launch. A visit after eviction re-drives the process
+  from that record (`workspace-host.ts` `routePreview` → `host.ts`
+  `ensureDurable`) and Nimbus checks the full capability against the live
+  registration before routing. The URL bytes never change unless
+  `slate.port` is redeclared or the slate is removed; a different process
+  binding the port retires the capability, so the old URL answers 404.
 - Kinu directs `slate.runtime: "node"` projects to the sandbox container
   (`project.ts:52-58`; `docs/EXECUTION-LAYER-SPEC.md`,
   "Slate preview home"); the resident host refuses it (`host.ts:320`). Its URL
@@ -80,13 +80,14 @@ Vite, Node-compatible execution and Worker applications; its resident runtime
 adapters also support Python and Ruby. Nimbus's own retained port capabilities
 have no TTL. The 30-day expiry above belongs to Kinu's sandbox edge records.
 
-Durability and sharing are separate changes. The recommended durability repair
-composes Nimbus's process recovery over the existing workspace and retains
-logical service, port and capability ownership. A valid route asks that
-supervisor to ensure readiness; it must not become a second supervisor.
-Saved application data survives recovery; arbitrary heap and socket state
-needs a separate checkpoint contract. Sharing still requires section 5's
-authorization policy.
+Durability and sharing are separate changes. Durability is done: Nimbus owns
+the reservation, the capability and the facet; Kinu fronts the URL and asks
+the slate host to bring the owner up before it routes. `this.storage` and
+`this.sql` survive recovery; arbitrary heap and socket state does not.
+Sharing still requires section 5's authorization policy. Nimbus's public
+link (`apps.expose(…, { visibility: 'public' })`) is not wired: it needs
+Nimbus's public directory binding and its own router, which this deployment
+does not run, so no host method offers it.
 
 ## 2. Research
 
