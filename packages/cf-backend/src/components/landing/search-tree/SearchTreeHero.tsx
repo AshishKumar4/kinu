@@ -3,7 +3,7 @@ import { useEffect, useRef, type ReactElement } from 'react';
 import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import { createCanvasRenderer } from '@kinu.run/core/web/hero-canvas';
 import { SearchTree, type HeroPalette, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
-import { boxOf, createPlayback, readPalette, type Box, type FrameTimes } from './stage';
+import { boxOf, createPlayback, keepOutOf, readPalette, type Box, type FrameTimes } from './stage';
 
 const SEED = 417;
 
@@ -112,7 +112,8 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
     canvas?.remove();
     const next = document.createElement('canvas');
     next.className = 'absolute inset-0 size-full';
-    host.appendChild(next);
+    // Under the blur veil, which is the host's own child.
+    host.insertBefore(next, host.firstChild);
     canvas = next;
 
     return next;
@@ -157,6 +158,11 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
     if (frame.time >= SETTLED_AT && canvas.dataset.settled !== 'true') canvas.dataset.settled = 'true';
   };
 
+  /** The headline's box, so no branch grows behind the copy. */
+  const keepOut = (): void => {
+    tree.setKeepOut(keepOutOf(host.getBoundingClientRect(), stage.querySelector('h1')?.getBoundingClientRect() ?? null));
+  };
+
   const fit = (): void => {
     if (renderer === null || canvas === null) return;
     const box = boxOf(host);
@@ -168,6 +174,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
 
     renderer.resize(box.width, box.height, box.ratio);
     tree.setAspect(box.height / box.width);
+    keepOut();
   };
 
   /** One evolved frame, no clock: the still a reduced-motion visitor gets. */
@@ -175,6 +182,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
     if (renderer === null) return;
     const box = boxOf(host);
     const frozen = new SearchTree({ seed: SEED, aspect: box.height / box.width });
+    frozen.setKeepOut(keepOutOf(host.getBoundingClientRect(), stage.querySelector('h1')?.getBoundingClientRect() ?? null));
     const steps = Math.round(STATIC_SECONDS / STATIC_STEP);
 
     for (let index = 0; index < steps; index += 1) frozen.step(STATIC_STEP);
@@ -192,6 +200,7 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
     const next = installCanvas();
     const box = boxOf(host);
     tree = new SearchTree({ seed: SEED, aspect: box.height / box.width });
+    keepOut();
 
     if (still) {
       renderer = canvasRenderer(next, palette);
@@ -300,9 +309,15 @@ function mountSearchTree(host: HTMLElement, stage: HTMLElement): () => void {
 
 /**
  * The hero's centrepiece: the living search tree, full-bleed behind the copy.
- * The host is a positioned box the mounted canvas fills; a mask keeps the
- * type readable over it. Pointer input is read from the parent stage, so the
- * copy and its links stay clickable while the tree bends to the cursor.
+ * The host is a positioned box the mounted canvas fills. Three masks keep
+ * the type readable over it, and they multiply: left to right the art
+ * dissolves under the copy's column and is whole only past it; top to
+ * bottom it fades at the edges; and a radial well centred on the headline
+ * dissolves whatever the keep-out still let near it, so the region under
+ * the copy is faint by construction whatever the simulation does. The
+ * veil blurs what sits under the copy and leaves the right edge sharp.
+ * Pointer input is read from the parent stage, so the copy and its links
+ * stay clickable while the tree bends to the cursor.
  */
 export function SearchTreeHero(): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -321,7 +336,9 @@ export function SearchTreeHero(): ReactElement {
       ref={hostRef}
       data-hero-graph
       aria-hidden="true"
-      className="pointer-events-none absolute inset-x-0 top-0 -bottom-16 [mask-composite:intersect] [mask-image:linear-gradient(to_right,rgba(0,0,0,.25),rgba(0,0,0,.35)_40%,black_62%),linear-gradient(to_bottom,transparent,black_16%,black_76%,transparent)]"
-    />
+      className="pointer-events-none absolute inset-x-0 top-0 -bottom-16 [mask-composite:intersect] [mask-image:linear-gradient(to_right,rgba(0,0,0,.05),rgba(0,0,0,.06)_42%,rgba(0,0,0,.5)_64%,black_80%),linear-gradient(to_bottom,transparent,black_14%,black_78%,transparent),radial-gradient(ellipse_36%_24%_at_50%_34%,rgba(0,0,0,.14),rgba(0,0,0,.14)_55%,black)]"
+    >
+      <div data-hero-veil className="absolute inset-0 z-10 [backdrop-filter:blur(6px)] [mask-image:linear-gradient(to_right,black,black_48%,transparent_76%)]" />
+    </div>
   );
 }
