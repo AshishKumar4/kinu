@@ -118,30 +118,54 @@ const quoted = (cmd: string): string => {
   return all.length ? all[all.length - 1]![1]! : '';
 };
 
+/** The error the SDK raises where this double used to return an exit code —
+ *  the shape capnweb carries across the DO hop: `name` is the SDK class,
+ *  `errorResponse.code` the container's own code (measured on the deployed
+ *  build 2026-09-14 — the FileNotFoundError a create's existence probe met).
+ *  The `code` getter does NOT survive serialization, so the double carries
+ *  the code only where the wire leaves it. */
+function sandboxSdkError(name: string, code: string, message: string): Error {
+	const error = new Error(message);
+	error.name = name;
+	Object.defineProperty(error, 'errorResponse', { value: { code }, enumerable: true });
+
+	return error;
+}
+
 function sandboxHandle(fs: MemFs): SandboxHandle {
-  const handle: SandboxHandle = {
-    async readFile(path: string) {
-      const b = fs.read(path);
+	const handle: SandboxHandle = {
+		async readFile(path: string) {
+			const b = fs.read(path);
 
-      if (b === null) return { exitCode: 1 };
+			if (b === null) {
+				throw sandboxSdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${path}`);
+			}
 
-      return { content: Buffer.from(b).toString('base64'), encoding: 'base64', exitCode: 0 };
-    },
-    async writeFile(path: string, content: string, opts?: { encoding?: string }) {
-      fs.write(path, opts?.encoding === 'base64'
-        ? new Uint8Array(Buffer.from(content, 'base64'))
-        : new TextEncoder().encode(content));
-    },
-    async listFiles(dir: string) {
-      return { files: fs.list(dir).map((name) => {
-        const s = fs.stat(`${dir === '/' ? '' : dir}/${name}`);
+			return { content: Buffer.from(b).toString('base64'), encoding: 'base64', exitCode: 0 };
+		},
+		async writeFile(path: string, content: string, opts?: { encoding?: string }) {
+			fs.write(path, opts?.encoding === 'base64'
+				? new Uint8Array(Buffer.from(content, 'base64'))
+				: new TextEncoder().encode(content));
+		},
+		async listFiles(dir: string) {
+			if (dir !== '/' && !fs.exists(dir)) {
+				throw sandboxSdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${dir}`);
+			}
 
-        if (!s) throw new Error(`Expected '${name}' in in-memory filesystem`);
+			return { files: fs.list(dir).map((name) => {
+				const s = fs.stat(`${dir === '/' ? '' : dir}/${name}`);
 
-        return { name, type: s.isDir ? 'directory' : 'file', size: s.size };
-      }) };
-    },
-    async deleteFile(path: string) { fs.del(path); },
+				if (!s) throw new Error(`Expected '${name}' in in-memory filesystem`);
+
+				return { name, type: s.isDir ? 'directory' : 'file', size: s.size };
+			}) };
+		},
+		async deleteFile(path: string) {
+			if (!fs.del(path)) {
+				throw sandboxSdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${path}`);
+			}
+		},
     async exec(command: string) {
       const p = quoted(command);
 
@@ -369,8 +393,13 @@ for (const c of cases) {
       expect(await rejectionCode(() => vfs.readFile(c.path('nope.txt')))).toBe('ENOENT');
     });
 
-    test('stat of a missing path signals absence per the impl contract', async () => {
+    test('stat of a missing name under a live directory signals absence per the impl contract', async () => {
       const vfs = c.make();
+
+      // `null` is the answer for "the parent has no such entry": the parent has
+      // to exist for that answer to mean anything, and the sandbox view's stat
+      // IS a listing of the parent — a missing parent is ENOENT, not absence.
+      await vfs.mkdir(c.path('ghost').replace(/\/ghost$/, ''), { recursive: true });
 
       if (c.statMissing === 'null') {
         expect(await vfs.stat(c.path('ghost'))).toBeNull();
