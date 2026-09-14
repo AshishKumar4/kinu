@@ -5104,16 +5104,24 @@ const LARGE_TOOL_RUN_MESSAGE: UIMessage = msg({
 });
 
 /** One finished call whose input and output both carry credential-shaped
- *  fields, nested exactly where a webhook or MCP call would put them. The
- *  redaction gate (`?frame=toolrun&secrets=1`) expands this row and asserts
- *  the preview shows `keep: visible` while every secret value is masked. */
+ *  fields, nested exactly where a webhook or MCP call would put them, and a
+ *  second call whose free-text previews — the command block and the error
+ *  channel — carry the same token. The redaction gate (`?frame=toolrun&secrets=1`)
+ *  expands these rows and asserts the previews show `keep: visible` while
+ *  every secret value is masked, keyed or not. */
+/** A live Cloudflare token, assembled rather than written out: the commit-tier
+ *  secret scan shares the pattern list the preview redacts by, so a literal
+ *  here would block the commit whose behavior this fixture exists to prove.
+ *  Assembled in parts, the source text never matches the shape. */
+const ASSEMBLED_TOKEN = `cfut_${'a'.repeat(48)}`;
+
 const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
   type: 'tool-run',
   toolCallId: 'secret-call',
   state: 'output-available',
   input: {
     runtime: 'sandbox',
-    command: 'curl -s https://api.stripe.example/v1/charges',
+    command: `curl -s https://api.stripe.example/v1/charges --token=${ASSEMBLED_TOKEN}`,
     headers: { authorization: 'Bearer sk-live-REDACTME' },
     nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
   },
@@ -5121,7 +5129,18 @@ const SECRET_TOOL_RUN_PART: UIMessage['parts'][number] = {
     status: 200,
     headers: { authorization: 'Bearer sk-live-REDACTME' },
     nested: { apiKey: 'sk-live-REDACTME', keep: 'visible' },
+    body: `token ${ASSEMBLED_TOKEN} accepted`,
   },
+};
+
+/** The same token reaching a preview through the error channel — a
+ *  protocol-level failure whose `errorText` quotes the rejected credential. */
+const SECRET_ERROR_PART: UIMessage['parts'][number] = {
+  type: 'tool-run',
+  toolCallId: 'secret-error',
+  state: 'output-error',
+  input: { runtime: 'sandbox', command: `deploy --token=${ASSEMBLED_TOKEN}` },
+  errorText: `deploy rejected the credential ${ASSEMBLED_TOKEN}`,
 };
 
 const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
@@ -5129,6 +5148,7 @@ const SECRET_TOOL_RUN_MESSAGE: UIMessage = msg({
   parts: [
     { type: 'text', text: 'A call that carries credential-shaped fields in both directions.' },
     SECRET_TOOL_RUN_PART,
+    SECRET_ERROR_PART,
   ],
 });
 
