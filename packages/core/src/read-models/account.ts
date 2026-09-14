@@ -46,3 +46,13 @@ export function displayNameProblem(input: string): string | null {
 
   return null;
 }
+
+/**
+ * Delete-account confirmation — the typed phrase is the account's own email.
+ * Case-insensitive, trimmed; anything else means the confirm step stays armed.
+ * The comparison is the contract shared by the form that asks and the route
+ * that checks, so it is a rule rather than a line of JSX or a `===`.
+ */
+export function confirmsAccountDelete(confirm: string, email: string): boolean {
+  return confirm.trim().toLowerCase() === email.trim().toLowerCase();
+}

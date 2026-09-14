@@ -227,4 +227,54 @@ describe('account panels', () => {
       process.stdout.write(`account-ux welcome: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
   }, 240_000);
+
+  test('the account section names the owner and arms the delete only on the typed email', async () => {
+    await withGallery(async (gallery) => {
+      const shots: string[] = [];
+
+      for (const theme of ['dark', 'light'] as const) {
+        for (const viewport of ['desktop', 'mobile'] as const) {
+          const page = await freshPage(gallery, 'usersettingsstate&section=account', theme, viewport);
+
+          try {
+            await page.waitForSelector('[aria-label="Your name"]', { timeout: 10_000 });
+            const body = await page.evaluate(() => document.body.innerText);
+            expect(body).toContain('owner@example.com');
+            expect(body).toContain('Delete this account');
+            shots.push(await shoot(page, `settings-account-${viewport}-${theme}`));
+
+            // The danger button sleeps until the phrase is the account's own
+            // email; a wrong phrase leaves it asleep, and case does not count.
+            await page.evaluate(() => {
+              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Delete account'));
+
+              if (button === undefined) throw new Error('no delete button');
+              button.click();
+            });
+            await page.waitForSelector('[aria-label="Confirm your email"]', { timeout: 10_000 });
+
+            const armed = (): Promise<boolean> => page.evaluate(() =>
+              [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled));
+
+            expect(await armed()).toBe(false);
+            await page.type('[aria-label="Confirm your email"]', 'someone@else.com');
+            expect(await armed()).toBe(false);
+            await page.$eval('[aria-label="Confirm your email"]', (input) => { if (input instanceof HTMLInputElement) input.value = ''; });
+            await page.type('[aria-label="Confirm your email"]', 'Owner@Example.com');
+            await page.waitForFunction(
+              () => [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled),
+              { timeout: 10_000 },
+            );
+            expect(await armed()).toBe(true);
+            shots.push(await shoot(page, `settings-account-armed-${viewport}-${theme}`));
+          } finally {
+            await page.close();
+          }
+        }
+      }
+
+      expect(shots.length).toBe(8);
+      process.stdout.write(`account-ux account: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+    });
+  }, 240_000);
 });

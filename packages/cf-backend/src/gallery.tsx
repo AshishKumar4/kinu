@@ -298,6 +298,10 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     return fixtureJson({ onboardedAt: NOW });
   }
 
+  if (path === "/api/user/account" && method === "DELETE") {
+    return fixtureJson({ deleted: true });
+  }
+
   if (path === "/api/user/profile" && method === "PATCH") {
     const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
     const displayName = patch.success ? patch.output.displayName : "Owner";

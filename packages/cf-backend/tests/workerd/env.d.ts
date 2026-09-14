@@ -92,6 +92,14 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   readPrivateSourceAsAgent(): Promise<{ content?: string; error?: string }>;
 }
 
+interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
+  seed(): Promise<{ hashes: Record<'ws-alpha' | 'ws-beta', string | null> }>;
+  counts(): Promise<Record<string, number>>;
+  hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
+  reset(): Promise<{ ok: true; workspaces: number }>;
+  freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null } | null>;
+}
+
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   serveSlate(input: {
     workspace: string; owner: string; id: string; body: string; preferredPort?: number;
@@ -135,6 +143,7 @@ declare global {
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
+      ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
   // A devbox's readiness refusal must serialise over Workers RPC as data,
   // not as a thrown class name. The probe is a narrow DO exposing only the
   // two halves of `RestoreReadiness` plus the normalization control —

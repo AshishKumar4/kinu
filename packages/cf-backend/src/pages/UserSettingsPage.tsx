@@ -53,6 +53,7 @@ import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
+import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -147,25 +148,29 @@ export default function UserSettingsPage() {
             <div className="space-y-5">
 
         {section === "account" && (
-          <Card title="Profile" icon={UserCircleIcon}>
-            <CardSlot resource={profile.resource} what="your profile" onRetry={profile.reload}>
-              {(p) => (
-                <div className="space-y-5">
-                  <ProfileNameEditor profile={p} onSaved={profile.reload} />
-                  <dl className="grid gap-5 sm:grid-cols-2">
-                    <div>
-                      <dt className="p-meta p-text-3">Email</dt>
-                      <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
-                    </div>
-                    <div>
-                      <dt className="p-meta p-text-3">Member since</dt>
-                      <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
-                    </div>
-                  </dl>
-                </div>
-              )}
-            </CardSlot>
-          </Card>
+          <>
+            <Card title="Profile" icon={UserCircleIcon}>
+              <CardSlot resource={profile.resource} what="your profile" onRetry={profile.reload}>
+                {(p) => (
+                  <div className="space-y-5">
+                    <ProfileNameEditor profile={p} onSaved={profile.reload} />
+                    <dl className="grid gap-5 sm:grid-cols-2">
+                      <div>
+                        <dt className="p-meta p-text-3">Email</dt>
+                        <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
+                      </div>
+                      <div>
+                        <dt className="p-meta p-text-3">Member since</dt>
+                        <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                )}
+              </CardSlot>
+            </Card>
+
+            {profile.resource.value !== null && <DeleteAccountCard email={profile.resource.value.email} />}
+          </>
         )}
 
         {section === "cli" && <CliInstallCard />}

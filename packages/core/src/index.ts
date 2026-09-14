@@ -2552,7 +2552,7 @@ export {
   type OnboardingStepId,
 } from './read-models/account';
 
-export { DISPLAY_NAME_MAX, displayNameProblem } from './read-models/account';
+export { DISPLAY_NAME_MAX, confirmsAccountDelete, displayNameProblem } from './read-models/account';
 
 export {
   CLIENT_ERROR_ENDPOINT,
