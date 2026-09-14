@@ -21,7 +21,7 @@ import * as v from 'valibot';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import { cancelBackgroundJob, cancelCurrentWork } from '../src/read-models/background-jobs';
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
@@ -68,7 +68,7 @@ function scene() {
   const runner = new BackgroundJobRunner({
     store,
     fiber,
-    signals: new SignalDelivery(idleHost()),
+    inbox: new Inbox(idleHost()),
     eventLog: new EventLog(hubSql, actor),
     scheduleDrain: () => {},
     logActivity: () => {},

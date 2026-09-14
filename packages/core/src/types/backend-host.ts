@@ -51,7 +51,7 @@ export interface BroadcastEvent {
 }
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —
- *  the queued half of signal delivery (orchestrator/signals.ts).
+ *  the turn half of the inbox (orchestrator/inbox.ts).
  *  `metadata.kinuEvent` makes the chat render it as an event card rather
  *  than a user bubble. */
 export interface ProgrammaticTurn {
@@ -62,6 +62,12 @@ export interface ProgrammaticTurn {
   readonly idempotencyKey?: string;
   /** The turn is a move offered to an agent nobody has spoken to, not an event it must hear. If a message the operator wrote has been admitted by the time this turn takes its slot, the host runs nothing and answers 'yielded': that message is the turn now. Read inside the slot, never before it — the race this closes is a message landing between the enqueue and the start. */
   readonly yieldsToUserMessage?: boolean;
+  /** 'user': this turn carries the operator's own words (a steer rerun). The host queues it as
+   *  a user turn: CLI at the queue FRONT with kind 'user' and `files`; CF as an operator-stamped
+   *  row and it deletes the `pending_steers` rows named by `steerIds` once admitted. */
+  readonly origin?: 'user';
+  readonly files?: readonly PromptFile[];
+  readonly steerIds?: readonly string[];
 }
 
 /** A file attached to a user prompt — the ai-sdk FileUIPart payload (sans tag).
@@ -94,10 +100,8 @@ export interface BackendHost {
 
   /** Inject a programmatic turn, serialized behind any live turn. CF:
    *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue.
-   *  The core SignalDelivery seam (orchestrator/signals.ts) is its only caller
-   *  — producers deliver a signal and never pick the mechanism. An explicit
-   *  owner decision may also enqueue a new mode-boundary turn directly when
-   *  splicing into the live turn would preserve the wrong tool surface. */
+   *  The core Inbox (orchestrator/inbox.ts) is its only caller — producers
+   *  send a message and never pick the mechanism. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
   /** Is a turn running right now — i.e. will there BE a next agentic step for

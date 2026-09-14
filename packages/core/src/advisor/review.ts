@@ -26,7 +26,7 @@ import * as v from 'valibot';
 import type { LLM, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
-import type { AgentSignal, SignalOutcome } from '../types/signals';
+import type { AgentSignal, SendOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
@@ -584,8 +584,8 @@ interface AdvisorLaneDeps {
    *  checkable rather than speculative. Empty when the caller cannot say. */
   readonly reachable: readonly string[];
   readonly guidance: string;
-  /** Speak the note. The caller supplies its own SignalDelivery. */
-  readonly deliver: (signal: AgentSignal) => Promise<SignalOutcome>;
+  /** Speak the note, through the caller's own inbox. */
+  readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
   /** Record the note on the audit stream (EvolutionEngine.recordAdvisorNote).
    *  The turn id comes from the lane rather than from each backend's closure:
    *  it is what joins the row back to the conversation it graded, and a backend
@@ -593,7 +593,7 @@ interface AdvisorLaneDeps {
    *  exactly like one that works. */
   readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
   readonly actor?: ActorHandle;
-  readonly parent?: (signal: AgentSignal) => Promise<SignalOutcome>;
+  readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
 }
 
 /**
@@ -606,7 +606,7 @@ interface AdvisorLaneDeps {
  *
  * A MIRROR OF THE LANE'S OWN DEPS, field for field, and that is deliberate: a
  * snapshot carrying anything less would re-run the review against different
- * inputs and produce advice about a turn that never happened. `llm`, `deliver`
+ * inputs and produce advice about a turn that never happened. `llm`, `send`
  * and `record` are the three deps NOT here, because each is a live seam the
  * recovering host re-resolves for itself; `gateOpen` is absent because the one
  * backend that has a gate records it beside the snapshot, and the other has none.
@@ -679,7 +679,7 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
     : { ...signal, idempotencyKey: deps.actor === undefined
       ? `advisor:${deps.turn.turnId}` : `advisor:${deps.actor.actorId}:${deps.turn.turnId}` };
 
-  await deps.deliver(keyed);
+  await deps.send(keyed);
 
   if (note.severity === 'blocker' && deps.actor !== undefined && deps.parent !== undefined) {
     await deps.parent({ ...keyed, text: `[Actor ${deps.actor.name}]\n${keyed.text}` });
@@ -762,7 +762,7 @@ export async function reviewRecordedTurn(deps: {
   readonly llm: LLM | undefined;
   readonly govern: (llm: LLM, labels: readonly string[]) => LLM;
   readonly gateOpen: boolean;
-  readonly deliver: AdvisorLaneDeps['deliver'];
+  readonly send: AdvisorLaneDeps['send'];
   readonly record: AdvisorLaneDeps['record'];
   /** The workspace's advisor guidance, already admitted by the caller's own
    *  context assembly (advisorWorkspaceGuidance) — a string, the way the turn
@@ -787,7 +787,7 @@ export async function reviewRecordedTurn(deps: {
         gateOpen: deps.gateOpen,
         reachable: snapshot.reachable,
         guidance: deps.guidance ?? '',
-        deliver: deps.deliver,
+        send: deps.send,
         record: deps.record,
         actor: deps.actor,
         parent: deps.parent,

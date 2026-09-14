@@ -59,7 +59,7 @@ import type { RunEndReason } from './turn-lifecycle';
 import { TurnSteering } from './turn-steering';
 import { CraftCycle } from './craft-cycle';
 import { DrainScheduler } from './drain-scheduler';
-import { SignalDelivery, readSignalId } from './signals';
+import { Inbox, readSignalId, type UserSteerDeps } from './inbox';
 import { buildDrainBatch } from '../events/hub/drain';
 import type { EventLog } from '../events/hub/log';
 import type { ExecutionRecoveryRecord } from '../events/types';
@@ -157,10 +157,11 @@ export interface AgentOrchestratorDeps {
 export class AgentOrchestrator {
   /** Per-turn accounting — tool calls, steps, token usage, errors. */
   readonly acc: TurnAccumulator;
-  /** The ONE way an asynchronous producer reaches the agent — hub drains,
-   *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
-   *  time anything reaches it: its next step. Producers state intent only. */
-  readonly signals: SignalDelivery;
+  /** The ONE way anything reaches the agent — the user's messages, hub
+   *  drains, background-job wakes, overflow retries, take picks, MCP tasks —
+   *  at the ONE time anything reaches it: its next step. Producers state
+   *  intent only. */
+  readonly inbox: Inbox;
   /** Per-turn mechanical steering — repeat, repeated failure, no progress.
    *  Observed through {@link turnExtension} and handed to closeTurnRun for the
    *  durable `turn_steering` rows. */
@@ -172,12 +173,12 @@ export class AgentOrchestrator {
   /** The orchestrator's per-turn extension, registered on the turn's
    *  ExtensionHost by both backends: the steering object's and the craft
    *  cycle's observation hooks (the craft cycle needs only the result, which
-   *  carries its call's own args), plus the ONE mid-turn signal drain every
+   *  carries its call's own args), plus the ONE mid-turn inbox drain every
    *  producer feeds. The steer is decided against the step being prepared and
    *  handed straight to it, so it rides the step it was decided on and dies
    *  with it. */
   readonly turnExtension: KinuExtension = {
-    name: 'kinu.signals',
+    name: 'kinu.inbox',
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
     onToolResult: (ctx) => {
       const recovery = this.steering.onToolResult(ctx);
@@ -185,13 +186,13 @@ export class AgentOrchestrator {
 
       if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
     },
-    prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
+    prepareStep: (ctx: PrepareStepContext): Promise<ModelMessage[] | undefined> => {
       // The turn's file ledger is the other half of the progress trigger's
       // evidence — what a codemode program actually changed, which no
       // tool-call signature can show. Both live on this object, per turn.
       const steer = this.steering.steerFor(ctx, this.acc.files.progress);
 
-      return this.signals.prepareStep(ctx, steer ? [steer] : []);
+      return this.inbox.prepareStep(ctx, steer ? [steer] : []);
     },
   };
   /** The turn's execution recoveries — failure streaks the steering ledger saw
@@ -207,6 +208,8 @@ export class AgentOrchestrator {
   private observeRecoveries = false;
   private turnEvolutionEnabled = false;
   private activeWorkMode: WorkMode = 'build';
+  /** The live turn's mission scope, captured in beginTurn for the budget. */
+  private activeMissions: readonly string[] = [];
   private readonly reflectionInterval = DEFAULT_SESSION_REFLECTION_INTERVAL;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -232,15 +235,11 @@ export class AgentOrchestrator {
    *  filled. */
   private shadowTrials: Promise<void> | null = null;
 
-  constructor(private readonly deps: AgentOrchestratorDeps) {
+  constructor(private readonly deps: AgentOrchestratorDeps, steers?: UserSteerDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
-    this.signals = new SignalDelivery(
-      deps.host,
-      (e, d) => deps.sinks?.logActivity?.(e, d),
-      () => this.activeWorkMode,
-    );
+    this.inbox = new Inbox(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d), steers);
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
       (fn, ms) => deps.host.setTimer(fn, ms),
@@ -278,13 +277,14 @@ export class AgentOrchestrator {
     // in-episode loop's absence along with the rest of it.
     const workMode = workModeForTurnMetadata(metadata);
     this.activeWorkMode = workMode;
+    this.activeMissions = readMissionLabels(metadata);
     const evolutionEnabled = this.deps.engine.enabled && workMode !== 'plan';
     this.turnEvolutionEnabled = evolutionEnabled;
     this.craft.reset(evolutionEnabled);
     this.turnRecoveries = [];
     this.observeRecoveries = evolutionEnabled;
-    this.signals.beginTurn(continuation, readSignalId(metadata));
-    this.deps.budget?.activate(readMissionLabels(metadata));
+    this.inbox.beginTurn(continuation, readSignalId(metadata));
+    this.deps.budget?.activate(this.activeMissions);
   }
 
   /** Role resolution can further restrict a Build request after accounting opens.
@@ -861,10 +861,9 @@ export class AgentOrchestrator {
       idempotencyKey: turnId,
       compensate: () => this.returnEventsToPending(ids),
       metadata,
-      requiresOwnTurn: batch.mode !== null,
     };
 
-    await this.signals.deliver(signal);
+    await this.inbox.send(signal);
   }
 
   // THE SETTLE SPINE IS THE TERMINAL ROSTER, and it is not here.

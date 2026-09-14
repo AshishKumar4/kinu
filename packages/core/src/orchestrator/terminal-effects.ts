@@ -78,7 +78,7 @@ import {
 } from '../steer-branch';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
-import type { SignalDeliverer } from '../types/signals';
+import type { AgentInbox } from '../types/signals';
 
 /**
  * The driver's verdict on how a turn ended, as a recorded effect input reads it
@@ -260,7 +260,7 @@ export function terminalEffect<I>(spec: {
  * prefix is per-signal because two different follow-ups on one response must not
  * collide onto one durable message id.
  */
-function signalTerminalEffect(signals: SignalDeliverer, spec: {
+function signalTerminalEffect(inbox: AgentInbox, spec: {
   readonly kind: string;
   readonly text: string;
   /** The `idempotencyKey` prefix. Omitted when the scope is unkeyed — a
@@ -283,7 +283,7 @@ function signalTerminalEffect(signals: SignalDeliverer, spec: {
           idempotencyKey: `${spec.keyPrefix}:${effectScope}`,
         };
 
-      const outcome = await signals.deliver(signal);
+      const outcome = await inbox.send(signal);
 
       return outcome === 'undelivered'
         ? { status: 'owed', detail: spec.undelivered }
@@ -293,8 +293,8 @@ function signalTerminalEffect(signals: SignalDeliverer, spec: {
 }
 
 /** The one durable body both backends use for a context-overflow retry. */
-export function overflowRetryTerminalEffect(signals: SignalDeliverer): TerminalEffect {
-  return signalTerminalEffect(signals, {
+export function overflowRetryTerminalEffect(inbox: AgentInbox): TerminalEffect {
+  return signalTerminalEffect(inbox, {
     kind: OVERFLOW_RETRY_EVENT,
     text: OVERFLOW_RETRY_TEXT,
     keyPrefix: 'overflow-retry',
@@ -315,8 +315,8 @@ export function overflowRetryTerminalEffect(signals: SignalDeliverer): TerminalE
  * is exactly the state the audit named: a turn published as complete with the
  * work after it never done.
  */
-export function outputLimitContinuationTerminalEffect(signals: SignalDeliverer): TerminalEffect {
-  return signalTerminalEffect(signals, {
+export function outputLimitContinuationTerminalEffect(inbox: AgentInbox): TerminalEffect {
+  return signalTerminalEffect(inbox, {
     kind: OUTPUT_CONTINUATION_EVENT,
     text: OUTPUT_CONTINUATION_TEXT,
     keyPrefix: 'output-continuation',

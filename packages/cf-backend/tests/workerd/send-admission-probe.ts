@@ -27,7 +27,7 @@ import { Think, type ChatRecoveryConfig } from '@cloudflare/think';
 import type { ModelStreamPart } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel, ToolSet } from 'ai';
-import { SignalDelivery, type ProgrammaticTurn } from '@kinu.run/core';
+import { Inbox, type ProgrammaticTurn } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const USAGE = {
@@ -179,7 +179,7 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
   async deliverSignal(text: string): Promise<SignalReceipt> {
     const accepted = Promise.withResolvers<SignalReceipt>();
 
-    const signals = new SignalDelivery({
+    const signals = new Inbox({
       broadcast: (event) => this.broadcast(JSON.stringify(event)),
       turnInFlight: () => false,
       setTimer: () => { throw new Error('signal admission does not schedule a fixture timer'); },
@@ -197,7 +197,7 @@ export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
       },
     });
 
-    const outcome = await signals.deliver({ kind: 'mcp', text });
+    const outcome = await signals.send({ kind: 'mcp', text });
 
     if (outcome !== 'queued') throw new Error('the signal was not admitted');
 

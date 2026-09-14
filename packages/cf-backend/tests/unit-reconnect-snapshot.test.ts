@@ -67,9 +67,9 @@ const RUNNING_BRANCH = `${BRANCH_ID}:running:${BRANCH_RATIONALE}`;
  * A workspace with one acknowledged steer and one running branch, both written
  * through the production seams that own them.
  *
- * The steer goes through `steerTurn`, the RPC the composer calls, which refuses
- * unless a turn is genuinely in flight with a durable identity — so the row it
- * writes is bound to a real turn rather than inserted beside one. The branch
+ * The steer goes through `send` while a turn is genuinely in flight with a
+ * durable identity — the RPC the composer calls — so the row it writes binds
+ * to a real turn rather than being inserted beside one. The branch
  * goes through `startBranchHead`, journalled under the DERIVED head id a branch
  * run really uses; a hand-written row would normalise exactly that away.
  * `spawnedAt` states WHEN the branch was spawned, for the one case that turns on
@@ -88,9 +88,20 @@ async function workspaceWithQueuedWork(
   // the steer's own frames are asserted by `unit-mid-turn-steer`. What matters
   // here is the row the accept writes.
   Reflect.set(seeded.agent, 'broadcast', () => {});
-  seeded.agent.harnessBeginTurn('turn-n018');
+  // Production opens a turn through beforeTurn; driving the same entry point
+  // gives beforeStep the prepared snapshot it refuses without, and writes the
+  // durable turn identity the steer row binds to.
+  await seeded.agent.beforeTurn({
+    system: 'sys',
+    messages: [{ role: 'user', content: 'deploy the api' }, { role: 'assistant', content: 'starting' }],
+    tools: {},
+    model: new MockLanguageModelV3(),
+    continuation: false,
+    body: {},
+  });
+
   seeded.agent.declareTurnInFlight(true);
-  expect(await seeded.agent.steerTurn(STEER)).toEqual({ landed: 'mid-turn' });
+  expect(await seeded.agent.send(STEER)).toEqual({ landed: 'mid-turn' });
 
   const clock = spawnedAt === undefined
     ? null

@@ -55,7 +55,7 @@ import {
   type AgentSearchNode,
   type AgentToolSurface,
   type AgentTranscriptMessage,
-  type AgentTurnResult,
+  type AgentSendResult,
   type DeviceConsentSurface,
   type FileCheckpointSurface,
   type ForkPoint,
@@ -278,6 +278,7 @@ const SocketFrameSchema = v.objectWithRest({
   done: v.optional(v.boolean()),
   /** Set by the DO on every frame of a stream it replays. */
   replay: v.optional(v.boolean()),
+  landed: v.optional(v.picklist(['mid-turn', 'turn'])),
 }, JsonValueSchema);
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
@@ -409,30 +410,12 @@ export class CloudAgentClient implements AgentClient {
     return () => this.listeners.delete(listener);
   }
 
-  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
-    return this.submit(prompt, opts, false);
-  }
-
-  /** Cloud steer: the DO persists an incoming chat request immediately and
-   *  serializes it on its TurnQueue, so a mid-turn submit reaches the agent
-   *  now and runs as the next turn at the boundary. Admission stays immediate;
-   *  this client owns the submission until its result or failure is rendered. */
-  steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
-    if (this.activeTurns.size === 0) return false;
-    const taskId = randomRequestId();
-    let task: Promise<void> | null = null;
-    task = (async () => {
-      try {
-        await this.submit(prompt, opts, true);
-      } catch (cause) {
-        this.emit({ type: 'error', message: renderThrownChain({ cause }) });
-      } finally {
-        if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
-      }
-    })();
-    this.launchedTasks.set(taskId, task);
-
-    return true;
+  /** The raw submit, whatever the workspace is doing: the server routes a
+   *  submit that arrives while a turn runs through its inbox under this
+   *  client's message id — attachments included — and answers the request
+   *  with where it landed; an idle workspace runs it as the SDK turn. */
+  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
+    return this.submit(prompt, opts, this.activeTurns.size > 0);
   }
 
   /** Steer-as-Branch: fire the branchTurn RPC — the DO spawns the head and
@@ -469,7 +452,7 @@ export class CloudAgentClient implements AgentClient {
     return true;
   }
 
-  private async submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Promise<AgentTurnResult> {
+  private async submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Promise<AgentSendResult> {
     const text = promptText(prompt).trim();
     const files = promptFiles(prompt);
 
@@ -490,12 +473,15 @@ export class CloudAgentClient implements AgentClient {
 
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
     this.activeCliSession.append('user', sessionEntry);
-    this.emit({ type: 'turn-start', kind: 'user', text });
+
+    // A message to a running turn starts no turn of its own: turn-start is
+    // announced only if the server answers with a stream after all.
+    if (!steered) this.emit({ type: 'turn-start', kind: 'user', text });
 
     const requestId = randomRequestId();
 
-    return await new Promise<AgentTurnResult>((resolve) => {
-      const turn = new CloudTurnStream((event) => this.emit(event), resolve);
+    return await new Promise<AgentSendResult>((resolve) => {
+      const turn = new CloudTurnStream((event) => this.emit(event), resolve, { deferStart: steered ? text : null });
       this.activeTurns.set(requestId, turn);
 
       try {
@@ -1058,6 +1044,17 @@ export class CloudAgentClient implements AgentClient {
       const message = payload.body || 'Cloud agent stream failed.';
       this.emit({ type: 'error', message });
       active.settle(true);
+
+      return;
+    }
+
+    // The server took the message into its running turn: the request is
+    // answered without a stream, and the words land at that turn's next step.
+    // Checked before apply — a landed frame's body is not stream content, and
+    // applying it would fire the deferred turn-start of a turn that never ends.
+    if (payload.done && payload.landed === 'mid-turn') {
+      this.activeTurns.delete(payload.id);
+      active.landedMidTurn();
 
       return;
     }

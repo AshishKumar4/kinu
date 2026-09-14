@@ -640,6 +640,14 @@
     "answer",
     "created_at"
   ],
+  "pending_steer_files@packages/cf-backend/src/actor-agent.ts": [
+    "seq",
+    "actor_id",
+    "steer_id",
+    "filename",
+    "media_type",
+    "url"
+  ],
   "pending_steers@packages/cf-backend/src/actor-agent.ts": [
     "seq",
     "actor_id",

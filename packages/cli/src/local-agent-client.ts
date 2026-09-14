@@ -63,6 +63,7 @@ import type {
   AgentSearchNode,
   AgentToolSurface,
   AgentTranscriptMessage,
+  AgentSendResult,
   AgentTurnResult,
   FileCheckpointSurface,
   ForkPoint,
@@ -405,10 +406,10 @@ export class LocalAgentClient implements AgentClient {
     return () => this.listeners.delete(listener);
   }
 
-  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentTurnResult> {
-    if (this.pending) throw new Error('A turn is already in progress.');
+  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
     const text = promptText(prompt);
     const files = promptFiles(prompt);
+    const payload = files.length > 0 ? { text, files } : text;
 
     // The JSONL log records attachment names, never the data-URL payloads.
     const sessionEntry: JsonObject = {
@@ -418,42 +419,36 @@ export class LocalAgentClient implements AgentClient {
     };
 
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
+
+    // A turn is running: the message reaches its next step through the
+    // session, which answers at once; nothing here waits for that turn.
+    if (this.pending) {
+      const landed = await this.session.send(payload, { tier: opts.tier });
+
+      if (landed !== 'mid-turn') throw new Error('A turn is already in progress.');
+      this.activeCliSession.append('user', { ...sessionEntry, steered: true });
+
+      return { landed };
+    }
+
     this.activeCliSession.append('user', sessionEntry);
     const pending: PendingLocalTurn = { result: null };
     this.pending = pending;
 
     try {
-      await this.session.send(files.length > 0 ? { text, files } : text, { tier: opts.tier });
+      const landed = await this.session.send(payload, { tier: opts.tier });
+
+      if (landed === 'mid-turn') return { landed };
       // An agent the owner added without naming has no title yet. What the
       // owner brings to it is the only thing that distinguishes it from the
       // peers it shares a mission with, so that is what names it — once, since
       // persisting marks `name_origin` and the shared policy stops matching.
       this.startAutoTitle({ mission: text });
 
-      return pending.result ?? unfinishedTurn();
+      return { landed, ...(pending.result ?? unfinishedTurn()) };
     } finally {
       if (this.pending === pending) this.pending = null;
     }
-  }
-
-  steer(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
-    const text = promptText(prompt);
-    const files = promptFiles(prompt);
-    const accepted = this.session.steer(files.length > 0 ? { text, files } : text);
-
-    if (!accepted) return false;
-
-    const sessionEntry: JsonObject = {
-      text,
-      steered: true,
-      cwd: opts.cwd ?? process.cwd(),
-      backend: 'local',
-    };
-
-    if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
-    this.activeCliSession.append('user', sessionEntry);
-
-    return true;
   }
 
   /** Steer-as-Branch: the in-process session runs the redirect as one

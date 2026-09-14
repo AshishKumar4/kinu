@@ -26,7 +26,7 @@ import {
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY,
   stampTurnAuthor, transcriptRole, turnAuthor, uiMessageRow, type StoredRowProjection,
 } from '../src/utils/ui-message';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import { FORK_INTERRUPTED_SIGNAL } from '../src/heads/reconcile';
 import { COMPLETION_GATE_EVENT } from '../src/orchestrator/completion-gate';
 import { OVERFLOW_RETRY_EVENT } from '../src/turn-failure';
@@ -68,14 +68,14 @@ function recordingHost() {
 describe('the seam stamps who wrote the turn', () => {
   test('every signal-queued turn is the harness unless its producer says otherwise', async () => {
     const { host, turns } = recordingHost();
-    const signals = new SignalDelivery(host);
+    const inbox = new Inbox(host);
 
     for (const kind of [
       'background_job', 'event_drain', 'workspace_created', 'deferred_approval',
       FORK_INTERRUPTED_SIGNAL, COMPLETION_GATE_EVENT, OVERFLOW_RETRY_EVENT, 'take_pick',
       'a_kind_invented_tomorrow',
     ]) {
-      await signals.deliver({ kind, text: `${kind} happened` });
+      await inbox.send({ kind, text: `${kind} happened` });
     }
 
     expect(turns).toHaveLength(9);
@@ -90,7 +90,7 @@ describe('the seam stamps who wrote the turn', () => {
     // The MCP bridge (cf-backend runTaskFromMcp) is the one signal whose text
     // a person typed. It says so, and the seam does not overwrite it.
     const { host, turns } = recordingHost();
-    await new SignalDelivery(host).deliver({
+    await new Inbox(host).send({
       kind: 'mcp', text: 'ship the coupon fix',
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
@@ -103,7 +103,7 @@ describe('the seam stamps who wrote the turn', () => {
     // it. The card and the row disagreeing is a signal that renders one way
     // while it is live and the other way after a reload.
     const { host, turns, cards } = recordingHost();
-    await new SignalDelivery(host).deliver({ kind: FORK_INTERRUPTED_SIGNAL, text: '23 head(s)…' });
+    await new Inbox(host).send({ kind: FORK_INTERRUPTED_SIGNAL, text: '23 head(s)…' });
     expect(cards).toHaveLength(1);
     expect(cards[0]![TURN_AUTHOR_METADATA_KEY]).toBe('harness');
     expect(turns[0]!.metadata?.[TURN_AUTHOR_METADATA_KEY]).toBe('harness');

@@ -18,7 +18,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { asRecord } from './options';
-import type { AgentClientEvent, AgentTurnResult } from './agent-client';
+import type { AgentClientEvent, AgentSendResult, AgentTurnResult } from './agent-client';
 
 export class CloudTurnStream {
   /** Whether this turn's resume has been acked on the LIVE socket. The DO
@@ -41,10 +41,25 @@ export class CloudTurnStream {
   /** Bodies counted in the CURRENT replay, against `applied`. */
   private replayed = 0;
 
+  /** The text of a message sent to a RUNNING turn, whose turn-start is owed
+   *  only if the server answers with a stream after all; null once announced
+   *  or for a message that started its own turn. */
+  private deferredStart: string | null;
+
   constructor(
     private readonly emit: (event: AgentClientEvent) => void,
-    private readonly resolve: (result: AgentTurnResult) => void,
-  ) {}
+    private readonly resolve: (result: AgentSendResult) => void,
+    opts: { readonly deferStart: string | null } = { deferStart: null },
+  ) {
+    this.deferredStart = opts.deferStart;
+  }
+
+  /** The server took the message into its running turn: no turn of its own
+   *  started, so no turn-start/turn-end pair is owed. */
+  landedMidTurn(): void {
+    this.deferredStart = null;
+    this.resolve({ landed: 'mid-turn' });
+  }
 
   /** A resume ack just went out: the replay that answers it starts at chunk
    *  zero, so the comparison against `applied` starts there too. */
@@ -61,12 +76,23 @@ export class CloudTurnStream {
    */
   apply(body: string, replay: boolean): void {
     if (!this.admit(replay)) return;
+
+    if (this.deferredStart !== null) {
+      this.emit({ type: 'turn-start', kind: 'user', text: this.deferredStart });
+      this.deferredStart = null;
+    }
+
     this.decode(body);
   }
 
   /** End the turn: exactly ONE turn-end per turn-start, carrying `hadError`
    *  (the error event precedes it) so a surface can pair the lifecycle. */
   settle(hadError = false): void {
+    if (this.deferredStart !== null) {
+      this.emit({ type: 'turn-start', kind: 'user', text: this.deferredStart });
+      this.deferredStart = null;
+    }
+
     const result: AgentTurnResult = {
       text: this.text,
       toolCalls: this.toolCalls,
@@ -76,7 +102,7 @@ export class CloudTurnStream {
     };
 
     this.emit({ type: 'turn-end', turn: result });
-    this.resolve(result);
+    this.resolve({ landed: 'turn', ...result });
   }
 
   private admit(replay: boolean): boolean {

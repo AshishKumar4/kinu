@@ -21,7 +21,7 @@
  */
 import type { UIMessage } from 'ai';
 import * as v from 'valibot';
-import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/user-steer';
+import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../orchestrator/inbox';
 
 /** One part of a message, as a renderer receives it. */
 export type TranscriptPart = UIMessage['parts'][number];

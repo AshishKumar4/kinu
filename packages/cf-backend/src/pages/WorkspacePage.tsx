@@ -473,21 +473,12 @@ function SubordinateChatColumn({
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
 
-  // `sendChat` owns admission — one synchronous latch inside `useKinu`. A
-  // reactive `state.isStreaming` pre-check here is what let two presses in one
-  // tick both pass, so the composer is cleared only for the press that was
-  // actually admitted and a refused press leaves the draft alone.
-  const send = useCallback(() => {
-    const t = input.trim();
-
-    if (!t) return;
-
-    if (!state.sendChat(t, [], effectiveMode)) return;
-    setInput("");
-  }, [input, state, effectiveMode, setInput]);
-
-  const { notice: steerNotice, steer, stop } = useSteerActions({
-    steerChat: (text) => state.steerChat(text, effectiveMode),
+  // One submit, whatever the agent is doing: `sendChat` owns admission (one
+  // synchronous latch inside `useKinu`) and decides between starting a turn
+  // and handing the words to the running one; the draft is cleared only for
+  // a press that was taken.
+  const { notice: steerNotice, send, stop } = useSteerActions({
+    sendChat: (text, files) => state.sendChat(text, [...files], effectiveMode),
     abortChat: state.abortChat,
     draft: input,
     setDraft: ui.updateDraft,
@@ -588,7 +579,6 @@ function SubordinateChatColumn({
             : `Message ${title}…`}
           disabled={state.connectionStatus !== "connected"}
           streaming={state.isStreaming}
-          onSteer={steer}
           onStop={stop}
           mode={{ value: effectiveMode, onChange: ui.setMode, locked: planGate.locked }}
           modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" />}
@@ -900,20 +890,6 @@ export default function WorkspacePage() {
   }, [agentId]);
 
 
-  // `sendChat` owns admission — one synchronous latch inside `useKinu`, so a
-  // reactive `state.isStreaming` pre-check here is exactly what let two presses
-  // in one tick both start a turn. The draft and its attachments are cleared
-  // only for the press that was admitted; a refused press keeps both.
-  const handleSend = useCallback(() => {
-    const t = chatInput.trim();
-
-    if (!t && attachments.parts.length === 0) return;
-
-    if (!state.sendChat(t, [...attachments.parts], effectiveChatMode)) return;
-    setChatInput("");
-    attachments.clear();
-  }, [chatInput, attachments, effectiveChatMode, state]);
-
   // Steer-as-Branch: while the agent streams, the composer's split affordance
   // runs the draft as a parallel head (branchTurn) — the live turn continues;
   // progress arrives as branch_status broadcasts (state.branchRuns).
@@ -941,19 +917,23 @@ export default function WorkspacePage() {
   }, [chatInput, effectiveChatMode, state]);
 
   /**
-   * Steer and Stop — the composer's mid-turn pair, shared with the subordinate
-   * column so both surfaces give the same account of where a message went.
+   * Send and Stop — the composer's pair, shared with the subordinate column so
+   * both surfaces give the same account of where a message went. `sendChat`
+   * owns admission (one synchronous latch inside `useKinu`) and decides
+   * between starting a turn and handing the words to the running one; the
+   * draft and its attachments are cleared only for a press that was taken.
    *
-   * The thread the chat draws — every steer inside the turn that read it, and
-   * only an unplaceable one trailing — comes from `useChatThread` above, which
-   * owns that one rule for the live splice and the reloaded row alike.
+   * The thread the chat draws — every mid-turn message inside the turn that
+   * read it, and only an unplaceable one trailing — comes from `useChatThread`
+   * above, which owns that one rule for the live splice and the reloaded row
+   * alike.
    */
-  const { notice: steerNotice, steer: handleSteer, stop: handleStop } = useSteerActions({
-    steerChat: (text) => state.steerChat(text, effectiveChatMode),
+  const { notice: steerNotice, send: handleSend, stop: handleStop } = useSteerActions({
+    sendChat: (text, files) => state.sendChat(text, [...files], effectiveChatMode),
     abortChat: state.abortChat,
     draft: chatInput,
     setDraft: ui.updateDraft,
-    hasAttachments: attachments.parts.length > 0,
+    attachments: { parts: attachments.parts, clear: attachments.clear },
     steerRuns: state.steerRuns,
   });
 
@@ -1370,7 +1350,6 @@ export default function WorkspacePage() {
                 placeholder={state.isStreaming ? "Steer the running turn…" : "Send a message..."}
                 disabled={state.connectionStatus !== "connected"}
                 streaming={state.isStreaming}
-                onSteer={handleSteer}
                 onStop={handleStop}
                 onBranch={handleBranch}
                 mode={{ value: effectiveChatMode, onChange: setChatMode, locked: planGate.locked }}

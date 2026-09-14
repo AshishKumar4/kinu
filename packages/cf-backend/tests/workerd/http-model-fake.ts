@@ -28,6 +28,9 @@ export interface CapturedHttpCall {
   readonly stream: boolean;
   readonly users: string[];
   readonly conversation: ReadonlyArray<{ role: string; content: string }>;
+  /** Non-text content parts per message — attachments as they reached the
+   *  wire (image_url / file / input_audio), which `textOf` drops. */
+  readonly fileParts: ReadonlyArray<ReadonlyArray<{ type: string; url: string }>>;
   readonly authHeader: string | null;
   /** Tool definitions the request offered, by function name — the real
    *  registry surface as it reached the wire. */
@@ -100,6 +103,52 @@ function textOf(content: MessageContent | null | undefined): string {
   return content;
 }
 
+/** The attachment halves of one message's content array: non-text parts the
+ *  wire carries (`image_url`, `file`, `input_audio`), reduced to a comparable
+ *  `{type,url}` so a splice assertion reads the part, not the adapter shape. */
+function filePartsOf(content: MessageContent | null | undefined): { type: string; url: string }[] {
+  if (!Array.isArray(content)) return [];
+
+  return content.flatMap((part): { type: string; url: string }[] => {
+    const image = v.safeParse(v.object({ type: v.literal('image_url'), image_url: v.object({ url: v.string() }) }), part);
+
+    if (image.success) return [{ type: image.output.type, url: image.output.image_url.url }];
+
+    const file = v.safeParse(v.object({ type: v.literal('file'), file: v.object({ file_data: v.string() }) }), part);
+
+    if (file.success) return [{ type: file.output.type, url: file.output.file.file_data }];
+
+    const audio = v.safeParse(v.object({ type: v.literal('input_audio'), input_audio: v.object({ data: v.string() }) }), part);
+
+    if (audio.success) return [{ type: audio.output.type, url: audio.output.input_audio.data }];
+
+    return [];
+  });
+}
+
+function recordCall(url: URL, request: Request, body: OutboundBody): void {
+  const messages = body.messages ?? [];
+
+  log.push({
+    url: url.toString(),
+    method: request.method,
+    host: url.host,
+    path: url.pathname,
+    model: body.model ?? '',
+    stream: body.stream === true,
+    users: messages.filter((m) => m.role === 'user').map((m) => textOf(m.content)),
+    conversation: messages.map((m) => ({ role: m.role ?? '', content: textOf(m.content) })),
+    fileParts: messages.map((m) => filePartsOf(m.content)),
+    authHeader: request.headers.get('authorization'),
+    offeredTools: (body.tools ?? []).map((t) => t.function.name),
+    toolCalls: messages.flatMap((m) => (m.tool_calls ?? [])
+      .map((c) => ({ id: c.id, name: c.function.name }))),
+    toolResults: messages
+      .filter((m) => m.role === 'tool')
+      .map((m) => textOf(m.content)),
+  });
+}
+
 function sseChunk(delta: SseDelta, finishReason?: string): string {
   const base = { index: 0, delta };
 
@@ -136,27 +185,6 @@ function sseResponse(chunks: readonly string[]): Response {
   );
 }
 
-function recordCall(url: URL, request: Request, body: OutboundBody): void {
-  const messages = body.messages ?? [];
-
-  log.push({
-    url: url.toString(),
-    method: request.method,
-    host: url.host,
-    path: url.pathname,
-    model: body.model ?? '',
-    stream: body.stream === true,
-    users: messages.filter((m) => m.role === 'user').map((m) => textOf(m.content)),
-    conversation: messages.map((m) => ({ role: m.role ?? '', content: textOf(m.content) })),
-    authHeader: request.headers.get('authorization'),
-    offeredTools: (body.tools ?? []).map((t) => t.function.name),
-    toolCalls: messages.flatMap((m) => (m.tool_calls ?? [])
-      .map((c) => ({ id: c.id, name: c.function.name }))),
-    toolResults: messages
-      .filter((m) => m.role === 'tool')
-      .map((m) => textOf(m.content)),
-  });
-}
 
 async function echoBody(body: OutboundBody): Promise<Response> {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));

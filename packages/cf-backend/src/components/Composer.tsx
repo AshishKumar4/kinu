@@ -276,13 +276,6 @@ export interface ComposerProps {
   /** The model selector, passed in because it is a connected component and this
    *  one has to stay renderable without a socket. */
   modelPicker?: ReactNode;
-  /**
-   * Send WITHOUT stopping the turn: the draft is spliced into the agent's next
-   * step. Wired ⇒ the composer keeps a working submit action while streaming,
-   * which is the difference between "you must stop the agent to say anything"
-   * and a conversation.
-   */
-  onSteer?: () => void;
   /** Run the draft as a parallel take instead of steering or interrupting.
    *  Only offered mid-stream, and never in Plan mode. */
   onBranch?: () => void;
@@ -291,7 +284,7 @@ export interface ComposerProps {
 
 export function Composer({
   value, onValueChange, onSend, placeholder, disabled, streaming, onStop,
-  notices, mode, attachments, modelPicker, onSteer, onBranch, textareaRef,
+  notices, mode, attachments, modelPicker, onBranch, textareaRef,
 }: ComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
@@ -301,11 +294,12 @@ export function Composer({
   // The runtime sends no stopped event, so the streaming flag going false is
   // the only confirmation a stop landed.
   useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
-  // While a turn runs the primary action STEERS it. Enter has to reach the same
-  // thing the button does — an Enter that silently does nothing is the defect
-  // this replaces, and the composer was in exactly that state whenever the
-  // agent was working.
-  const submit = streaming ? onSteer : onSend;
+  // One submit whatever the agent is doing: while a turn runs it is the words
+  // handed to that turn, and the button says so. Enter reaches the same thing
+  // the button does — an Enter that silently does nothing is the defect this
+  // replaces, and the composer was in exactly that state whenever the agent
+  // was working.
+  const submit = onSend;
 
   return (
     // @container: the action row labels itself when there is room and falls back
@@ -454,7 +448,7 @@ export function Composer({
               </button>
             )}
             {streaming
-              ? <button type="button" onClick={onSteer} disabled={empty || disabled || !onSteer}
+              ? <button type="button" onClick={onSend} disabled={empty || disabled || hasFailedAttachment}
                   className="p-btn inline-flex h-[30px] cursor-pointer items-center justify-center gap-1.5 rounded-full px-[18px] text-[12.5px]"
                   aria-label="Steer the running turn"
                   title="Send this to the running turn. It arrives at the agent's next step.">
