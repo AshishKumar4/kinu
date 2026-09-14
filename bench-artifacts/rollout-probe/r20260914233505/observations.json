@@ -1,0 +1,1778 @@
+{
+  "runId": "r20260914233505",
+  "date": "2026-09-14T23:40:13.086Z",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:3b11f7bf756af01664663f05fd1f3c1721dababc6a4fcf2bfa047d341d9b6a9e",
+  "cells": [
+    {
+      "cell": "passive",
+      "worker": "kinu-devbox-rollout-probe-r20260914233505-passive",
+      "application": "kinu-devbox-rollout-probe-r20260914233505-passive-onstartexecprobe",
+      "applicationId": "a0358190-7d38-4abf-9b24-f3a4cc3732e9",
+      "deployStartedAt": 1789428905262,
+      "deployedAt": 1789428912254,
+      "workerAnsweredAt": 1789428932587,
+      "healthyAt": 1789428950014,
+      "healthyAfterDeployMs": 37760,
+      "firstAdmissionAt": 1789428952887,
+      "firstAdmissionAfterDeployMs": 40633,
+      "health": [
+        {
+          "at": 1789428933481,
+          "sinceDeployMs": 21227,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428935883,
+          "sinceDeployMs": 23629,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428938301,
+          "sinceDeployMs": 26047,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428940501,
+          "sinceDeployMs": 28247,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428942764,
+          "sinceDeployMs": 30510,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428945118,
+          "sinceDeployMs": 32864,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428947416,
+          "sinceDeployMs": 35162,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428950014,
+          "sinceDeployMs": 37760,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 1,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428952237,
+          "sinceDeployMs": 39983,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 1,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428954450,
+          "sinceDeployMs": 42196,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 1,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        }
+      ],
+      "drives": [
+        {
+          "at": 1789428950397,
+          "sinceDeployMs": 38143,
+          "ms": 2490,
+          "admitted": true,
+          "detail": "onStart entered 1839 ms after start"
+        }
+      ],
+      "cleanup": [
+        "destroy: 200 {\"ok\":true,\"box\":\"passive-r20260914233505\",\"destroyed\":true}",
+        "worker:  ⛅️ wrangler 4.129.0 (update available 4.131.2) ───────────────────────────────",
+        "kinu-devbox-rollout-probe-r20260914233505-passive-onstartexecprobe: absent",
+        "application listed after delete: 0"
+      ],
+      "errors": []
+    },
+    {
+      "cell": "churn",
+      "worker": "kinu-devbox-rollout-probe-r20260914233505-churn",
+      "application": "kinu-devbox-rollout-probe-r20260914233505-churn-onstartexecprobe",
+      "applicationId": "a03a3f5b-bc57-4dc5-a881-89f2cd9d6dc3",
+      "deployStartedAt": 1789428960956,
+      "deployedAt": 1789428967503,
+      "workerAnsweredAt": 1789428975725,
+      "healthyAt": null,
+      "healthyAfterDeployMs": null,
+      "firstAdmissionAt": 1789429007139,
+      "firstAdmissionAfterDeployMs": 39636,
+      "health": [
+        {
+          "at": 1789428976545,
+          "sinceDeployMs": 9042,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 1,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428978798,
+          "sinceDeployMs": 11295,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 1,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428981200,
+          "sinceDeployMs": 13697,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 1,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428983423,
+          "sinceDeployMs": 15920,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 1,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428985685,
+          "sinceDeployMs": 18182,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 1,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789428987895,
+          "sinceDeployMs": 20392,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428990154,
+          "sinceDeployMs": 22651,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428992461,
+          "sinceDeployMs": 24958,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428994773,
+          "sinceDeployMs": 27270,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428996983,
+          "sinceDeployMs": 29480,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789428999327,
+          "sinceDeployMs": 31824,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789429001997,
+          "sinceDeployMs": 34494,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789429004303,
+          "sinceDeployMs": 36800,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789429006531,
+          "sinceDeployMs": 39028,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789429009188,
+          "sinceDeployMs": 41685,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789429011469,
+          "sinceDeployMs": 43966,
+          "instances": 1,
+          "health": {
+            "active": 0,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 1
+          },
+          "error": null
+        },
+        {
+          "at": 1789429013770,
+          "sinceDeployMs": 46267,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429015996,
+          "sinceDeployMs": 48493,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429018181,
+          "sinceDeployMs": 50678,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429020444,
+          "sinceDeployMs": 52941,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429022659,
+          "sinceDeployMs": 55156,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429024873,
+          "sinceDeployMs": 57370,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429027559,
+          "sinceDeployMs": 60056,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429029778,
+          "sinceDeployMs": 62275,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429032048,
+          "sinceDeployMs": 64545,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429034290,
+          "sinceDeployMs": 66787,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429036545,
+          "sinceDeployMs": 69042,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429038939,
+          "sinceDeployMs": 71436,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429041243,
+          "sinceDeployMs": 73740,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429043455,
+          "sinceDeployMs": 75952,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429045749,
+          "sinceDeployMs": 78246,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429047966,
+          "sinceDeployMs": 80463,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429050183,
+          "sinceDeployMs": 82680,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429052405,
+          "sinceDeployMs": 84902,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429054684,
+          "sinceDeployMs": 87181,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429056977,
+          "sinceDeployMs": 89474,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429059259,
+          "sinceDeployMs": 91756,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429061484,
+          "sinceDeployMs": 93981,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429064223,
+          "sinceDeployMs": 96720,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429066533,
+          "sinceDeployMs": 99030,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429068800,
+          "sinceDeployMs": 101297,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429071088,
+          "sinceDeployMs": 103585,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429073288,
+          "sinceDeployMs": 105785,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429075574,
+          "sinceDeployMs": 108071,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429077785,
+          "sinceDeployMs": 110282,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429079999,
+          "sinceDeployMs": 112496,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429082284,
+          "sinceDeployMs": 114781,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429084620,
+          "sinceDeployMs": 117117,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429086828,
+          "sinceDeployMs": 119325,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429089101,
+          "sinceDeployMs": 121598,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429091374,
+          "sinceDeployMs": 123871,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429093643,
+          "sinceDeployMs": 126140,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429095853,
+          "sinceDeployMs": 128350,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429098035,
+          "sinceDeployMs": 130532,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429100307,
+          "sinceDeployMs": 132804,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429102537,
+          "sinceDeployMs": 135034,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429104808,
+          "sinceDeployMs": 137305,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429107027,
+          "sinceDeployMs": 139524,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429109311,
+          "sinceDeployMs": 141808,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429111541,
+          "sinceDeployMs": 144038,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429113746,
+          "sinceDeployMs": 146243,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429115951,
+          "sinceDeployMs": 148448,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429118185,
+          "sinceDeployMs": 150682,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429120443,
+          "sinceDeployMs": 152940,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429123124,
+          "sinceDeployMs": 155621,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429125327,
+          "sinceDeployMs": 157824,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429127621,
+          "sinceDeployMs": 160118,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429129902,
+          "sinceDeployMs": 162399,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429132214,
+          "sinceDeployMs": 164711,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429134447,
+          "sinceDeployMs": 166944,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429136723,
+          "sinceDeployMs": 169220,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429138948,
+          "sinceDeployMs": 171445,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429141173,
+          "sinceDeployMs": 173670,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429143432,
+          "sinceDeployMs": 175929,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429145753,
+          "sinceDeployMs": 178250,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429148016,
+          "sinceDeployMs": 180513,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429150260,
+          "sinceDeployMs": 182757,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429152566,
+          "sinceDeployMs": 185063,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429154758,
+          "sinceDeployMs": 187255,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429156960,
+          "sinceDeployMs": 189457,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429159333,
+          "sinceDeployMs": 191830,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429161997,
+          "sinceDeployMs": 194494,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429164216,
+          "sinceDeployMs": 196713,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429166870,
+          "sinceDeployMs": 199367,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429169083,
+          "sinceDeployMs": 201580,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429171278,
+          "sinceDeployMs": 203775,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429173593,
+          "sinceDeployMs": 206090,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429175917,
+          "sinceDeployMs": 208414,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429178490,
+          "sinceDeployMs": 210987,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429180724,
+          "sinceDeployMs": 213221,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429182954,
+          "sinceDeployMs": 215451,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429185190,
+          "sinceDeployMs": 217687,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429187410,
+          "sinceDeployMs": 219907,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429189633,
+          "sinceDeployMs": 222130,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429191922,
+          "sinceDeployMs": 224419,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429194259,
+          "sinceDeployMs": 226756,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429196498,
+          "sinceDeployMs": 228995,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429199099,
+          "sinceDeployMs": 231596,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429201349,
+          "sinceDeployMs": 233846,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429205795,
+          "sinceDeployMs": 238292,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        },
+        {
+          "at": 1789429208367,
+          "sinceDeployMs": 240864,
+          "instances": 1,
+          "health": {
+            "active": 1,
+            "assigned": 0,
+            "healthy": 0,
+            "stopped": 0,
+            "failed": 0,
+            "scheduling": 0,
+            "starting": 0
+          },
+          "error": null
+        }
+      ],
+      "drives": [
+        {
+          "at": 1789428976797,
+          "sinceDeployMs": 9294,
+          "ms": 6518,
+          "admitted": false,
+          "detail": "Aborted waiting for container to start as we received a cancellation signal"
+        },
+        {
+          "at": 1789428983315,
+          "sinceDeployMs": 15812,
+          "ms": 426,
+          "admitted": false,
+          "detail": "There is no container instance that can be provided to this Durable Object, try again later"
+        },
+        {
+          "at": 1789428983742,
+          "sinceDeployMs": 16239,
+          "ms": 6062,
+          "admitted": false,
+          "detail": "Aborted waiting for container to start as we received a cancellation signal"
+        },
+        {
+          "at": 1789428989804,
+          "sinceDeployMs": 22301,
+          "ms": 6060,
+          "admitted": false,
+          "detail": "Aborted waiting for container to start as we received a cancellation signal"
+        },
+        {
+          "at": 1789428995864,
+          "sinceDeployMs": 28361,
+          "ms": 424,
+          "admitted": false,
+          "detail": "There is no container instance that can be provided to this Durable Object, try again later"
+        },
+        {
+          "at": 1789428996288,
+          "sinceDeployMs": 28785,
+          "ms": 6054,
+          "admitted": false,
+          "detail": "Aborted waiting for container to start as we received a cancellation signal"
+        },
+        {
+          "at": 1789429002342,
+          "sinceDeployMs": 34839,
+          "ms": 4797,
+          "admitted": true,
+          "detail": "onStart entered 4518 ms after start"
+        }
+      ],
+      "cleanup": [
+        "destroy: 200 {\"ok\":true,\"box\":\"churn-r20260914233505\",\"destroyed\":true}",
+        "worker:  ⛅️ wrangler 4.129.0 (update available 4.131.2) ───────────────────────────────",
+        "kinu-devbox-rollout-probe-r20260914233505-churn-onstartexecprobe: absent",
+        "application listed after delete: 0"
+      ],
+      "errors": [
+        "no healthy instance within 240000 ms of deploy"
+      ]
+    }
+  ]
+}
