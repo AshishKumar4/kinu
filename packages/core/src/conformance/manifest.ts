@@ -464,6 +464,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_content_chunks: EVERYWHERE,
     slate_invocations: EVERYWHERE,
     slate_receipts: EVERYWHERE,
+    // The authored slate's durable KV — the `this.storage` surface — lives in
+    // the workspace object's database beside the slate's own rows, so every
+    // root that can host a slate must declare it.
+    slate_state: EVERYWHERE,
     // Which workspace instruction bytes the owner approved for system placement
     // (KINU-N028). EVERYWHERE for the same reason prompt_section_versions is:
     // the prompt builder classifies AGENTS.md and skills on every turn on every
