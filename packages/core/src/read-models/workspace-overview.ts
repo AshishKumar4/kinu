@@ -108,3 +108,64 @@ export function workspaceOverviewStatus(overview: WorkspaceOverview): WorkspaceO
 
   return { kind: 'idle' };
 }
+
+/** One fact a card can show beneath its lead line. `tone` is a surface-
+ *  neutral word — `warning`, `accent`, `muted`, `quiet`, `success` — and the
+ *  caller owns the class it maps to, same split as the status slot: core
+ *  decides WHICH facts exist, the surface decides how they look. */
+export interface WorkspaceOverviewFact {
+  readonly key: 'decisions' | 'working' | 'unfinished' | 'updates' | 'run' | 'task' | 'empty';
+  readonly text: string;
+  readonly tone: 'warning' | 'accent' | 'muted' | 'quiet' | 'success';
+}
+
+/** Every fact the overview holds, in the order a card lists them: what waits
+ *  on the owner, what is moving, what remains, what is unread, then how the
+ *  last run sealed and what it was doing.
+ *
+ *  A run status is quoted verbatim: `completed` earns `success`, a run that
+ *  was reported `failed` or `cancelled` warns, and anything else — an
+ *  `error`, an `aborted`, a run whose end never recorded a reason — is plain
+ *  text, because this row may describe but never decorate. The task preview
+ *  re-applies the wire bound so a caller-built overview cannot pin one fact
+ *  to a full-width line the row cannot hold.
+ *
+ *  Idle is evidence of nothing: when the status slot says `idle` the row is
+ *  exactly "No runs yet", so a quiet workspace can never sit beside a word
+ *  that reads as finished work. */
+export function workspaceOverviewEvidence(overview: WorkspaceOverview): readonly WorkspaceOverviewFact[] {
+  if (workspaceOverviewStatus(overview).kind === 'idle' && overview.latestRun === null) {
+    return [{ key: 'empty', text: 'No runs yet', tone: 'quiet' }];
+  }
+
+  const facts: WorkspaceOverviewFact[] = [];
+
+  if (overview.decisionsWaiting > 0) {
+    facts.push({ key: 'decisions', text: `${overview.decisionsWaiting} decisions waiting`, tone: 'warning' });
+  }
+
+  if (overview.activity === 'working') facts.push({ key: 'working', text: 'Working now', tone: 'accent' });
+
+  if (overview.activity === 'unfinished') facts.push({ key: 'unfinished', text: 'Unfinished work', tone: 'muted' });
+
+  if (overview.hasUpdates) facts.push({ key: 'updates', text: 'Updates to read', tone: 'muted' });
+
+  const run = overview.latestRun;
+
+  if (run !== null) {
+    const status = run.status ?? 'unknown';
+
+    const tone: WorkspaceOverviewFact['tone'] =
+      run.status === 'completed' ? 'success'
+      : run.status === 'failed' || run.status === 'cancelled' ? 'warning'
+      : 'muted';
+
+    facts.push({ key: 'run', text: `Last run: ${status}`, tone });
+
+    if (run.task !== null && run.task !== '') {
+      facts.push({ key: 'task', text: run.task.slice(0, TASK_PREVIEW_MAX), tone: 'quiet' });
+    }
+  }
+
+  return facts;
+}
