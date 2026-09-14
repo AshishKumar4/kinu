@@ -129,15 +129,10 @@ export interface WorkspaceOverviewFact {
  *  text, because this row may describe but never decorate. The task preview
  *  re-applies the wire bound so a caller-built overview cannot pin one fact
  *  to a full-width line the row cannot hold.
- *
- *  Idle is evidence of nothing: when the status slot says `idle` the row is
- *  exactly "No runs yet", so a quiet workspace can never sit beside a word
- *  that reads as finished work. */
+ *  Idle is evidence of nothing: "No runs yet" is the row's content only when
+ *  the list is empty, so a quiet workspace can never sit beside a word that
+ *  reads as finished work — and one with unread updates still names them. */
 export function workspaceOverviewEvidence(overview: WorkspaceOverview): readonly WorkspaceOverviewFact[] {
-  if (workspaceOverviewStatus(overview).kind === 'idle' && overview.latestRun === null) {
-    return [{ key: 'empty', text: 'No runs yet', tone: 'quiet' }];
-  }
-
   const facts: WorkspaceOverviewFact[] = [];
 
   if (overview.decisionsWaiting > 0) {
@@ -167,5 +162,5 @@ export function workspaceOverviewEvidence(overview: WorkspaceOverview): readonly
     }
   }
 
-  return facts;
+  return facts.length === 0 ? [{ key: 'empty', text: 'No runs yet', tone: 'quiet' }] : facts;
 }
