@@ -1,9 +1,9 @@
 import * as v from 'valibot';
 import {
   CheckpointReplySchema, ExecReplySchema, FileObservationSchema,
-  StateReplySchema, StartupCompletionSchema, StartupObservationSchema, DestroyReplySchema, TeardownReplySchema,
+  StateReplySchema, StartupCompletionSchema, StartupIncidentsSchema, StartupObservationSchema, DestroyReplySchema, TeardownReplySchema,
   type CheckpointReply, type ExecReply, type FileObservation,
-  type StateReply, type StartupCompletion, type StartupObservation, type DestroyReply, type TeardownReply,
+  type StateReply, type StartupCompletion, type StartupIncidents, type StartupObservation, type DestroyReply, type TeardownReply,
 } from './observation-schema';
 import { PublicationWindowSchema, publicationTotals, type PublicationTotals, type PublicationWindow } from './publication-meter';
 import { C3_BYTES_BOUND, C3_OVERWRITE_SHA256, C3_WORKLOAD } from './witness-files';
@@ -46,6 +46,9 @@ export interface LiveC3Observation {
   destroyReceipt: DestroyReply | null;
   restoration: StartupCompletion | null;
   restorationObservations: StartupObservation[];
+  /** The incident reasons read after each startup edge. A refused startup
+   *  without its reason strings is a red nobody can act on. */
+  incidents?: StartupIncidents;
   restoreProbe: { kind?: string; treeBytes?: number | null; wallMs: number | null; probeAt: number | null; outcome: string; phases?: RestorePhaseStamps } | null;
   blockReads?: BlockAttachMetrics | null;
   file: FileObservation | null;
@@ -84,6 +87,7 @@ export const LiveC3ObservationSchema = v.looseObject({
   })),
   beforeDestroy: v.nullable(StateReplySchema), destroyReceipt: v.nullable(DestroyReplySchema),
   restoration: v.nullable(StartupCompletionSchema), restorationObservations: v.array(StartupObservationSchema),
+  incidents: v.optional(StartupIncidentsSchema),
   restoreProbe: v.nullable(v.looseObject({ wallMs: v.nullable(Count), probeAt: v.nullable(Count), outcome: v.string(), phases: v.optional(RestorePhaseStampsSchema) })),
   blockReads: v.optional(v.nullable(BlockAttachMetricsSchema)),
   file: v.nullable(FileObservationSchema), correctness: v.picklist(['passed', 'failed', 'unmeasured']), errors: v.array(v.string()), cleanup: v.nullable(TeardownReplySchema),

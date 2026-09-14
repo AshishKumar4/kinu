@@ -138,6 +138,33 @@ export const StartupObservationSchema = v.variant('event', [
   v.looseObject({ ...StartupObservationClock, event: v.literal('drive'), reply: v.nullable(ExecReplySchema) }),
 ]) satisfies v.GenericSchema<StartupObservation>;
 
+/** One filed failure as the fixture's `/incidents` route reports it. The
+ *  totals in a state reading say how many; only these rows say what. */
+export interface IncidentReasonObservation {
+  stage?: string;
+  reason?: string;
+  at?: number;
+  attempts?: number;
+  delivered?: boolean;
+}
+
+export const IncidentReasonObservationSchema = v.looseObject({
+  stage: v.optional(v.string()), reason: v.optional(v.string()), at: v.optional(v.number()),
+  attempts: v.optional(v.number()), delivered: v.optional(v.boolean()),
+}) satisfies v.GenericSchema<IncidentReasonObservation>;
+
+/** The ledger read at each startup edge, whether the startup attached or was
+ *  refused at the observer's ceiling. Null when the read itself failed. */
+export interface StartupIncidents {
+  initial: IncidentReasonObservation[] | null;
+  restoration: IncidentReasonObservation[] | null;
+}
+
+export const StartupIncidentsSchema = v.object({
+  initial: v.nullable(v.array(IncidentReasonObservationSchema)),
+  restoration: v.nullable(v.array(IncidentReasonObservationSchema)),
+}) satisfies v.GenericSchema<StartupIncidents>;
+
 export interface DestroyReply extends KickReply { destroyed?: boolean }
 
 export const DestroyReplySchema = v.looseObject({
