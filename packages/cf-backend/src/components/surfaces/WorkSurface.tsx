@@ -26,9 +26,8 @@ import { FilesSurface } from "./FilesSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
-import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
+import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import { ShareNetworkIcon } from "@phosphor-icons/react";
 import { SLATE_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence";
 import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
@@ -187,8 +186,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const [connecting, setConnecting] = useState(false);
   const openConnect = useCallback(() => setConnecting(true), []);
   const closeConnect = useCallback(() => setConnecting(false), []);
-  // The share control of the open slate's tab: one dialog, owned here.
-  const [sharing, setSharing] = useState(false);
 
   // A surface can be selected without being clicked (a deep link, a restored
   // tab) — keep the current one in view when the strip has to scroll.
@@ -243,18 +240,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
-        {openSlateSummary !== undefined && props.workspace !== undefined && (
-          <button
-            type="button"
-            onClick={() => setSharing(true)}
-            data-slate-share
-            title={`Share ${openSlateSummary.title}`}
-            aria-label={`Share ${openSlateSummary.title}`}
-            className={`${tabCls} px-2.5`}
-          >
-            <ShareNetworkIcon size={14} />
-          </button>
-        )}
+        <ShareSlateControl workspace={props.workspace} slate={openSlateSummary} rpc={props.rpc} />
         {chip !== null && (
           <button
             type="button"
@@ -358,9 +344,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
       {props.previewError && <LoadFailure what="preview listings" message={props.previewError} onRetry={props.onRefreshPorts} />}
       {connecting && <ConnectDeviceDialog onClose={closeConnect} />}
-      {sharing && openSlateSummary !== undefined && props.workspace !== undefined && (
-        <ShareSlateDialog workspace={props.workspace} slate={openSlateSummary.id} title={openSlateSummary.title} rpc={props.rpc} onClose={() => setSharing(false)} />
-      )}
     </div>
   );
 }
