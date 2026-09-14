@@ -53,7 +53,7 @@ interface SteerHarness {
   /** Programmatic turns the actor enqueued (the leftover rerun path). */
   enqueued: Array<{
     text: string; metadata?: unknown; idempotencyKey?: string;
-    origin?: 'user'; steerIds?: readonly string[];
+    origin?: 'user'; steerIds?: readonly string[]; files?: readonly { filename?: string; mediaType?: string; url?: string }[];
   }>;
   /** Prepare a real turn: beforeTurn sets the in-flight flag, the durable
    *  turn identity and the step snapshot a steer must land on. */
@@ -296,6 +296,39 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     await h.startTurn();
     await expect(h.agent.send('   ')).rejects.toThrow(/requires the message text/);
+  });
+
+  test('a pending steer with an attachment survives a reset intact — the rerun carries real file data', async () => {
+    const h = steerHarness();
+    await h.startTurn();
+    const liveTurnId = h.agent.harnessDurableTurnId();
+
+    if (liveTurnId === null) throw new Error('expected the harness turn to be durable');
+    await h.agent.send('the live turn keeps me');
+
+    // A dead turn's steer + its attachment, written through SQL the way an
+    // eviction leaves them: the live activation's sweep is what reruns it.
+    const actorRow = h.db.query<{ actor_id: string }, [string]>(
+      'SELECT actor_id FROM pending_steers WHERE turn_id = ?',
+    ).get(liveTurnId);
+
+    if (!actorRow) throw new Error('the live steer left no pending_steers row');
+    h.db.query(
+      `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+       VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
+    ).run(actorRow.actor_id);
+    h.db.query(
+      `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
+       VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', 'data:image/png;base64,AAAA')`,
+    ).run(actorRow.actor_id);
+
+    h.agent.harnessRestorePendingSteers(liveTurnId);
+    await h.agent.harnessJoinDetachedFibers();
+
+    // The orphan reruns as a user-origin turn — and its file rides with real
+    // fields, not the field-less `[{}]` a shadowed file read produced.
+    const rerun = h.enqueued.find((turn) => turn.steerIds?.includes('steer-dead-file'));
+    expect(rerun?.files).toEqual([{ filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,AAAA' }]);
   });
 });
 
