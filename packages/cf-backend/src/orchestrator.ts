@@ -140,7 +140,7 @@ import {
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
-  startBranchHead, newBranchId,
+  startBranchHead, newBranchId, PendingSendStore,
   headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
@@ -4867,10 +4867,8 @@ export class OrchestratorAgent extends ActorAgent {
       // The child's OWN acknowledged-but-not-landed steers, read with the
       // child's actor id rather than this root's — the same rows and the same
       // ordering `pendingSteerRuns()` reads for the workspace actor.
-      pendingSteers: this.boundSql<{ id: string; text: string }>`
-        SELECT id, text FROM pending_steers
-        WHERE actor_id = ${child.handle.actorId} ORDER BY seq ASC`
-        .map((row) => ({ ...row, state: 'queued' as const, atStep: null })),
+      pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
+        .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
     };
   }
 

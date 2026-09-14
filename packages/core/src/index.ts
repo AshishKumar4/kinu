@@ -1052,10 +1052,10 @@ export {
 export {
   Inbox, readSignalId, PromptFileSchema,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
-  describeLandedSteers, initPendingSendTables,
+  describeLandedSteers, initPendingSendTables, PendingSendStore,
   type UserSteerDeps, type AcceptedSteer,
   type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
-  type LandedSteerRow,
+  type LandedSteerRow, type PendingSendRow,
 } from './orchestrator/inbox';
 
 // Where a steer sits in the transcript — the read side of the same drain, and

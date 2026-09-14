@@ -30,7 +30,7 @@ import type {
   CompletedTurn, TurnContinuity, FiberCtx,
   LLM, ModelCallSink, ModelRouteResolution, HeadMergeModelBinding,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile, SendLanding, UserSteer,
-  AcceptedSteer, LandedSteerRow,
+  LandedSteerRow,
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
@@ -119,7 +119,7 @@ import { TierIdSchema,
   type DynamicContext,
   type MediaModality,
   createReleaseStore, initReleaseTables, releaseSqlFromExec,
-  initWorkspaceBaselineTable, initWorkspaceSchema, initPendingSendTables,
+  initWorkspaceBaselineTable, initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, listInstructionApprovals, gatherApprovableInstructions,
   admitInstructionDecision, type AdmittedInstructionDecision,
   openInstructionSource,
@@ -865,6 +865,10 @@ export class LocalAgentSession implements BackendHost {
    *  committed inside, and what core's terminal claim commits its roster
    *  inside. */
   private readonly db: LocalSessionDb;
+  /** The ONE pending-send ledger's store — every acknowledged send's row read
+   *  and write goes through core's PendingSendStore, the same object the cf
+   *  actor holds. Bound to this session's own actor id at construction. */
+  private readonly pendingSends: PendingSendStore;
   /** Reads the title of the workspace this session works in, on a SUBAGENT
    *  session. Null on a workspace's own chat, where this session's own config
    *  already holds that title. */
@@ -924,6 +928,9 @@ export class LocalAgentSession implements BackendHost {
     // backend's actor constructor runs, beside the terminal ledger. `turn_id`
     // is NULL when the send queued while the actor was idle.
     initPendingSendTables(this.rt.storage.execRaw);
+    // The store over that ledger — one instance per actor, the same object the
+    // cf actor lazily builds over its own executor.
+    this.pendingSends = new PendingSendStore(this.rt.storage.sql, this.rt.actor.actorId);
 
     // Instruction approvals are keyed by the directory on THIS disk, because on
     // a local CLI that directory IS the authority — there is no owner/workspace
@@ -1034,7 +1041,7 @@ export class LocalAgentSession implements BackendHost {
     // on the ActorSession's own wiring, because the hosted actor's session is
     // built by the host without a view of this workspace's queue.
     this.actorSession.bindSteerPersistence({
-      onAccept: (steer) => { this.reservePendingSteer(steer); },
+      onAccept: (steer) => { this.pendingSends.reserve({ ...steer, turnId: this.steerTurnId() }); },
       onDrain: (rows) => { this.commitLandedSteers(rows); },
       turnId: () => this.steerTurnId(),
     });
@@ -1658,9 +1665,7 @@ export class LocalAgentSession implements BackendHost {
       const mode: WorkMode = workModeForTurnMetadata(input.metadata) === 'plan' ? 'plan' : 'build';
 
       for (const steerId of item.steerIds ?? []) {
-        void this.rt.storage.sql`INSERT OR IGNORE INTO pending_steers (actor_id, id, turn_id, mode, text)
-                                 VALUES (${this.rt.actor.actorId}, ${steerId}, ${item.turnId ?? null},
-                                         ${mode}, ${input.text})`;
+        this.pendingSends.ensureReserved({ id: steerId, turnId: item.turnId ?? null, mode, text: input.text });
       }
 
       const front = this.queue.findIndex((queued) => queued.rerun !== true);
@@ -1810,7 +1815,7 @@ export class LocalAgentSession implements BackendHost {
     // runs BEFORE the pump can begin the turn, so a process that dies after
     // this line still owes the person the message it acknowledged.
     const pendingSendId = `steer-${crypto.randomUUID().slice(0, 12)}`;
-    this.reservePendingSend(pendingSendId, text, files);
+    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode: 'build', text, files });
     this.queue.push({
       text, files, metadata, kind: 'user',
       turnId: crypto.randomUUID(), pendingSendId,
@@ -1820,7 +1825,7 @@ export class LocalAgentSession implements BackendHost {
         // would re-deliver the words under the next session after the caller
         // was already told no.
         if (refusal) {
-          this.retirePendingSteer(pendingSendId);
+          this.pendingSends.retire([pendingSendId]);
           reject(new KinuError(
             refusal.reason,
             `${refusal.error}. Close that session, or send this from it.`,
@@ -1873,8 +1878,7 @@ export class LocalAgentSession implements BackendHost {
     // The words came back to the surface: the reservation they were held under
     // is spent, or a restart would re-deliver a steer the operator watched come
     // back as text. A steer that carries no id never wrote a row to spend.
-
-    for (const steer of returned) if (steer.id !== undefined) this.retirePendingSteer(steer.id);
+    this.pendingSends.retire(returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]));
 
     return returned.map((steer) => steer.text);
   }
@@ -3331,9 +3335,10 @@ export class LocalAgentSession implements BackendHost {
 
         // The reservation the queue item was admitted as is spent by its own
         // durable row — same transaction, so a restart sees one or neither.
-        if (item.pendingSendId !== undefined) this.retirePendingSteer(item.pendingSendId);
-
-        for (const id of item.steerIds ?? []) this.retirePendingSteer(id);
+        this.pendingSends.retire([
+          ...(item.pendingSendId === undefined ? [] : [item.pendingSendId]),
+          ...(item.steerIds ?? []),
+        ]);
 
         this.terminal.record(transition, owed);
       })();
@@ -4843,37 +4848,10 @@ export class LocalAgentSession implements BackendHost {
     return providerOptions ? { model, providerOptions } : { model };
   }
   // ─── The pending-send ledger ─────────────────────────────────────────────
-  // One rule, both backends: a send is a row before the client hears it. The
-  // cf backend names the same table on D1; here it is the workspace's own
-  // bun:sqlite database, through this runtime's SqlExecutor.
-
-  /** A send the session acknowledged while the actor was idle — no turn owns
-   *  it yet, so the row IS the queue (`turn_id` NULL). Written before `send()`
-   *  returns: the acceptance and the write are the same fact. */
-  private reservePendingSend(pendingId: string, text: string, files?: ReadonlyArray<PromptFile>): void {
-    void this.rt.storage.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
-                             VALUES (${this.rt.actor.actorId}, ${pendingId}, NULL, 'build', ${text})`;
-
-    for (const file of files ?? []) {
-      void this.rt.storage.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-                               VALUES (${this.rt.actor.actorId}, ${pendingId}, ${file.filename},
-                                       ${file.mediaType}, ${file.url})`;
-    }
-  }
-
-  /** A steer accepted into a live or queued turn — the row carries the turn
-   *  it will land in, so a restart can hand it back to that turn's step. */
-  private reservePendingSteer(steer: AcceptedSteer): void {
-    void this.rt.storage.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
-                             VALUES (${this.rt.actor.actorId}, ${steer.id}, ${this.steerTurnId()},
-                                     ${steer.mode ?? 'build'}, ${steer.text})`;
-
-    for (const file of steer.files ?? []) {
-      void this.rt.storage.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-                               VALUES (${this.rt.actor.actorId}, ${steer.id}, ${file.filename},
-                                       ${file.mediaType}, ${file.url})`;
-    }
-  }
+  // One rule, one store, both backends: a send is a row before the client
+  // hears it. `this.pendingSends` is core's PendingSendStore over the
+  // workspace's own bun:sqlite database; the cf actor holds the same object
+  // over its Durable Object storage.
 
   /** The two facts one drain makes durable, in one transaction: the landed
    *  user rows a surface reads, and the retirement of the reservations they
@@ -4886,7 +4864,7 @@ export class LocalAgentSession implements BackendHost {
         void this.rt.storage.sql`INSERT OR IGNORE INTO actor_messages (actor_id, session_id, id, parent_id, role, content, metadata)
                                  VALUES (${this.rt.actor.actorId}, ${this.sessionId}, ${row.id}, ${this.currentTurnId},
                                          'user', ${row.text}, ${JSON.stringify(row.metadata)})`;
-        this.retirePendingSteer(row.id);
+        this.pendingSends.retire([row.id]);
       }
     })();
   }
@@ -4900,36 +4878,13 @@ export class LocalAgentSession implements BackendHost {
     return this.queue.find((item) => item.kind === 'user')?.turnId ?? this.currentTurnId;
   }
 
-  /** One pending row spent: the reservation is gone, so a restart has nothing
-   *  left to hand back. */
-  private retirePendingSteer(id: string): void {
-    void this.rt.storage.sql`DELETE FROM pending_steer_files WHERE steer_id = ${id}`;
-    void this.rt.storage.sql`DELETE FROM pending_steers WHERE id = ${id}`;
-  }
-
-  /** The attachments a pending row carried, in the order the steer was sent —
-   *  restored with it so a restart does not lose the files the first process
-   *  acknowledged. */
-  private pendingSendFiles(steerId: string): PromptFile[] {
-    const rows = this.rt.storage.sql<{
-      filename: string; media_type: string; url: string;
-    }>`SELECT filename, media_type, url FROM pending_steer_files WHERE steer_id = ${steerId} ORDER BY seq`;
-
-    return rows.map((row) => ({
-      filename: row.filename, mediaType: row.media_type, url: row.url,
-    }));
-  }
-
   /** Session start's half of the send rule: the rows a dead process left
    *  acknowledged, restored before any new work runs. Mid-turn rows re-enter
    *  the inbox (they land in the next turn's first step); idle-queued rows
    *  re-enter the pump in sequence order as turns of their own — the same
    *  sweep the cf backend runs on wake, over this workspace's own store. */
   private restorePendingSends(): void {
-    const rows = this.rt.storage.sql<{
-      id: string; turn_id: string | null; mode: string; text: string;
-    }>`SELECT id, turn_id, mode, text FROM pending_steers
-       WHERE actor_id = ${this.rt.actor.actorId} ORDER BY seq`;
+    const rows = this.pendingSends.restore();
 
     if (rows.length === 0) return;
 
@@ -4937,22 +4892,22 @@ export class LocalAgentSession implements BackendHost {
     let queued = 0;
 
     for (const row of rows) {
-      if (row.turn_id === null) {
+      if (row.turnId === null) {
         this.queue.push({
           text: row.text, kind: 'user', turnId: crypto.randomUUID(),
           // Re-run of an acknowledgement, not a fresh send: kept ahead of
           // anything the new session admits, in the order they were accepted.
           rerun: true,
           pendingSendId: row.id,
-          metadata: { kinuMode: row.mode === 'plan' ? 'plan' : 'build' },
-          files: this.pendingSendFiles(row.id),
+          metadata: { kinuMode: row.mode },
+          files: this.pendingSends.files(row.id),
           settle: () => {},
         });
         queued += 1;
       } else {
         midTurn.push({
-          id: row.id, text: row.text, mode: row.mode === 'plan' ? 'plan' : 'build',
-          files: this.pendingSendFiles(row.id),
+          id: row.id, text: row.text, mode: row.mode,
+          files: this.pendingSends.files(row.id),
         });
       }
     }

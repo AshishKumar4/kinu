@@ -22,7 +22,7 @@ import type { UserCaller } from '@kinu.run/core';
 import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
 import {
-  shadowTrialPlan, claimToolEffect, actorReferenceOf,
+  shadowTrialPlan, claimToolEffect, actorReferenceOf, PendingSendStore,
   type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
 } from '@kinu.run/core';
 import {
@@ -370,8 +370,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessRestorePendingSteers(turnId: string): void {
     this.orch.inbox.interrupt();
 
-    const pending = this.sql<{ id: string; text: string; mode: WorkMode }>`
-      SELECT id, text, mode FROM pending_steers WHERE turn_id = ${turnId} ORDER BY seq ASC`;
+    const store = new PendingSendStore(this.boundSql, this.actorHandle().actorId);
+
+    const pending = store.forTurn(turnId).map((row) => {
+      const files = store.files(row.id);
+
+      return files.length > 0 ? { ...row, files } : row;
+    });
 
     this.orch.inbox.restorePending(pending);
     this.sweepOrphanedSteers();
