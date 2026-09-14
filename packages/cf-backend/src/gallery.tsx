@@ -117,6 +117,7 @@ import { WorkSurface, ACTIVITY_SURFACE, type SurfaceKind } from "@/components/su
 import { SlateFallbackFrame, SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
+import { SlateInlineContext } from "@/components/slates/context";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
@@ -3875,7 +3876,7 @@ const GALLERY_SLATE_ID = "sandbox-probe";
 /** Gallery-only previewSlate fixture. It exercises SlateFrame, not a deployed preview origin. */
 const slateRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Promise<T> => {
   if (method === "previewSlate") {
-    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789 } }).json<T>();
+    return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, inline: { height: 240 } } }).json<T>();
   }
 
   return stubRpc<T>(method, args);
@@ -3888,6 +3889,46 @@ function SlatePreviewFrame() {
         <SlateFrame id={GALLERY_SLATE_ID} rpc={slateRpc} />
       </div>
     </div>
+  );
+}
+
+/* A slate rendered where the owner reads it: inside the transcript, at the
+   card's own height, while the conversation stays legible around it. The
+   thread ends on the bare `slate://` address the agent typed — the markdown
+   pass turns it into the card, not into a link to click. */
+const SLATE_THREAD: UIMessage[] = [
+  msg({
+    id: "sl-u1", role: "user", createdAt: NOW - 4 * 60e3,
+    parts: [{ type: "text", text: "Which target should the release go to?" }],
+  }),
+  msg({
+    id: "sl-a1", role: "assistant", createdAt: NOW - 3 * 60e3,
+    parts: [{ type: "text", text: "Pick one below and I will continue.\n\nslate://deploy-choice" }],
+  }),
+];
+
+function ChatSlateFrame() {
+  const thread = buildTranscript(SLATE_THREAD, []);
+  const inline = { rpc: slateRpc, openSlate: () => {} };
+
+  return (
+    <SlateInlineContext.Provider value={inline}>
+      <div className="flex h-screen justify-center p-bg p-text">
+        <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+          <GalleryChatTabs />
+          <div className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8" data-gallery-chat>
+            {thread.entries.map(({ message, steers }, i) => (
+              <div key={message.id} data-chat-row={message.id}>
+                <MessageView
+                  message={message} steers={steers}
+                  isLast={i === thread.entries.length - 1} isStreaming={false} onFork={() => {}} />
+              </div>
+            ))}
+          </div>
+          <GalleryComposer />
+        </div>
+      </div>
+    </SlateInlineContext.Provider>
   );
 }
 
@@ -5924,6 +5965,8 @@ async function mount() {
     ["activitycache", { node: <div className="p-6 max-w-2xl"><CacheBlock cacheHit={ACTIVITY_CACHE_HIT} /></div>, entries: ["/"] }],
     // The read-only page a visitor sees, routed the way App.tsx routes it.
     ["blueprint", { node: <BlueprintFrame />, entries: [`/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`] }],
+    // A slate card inside a chat message, at its inline height.
+    ["chat-slate", { node: <ChatSlateFrame />, entries: ["/"] }],
     ["shared", {
       node: (
         <div className="flex h-screen w-screen p-bg p-text overflow-hidden">

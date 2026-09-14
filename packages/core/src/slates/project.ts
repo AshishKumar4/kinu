@@ -1,6 +1,8 @@
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
+import { TierIdSchema } from '../types/profile';
 import { renderIssues } from '../utils/json';
+import { SLATE_INLINE_HEIGHT } from './host-context';
 import { SLATE_READ_MODELS } from './read-models';
 
 const Name = v.pipe(v.string(), v.minLength(1));
@@ -8,7 +10,10 @@ const Name = v.pipe(v.string(), v.minLength(1));
 const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path.includes('\0') && !path.split('/').includes('..'), 'must name a file inside this Slate'));
 
 const Binding = v.variant('kind', [
-  v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)) }),
+  v.pipe(
+    v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)), paths: v.optional(v.array(Name)) }),
+    v.check((binding) => binding.paths === undefined || binding.namespace === 'workspace', 'paths scope only a workspace namespace binding'),
+  ),
   v.strictObject({ kind: v.literal('rpc'), methods: v.pipe(v.array(v.picklist(SLATE_READ_MODELS)), v.minLength(1)) }),
   v.strictObject({ kind: v.literal('mcp'), server: Name, tools: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('app'), id: Name }),
@@ -16,6 +21,8 @@ const Binding = v.variant('kind', [
   v.strictObject({ kind: v.literal('memory'), members: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('tasks'), members: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('web'), members: v.optional(v.array(Name)) }),
+  v.strictObject({ kind: v.literal('agent') }),
+  v.strictObject({ kind: v.literal('ai'), tier: v.optional(TierIdSchema) }),
 ]);
 
 const SlateMetadata = v.strictObject({
@@ -23,6 +30,9 @@ const SlateMetadata = v.strictObject({
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535))),
   title: v.optional(Name),
   bindings: v.optional(v.record(Name, Binding), () => ({})),
+  inline: v.optional(v.strictObject({
+    height: v.optional(v.pipe(v.number(), v.integer(), v.minValue(SLATE_INLINE_HEIGHT.min), v.maxValue(SLATE_INLINE_HEIGHT.max)), SLATE_INLINE_HEIGHT.default),
+  }), () => ({ height: SLATE_INLINE_HEIGHT.default })),
 });
 
 const Project = v.object({
@@ -45,7 +55,7 @@ export function parseSlateProject<Input>(input: Input): SlateProject {
   const project = parsed.output;
 
   if (project.slate.runtime === 'worker' && project.main === undefined) {
-    throw new KinuError('bad_input', 'package.json main must name the Worker module that exports a fetch handler');
+    throw new KinuError('bad_input', 'package.json main must name the module that exports class Slate extends SlateObject from kinu:slate');
   }
 
   if (project.slate.runtime === 'node') {
@@ -60,6 +70,14 @@ export function parseSlateProject<Input>(input: Input): SlateProject {
 }
 
 export type SlateBindingKind = SlateBinding['kind'];
+
+/** Every binding kind the variant admits, in declaration order, read off the
+ *  variant itself so a kind added there reaches every schema that lists
+ *  kinds. An option wrapped in a pipe (the workspace namespace carries a
+ *  check) is read through its first schema. */
+export const SLATE_BINDING_KINDS: readonly SlateBindingKind[] = Binding.options.map(
+  (option) => ('pipe' in option ? option.pipe[0] : option).entries.kind.literal,
+);
 
 /** One declared binding as a page or a forker reads it: its name, its kind and
  *  what it names on the other side. `credentialed` is the section-3 rule. */
@@ -82,15 +100,18 @@ function bindingTarget(binding: SlateBinding): string {
     case 'memory':
     case 'tasks':
     case 'web': return binding.members?.join(', ') ?? '';
+    case 'agent': return 'send';
+    case 'ai': return binding.tier ?? 'default';
   }
 }
 
 /**
  * A binding that acts with the owner's connections or reads the owner's
  * workspace: `mcp`, `tool`, `web` and `namespace` spend the owner's
- * credentials; `memory`, `tasks` and `rpc` read the owner's data. An `app`
- * binding is credentialed exactly when its callee is, and the callee is another
- * slate's own declaration, so it is not counted here.
+ * credentials; `memory`, `tasks` and `rpc` read the owner's data; `agent`
+ * reaches the owner's own agent and `ai` runs on the owner's model access. An
+ * `app` binding is credentialed exactly when its callee is, and the callee is
+ * another slate's own declaration, so it is not counted here.
  */
 function isCredentialedBinding(binding: SlateBinding): boolean {
   return binding.kind !== 'app';

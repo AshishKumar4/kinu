@@ -51,7 +51,9 @@ const MODEL_ROUTE_POLICY = {
   head: { kind: 'invocation' },
   mcts: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
-  // Fixed slots: account-wide tier assignments decide these, never a pin.
+  // A slate's `ai` binding resolves its own profile — the call's tier becomes
+  // the profile's explicit tier, so `invocation` reads back the same model.
+  slate: { kind: 'invocation' },
   scaffold: { kind: 'fixed', tier: 'deep' },
   judge: { kind: 'fixed', tier: 'deep' },
   advisor: { kind: 'fixed', tier: 'deep' },

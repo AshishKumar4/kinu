@@ -36,6 +36,8 @@ function connectionFor(binding: SlateBindingDeclaration): BindingConnection {
     case "memory": return { text: "Reads and writes this workspace's memory, as you." };
     case "tasks": return { text: "Reads and writes this workspace's tasks, as you." };
     case "rpc": return { text: `Reads this workspace's ${binding.target}.` };
+    case "agent": return { text: "Sends messages to this workspace's agent, as you." };
+    case "ai": return { text: `Runs model inference on your ${binding.target} tier, as you.`, to: APP_ROUTES.userSettings, label: "Models" };
   }
 }
 

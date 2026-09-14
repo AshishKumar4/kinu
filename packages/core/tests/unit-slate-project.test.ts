@@ -50,7 +50,48 @@ test('tool bindings accept native JSON input and projection bindings retain code
   expect(() => call('WEB', 'search', ['x'])).toThrow('does not offer');
   expect(call('MEMORY', 'recall', ['key'])).toMatchObject({ kind: 'codemode', namespace: 'memory', member: 'recall' });
   expect(call('TASKS', 'list')).toMatchObject({ kind: 'codemode', namespace: 'tasks', member: 'list' });
-  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { AGENT: { kind: 'agent' } } } })).toThrow('slate.bindings.AGENT.kind');
+  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { BOGON: { kind: 'bogon' } } } })).toThrow('slate.bindings.BOGON.kind');
+});
+
+test('agent, ai and path-scoped bindings parse, and only the workspace namespace scopes paths', () => {
+  const project = parseSlateProject({
+    main: 'server.js',
+    slate: {
+      bindings: {
+        INBOX: { kind: 'agent' },
+        MODEL: { kind: 'ai' },
+        TUNED: { kind: 'ai', tier: 'fast' },
+        FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/user/notes'] },
+      },
+    },
+  });
+
+  expect(project.slate.bindings.INBOX).toEqual({ kind: 'agent' });
+  expect(project.slate.bindings.MODEL).toEqual({ kind: 'ai' });
+  expect(project.slate.bindings.TUNED).toEqual({ kind: 'ai', tier: 'fast' });
+  expect(project.slate.bindings.FILES).toEqual({ kind: 'namespace', namespace: 'workspace', paths: ['/home/user/notes'] });
+
+  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { X: { kind: 'namespace', namespace: 'memory', paths: ['/a'] } } } }))
+    .toThrow('paths scope only a workspace namespace binding');
+  expect(() => parseSlateProject({ main: 'server.js', slate: { bindings: { X: { kind: 'ai', tier: 'Not-A-Tier' } } } }))
+    .toThrow('slate.bindings.X.tier');
+});
+
+test('the class contract is what a missing main names, and inline height is bounded', () => {
+  expect(() => parseSlateProject({ name: 'notes' })).toThrow('class Slate extends SlateObject');
+  expect(parseSlateProject({ main: 'server.ts' }).slate.inline).toEqual({ height: 320 });
+  expect(parseSlateProject({ main: 'server.ts', slate: { inline: { height: 480 } } }).slate.inline).toEqual({ height: 480 });
+
+  for (const height of [719.5, 800, 100]) {
+    expect(() => parseSlateProject({ main: 'server.ts', slate: { inline: { height } } })).toThrow('slate.inline.height');
+  }
+});
+
+test('a single-file slate names its browser module as its main module', () => {
+  const project = parseSlateProject({ main: 'slate.tsx', browser: 'slate.tsx' });
+
+  expect(project.main).toBe('slate.tsx');
+  expect(project.browser).toBe('slate.tsx');
 });
 
 test('credentialedBindings is non-empty exactly for the kinds that reach the owner (S4)', () => {

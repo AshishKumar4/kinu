@@ -4,21 +4,20 @@ import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SlateShareStore, SqliteSlateContentStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
+  SlateFiles, SlateShareStore, SqliteSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
   type BlueprintReading, type ShareUser,
 } from '@kinu.run/core/slates';
 import {
-  parseSlateProject,
+  parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING,
   SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
-import { ERROR_CODES, KinuError, refusalOf, toKinuError } from '@kinu.run/core/obs';
+import { ERROR_CODES, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
+import { slateBatchStub } from './rpc-transport';
 import { slateCallerKey, slateCredentialKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
-
-const Failure = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 
 /** A binding route the calling actor answers with its own capability set. */
 export type SlateCapabilityRoute = Exclude<SlateBindingRoute, { kind: 'app' }>;
@@ -29,6 +28,19 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
   expose(port: number): Promise<{ url?: string }>;
 }
 
+/**
+ * A guest binding refusal crosses Cap'n Web as a plain Error whose message is
+ * `reason: error`; the reason is one of the shared codes or nothing.
+ */
+const SLATE_REFUSAL_MESSAGE = new RegExp(`^(${ERROR_CODES.join('|')}): ([\\s\\S]*)$`);
+
+function refusalFromThrown(input: { cause: unknown }): Refusal | null {
+  const match = input.cause instanceof Error ? SLATE_REFUSAL_MESSAGE.exec(input.cause.message) : null;
+  const reason = match === null ? undefined : v.safeParse(v.picklist(ERROR_CODES), match[1]);
+
+  return reason?.success === true && match !== null ? { reason: reason.output, error: match[2] } : null;
+}
+
 interface RunningSlate {
   readonly key: string;
   readonly revision: number;
@@ -37,11 +49,23 @@ interface RunningSlate {
   readonly process: ResidentSlateProcess;
 }
 
-/** One isolate-lifetime process per authored tree PER CALLER. No running state is durable. */
+/**
+ * One isolate-lifetime process per authored tree PER CALLER. No running state is durable.
+ *
+ * Measured on Nimbus fabric 0.2.0: a resident facet is named by a REUSED SLOT
+ * — `workerd-facet-host.js:114-116` mints `proc-slot-${slot}` from a per-DO
+ * free list (`:142-165`) — and `release` is `facets.abort` then
+ * `facets.delete` (`:240-256`), which `facet-pool.js:5-13` documents as
+ * eviction-with-storage-kept then terminal-with-storage-wiped. So the facet's
+ * own SQLite — the `this.sql` an authored slate sees — is per-process until
+ * Nimbus retains facets on its side; `this.storage` is the durable half, and
+ * it lives in this object's `slate_state` table now.
+ */
 export class SlateHost {
   private readonly content: SqliteSlateContentStore;
   private readonly resident: ResidentSlateProcesses;
   private readonly store: SqliteSlateStore;
+  private readonly state: SqliteSlateStateStore;
   private readonly sourceRuntimes = new Map<string, WorkspaceSlates>();
   private readonly running = new Map<string, RunningSlate>();
   private readonly starting = new Map<string, Promise<ResidentSlateProcess>>();
@@ -53,6 +77,7 @@ export class SlateHost {
     this.content = new SqliteSlateContentStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.resident = new ResidentSlateProcesses({ ...deps, content: this.content });
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
+    this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
   }
 
   private async project(cred: VfsCred, id: string): Promise<SlateProject> {
@@ -219,12 +244,13 @@ export class SlateHost {
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
+      const project = await this.project(caller.cred, id);
       const process = await this.ensure(caller, id);
       const preview = await this.deps.expose(process.port);
 
       if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL');
 
-      return { ok: true, value: { url: preview.url, port: process.port } };
+      return { ok: true, value: { url: preview.url, port: process.port, inline: { height: project.slate.inline.height } } };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
     }
@@ -279,6 +305,29 @@ export class SlateHost {
 
       if (!parsed.success) throw new KinuError('bad_input', 'A binding call is { member, args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
       const chain = resolveSlateChain({ invocations: this.invocations, id, invocation: parsed.output.invocation });
+
+      // The reserved binding is the slate's own durable KV on this object —
+      // answered here rather than dispatched: it carries no actor capability.
+      if (name === SLATE_STORAGE_BINDING) {
+        const operation = routeSlateStorageCall(parsed.output);
+
+        if (operation.op === 'put' || operation.op === 'delete') {
+          requireWorkModePermission(caller.workMode, false, 'slate storage write');
+        }
+
+        switch (operation.op) {
+          case 'get': return { ok: true, value: this.state.get(id, operation.key) };
+          case 'put': {
+            this.state.put(id, operation.key, operation.value);
+
+            return { ok: true, value: null };
+          }
+
+          case 'delete': return { ok: true, value: this.state.delete(id, operation.key) };
+          case 'list': return { ok: true, value: this.state.list(id, { prefix: operation.prefix, limit: operation.limit }) };
+        }
+      }
+
       const project = await this.project(caller.cred, id);
 
       return await this.run(caller, routeSlateBindingCall({ id, project, name, request: parsed.output, chain }));
@@ -303,15 +352,23 @@ export class SlateHost {
       case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
       case 'tool':
       case 'codemode': return { ok: true, value: await this.deps.dispatch(caller, route) };
+      // The agent's inbox and the model call are the calling actor's own
+      // surfaces, answered inside the same dispatch as the capability planes.
+      case 'agent':
+      case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
       case 'app': return this.call(caller, route.id, route.method, [...route.args], route.chain);
     }
   }
 
-  /** App members are POST routes on the same authored fetch handler that serves the preview. */
+  /**
+   * An app call is one Cap'n Web HTTP-batch RPC against the slate's forwarder:
+   * the method resolves on the instance's prototype chain and runs under the
+   * invocation this request carries. The id is issued before the session opens
+   * and retired when it settles, so the callee names a live call and nothing
+   * else.
+   */
   async call(caller: SlateCaller, id: string, method: string, args: JsonValue[], chain: readonly string[] = []): Promise<SlateCallResult> {
-    // Issued before the request leaves and retired when it settles, so the id
-    // the callee carries names a live call and nothing else.
     const invocation = crypto.randomUUID();
     this.invocations.set(invocation, { id, chain });
 
@@ -324,29 +381,34 @@ export class SlateHost {
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
       const process = await this.ensure(caller, id);
 
-      const response = await process.request(new Request(`https://slate.invalid/${method}`, {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-slate-call': invocation },
-        body: JSON.stringify(parsed.output),
-      }));
-
-      if (!response.ok) {
-        const body = await response.text();
-
-        if (response.headers.get('content-type')?.includes('application/json')) {
-          const failure = v.safeParse(Failure, JSON.parse(body));
-
-          if (failure.success) return { ok: false, ...failure.output };
-        }
-
-        throw new KinuError('io', 'Slate ' + id + '.' + method + ': HTTP ' + response.status + ': ' + body);
+      if (!process.methods.includes(method)) {
+        throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
       }
 
-      const value = v.safeParse(JsonValueSchema, await response.json());
+      const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
 
-      if (!value.success) throw new KinuError('bad_input', 'Slate response must be JSON', { cause: new v.ValiError(value.issues) });
+      try {
+        const raw: unknown = await stub[method](...parsed.output);
+        const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
 
-      return { ok: true, value: value.output };
+        if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
+
+        return { ok: true, value: value.output };
+      } finally {
+        // Shut the session down once the call settles: disposing the main stub
+        // aborts the read-loop, and doing it here — not at transport end — is
+        // the difference between a rejection capnweb observes and one workerd
+        // reports as unhandled.
+        // SAFETY: `RpcStub` always carries a `Symbol.dispose` hook for its
+        // session (capnweb's RpcStub constructor sets it) — the interface
+        // merely doesn't declare it.
+        (stub as { [Symbol.dispose](): void })[Symbol.dispose]();
+      }
     } catch (cause) {
+      const refusal = refusalFromThrown({ cause });
+
+      if (refusal !== null) return { ok: false, ...refusal };
+
       return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
     } finally {
       this.invocations.delete(invocation);
@@ -402,6 +464,12 @@ export class SlateHost {
         const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller };
         bindings[name] = exports.SlateBinding({ props });
       }
+
+      // The reserved stub every slate carries: its own durable KV, answered by
+      // `bindingCall`'s `__storage` arm over this object's `slate_state` table.
+      bindings[SLATE_STORAGE_BINDING] = exports.SlateBinding({
+        props: { workspace: this.deps.workspace, id, name: SLATE_STORAGE_BINDING, caller },
+      });
 
       const port = project.slate.port ?? this.ports.get(held) ?? this.nextPort++;
       this.ports.set(held, port);

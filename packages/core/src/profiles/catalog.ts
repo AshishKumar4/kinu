@@ -23,7 +23,7 @@ import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import {
-  TIER_IDS,
+  TIER_IDS, TierIdSchema,
   type ProfileCatalog, type RoleCatalog, type RoleId,
   type TierAssignments, type TierId, type RoleDefinition, type ProfileCatalogEnvelope,
 } from '../types/profile';
@@ -33,18 +33,11 @@ export type {
   TierAssignment, TierAssignments, TierId, RoleDefinition, ProfileCatalogEnvelope,
 } from '../types/profile';
 
-export { TIER_IDS } from '../types/profile';
-
+export { TIER_IDS, TierIdSchema } from '../types/profile';
 
 
 // ── Vocabulary ───────────────────────────────────────────────────
 
-/** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
-const TIER_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-
-const TIER_ID_MAX_LEN = 32;
-
-export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(TIER_ID_MAX_LEN));
 
 /** The roles every authority implicitly ships. A catalog may override any of
  *  them by key; it cannot remove them. */

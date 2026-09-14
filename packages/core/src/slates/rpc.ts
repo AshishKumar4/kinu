@@ -6,6 +6,10 @@ import { requireWorkModePermission } from '../execution/work-mode';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
+/** The method-name rule as a source string, for the generated runner that
+ *  applies the same test without importing this module. */
+export const SLATE_METHOD_NAME_SOURCE = METHOD_RE.source;
+
 /** A slate id as one directory name. Defined HERE rather than beside the
  *  worker-only `SlateFiles`: that module imports the vendored agent-core
  *  runtime, which cannot load in a browser, while this operation schema —
