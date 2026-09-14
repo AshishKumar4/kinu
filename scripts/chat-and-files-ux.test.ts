@@ -2101,6 +2101,10 @@ describe('composer and message continuity at browser boundaries', () => {
   }, 240_000);
 });
 
+/** The same live-token shape the gallery fixture assembles, spelled the same
+ *  way so the commit-tier scan sees no literal here either. */
+const ASSEMBLED = `cfut_${'a'.repeat(48)}`;
+
 /**
  * KINU-011. The generic tool preview renders a credential.
  *
@@ -2123,13 +2127,15 @@ describe('composer and message continuity at browser boundaries', () => {
  * point: the masked marker must be present, and the literal secret must appear
  * nowhere in the document.
  *
- * BLIND SPOT, and it is the ledger's own residual. `redactPayload` is a
- * FIELD-NAME heuristic. The `run` and `execute_tools` inputs do not go through
- * it at all: they render as a code block, because pretty-printed JSON turns
- * every quote and newline in a command into an escape sequence. A credential
- * written inside a shell command is therefore still shown, and the last
- * assertion here states that on purpose, so the gap is visible and cannot widen
- * quietly into the structured path.
+ * VALUE-LEVEL REDACTION (KINU-011's second half). Field names cannot see a
+ * token inside a free-form string, and the `run`/`execute_tools` inputs plus
+ * `errorText` render as free text, not JSON — so the canonical policy's other
+ * half, `redactSecrets`, masks secret-shaped VALUES off the same
+ * `SECRET_PATTERNS` list the commit-tier scan runs. The gallery fixture
+ * carries an assembled `cfut_` token inside the command, the output body and
+ * the error text, and the assertions below prove none of it reaches a pixel.
+ * A shape the list does not know still renders raw; that residual is now the
+ * pattern list's own coverage question, not the preview's.
  */
 describe('the tool preview redacts through the one canonical policy', () => {
   test('structured input and output are a fixed point of redactPayload', async () => {
@@ -2190,12 +2196,14 @@ describe('the tool preview redacts through the one canonical policy', () => {
 
       expect(secretsInStructured, 'a credential value survived into a structured preview').toEqual([]);
 
-      // THE RESIDUAL, asserted rather than described. `run` renders its command
-      // as free text, so a credential inside the command is still shown. The day
-      // this stops being true, delete this assertion and the residual note in
-      // `docs/research/triage-ledger.md`.
-      expect(rendered.body, 'the free-text residual closed; update the ledger')
-        .toContain('curl -s https://api.stripe.example/v1/charges');
+      // The free-text arms are closed: the token inside the command, the
+      // output body and the error text is masked at the value, and the
+      // surrounding prose survives.
+      expect(rendered.body).toContain('--token=<redacted>');
+      expect(rendered.body).toContain('token <redacted> accepted');
+      expect(rendered.body).toContain('rejected the credential <redacted>');
+      expect(rendered.body).toContain('curl -s https://api.stripe.example/v1/charges');
+      expect(rendered.body, 'a secret-shaped value reached a pixel').not.toContain(ASSEMBLED);
     });
   }, 240_000);
 });

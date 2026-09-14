@@ -6,7 +6,7 @@
  * the LLM sees in its context).
  *
  *   full           — store and render as-is
- *   redact         — store as-is, render with secret-shaped fields masked
+ *   redact         — stored with secret-shaped fields and free-text values masked
  *   hash           — store sha256+size+content-type only
  *   hmac           — store hmac (proves identity without revealing content)
  *   opaque_handle  — store a pointer to a separate secret store
@@ -24,6 +24,7 @@
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
 import { evidenceWindow } from '../../prompts/evidence-window';
+import { SECRET_PATTERNS } from '../../safety/secret-patterns';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS,
   type PayloadPolicy, type KinuEvent, type SubordinateReportHandoff,
@@ -78,6 +79,8 @@ export function looksLikeSecretField(name: string): boolean {
  * extended.
  */
 export function redactPayload(value: JsonValue): JsonValue {
+  if (v.is(v.string(), value)) return redactSecrets(value);
+
   if (!isJsonObject(value) && !Array.isArray(value)) return value;
 
   if (Array.isArray(value)) return value.map(redactPayload);
@@ -90,6 +93,32 @@ export function redactPayload(value: JsonValue): JsonValue {
   }
 
   return redacted;
+}
+
+/**
+ * Mask secret-shaped VALUES inside free text — the second half of the
+ * redaction boundary, for strings whose field name cannot see them.
+ *
+ * The shape list is `SECRET_PATTERNS`, the one source the commit-tier scan
+ * and the blueprint export already read, applied with the same semantics:
+ * each line is adjudicated per pattern and a pattern's `benign` form
+ * suppresses its own matches on that line only. What is masked is replaced by
+ * `<redacted>`, the marker `redactErrorText` and the preview code blocks
+ * already print, so one marker means "a value was here" across every free
+ * text a payload can carry.
+ */
+export function redactSecrets(text: string): string {
+  return text.split('\n').map((line) => {
+    let redacted = line;
+
+    for (const pattern of SECRET_PATTERNS) {
+      if (pattern.benign?.test(line)) continue;
+
+      redacted = redacted.replaceAll(pattern.regex, '<redacted>');
+    }
+
+    return redacted;
+  }).join('\n');
 }
 
 // ── Storage transform ────────────────────────────────────────────
