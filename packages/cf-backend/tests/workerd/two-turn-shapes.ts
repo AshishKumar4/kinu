@@ -221,3 +221,72 @@ export const DriveOnceResultSchema = v.object({
 });
 
 export type DriveOnceResult = v.InferOutput<typeof DriveOnceResultSchema>;
+
+// ── The parity drive ───────────────────────────────────────────────────────
+//
+// JSON columns cross the RPC as the STRINGS they are stored as: a recursive
+// JSON type is what the stub's Serializable map cannot carry (TS2589), and the
+// test parses them on its own side anyway.
+
+/** One frame a probe socket received, reduced to what the script decides. */
+export const ParityFrameSchema = v.object({
+  socket: v.string(),
+  type: v.string(),
+  id: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+  landed: v.optional(v.string()),
+  replay: v.optional(v.boolean()),
+  continuation: v.optional(v.boolean()),
+  body: v.optional(v.string()),
+});
+
+export type ParityFrame = v.InferOutput<typeof ParityFrameSchema>;
+
+/** The durable record of the root at one point of the parity script — raw
+ *  rows, normalized by the test, so the probe stays a reader. */
+export const ParityRowsSchema = v.object({
+  assistantMessages: v.array(v.object({
+    id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string(),
+  })),
+  pendingSteers: v.array(PendingSteerSchema),
+  pendingSteerFiles: v.array(PendingSteerFileSchema),
+  agentLog: v.array(v.object({
+    id: v.string(), kind: v.string(), turnId: v.nullable(v.string()), variant: v.nullable(v.string()),
+    consumed: v.boolean(), payload: v.string(),
+  })),
+  terminalEffects: v.array(v.object({
+    sequenceId: v.string(), effectKey: v.string(), effectName: v.string(), scope: v.string(), seq: v.number(),
+    input: v.string(), lane: v.string(), status: v.string(), outcome: v.nullable(v.string()),
+    attempts: v.number(), settled: v.boolean(),
+  })),
+  /** The run ledger, restricted to the rows the continuation invariant reads. */
+  runEvents: v.array(v.object({ runId: v.string(), type: v.string(), payload: v.string() })),
+});
+
+export type ParityRows = v.InferOutput<typeof ParityRowsSchema>;
+
+const ParityModelCallSchema = v.object({ users: v.array(v.string()), toolResults: v.array(v.string()), roles: v.array(v.string()) });
+
+export const ParityPreparedSchema = v.object({
+  workspace: v.string(),
+  owner: v.string(),
+  frames: v.array(ParityFrameSchema),
+  landings: v.record(v.string(), v.nullable(v.string())),
+  afterTwo: ParityRowsSchema,
+  beforeRestart: ParityRowsSchema,
+  /** The parity-lane model calls made before the reset. */
+  modelCallsBefore: v.array(ParityModelCallSchema),
+});
+
+export type ParityPrepared = v.InferOutput<typeof ParityPreparedSchema>;
+
+export const ParityCompletedSchema = v.object({
+  frames: v.array(ParityFrameSchema),
+  landings: v.record(v.string(), v.nullable(v.string())),
+  end: ParityRowsSchema,
+  modelCallsAfter: v.array(ParityModelCallSchema),
+  failures: v.array(DiagnosticFailureSchema),
+});
+
+export type ParityCompleted = v.InferOutput<typeof ParityCompletedSchema>;

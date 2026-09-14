@@ -1,0 +1,1983 @@
+{
+  "landings": {
+    "PARITY-ONE": null,
+    "PARITY-TWO-STEER": "mid-turn",
+    "PARITY-TWO": null,
+    "PARITY-THREE": null,
+    "PARITY-FOUR-STEER": "mid-turn",
+    "PARITY-FIVE": null
+  },
+  "afterTwo": {
+    "assistantMessages": [
+      {
+        "id": "input-PARITY-ONE",
+        "parentId": null,
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-ONE",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-ONE"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#1>",
+        "parentId": "input-PARITY-ONE",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#1>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-ONE",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-TWO",
+        "parentId": "<uuid#1>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-TWO",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-TWO"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#2>",
+        "parentId": "input-PARITY-TWO",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#2>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-TWO",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "parentId": "<uuid#2>",
+        "role": "user",
+        "content": {
+          "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+          "role": "user",
+          "parts": [
+            {
+              "type": "file",
+              "url": "data:text/plain;base64,aGVsbG8=",
+              "mediaType": "text/plain",
+              "filename": "note.txt"
+            },
+            {
+              "type": "text",
+              "text": "PARITY-TWO-STEER"
+            }
+          ],
+          "metadata": {
+            "kinuAuthor": "operator",
+            "kinuMode": "build"
+          }
+        }
+      },
+      {
+        "id": "<uuid#3>",
+        "parentId": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#3>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+              "state": "done"
+            }
+          ]
+        }
+      }
+    ],
+    "pendingSteers": [],
+    "pendingSteerFiles": [],
+    "agentLog": [],
+    "terminalEffects": [],
+    "runEvents": [
+      {
+        "runId": "<run#4>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-ONE",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#4>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-ONE"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#4>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-TWO",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-TWO"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-TWO-STEER",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      }
+    ]
+  },
+  "beforeRestart": {
+    "assistantMessages": [
+      {
+        "id": "input-PARITY-ONE",
+        "parentId": null,
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-ONE",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-ONE"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#1>",
+        "parentId": "input-PARITY-ONE",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#1>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-ONE",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-TWO",
+        "parentId": "<uuid#1>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-TWO",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-TWO"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#2>",
+        "parentId": "input-PARITY-TWO",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#2>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-TWO",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "parentId": "<uuid#2>",
+        "role": "user",
+        "content": {
+          "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+          "role": "user",
+          "parts": [
+            {
+              "type": "file",
+              "url": "data:text/plain;base64,aGVsbG8=",
+              "mediaType": "text/plain",
+              "filename": "note.txt"
+            },
+            {
+              "type": "text",
+              "text": "PARITY-TWO-STEER"
+            }
+          ],
+          "metadata": {
+            "kinuAuthor": "operator",
+            "kinuMode": "build"
+          }
+        }
+      },
+      {
+        "id": "<uuid#3>",
+        "parentId": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#3>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-THREE",
+        "parentId": "<uuid#3>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-THREE",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-THREE"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-FOUR-TOOL",
+        "parentId": "input-PARITY-THREE",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-FOUR-TOOL",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-FOUR-TOOL"
+            }
+          ]
+        }
+      }
+    ],
+    "pendingSteers": [
+      {
+        "id": "input-PARITY-FOUR-STEER",
+        "turnId": "input-PARITY-FOUR-TOOL",
+        "mode": "build",
+        "text": "PARITY-FOUR-STEER"
+      }
+    ],
+    "pendingSteerFiles": [
+      {
+        "steerId": "input-PARITY-FOUR-STEER",
+        "filename": "note.txt",
+        "mediaType": "text/plain",
+        "url": "data:text/plain;base64,aGVsbG8="
+      }
+    ],
+    "agentLog": [],
+    "terminalEffects": [],
+    "runEvents": [
+      {
+        "runId": "<run#4>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-ONE",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#4>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-ONE"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#4>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-TWO",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-TWO"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-TWO-STEER",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#8>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-THREE",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#8>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "aborted",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-FOUR-TOOL",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "tool_call_end",
+        "payload": {
+          "type": "tool_call_end",
+          "name": "file",
+          "toolCallId": "call_parity_1",
+          "outcome": {
+            "success": false,
+            "reason": "missing"
+          },
+          "args": {
+            "action": "read",
+            "path": "probe-fixture.txt"
+          },
+          "result": {
+            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+          },
+          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "durationMs": "<clock>",
+          "eventIndex": 3,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "tool-calls",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "tool-call",
+                  "toolCallId": "call_parity_1",
+                  "toolName": "file",
+                  "input": {
+                    "action": "read",
+                    "path": "probe-fixture.txt"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "content": [
+                {
+                  "type": "tool-result",
+                  "toolCallId": "call_parity_1",
+                  "toolName": "file",
+                  "output": {
+                    "type": "error-text",
+                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+                  }
+                }
+              ]
+            }
+          ],
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      }
+    ]
+  },
+  "end": {
+    "assistantMessages": [
+      {
+        "id": "input-PARITY-ONE",
+        "parentId": null,
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-ONE",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-ONE"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#1>",
+        "parentId": "input-PARITY-ONE",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#1>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-ONE",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-TWO",
+        "parentId": "<uuid#1>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-TWO",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-TWO"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#2>",
+        "parentId": "input-PARITY-TWO",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#2>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-TWO",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "parentId": "<uuid#2>",
+        "role": "user",
+        "content": {
+          "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+          "role": "user",
+          "parts": [
+            {
+              "type": "file",
+              "url": "data:text/plain;base64,aGVsbG8=",
+              "mediaType": "text/plain",
+              "filename": "note.txt"
+            },
+            {
+              "type": "text",
+              "text": "PARITY-TWO-STEER"
+            }
+          ],
+          "metadata": {
+            "kinuAuthor": "operator",
+            "kinuMode": "build"
+          }
+        }
+      },
+      {
+        "id": "<uuid#3>",
+        "parentId": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#3>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-THREE",
+        "parentId": "<uuid#3>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-THREE",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-THREE"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-FOUR-TOOL",
+        "parentId": "input-PARITY-THREE",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-FOUR-TOOL",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-FOUR-TOOL"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#10>",
+        "parentId": "input-PARITY-FOUR-TOOL",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#10>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "tool-file",
+              "toolCallId": "call_parity_1",
+              "toolName": "file",
+              "state": "output-error",
+              "input": {
+                "action": "read",
+                "path": "probe-fixture.txt"
+              },
+              "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-FOUR-STEER",
+        "parentId": "<uuid#10>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-FOUR-STEER",
+          "role": "user",
+          "parts": [
+            {
+              "type": "file",
+              "url": "data:text/plain;base64,aGVsbG8=",
+              "mediaType": "text/plain",
+              "filename": "note.txt"
+            },
+            {
+              "type": "text",
+              "text": "PARITY-FOUR-STEER"
+            }
+          ],
+          "metadata": {
+            "kinuSteer": true,
+            "kinuSteerAtStep": 0
+          }
+        }
+      },
+      {
+        "id": "<uuid#11>",
+        "parentId": "input-PARITY-FOUR-STEER",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#11>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:helloPARITY-FOUR-STEER",
+              "state": "done"
+            }
+          ]
+        }
+      },
+      {
+        "id": "input-PARITY-FIVE",
+        "parentId": "<uuid#11>",
+        "role": "user",
+        "content": {
+          "id": "input-PARITY-FIVE",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "PARITY-FIVE"
+            }
+          ]
+        }
+      },
+      {
+        "id": "<uuid#12>",
+        "parentId": "input-PARITY-FIVE",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#12>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "echo:PARITY-FIVE",
+              "state": "done"
+            }
+          ]
+        }
+      }
+    ],
+    "pendingSteers": [],
+    "pendingSteerFiles": [],
+    "agentLog": [],
+    "terminalEffects": [],
+    "runEvents": [
+      {
+        "runId": "<run#4>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-ONE",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#4>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-ONE"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#4>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-TWO",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-TWO"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#6>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-TWO-STEER",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#7>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#8>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-THREE",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#8>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "aborted",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-FOUR-TOOL",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "tool_call_end",
+        "payload": {
+          "type": "tool_call_end",
+          "name": "file",
+          "toolCallId": "call_parity_1",
+          "outcome": {
+            "success": false,
+            "reason": "missing"
+          },
+          "args": {
+            "action": "read",
+            "path": "probe-fixture.txt"
+          },
+          "result": {
+            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+          },
+          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "durationMs": "<clock>",
+          "eventIndex": 3,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "tool-calls",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "tool-call",
+                  "toolCallId": "call_parity_1",
+                  "toolName": "file",
+                  "input": {
+                    "action": "read",
+                    "path": "probe-fixture.txt"
+                  }
+                }
+              ]
+            },
+            {
+              "role": "tool",
+              "content": [
+                {
+                  "type": "tool-result",
+                  "toolCallId": "call_parity_1",
+                  "toolName": "file",
+                  "output": {
+                    "type": "error-text",
+                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+                  }
+                }
+              ]
+            }
+          ],
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#13>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-FOUR-TOOL",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#13>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:helloPARITY-FOUR-STEER"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 2,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#13>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 4,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#9>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "interrupted",
+          "eventIndex": 5,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#14>",
+        "type": "run_start",
+        "payload": {
+          "type": "run_start",
+          "agentId": "<uuid#5>",
+          "caused_by": "chat",
+          "userMessage": "PARITY-FIVE",
+          "eventIndex": 0,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#14>",
+        "type": "step_finish",
+        "payload": {
+          "type": "step_finish",
+          "stepIndex": 1,
+          "reason": "stop",
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "echo:PARITY-FIVE"
+                }
+              ]
+            }
+          ],
+          "eventIndex": 3,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#14>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 5,
+          "timestamp": "<clock>"
+        }
+      }
+    ]
+  },
+  "framesBefore": {
+    "protocol": [
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#1>"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "text-start",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "text-delta",
+          "id": "txt-0",
+          "delta": "echo:PARITY-ONE"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "text-end",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "finish-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": false,
+        "body": {
+          "type": "finish",
+          "finishReason": "stop"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-ONE",
+        "done": true
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#2>"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "steer_status"
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO-STEER",
+        "done": true,
+        "landed": "mid-turn"
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "text-start",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "text-delta",
+          "id": "txt-0",
+          "delta": "echo:PARITY-TWO"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "text-end",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "finish-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": false,
+        "body": {
+          "type": "finish",
+          "finishReason": "stop"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-TWO",
+        "done": true
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#3>"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "text-start",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "text-delta",
+          "id": "txt-0",
+          "delta": "echo:[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "text-end",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "finish-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
+        "body": {
+          "type": "finish",
+          "finishReason": "stop"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": true
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-THREE",
+        "done": false,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#16>"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-THREE",
+        "done": true
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#10>"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "tool-input-start",
+          "toolCallId": "call_parity_1",
+          "toolName": "file"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "tool-input-delta",
+          "toolCallId": "call_parity_1",
+          "inputTextDelta": "{\"action\":\"read\",\"path\":\"probe-fixture.txt\"}"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "tool-input-available",
+          "toolCallId": "call_parity_1",
+          "toolName": "file",
+          "input": {
+            "action": "read",
+            "path": "probe-fixture.txt"
+          }
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "tool-output-error",
+          "toolCallId": "call_parity_1",
+          "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "finish-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "text-start",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-TOOL",
+        "done": false,
+        "body": {
+          "type": "text-delta",
+          "id": "txt-0",
+          "delta": "echo:part-one "
+        }
+      },
+      {
+        "socket": "A",
+        "type": "steer_status"
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FOUR-STEER",
+        "done": true,
+        "landed": "mid-turn"
+      }
+    ],
+    "syncs": {
+      "cf_agent_chat_messages": 5,
+      "cf_agent_identity": 1,
+      "cf_agent_mcp_servers": 1,
+      "cf_agent_session": 8
+    }
+  },
+  "framesAfter": {
+    "protocol": [
+      {
+        "socket": "B",
+        "type": "cf_agent_chat_recovering",
+        "id": "PARITY-FOUR-TOOL"
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_stream_resume_none"
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "start"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "steer_status"
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "text-start",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "text-delta",
+          "id": "txt-0",
+          "delta": "echo:helloPARITY-FOUR-STEER"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "text-end",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "finish-step"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": false,
+        "continuation": true,
+        "body": {
+          "type": "finish",
+          "finishReason": "stop"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#17>",
+        "done": true,
+        "continuation": true
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_chat_recovering",
+        "id": "PARITY-FOUR-TOOL"
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#12>"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "start-step"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "text-start",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "text-delta",
+          "id": "txt-0",
+          "delta": "echo:PARITY-FIVE"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "text-end",
+          "id": "txt-0"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "finish-step"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": false,
+        "body": {
+          "type": "finish",
+          "finishReason": "stop"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-FIVE",
+        "done": true
+      }
+    ],
+    "syncs": {
+      "cf_agent_chat_messages": 3,
+      "cf_agent_identity": 1,
+      "cf_agent_mcp_servers": 1,
+      "cf_agent_session": 4
+    }
+  },
+  "modelCallsBefore": [
+    {
+      "users": [
+        "PARITY-ONE"
+      ],
+      "toolResults": [],
+      "roles": [
+        "system",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO"
+      ],
+      "toolResults": [],
+      "roles": [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "user"
+      ]
+    },
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER"
+      ],
+      "toolResults": [],
+      "roles": [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user"
+      ]
+    },
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+        "PARITY-THREE"
+      ],
+      "toolResults": [],
+      "roles": [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user"
+      ]
+    },
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+        "PARITY-THREE",
+        "PARITY-FOUR-TOOL"
+      ],
+      "toolResults": [],
+      "roles": [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+        "PARITY-THREE",
+        "PARITY-FOUR-TOOL"
+      ],
+      "toolResults": [
+        "{\"reason\":\"missing\",\"error\":\"ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.\"}"
+      ],
+      "roles": [
+        "system",
+        "user",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "user",
+        "assistant",
+        "tool"
+      ]
+    }
+  ],
+  "modelCallsAfter": [
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+        "PARITY-THREE",
+        "PARITY-FOUR-TOOL",
+        "helloPARITY-FOUR-STEER"
+      ],
+      "toolResults": [
+        "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+      ],
+      "roles": [
+        "system",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "user"
+      ]
+    },
+    {
+      "users": [
+        "PARITY-ONE",
+        "PARITY-TWO",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
+        "PARITY-THREE",
+        "PARITY-FOUR-TOOL",
+        "helloPARITY-FOUR-STEER",
+        "PARITY-FIVE"
+      ],
+      "toolResults": [
+        "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+      ],
+      "roles": [
+        "system",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+        "user",
+        "user",
+        "assistant",
+        "tool",
+        "user",
+        "user",
+        "assistant",
+        "user"
+      ]
+    }
+  ],
+  "failures": []
+}

@@ -49,3 +49,5 @@ export * from './eval-adopted-spend';
 export * from './eval-outcome';
 
 export * from './hard-tasks/index';
+
+export * from './parity-normalizer';

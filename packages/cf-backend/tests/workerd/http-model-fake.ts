@@ -56,6 +56,21 @@ interface HeldGate {
  *  prepare RPC can join on "the held call exists" rather than a counter. */
 let heldRequest: { readonly gate: HeldGate; readonly from: number } | null = null;
 
+/**
+ * The parity lane's own hold, armed by `/parity/hold`: the next `probe-parity`
+ * call named by `parkAt` parks — `first` parks the turn's opening call
+ * before it answers (the mid-turn window), `partial` streams one text delta
+ * of the tool-answering step and then parks with the body open, which is the
+ * exact instant an eviction leaves a flushed partial and a settled tool
+ * result behind. Released by `/parity/release`; the parked producer is then
+ * finished so the runtime can reclaim it.
+ */
+let parityHold: { readonly gate: HeldGate; readonly parkAt: 'first' | 'partial' } | null = null;
+
+/** The gate a parity call is parked on right now — kept apart from the armed
+ *  hold so `/parity/release` still reaches it after the call consumed the arm. */
+let parityParked: HeldGate | null = null;
+
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
 const MessageContentSchema = v.union([v.string(), v.array(v.unknown())]);
@@ -274,6 +289,83 @@ function toolBody(body: OutboundBody, callId: string, narration?: string): Respo
   return sseResponse(chunks);
 }
 
+/**
+ * The parity conversation's model. One lane, keyed on the request shape and
+ * the last typed user line, so a whole scripted conversation runs on one pin:
+ *
+ *   - a user line naming `TOOL` opens a tool script: the first request is
+ *     answered with a real `file` tool call; the request carrying its result
+ *     streams `echo:part-one ` and — when the `partial` hold is armed — parks
+ *     there with the body open; a request whose transcript already ends in
+ *     that partial assistant text (the continuation) answers `part-two`;
+ *   - every other line is an echo, parked before answering when the `first`
+ *     hold is armed.
+ */
+async function parityBody(body: OutboundBody): Promise<Response> {
+  const messages = body.messages ?? [];
+  const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
+  const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
+  const trailingAssistant = messages.at(-1)?.role === 'assistant' ? textOf(messages.at(-1)?.content ?? '') : '';
+  const encoder = new TextEncoder();
+
+  const parkedResponse = (before: readonly string[], after: readonly string[], gate: HeldGate): Response => new Response(
+    new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const c of before) controller.enqueue(encoder.encode(c));
+        gate.arrived.resolve();
+        await gate.release.promise;
+
+        for (const c of after) controller.enqueue(encoder.encode(c));
+        controller.close();
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  );
+
+  if (text.includes('TOOL')) {
+    if (trailingAssistant.startsWith('echo:part-one')) {
+      return sseResponse([sseChunk({ content: 'part-two' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()]);
+    }
+
+    if (messages.some((m) => m.role === 'tool')) {
+      const tail = [sseChunk({ content: 'part-two' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()];
+
+      if (parityHold?.parkAt === 'partial') {
+        const { gate } = parityHold;
+        parityHold = null;
+        parityParked = gate;
+
+        return parkedResponse([sseChunk({ content: 'echo:part-one ' })], tail, gate);
+      }
+
+      return sseResponse([sseChunk({ content: 'echo:part-one ' }), ...tail]);
+    }
+
+    return sseResponse([
+      sseChunk({
+        tool_calls: [{
+          index: 0, id: 'call_parity_1', type: 'function',
+          function: { name: 'file', arguments: JSON.stringify({ action: 'read', path: 'probe-fixture.txt' }) },
+        }],
+      }),
+      sseChunk({ role: 'assistant' }, 'tool_calls'),
+      sseDone(),
+    ]);
+  }
+
+  const answer = [sseChunk({ content: `echo:${text}` }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()];
+
+  if (parityHold?.parkAt === 'first') {
+    const { gate } = parityHold;
+    parityHold = null;
+    parityParked = gate;
+
+    return parkedResponse([], answer, gate);
+  }
+
+  return sseResponse(answer);
+}
+
 async function errorBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
 
@@ -318,6 +410,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-tools-only' },
       { id: 'probe-error' },
       { id: 'probe-queue' },
+      { id: 'probe-parity' },
     ],
   });
 }
@@ -349,6 +442,31 @@ export async function probeOutbound(request: Request): Promise<Response> {
     if (url.pathname === '/queue/release' && request.method === 'POST') {
       heldRequest?.gate.release.resolve();
       heldRequest = null;
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/parity/hold' && request.method === 'POST') {
+      const spec = v.parse(v.object({ parkAt: v.picklist(['first', 'partial']) }), await request.json());
+      parityHold = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, parkAt: spec.parkAt };
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/parity/arrived' && request.method === 'GET') {
+      const gate = parityHold?.gate ?? parityParked;
+
+      if (gate === null || gate === undefined) throw new Error('parity model hold was not armed');
+      await gate.arrived.promise;
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/parity/release' && request.method === 'POST') {
+      parityParked?.release.resolve();
+      parityHold?.gate.release.resolve();
+      parityParked = null;
+      parityHold = null;
 
       return Response.json({ ok: true });
     }
@@ -393,6 +511,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
         }
 
         case 'probe': return echoBody(body);
+        case 'probe-parity': return parityBody(body);
         case 'probe-early-done': return earlyDoneBody();
         case 'probe-tools': return toolBody(body, 'call_probe_1', 'I will read that fixture file.');
         case 'probe-tools-only': return toolBody(body, 'call_probe_only_1');
