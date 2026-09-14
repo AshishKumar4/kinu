@@ -101,7 +101,7 @@ import {
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   describeLandedSteers, USER_MESSAGE_SIGNAL_KIND,
-  type UserSteer,
+  type UserSteer, type AcceptedSteer, type SendLanding, type PromptFile, PromptFileSchema,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   OVERFLOW_RETRY_EVENT, type OverflowRecoveryDecision,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
@@ -603,14 +603,23 @@ interface WorkspaceTitleInputs {
 
 
 
-/**
- * Where `steerTurn` put the operator's words. Unlike the signal seam's own
- * outcome for the user kind — which may also answer 'queued' by running the
- * steer as its own user-origin turn — this never says `idle`: an idle actor
- * queues the text as the next ordinary turn itself, so every answer names a
- * place the words now are, never work the caller still owes.
- */
-export type SteerTurnLanding = 'mid-turn' | 'queued';
+/** The chat-request body as the busy route reads it: the user messages the
+ *  client is sending, by id, with their parts and the mode they were typed in. */
+const BusyChatBodySchema = v.looseObject({
+  messages: v.array(v.looseObject({
+    id: v.pipe(v.string(), v.nonEmpty()),
+    role: v.string(),
+    parts: v.array(v.looseObject({
+      type: v.string(),
+      text: v.optional(v.string()),
+      mediaType: v.optional(v.string()),
+      url: v.optional(v.string()),
+      filename: v.optional(v.string()),
+    })),
+    metadata: v.optional(v.unknown()),
+  })),
+  trigger: v.optional(v.string()),
+});
 
 /** The failure classes under which a turn runs on builtins alone because the
  *  owner's MCP catalog could not be reached or finished: a hop that failed, timed
@@ -826,6 +835,17 @@ export abstract class ActorAgent extends Think<Env> {
       mode     TEXT NOT NULL CHECK (mode IN ('plan','build')),
       text     TEXT NOT NULL,
       UNIQUE (actor_id, id)
+    )`);
+    // The attachments of a pending steer, in their own table because a
+    // shipped table's shape never moves: one row per file part, in the order
+    // the message carried them, retired with the steer row they belong to.
+    this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS pending_steer_files (
+      seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_id   TEXT NOT NULL,
+      steer_id   TEXT NOT NULL,
+      filename   TEXT NOT NULL,
+      media_type TEXT NOT NULL,
+      url        TEXT NOT NULL
     )`);
     // The admission ledger records the issued actor, run, execution epoch,
     // selected program and admitted context; one workspace-wide turn pointer
@@ -1466,7 +1486,7 @@ export abstract class ActorAgent extends Think<Env> {
     // through closures because `orch` is built lazily and this runs in the
     // constructor.
     this.extensions.register({
-      name: 'kinu.signals',
+      name: 'kinu.inbox',
       onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
       onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
       prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
@@ -1512,8 +1532,21 @@ export abstract class ActorAgent extends Think<Env> {
       }
 
       try {
-        const bound = v.is(v.string(), message) ? bindChatInput(message, this.stores.claims,
-          (id) => this.sql<{ id: string }>`SELECT id FROM assistant_messages WHERE id = ${id}`.length > 0) : message;
+        const hasMessage = (id: string) => this.sql<{ id: string }>`SELECT id FROM assistant_messages WHERE id = ${id}`.length > 0;
+
+        if (event?.type === 'chat-request') {
+          const routed = await this.routeBusyChat(event, hasMessage);
+
+          if (routed !== null) {
+            connection.send(JSON.stringify({
+              type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: '', done: true, landed: routed,
+            }));
+
+            return;
+          }
+        }
+
+        const bound = v.is(v.string(), message) ? bindChatInput(message, this.stores.claims, hasMessage) : message;
 
         return await dispatchMessage.call(this, connection, bound);
       } finally {
@@ -1535,6 +1568,45 @@ export abstract class ActorAgent extends Think<Env> {
       }
     };
   }
+  /**
+   * A chat request that arrives while a turn exists is the user's message to
+   * THAT turn: it goes through the inbox under the client's own message id
+   * and lands at the turn's next step, and the SDK never queues a turn for
+   * it. Answers where it landed, or null when the request is the SDK's to
+   * run — the actor is idle (the SDK turn IS the start-a-turn path), the
+   * request is a regenerate, or it carries no user message this actor has
+   * not already persisted (a reconnect replaying an admitted intake).
+   *
+   * Attachments ride as file parts, exactly as the idle path carries them;
+   * the mode is the message's own `kinuMode`, a fact on the message.
+   */
+  private async routeBusyChat(
+    event: { readonly id: string; readonly init: { readonly method?: string; readonly body?: string | null } },
+    hasMessage: (id: string) => boolean,
+  ): Promise<SendLanding | null> {
+    if (!this.orch.inbox.busy || event.init.method !== 'POST' || !event.init.body) return null;
+    const body = v.safeParse(v.pipe(v.string(), v.parseJson(), BusyChatBodySchema), event.init.body);
+
+    if (!body.success || body.output.trigger === 'regenerate-message') return null;
+    const fresh = body.output.messages.filter((input) => input.role === 'user' && !hasMessage(input.id));
+
+    if (fresh.length === 0) return null;
+    let landed: SendLanding = 'mid-turn';
+
+    for (const input of fresh) {
+      const text = input.parts.flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('');
+
+      const files: PromptFile[] = input.parts.flatMap((part) => part.type === 'file' && part.url !== undefined
+        ? [{ filename: part.filename ?? 'attachment', mediaType: part.mediaType ?? 'application/octet-stream', url: part.url }]
+        : []);
+
+      const mode = v.is(v.object({ kinuMode: v.string() }), input.metadata) && isWorkMode(input.metadata.kinuMode) ? input.metadata.kinuMode : 'build';
+      landed = await this.acceptSend(text, files, mode, input.id);
+    }
+
+    return landed;
+  }
+
   /** The settled turn's actor-generic front half — every actor's
    *  onChatResponse calls this FIRST (before anything that can throw or
    *  return early). Resolves the drain identity, clears in-flight turn
@@ -1577,7 +1649,7 @@ export abstract class ActorAgent extends Think<Env> {
       const response = await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true });
       this.contextPlane.endTurn({
         turnId: claimedTurn.turnId,
-        history: [...this._turnDurableInput, ...this.orch.signals.replayInto(response)],
+        history: [...this._turnDurableInput, ...this.orch.inbox.replayInto(response)],
       });
     }
 
@@ -1592,7 +1664,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._turnOperation = null;
     this._cliCwd = null;
     const completed = result.status === 'completed';
-    const injectedSignals = this.orch.signals.settle({ completed });
+    const injectedSignals = this.orch.inbox.settle({ completed });
 
     // THE OUTPUT-LIMIT CONTINUATION, decided here because this is the one place
     // both actors settle through and the one moment all three facts are still
@@ -1660,66 +1732,83 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Accept a message the user typed while a turn is running — or, when the turn
-   * ended before it arrived, commit it as the NEXT ordinary user turn right
-   * here. The decision and its commitment share one synchronous slice of this
-   * actor: `accept` reads the in-flight flag in this tick, and the idle branch
-   * hands the text to the turn queue before any other input runs. The caller
-   * never re-sends, so the race where mid-turn guidance became an ordinary
-   * turn at some later, unpredictable point is structurally gone (KINU-N026).
+   * The user's message, through the inbox. A running turn takes it at its next
+   * step (`'mid-turn'`, announced before the model has it — the person who
+   * pressed Enter needs to know their words were taken); an idle actor runs it
+   * as the next ordinary turn (`'turn'`, answered when that turn has run). The
+   * decision is the inbox's, in one synchronous slice with the durable
+   * reservation {@link reservePendingSteer} writes, so a mid-turn message
+   * exists in SQL before the client hears it queued and an eviction cannot
+   * turn an acknowledged chip into forgotten RAM. The caller never re-sends.
    *
-   * `'mid-turn'` is announced immediately, before the model has it: the person
-   * who pressed Enter needs to know their words were taken and are waiting for
-   * the next step, which is a different fact from "the model read them"
-   * (announced again, as `landed`, when the drain actually happens). The id is
-   * minted HERE and carried through both announcements and the durable row, so
-   * a surface tracking a steer never sees the same one twice under two names.
-   *
-   * `mode` rides the enqueued turn as its `kinuMode`, so a Plan composer's
-   * fallback turn keeps the Plan bar the ordinary send path would have given it.
+   * The id is minted HERE and carried through both announcements and the
+   * durable row, so a surface tracking a message never sees it twice under two
+   * names. `mode` is the composer's, a fact the message carries: a turn it
+   * starts runs under it, and a splice leaves the running turn's mode alone.
    */
-  protected async acceptUserSteer(text: string, mode: WorkMode, id = `steer-${nanoid(12)}`): Promise<SteerTurnLanding> {
+  protected async acceptSend(
+    text: string, files: readonly PromptFile[], mode: WorkMode, id = `steer-${nanoid(12)}`,
+  ): Promise<SendLanding> {
     const body = text.trim();
 
-    if (!body) throw new Error('steerTurn requires the message text');
+    if (!body && files.length === 0) throw new Error('send requires the message text');
 
-    // The decision and durable reservation are one synchronous actor slice.
-    // A mid-turn steer exists in SQL before the client hears it queued, so an
-    // eviction cannot turn an acknowledged chip into forgotten RAM.
-    if (this._inFlight) {
-      const turnId = this.durableTurnId();
+    const outcome = await this.orch.inbox.send({
+      kind: USER_MESSAGE_SIGNAL_KIND, text: body,
+      user: { id, mode, ...(files.length > 0 && { files }) },
+    });
 
-      if (turnId === null) throw new Error('running turn has no durable identity');
-      void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
-        VALUES (${this.actorHandle().actorId}, ${id}, ${turnId}, ${mode}, ${body})`;
-      // The user kind of signal: the seam answers 'mid-turn' and owns the
-      // 'queued' steer_status frame (same bytes — it broadcasts through
-      // host.broadcast, which is this.broadcast).
-
-      const outcome = await this.orch.signals.deliver({
-        kind: USER_MESSAGE_SIGNAL_KIND, text: body, user: { id, mode },
-      });
-
-      if (outcome !== 'mid-turn') throw new Error('turn changed while accepting a steer');
+    if (outcome === 'mid-turn') {
       this.logActivity('steer_queued', body.slice(0, 120));
 
       return 'mid-turn';
     }
 
-    // The operator's own words, exactly as the ordinary send path would have
-    // written them — author-stamped so the row wears the user bubble, never
-    // filed as the harness speaking (the sweepOrphanedSteers precedent).
-    const queued = await this.host.enqueueTurn({
-      text: body,
-      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: mode },
-    });
-
-    if (queued.status !== 'queued') {
-      throw new Error('the turn had already finished and this could not be queued as a new message — send it again');
-    }
-
-    return 'queued';
+    if (outcome === 'queued') return 'turn';
+    throw new Error('the turn had already finished and this could not be queued as a new message — send it again');
   }
+
+  /**
+   * The durable half of a mid-turn message, written by the inbox in the same
+   * synchronous slice as its routing read and before its 'queued' broadcast.
+   * Bound to the turn it will land in: the running turn's durable id, or, for
+   * a message that arrived while a turn this actor admitted was still opening,
+   * that turn's driving message id — the same id `restoreTurnCheckpoint` will
+   * derive for it, so a reset restores the row into the right turn.
+   */
+  private reservePendingSteer(steer: AcceptedSteer): void {
+    const turnId = this.durableTurnId() ?? this._startingTurnId;
+
+    if (turnId === null) throw new Error('running turn has no durable identity');
+    const actorId = this.actorHandle().actorId;
+    void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+      VALUES (${actorId}, ${steer.id}, ${turnId}, ${steer.mode}, ${steer.text})`;
+
+    for (const file of steer.files ?? []) {
+      void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
+        VALUES (${actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.url})`;
+    }
+  }
+
+  /** The attachments reserved with a pending steer, in the order they arrived. */
+  private pendingSteerFiles(steerId: string): PromptFile[] {
+    return this.sql<{ filename: string; media_type: string; url: string }>`
+      SELECT filename, media_type, url FROM pending_steer_files
+      WHERE actor_id = ${this.actorHandle().actorId} AND steer_id = ${steerId} ORDER BY seq ASC`
+      .map((row) => ({ filename: row.filename, mediaType: row.media_type, url: row.url }));
+  }
+
+  /** Retire a pending steer's reservation: the row and its attachments together. */
+  private retirePendingSteer(steerId: string): void {
+    const actorId = this.actorHandle().actorId;
+    void this.sql`DELETE FROM pending_steers WHERE actor_id = ${actorId} AND id = ${steerId}`;
+    void this.sql`DELETE FROM pending_steer_files WHERE actor_id = ${actorId} AND steer_id = ${steerId}`;
+  }
+
+  /** The driving message id of a turn this actor has handed to the queue and
+   *  that has not yet opened — what a message arriving in that window binds
+   *  its reservation to. Null outside the window. */
+  private _startingTurnId: string | null = null;
 
   /**
    * A drain happened: the model has these steers as of the step now starting.
@@ -1747,17 +1836,17 @@ export abstract class ActorAgent extends Think<Env> {
     // transport: Durable Object messages. The 'landed' steer_status frame is
     // the seam's, broadcast after this resolves — same key order, same bytes.
     const rows = describeLandedSteers(steers, atStep);
-    await this.addMessages(rows.map((row) => ({
+    await this.addMessages(rows.map((row, index) => ({
       id: row.id,
       role: 'user' as const,
-      parts: [{ type: 'text' as const, text: row.text }],
+      parts: [
+        ...(steers[index]?.files ?? []).map((f) => ({ type: 'file' as const, url: f.url, mediaType: f.mediaType, filename: f.filename })),
+        { type: 'text' as const, text: row.text },
+      ],
       metadata: row.metadata,
     })));
 
-    for (const row of rows) {
-      void this.sql`DELETE FROM pending_steers
-        WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
-    }
+    for (const row of rows) this.retirePendingSteer(row.id);
   }
 
   /** The reconnect snapshot reads SQL, not the RAM drain: RAM vanishes on an
@@ -1772,9 +1861,9 @@ export abstract class ActorAgent extends Think<Env> {
 
   /**
    * Rows whose turn is gone — an activation that died with steers acknowledged —
-   * rerun as a USER-origin turn. The LIVE turn's own leftovers are the seam's:
-   * they rerun from SignalDelivery.settle, so this sweep reads only rows bound
-   * to a turn id nobody holds.
+   * rerun as a USER-origin turn. The LIVE turn's own leftovers are the inbox's:
+   * they rerun from Inbox.settle, so this sweep reads only rows bound to a
+   * turn id nobody holds.
    *
    * Each carries the operator's own words, so it says so: without the stamp the
    * enqueue seam would read a row with no author and the programmatic id prefix
@@ -1805,10 +1894,11 @@ export abstract class ActorAgent extends Think<Env> {
 
             // Orphan rows come from SQL, not the RAM drain: a reset has
             // already lost RAM, while these rows are the operator words we
-            // acknowledged. Keep seq order and mode boundaries; merging a Plan
-            // steer with Build would run it on the wrong tool surface. The
-            // live turn's rows are excluded — its leftovers rerun from the
-            // seam at settle, not from this sweep.
+            // acknowledged. One rerun turn per dead turn, in seq order, under
+            // plan if any of its rows was typed in plan — the inbox's own
+            // rule for a turn's leftovers, so a reset changes nothing about
+            // how the words come back. The live turn's rows are excluded —
+            // its leftovers rerun from the inbox at settle, not from here.
             const live = this.durableTurnId() ?? '';
 
             const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
@@ -1823,22 +1913,25 @@ export abstract class ActorAgent extends Think<Env> {
               const group = [first];
               index++;
 
-              while (index < rows.length && rows[index]!.mode === first.mode && rows[index]!.turn_id === first.turn_id) group.push(rows[index++]!);
-              const idempotencyKey = `steer-rerun:${first.turn_id}:${first.mode}:${first.id}`;
+              while (index < rows.length && rows[index]!.turn_id === first.turn_id) group.push(rows[index++]!);
+              const mode: WorkMode = group.some((row) => row.mode === 'plan') ? 'plan' : 'build';
+              const idempotencyKey = `steer-rerun:${first.turn_id}:${mode}:${first.id}`;
 
               // A duplicate terminal callback can arrive before the first admission
               // resolves. RAM closes that window; the durable idempotency key closes
               // the same window across an activation reset.
               if (this._rerunningSteerKeys.has(idempotencyKey)) continue;
               this._rerunningSteerKeys.add(idempotencyKey);
+              const files = group.flatMap((row) => this.pendingSteerFiles(row.id));
 
               try {
                 await this.host.enqueueTurn({
                   text: group.map((row) => row.text).join('\n\n'),
-                  metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: first.mode },
+                  metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: mode },
                   idempotencyKey,
                   origin: 'user',
                   steerIds: group.map((row) => row.id),
+                  ...(files.length > 0 && { files }),
                 });
               } finally {
                 this._rerunningSteerKeys.delete(idempotencyKey);
@@ -2054,13 +2147,13 @@ export abstract class ActorAgent extends Think<Env> {
             : { status: 'completed', detail: refusal };
         },
       }),
-      overflow_retry: overflowRetryTerminalEffect(this.orch.signals),
+      overflow_retry: overflowRetryTerminalEffect(this.orch.inbox),
       // The other follow-up a settled turn can owe, and the shape is identical
       // because the obligation is: one signal, keyed on this response, still
       // owed until it is delivered. What differs is which turn earns it — the
       // retry answers a context-length FAILURE, this one an answer the provider
       // cut at its output limit while the model had more to say.
-      output_continuation: outputLimitContinuationTerminalEffect(this.orch.signals),
+      output_continuation: outputLimitContinuationTerminalEffect(this.orch.inbox),
 
       turn_record: turnRecordTerminalEffect(this.orch),
       event_drain: eventDrainTerminalEffect(this.orch),
@@ -2932,6 +3025,7 @@ export abstract class ActorAgent extends Think<Env> {
           },
         },
       }, {
+        onAccept: (steer) => this.reservePendingSteer(steer),
         onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
         turnId: () => this.durableTurnId(),
       });
@@ -3307,7 +3401,7 @@ export abstract class ActorAgent extends Think<Env> {
       }),
       govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: false,
-      deliver: (signal) => this.orch.signals.deliver(signal),
+      send: (signal) => this.orch.inbox.send(signal),
       record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
     });
   }
@@ -3548,14 +3642,22 @@ export abstract class ActorAgent extends Think<Env> {
           const retireSteerRows = () => {
             if (origin !== 'user' || steerIds === undefined) return;
 
-            for (const steerId of steerIds) {
-              void this.sql`DELETE FROM pending_steers
-                WHERE actor_id = ${this.actorHandle().actorId} AND id = ${steerId}`;
-            }
+            for (const steerId of steerIds) this.retirePendingSteer(steerId);
           };
 
+          // A message arriving before this turn opens binds its reservation
+          // to the turn's driving message id — the id `restoreTurnCheckpoint`
+          // derives once the turn runs, so the row is that turn's to restore.
+          this._startingTurnId = message.id;
+
           if (idempotencyKey) {
-            const result = await this.submitMessages([message], { idempotencyKey, metadata });
+            let result;
+
+            try {
+              result = await this.submitMessages([message], { idempotencyKey, metadata });
+            } finally {
+              if (this._startingTurnId === message.id) this._startingTurnId = null;
+            }
 
             if (result.accepted === true || (result.accepted === false
               && (result.status === 'pending' || result.status === 'running' || result.status === 'completed'))) {
@@ -3622,6 +3724,8 @@ export abstract class ActorAgent extends Think<Env> {
 
             return { status: result.status === 'completed' ? 'queued' : 'skipped' };
           } finally {
+            if (this._startingTurnId === message.id) this._startingTurnId = null;
+
             if (this._activeProgrammaticUserMessage === message) {
               this._activeDrainTurnId = null;
               this._activeProgrammaticUserMessage = null;
@@ -4066,7 +4170,7 @@ export abstract class ActorAgent extends Think<Env> {
         // spawn-shaped work detaches on unwatched turns too.
         policy: () => invocationBackgroundPolicy(this.turnSurface(), true),
         fiber: this.rt.schedule.fiber,
-        signals: this.orch.signals,
+        inbox: this.orch.inbox,
         eventLog: this.eventLog,
         scheduleDrain: () => this.orch.scheduleDrain(),
         logActivity: (event, detail) => this.logActivity(event, detail),
@@ -5341,25 +5445,24 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Steer the running turn with something the user just typed — the third
-   * composer action beside Stop and Branch, and the only one that neither
-   * abandons the turn nor forks it.
+   * Send the user a message to this actor — the composer's one submit, whatever
+   * the actor is doing. A running turn takes it at its next step
+   * (`'mid-turn'`); an idle actor runs it as the next ordinary turn (`'turn'`),
+   * atomically with the decision, in its own turn queue. "It went into the
+   * running turn" and "it started a new one" are different events for the
+   * person who typed it, so the answer still says which, and no caller
+   * re-sends. Attachments ride the same path, as file parts on the message.
    *
-   * `'queued'` means the turn ended before this arrived, so this actor queued
-   * the text as the next ordinary turn itself — atomically with the decision,
-   * in its own turn queue. "It went into the running turn" and "it started a
-   * new one" are different events for the person who typed it, so the answer
-   * still says which, and no caller re-sends.
-   *
-   * `mode` arrives over the wire, so it is admitted by `isWorkMode` rather
-   * than trusted; anything unrecognized runs as ordinary build work, exactly
-   * as `workModeForTurnMetadata` reads an unrecognized stored `kinuMode`.
+   * `files` and `mode` arrive over the wire, so they are parsed rather than
+   * trusted; an unrecognized mode runs as ordinary build work, exactly as
+   * `workModeForTurnMetadata` reads an unrecognized stored `kinuMode`.
    */
   @callable()
-  async steerTurn(text: string, mode?: WorkMode): Promise<{ landed: SteerTurnLanding }> {
+  async send(text: string, files: readonly PromptFile[] = [], mode?: WorkMode): Promise<{ landed: SendLanding }> {
     this.ensureSchema();
+    const attachments = v.parse(v.array(PromptFileSchema), files);
 
-    return { landed: await this.acceptUserSteer(text, isWorkMode(mode) ? mode : 'build') };
+    return { landed: await this.acceptSend(text, attachments, isWorkMode(mode) ? mode : 'build') };
   }
 
   /** Stop the turn on screen — the composer's Stop button. Aborts the in-flight
@@ -6103,9 +6206,14 @@ export abstract class ActorAgent extends Think<Env> {
     const pending = this.sql<{ id: string; text: string; mode: WorkMode }>`
       SELECT id, text, mode FROM pending_steers
       WHERE actor_id = ${this.actorHandle().actorId} AND turn_id = ${this._turnCheckpoint.turnId}
-      ORDER BY seq ASC`;
+      ORDER BY seq ASC`
+      .map((row) => {
+        const files = this.pendingSteerFiles(row.id);
 
-    if (pending.length > 0) this.orch.signals.restorePending(pending);
+        return files.length > 0 ? { ...row, files } : row;
+      });
+
+    if (pending.length > 0) this.orch.inbox.restorePending(pending);
     this.sweepOrphanedSteers();
   }
 
@@ -6796,7 +6904,7 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** The synthetic drain turn this turn is answering, off the DURABLE metadata
-   *  of the message that drove it. The same stamp `SignalDelivery` writes for
+   *  of the message that drove it. The same stamp the `Inbox` writes for
    *  every queued signal, read back — so a drain that crossed an eviction on
    *  the submission ledger still knows which batch it owes a reply to. */
   private turnDrainTurnId(): string | undefined {
@@ -7294,7 +7402,7 @@ export abstract class ActorAgent extends Think<Env> {
       actor: this.actorHandle(),
       appendMemory: (path, text) => this.rt.memory.append(path, text),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
-      deliverSignal: (signal) => this.orch.signals.deliver(signal),
+      deliverSignal: (signal) => this.orch.inbox.send(signal),
       redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
     };
   }

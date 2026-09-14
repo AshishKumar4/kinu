@@ -247,6 +247,11 @@ const SHARED_TRANSPORTS = {
   suggestTitle: 'suggestWorkspaceTitle',
   showRefinement: 'showRefinementRoute',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
+  // Both bodies are thin transports over core's Inbox.send — the mid-turn
+  // splice at the next step boundary is core's one rule. What stays per
+  // backend is only how an IDLE backend starts the turn: the DO's
+  // enqueueTurn, the CLI's session-queue pump.
+  send: '.send',
   // Accessors over ONE core object (ModelCatalogSession), three lines each.
   sessionAcceptedMedia: '.acceptedMedia',
   sessionContextWindow: '.contextWindow',

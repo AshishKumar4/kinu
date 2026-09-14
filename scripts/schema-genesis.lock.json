@@ -24,6 +24,16 @@
     "step_index",
     "recorded_at"
   ],
+  "actor_messages@packages/core/src/identity/schema.ts": [
+    "actor_id",
+    "id",
+    "session_id",
+    "parent_id",
+    "role",
+    "content",
+    "metadata",
+    "created_at"
+  ],
   "actor_program_state@packages/core/src/identity/program-state.ts": [
     "actor_id",
     "key",
@@ -586,16 +596,6 @@
     "text",
     "updated_at"
   ],
-  "actor_messages@packages/core/src/identity/schema.ts": [
-    "actor_id",
-    "id",
-    "session_id",
-    "parent_id",
-    "role",
-    "content",
-    "metadata",
-    "created_at"
-  ],
   "mission_budget@packages/core/src/mission-budget.ts": [
     "actor_id",
     "label",
@@ -639,6 +639,14 @@
     "effect_key",
     "answer",
     "created_at"
+  ],
+  "pending_steer_files@packages/cf-backend/src/actor-agent.ts": [
+    "seq",
+    "actor_id",
+    "steer_id",
+    "filename",
+    "media_type",
+    "url"
   ],
   "pending_steers@packages/cf-backend/src/actor-agent.ts": [
     "seq",

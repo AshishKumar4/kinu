@@ -3072,7 +3072,7 @@ export class OrchestratorAgent extends ActorAgent {
         store: new DeferredApprovalStore(this.boundSql, this.actorHandle()),
         // Read through `this.orch` at DELIVERY time, never captured: this
         // getter is reachable from the runtime's own construction path.
-        signals: { deliver: (signal) => this.orch.signals.deliver(signal) },
+        inbox: { send: (signal) => this.orch.inbox.send(signal) },
         // Where an 'always' answer lands: the same actor_config the approval
         // MODE lives in, read live by the gate on the very next command.
         remember: (grants) => { this.config.grantShellApproval(grants); },
@@ -3388,7 +3388,7 @@ export class OrchestratorAgent extends ActorAgent {
     dispatchRecoveredNotice(
       {
         redrive: (lane, checkpoint, body) => { this.redriveRecoveredLane(lane, checkpoint, body); },
-        deliverSignal: (recovered) => this.orch.signals.deliver(recovered),
+        deliverSignal: (recovered) => this.orch.inbox.send(recovered),
       },
       notice,
     );
@@ -3464,14 +3464,14 @@ export class OrchestratorAgent extends ActorAgent {
         // the QUEUED TURN ends — freight this alarm frame must not carry. The
         // wait is owned, so a failure still classifies and the harness join
         // still sees it.
-        signals: {
+        inbox: {
           // DURABLE before 'queued' is claimed: the fiber row the redrive
           // writes synchronously is the acceptance boundary, and an eviction
           // between the journal's terminal writes and the turn landing replays
           // the DELIVERY through the fork-notice lane — where the signal's
           // idempotency key makes an already-landed replay collide instead of
           // stacking cards.
-          deliver: (signal) => {
+          send: (signal) => {
             this.dispatchForkNotice(signal);
 
             return Promise.resolve('queued');
@@ -3999,7 +3999,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
     const outcome = await pickAlternateTake(
-      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, signals: this.orch.signals },
+      { sql: this.boundSql, actor: this.rt.actor, engine: this.engine, inbox: this.orch.inbox },
       takeId, nodeId);
 
     this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
@@ -4996,7 +4996,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     if (!trimmed) throw new Error('run_task requires non-empty text');
 
-    const outcome = await this.orch.signals.deliver({
+    const outcome = await this.orch.inbox.send({
       kind: 'mcp', text: trimmed,
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
     });
@@ -5220,7 +5220,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (!signal) return { started: false };
     this.detachOwned(async () => {
       try {
-        await this.keepAliveWhile(() => this.orch.signals.deliver(signal));
+        await this.keepAliveWhile(() => this.orch.inbox.send(signal));
       } catch (cause) {
         diagnostics.failure('genesis.turn_failed', toKinuError({
           doing: "taking the workspace's first turn", cause, otherwise: 'unavailable',
@@ -6472,7 +6472,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     return acceptSandboxLifecycleFailure({
       sql: this.boundSql,
-      signals: this.orch.signals,
+      inbox: this.orch.inbox,
       // The workspace is this object's own name, and it is the only dimension
       // the lifecycle module cannot know. Everything else on the row is decided
       // where the incident is understood.

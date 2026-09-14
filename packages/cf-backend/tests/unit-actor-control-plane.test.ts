@@ -2,7 +2,7 @@
  * The control plane the workspace root exposes, plus the per-actor stores a
  * hosted child keeps for itself.
  *
- * These four RPCs — getStoredModelSpec, setModel, steerTurn, cancelCurrentWork —
+ * These four RPCs — getStoredModelSpec, setModel, send, cancelCurrentWork —
  * are declared ONCE, on the one Durable Object: a hosted subordinate has no
  * Think turn queue to steer or stop. What is per actor is the durable state the
  * surface reads — the model row, the turn queue rows, and the activity rows —
@@ -62,10 +62,10 @@ describe('the workspace root answers the actor control plane', () => {
    */
   test('steering with no turn running queues the text as the next ordinary turn', async () => {
     const { agent } = orchestratorHarness();
-    const enqueued: Array<{ text: string; metadata?: JsonObject }> = [];
+    const enqueued: Array<{ text: string; metadata?: JsonObject; origin?: 'user'; steerIds?: readonly string[] }> = [];
     Reflect.set(agent, '_host', {
       broadcast: () => {},
-      enqueueTurn: async (turn: { text: string; metadata?: JsonObject }) => {
+      enqueueTurn: async (turn: { text: string; metadata?: JsonObject; origin?: 'user'; steerIds?: readonly string[] }) => {
         enqueued.push(turn);
 
         return { status: 'queued' as const };
@@ -74,11 +74,16 @@ describe('the workspace root answers the actor control plane', () => {
       setTimer: () => {},
       headRuntime: undefined,
     });
+    // The inbox captured the real host when `orch` was built; rebuild it over
+    // the fake so the idle path's enqueue is the one observed here.
+    Reflect.set(agent, '_orch', null);
 
-    expect(await agent.steerTurn('use the other parser')).toEqual({ landed: 'queued' });
+    expect(await agent.send('use the other parser')).toEqual({ landed: 'turn' });
     expect(enqueued).toEqual([{
       text: 'use the other parser',
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' },
+      origin: 'user',
+      steerIds: [expect.stringMatching(/^steer-/)],
     }]);
   });
 
