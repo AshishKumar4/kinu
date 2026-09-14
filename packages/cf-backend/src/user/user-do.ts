@@ -4858,6 +4858,84 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
+  /**
+   * The reverse projection of `sharesReceived_add`: every received row that
+   * names one owner goes. Run on each recipient when that owner deletes their
+   * account — their workspaces, and the share rows in them, are about to be
+   * destroyed, so a row left here would list a blueprint no object can answer
+   * for any more.
+   */
+  async sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
+    await this.requireTier(caller, 'shares');
+    this.sqlx(`DELETE FROM user_shares_received WHERE owner_user_id = ?`, ownerUserId);
+  }
+
+  // ── Account deletion ───────────────────────────────────────────────
+
+  /**
+   * Delete everything under this account, then the object itself.
+   *
+   * THE ORDER IS THE CONTRACT. Each step leaves no row behind once it is done,
+   * so a sweep that fails part-way is retried by the owner asking again and
+   * resumes where it stopped; nothing is caught here, because a step that
+   * could not finish is the one fact the owner must see.
+   *
+   *   1. WORKSPACES, every registry row whatever its flags: archived,
+   *      mid-teardown and mid-fork alike belong to this account and have an
+   *      object to destroy. `tearDownWorkspace` is the authority — the fence,
+   *      the revoke, the destroy, then the row — exactly what one delete does.
+   *   2. DEVICES, through `revokeDevice`, so every live command is asked to
+   *      stop and every socket released before the rows that name them go.
+   *   3. MCP SERVERS, through `userMcp_remove`, so the live manager closes its
+   *      connections and drops its OAuth grants rather than leaving them keyed
+   *      in storage the next step wipes.
+   *   4. THE OBJECT. The SDK's `destroy` disables the alarm, disposes the
+   *      lifecycle and runs `ctx.storage.deleteAll()`, which takes every SQL
+   *      table AND every key — credentials, sessions, consents, the received
+   *      shares, the onboarding stamp — then aborts this isolate on the next
+   *      tick with the `destroyed` sentinel. The next request for this user id
+   *      builds a fresh object over empty storage, which is what makes the next
+   *      sign-in land on onboarding.
+   *
+   * The shares this account GAVE are forgotten on the recipients' objects by
+   * the route before it calls here: their names live in the workspaces step 1
+   * destroys, and this object cannot reach another user's object with the
+   * owner's authority.
+   */
+  async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
+    await this.requireTier(caller, 'account');
+
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
+
+    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
+
+    for (const { name } of workspaces) {
+      await this.tearDownWorkspace(name, ownerUserId);
+    }
+
+    const devices = this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`);
+
+    for (const { id } of devices) {
+      await this.revokeDevice(caller, id);
+    }
+
+    const servers = this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`);
+
+    for (const { id } of servers) {
+      await this.userMcp_remove(caller, id);
+    }
+
+    await this.destroy();
+    // The abort is a tick away, and a request landing in that tick meets THIS
+    // object over emptied storage. Dropping the activation latch makes it
+    // re-run the idempotent schema init and answer as the empty account the
+    // fresh object will be, instead of failing on a table that is gone —
+    // measured on workerd 2026-09-14: the next RPC arrived before the abort.
+    this._initialized = false;
+
+    return { ok: true, workspaces: workspaces.length };
+  }
+
   // ── MCP servers ────────────────────────────────────────────────────
 
   /** The manager this user's plane runs on: the SDK's own, whose activation

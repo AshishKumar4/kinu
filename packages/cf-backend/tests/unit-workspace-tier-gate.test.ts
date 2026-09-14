@@ -314,6 +314,12 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     }),
   },
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
+  { capability: 'shares', name: 'sharesReceived_forget', run: (u, c) => u.sharesReceived_forget(c, USER_ID) },
+
+  // LAST, because an owner reaching it destroys the object under every row
+  // above: its storage is dropped and its context aborted, so no later call
+  // could observe anything but a wiped harness.
+  { capability: 'account', name: 'deleteAccount', run: (u, c) => u.deleteAccount(c, USER_ID) },
 ];
 
 /** Did the boundary refuse this call, as opposed to the call failing for its

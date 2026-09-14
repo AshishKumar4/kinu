@@ -175,6 +175,11 @@ export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }
 
 export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
 
+/** The one write that deletes the account itself — the confirmation phrase is
+ *  the account's own email, checked again server-side. */
+export const deleteAccount = (confirm: string) =>
+  api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm });
+
 export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────

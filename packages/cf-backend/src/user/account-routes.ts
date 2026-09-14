@@ -11,19 +11,24 @@
  * touch the account" answerable by reading one file.
  *
  * Routes:
- *   POST  /api/user/onboarding/complete  — first-run setup finished (idempotent)
- *   PATCH /api/user/profile              — rename the owner ({ displayName })
+ *   POST   /api/user/onboarding/complete  — first-run setup finished (idempotent)
+ *   PATCH  /api/user/profile              — rename the owner ({ displayName })
+ *   DELETE /api/user/account              — the account itself ({ confirm })
  */
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from './user-do';
+import { forgetSharesGiven } from './shares-given';
 import {
+  confirmsAccountDelete,
   displayNameProblem,
   err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError,
   type UserCaller,
 } from '@kinu.run/core';
 
 const ProfilePatch = v.object({ displayName: v.string() });
+
+const DeleteConfirm = v.object({ confirm: v.string() });
 
 export async function handleAccountRequest(request: Request, env: Env, identity: AuthIdentity): Promise<Response | null> {
   const url = new URL(request.url);
@@ -32,7 +37,8 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
   const path = url.pathname.slice('/api/user'.length);
 
   if (!(path === '/onboarding/complete' && request.method === 'POST')
-    && !(path === '/profile' && request.method === 'PATCH')) return null;
+    && !(path === '/profile' && request.method === 'PATCH')
+    && !(path === '/account' && request.method === 'DELETE')) return null;
 
   let owner: UserCaller;
 
@@ -47,6 +53,33 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
 
   if (path === '/onboarding/complete' && request.method === 'POST') {
     return json(await stub.completeOnboarding(owner));
+  }
+
+  // DELETE /api/user/account — the one that cannot be undone. The typed
+  // confirmation is the account's own email, not a password: the session is
+  // the authentication, and the phrase is what separates a stray click from a
+  // decision. There is deliberately no rate limit on it; the phrase is the gate.
+  if (path === '/account' && request.method === 'DELETE') {
+    const body = await safeJson(request, DeleteConfirm);
+
+    if (!body || !confirmsAccountDelete(body.confirm, identity.email)) {
+      return err(400, 'Type the account email to confirm.');
+    }
+
+    // The recipients of this account's shares are named only inside the
+    // workspaces the delete destroys, so they are forgotten first.
+    await forgetSharesGiven(env, identity.userId, owner);
+
+    try {
+      await stub.deleteAccount(owner, identity.userId);
+    } catch (cause) {
+      // The SDK's destroy aborts its own isolate after the durable wipe, and
+      // that exact sentinel is successful completion — the same rule
+      // `tearDownWorkspace` applies to a workspace object. Anything else is real.
+      if (!(cause instanceof Error) || cause.message !== 'destroyed') throw cause;
+    }
+
+    return json({ deleted: true });
   }
 
   // PATCH /api/user/profile
