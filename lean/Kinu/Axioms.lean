@@ -193,6 +193,10 @@ import Kinu
 
 /-! ## Kinu/Storage/BlockLayer.lean -/
 
+#print axioms Kinu.Storage.BlockLayer.opacity_keeps_directory_record_count
+#print axioms Kinu.Storage.BlockLayer.opaque_hides_base_names
+#print axioms Kinu.Storage.BlockLayer.opaque_preserves_whole_records
+#print axioms Kinu.Storage.BlockLayer.opaque_preserves_chunked_records
 #print axioms Kinu.Storage.BlockLayer.attach_metadata_bound
 #print axioms Kinu.Storage.BlockLayer.attach_payload_bytes
 #print axioms Kinu.Storage.BlockLayer.median_children_half
