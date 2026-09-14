@@ -1187,11 +1187,12 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-08-24 after the six plan checks joined this row:
-    // 177.63s and 175.02s over two runs.
-    seconds: 190,
+    // Measured 2026-09-14 after the models-section and slate-sharing UX
+    // self-tests joined this row: 265.76s over one run on the 24-thread
+    // workstation (was 190 declared against 177.63s / 175.02s on 2026-08-24).
+    seconds: 285,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1225,7 +1226,13 @@ export const LADDER: readonly Gate[] = [
       + 'and every row of an `ls -la` started where the row above it ended, while a '
       + 'pasted two-line command ran its first line and dropped the second with no echo '
       + 'and no error. Both are measured now by driving the real pane and reading the '
-      + 'rows a browser drew. The drive costs nothing measurable: 55.8s before and '
+      + 'rows a browser drew. The models section\'s accessible names and the '
+      + 'Phase 1 sharing surfaces are read the same way: every tier row and '
+      + 'role field stays reachable by the name assistive technology announces, '
+      + 'and the shared library, the blueprint page, the share dialog and the '
+      + 'unmapped-bindings panel render at both widths in both themes with the '
+      + 'warning and fork copy they owe and no rate or spend anywhere. The '
+      + 'drive costs nothing measurable: 55.8s before and '
       + '55.6s after for chat-and-files-ux alone, 2026-09-01.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
