@@ -1,9 +1,11 @@
 /**
  * The authored-facing runtime modules. `server.js` is the `kinu:slate`
- * specifier's real module on the server side — every slate's VFS holds it
- * under `/usr/lib/kinu/slate/`, kernel-owned — and `client.js` is the module
+ * implementation the worker half links against — kernel-owned, written
+ * under `/usr/lib/kinu/slate/` — and `client.js` is the module
  * the browser's import map serves at `/__kinu/slate.js`.
  */
+
+import { SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
 /**
  * `server.js` — `kinu:slate` on the server. `SlateObject` is the class every
@@ -54,7 +56,7 @@ function defaultTheme() {
 const DEFAULT_CONTEXT = { theme: defaultTheme(), styles: { variables: {} }, containerDimensions: {}, display: "pane" };
 
 function parseContext() {
-  const raw = new URLSearchParams(window.location.search).get("kinu");
+  const raw = new URLSearchParams(window.location.search).get("${SLATE_QUERY_PARAM}");
   if (raw === null) return DEFAULT_CONTEXT;
   try {
     const parsed = JSON.parse(raw);
@@ -79,7 +81,7 @@ window.addEventListener("message", (event) => {
   if (event.source !== window.parent) return;
   if (hostOrigin !== null && event.origin !== hostOrigin) return;
   const message = event.data;
-  if (message === null || typeof message !== "object" || message.kinu !== "host-context") return;
+  if (message === null || typeof message !== "object" || message.kinu !== "${SLATE_HOST_CONTEXT_MESSAGE}") return;
   context = message.context;
   applyContext();
   for (const listener of listeners) listener();
@@ -128,7 +130,7 @@ export function useHostContext() {
 
 export function resize(height) {
   if (window.parent === window || hostOrigin === null) return;
-  window.parent.postMessage({ kinu: "size-changed", height }, hostOrigin);
+  window.parent.postMessage({ kinu: "${SLATE_SIZE_CHANGED_MESSAGE}", height }, hostOrigin);
 }
 
 let resizeQueued = false;

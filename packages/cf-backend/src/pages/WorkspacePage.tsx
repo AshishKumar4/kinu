@@ -35,6 +35,8 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId } from "@kinu.run/core";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
+import { SlateInlineContext } from "@/components/slates/context";
+import { SLATE_PREFIX } from "@/components/surfaces/presence";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
@@ -1124,6 +1126,14 @@ export default function WorkspacePage() {
     });
   }, [state.rpc]);
 
+  // One inline-slate context for the whole page: the chat transcript's
+  // `slate://` links mount their card through it, and its Open button hops
+  // the same slate to the pane surface.
+  const slateInline = useMemo(() => ({
+    rpc: state.rpc,
+    openSlate: (id: string): void => { setSurface(`${SLATE_PREFIX}${id}`); },
+  }), [state.rpc]);
+
   // First-paint loading: only when we genuinely have nothing to show.
   // (STABILITY-AUDIT §A1 — never unmount on transient WS errors.)
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
@@ -1143,7 +1153,9 @@ export default function WorkspacePage() {
   // The URL still carries the id for anyone who needs one.
   const shownTitle = workspaceTitle(as?.displayName || rosterTitle);
 
+
   return (
+    <SlateInlineContext.Provider value={slateInline}>
     <div className="h-full flex flex-col">
       {/* Non-destructive disconnect banner. The chat panel below stays
           mounted so the in-flight assistant turn is preserved through
@@ -1529,6 +1541,7 @@ export default function WorkspacePage() {
         </Modal>
       )}
     </div>
+    </SlateInlineContext.Provider>
   );
 }
 

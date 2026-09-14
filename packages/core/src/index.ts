@@ -315,6 +315,14 @@ export {
 
 export { initSlateStateTable, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
 
+// The host↔client slate vocabulary: browser-safe — strings, bounds and one
+// valibot schema — so it belongs on the value-imported barrel.
+export {
+  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateInlineHeight, slateLinkId,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
+  SlateFrameMessageSchema, type SlateHostContext,
+} from './slates/host-context';
+
 // Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
 export {
   assertReleaseTransition,

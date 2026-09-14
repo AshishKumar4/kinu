@@ -4953,22 +4953,22 @@ export abstract class ActorAgent extends Think<Env> {
     route: Extract<SlateBindingRoute, { kind: 'ai' }>,
     actor?: ActorHandle,
   ): Promise<JsonValue> {
-    let spec: string;
+    let profile: ResolvedTurnProfile;
 
     try {
       if (actor === undefined) {
-        spec = resolveAgentTurnProfile({
+        profile = resolveAgentTurnProfile({
           ...(await this.profileInputs()),
           activeRoleId: this.activeRoleLabel(),
           workMode: 'build',
           availableTools: [],
           activeSkills: [],
           explicitTier: route.tier ?? this.config.getAssignedTier() ?? undefined,
-        }).tier.model;
+        });
       } else {
-        spec = (await this.hostedActorProfile({
+        profile = (await this.hostedActorProfile({
           actor, workMode: 'build', availableTools: [], explicitTier: route.tier,
-        })).profile.tier.model;
+        })).profile;
       }
     } catch (cause) {
       // The resolver names an unknown or malformed tier in a plain Error; the
@@ -4980,6 +4980,7 @@ export abstract class ActorAgent extends Think<Env> {
       throw cause;
     }
 
+    const spec = profile.tier.model;
     const model = this.ownedModelServices.resolveModel(spec);
 
     const operation = beginModelOperation(
@@ -5002,7 +5003,7 @@ export abstract class ActorAgent extends Think<Env> {
     const usage = normalizeUsage(answer.usage);
     operation.completed({ usage, modelId: spec });
 
-    return v.parse(JsonValueSchema, { text: answer.text, model: spec, usage });
+    return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
 
   /** Native and crafted calls share the codemode factory over this caller's runtime. */

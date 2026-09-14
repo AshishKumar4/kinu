@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { TierIdSchema } from '../types/profile';
 import { renderIssues } from '../utils/json';
+import { SLATE_INLINE_HEIGHT } from './host-context';
 import { SLATE_READ_MODELS } from './read-models';
 
 const Name = v.pipe(v.string(), v.minLength(1));
@@ -30,8 +31,8 @@ const SlateMetadata = v.strictObject({
   title: v.optional(Name),
   bindings: v.optional(v.record(Name, Binding), () => ({})),
   inline: v.optional(v.strictObject({
-    height: v.optional(v.pipe(v.number(), v.integer(), v.minValue(120), v.maxValue(720)), 320),
-  }), () => ({ height: 320 })),
+    height: v.optional(v.pipe(v.number(), v.integer(), v.minValue(SLATE_INLINE_HEIGHT.min), v.maxValue(SLATE_INLINE_HEIGHT.max)), SLATE_INLINE_HEIGHT.default),
+  }), () => ({ height: SLATE_INLINE_HEIGHT.default })),
 });
 
 const Project = v.object({

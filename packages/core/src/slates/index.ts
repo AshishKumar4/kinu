@@ -20,3 +20,9 @@ export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';
 export { initSlateStateTable, SLATE_STORAGE_BINDING, SqliteSlateStateStore, routeSlateStorageCall, type SlateStorageOp, type SlateStorageListOptions } from './state';
 
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
+
+export {
+  buildSlateHostContext, isSlateFrameMessage, slateFrameSrc, slateInlineHeight, slateLinkId,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
+  SlateFrameMessageSchema, type SlateHostContext,
+} from './host-context';

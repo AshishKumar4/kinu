@@ -3,15 +3,17 @@
  * surfaces — kept in one place so there is a single source of truth (DRY) for
  * markdown rendering, code blocks, and empty states.
  */
-import { memo, useCallback, useState, type ReactNode } from "react";
+import { memo, useContext, useCallback, useState, type ReactNode } from "react";
 import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import Markdown from "react-markdown";
+import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { MAX_LINES_PER_FILE, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
+import { MAX_LINES_PER_FILE, slateLinkId, type ChangelogEntry, type DiffLine } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
+import { InlineSlate } from "@/components/slates/InlineSlate";
+import { SlateInlineContext } from "@/components/slates/context";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
  *  scaffold-version diff (Self) and the workspace change-set (Output).
@@ -110,11 +112,97 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
   );
 }
 
+/** One `slate://<id>` link in markdown. Inside the chat column (the context
+ *  the workspace page installs) it mounts the live card; anywhere else the
+ *  address is the whole story, so it renders as the code it would read as. */
+function SlateLink({ id }: { id: string }) {
+  const inline = useContext(SlateInlineContext);
+
+  if (inline === null) return <code className="p-code-inline">{`slate://${id}`}</code>;
+
+  // Spans only — this renderer runs inside the markdown <p>.
+  return <span className="block my-2"><InlineSlate id={id} rpc={inline.rpc} display="inline" /></span>;
+}
+
+/** remark pass: a bare `slate://<id>` written as TEXT becomes a link node, so
+ *  the `a` renderer — and nothing else — decides how it renders. Walks the
+ *  mdast directly; a link or code node is left alone, and only ids that pass
+ *  `slateLinkId` count. */
+function remarkSlateLinks() {
+  // The slice of mdast this pass reads and writes, declared locally: pulling
+  // `mdast` types in for one plugin is heavier than the plugin itself. A link
+  // node carries its address in `url`; a text node in `value`.
+  interface MdNode {
+    readonly type: string;
+    readonly value?: string;
+    readonly url?: string;
+    children?: MdNode[];
+  }
+
+  const RE = /slate:\/\/[^\s)\]>"'`]+/g;
+
+  const split = (node: MdNode): MdNode[] | null => {
+    const parts: MdNode[] = [];
+    let rest = node.value ?? '';
+
+    while (true) {
+      RE.lastIndex = 0;
+      const hit = RE.exec(rest);
+
+      if (hit === null) break;
+
+      const id = slateLinkId(hit[0]);
+
+      if (id === null) continue;
+
+      const before = rest.slice(0, hit.index);
+
+      if (before !== '') parts.push({ type: 'text', value: before });
+
+      parts.push({ type: 'link', url: hit[0], children: [{ type: 'text', value: hit[0] }] });
+      rest = rest.slice(hit.index + hit[0].length);
+    }
+
+    if (parts.length === 0) return null;
+
+    if (rest !== '') parts.push({ type: 'text', value: rest });
+
+    return parts;
+  };
+
+  const walk = (node: MdNode): void => {
+    if (node.type === 'link' || node.type === 'linkReference' || node.type === 'inlineCode' || node.type === 'code') return;
+
+    const children = node.children;
+
+    if (children === undefined) return;
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i]!;
+
+      if (child.type === 'text') {
+        const parts = split(child);
+
+        if (parts !== null) {
+          children.splice(i, 1, ...parts);
+          i += parts.length - 1;
+
+          continue;
+        }
+      }
+
+      walk(child);
+    }
+  };
+
+  return (tree: MdNode) => { walk(tree); };
+}
+
 // Memoized on the content string — the react-markdown re-parse is the
 // dominant render cost, so unchanged messages must skip it entirely.
 export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   return (
-    <Markdown remarkPlugins={[remarkGfm]} components={{
+    <Markdown remarkPlugins={[remarkGfm, remarkSlateLinks]} urlTransform={(url) => url.startsWith('slate://') ? url : defaultUrlTransform(url)} components={{
       // A fence with no language gets no className, which is also what real
       // inline code gets — so className alone renders a ``` block as an inline
       // pill wrapping across lines. The block/inline question is answered by the
@@ -130,7 +218,13 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
 
         return <CodeBlock className={className}>{children}</CodeBlock>;
       },
-      a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
+      a({ href, children }) {
+        const id = slateLinkId(href ?? '');
+
+        if (id !== null) return <SlateLink id={id} />;
+
+        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>;
+      },
       // Keyed on the source so a re-render that swaps the image also resets
       // the failure state — the new source deserves its own attempt.
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
