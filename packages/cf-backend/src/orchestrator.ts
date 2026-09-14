@@ -36,6 +36,7 @@ import {
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
+import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
 import {
   createWorkspaceActorHost, provisionHostedActorHome, type WorkspaceHostSeams,
@@ -89,6 +90,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
+  type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -5092,7 +5094,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   private _slates: SlateHost | undefined;
 
-  private get slates(): SlateHost {
+  protected get slates(): SlateHost {
     this._slates ??= new SlateHost({
       ctx: this.ctx, env: this.env, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
@@ -5117,6 +5119,30 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async listSlates() {
     return this.slates.list(ROOT_SLATE_CALLER);
+  }
+
+  // Blueprints cross workspaces, so these four are DO-only: the app host
+  // verifies the viewer, the address and the forker's ownership before it
+  // calls, and a browser holds no stub that reaches them.
+
+  /** One published blueprint for a viewer: the row re-read now, refused when revoked. */
+  async readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
+    return this.slates.readBlueprint(share);
+  }
+
+  /** The bytes a forker's workspace admits. */
+  async blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return this.slates.blueprintBundle(share);
+  }
+
+  /** Record the users the owner named on a blueprint. */
+  async shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
+    return this.slates.shareBlueprintWith(share, users);
+  }
+
+  /** Admit a blueprint into THIS workspace as a new slate with every binding unmapped. */
+  async admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
+    return this.slates.admitBlueprint(bundle);
   }
 
   @callable() async previewSlate(id: string): Promise<SlateCallResult> {
