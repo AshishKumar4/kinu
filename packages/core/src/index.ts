@@ -389,6 +389,7 @@ export {
   findPublishable,
   runExperienceAction,
   EXPERIENCE_ACTIONS,
+  EXPERIENCE_KINDS,
   type ExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,

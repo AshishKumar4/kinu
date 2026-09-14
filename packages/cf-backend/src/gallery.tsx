@@ -22,6 +22,8 @@
  *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
+ *   /gallery.html?frame=workspaces → the Workspaces page (`&view=tiled` for the grid)
+ *   /gallery.html?frame=plugins  → the Plugins page
  *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
  *                                  the modal the Setup card opens;
  *                                  `&panel=providers|mcp|cli` picks which
@@ -148,7 +150,7 @@ import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspa
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { SetupModalFrame, WelcomeFrame } from "@/gallery-account";
+import { PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { AccountProvider } from "@/hooks/use-account";
 import SharedPage from "@/pages/SharedPage";
 import BlueprintPage from "@/pages/BlueprintPage";
@@ -272,7 +274,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
 /* The frames the account fixture answers: settings sections, and the surfaces
    that mount the account panels in place — the setup modal and the wizard
    today; plugins and workspaces join when their commits land. */
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins"]);
 
 /* Account-settings failure rig. The browser owns the two transitions: Codex
    stays failed until `gallery:settings-heal`; the gateway read stays pending
@@ -291,6 +293,36 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+/** What the plugins page reads beyond the settings reads: the device grants
+ *  (one for the plugins frame; the settings frames keep an empty list because
+ *  the device-row gate reads the roster without one) and the owner's crafted
+ *  tools. Null for every other path. */
+function pluginsFixture(path: string): Response | null {
+  if (path === "/api/user/devices/consents") {
+    return fixtureJson(frame === "plugins"
+      ? [{ agentName: "checkout-fixes", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" }]
+      : []);
+  }
+
+  // The query string rides on `path` for a relative URL, so the match is by prefix.
+  if (path.startsWith("/api/user/experience")) {
+    return fixtureJson([
+      {
+        id: "exp-1", kind: "craft", key: "parse-ledger", title: "parse-ledger", sourceWorkspace: "checkout-fixes",
+        publishedAt: NOW - 2 * 864e5, evidence: "EMA 0.91 over 12 runs",
+        payload: { kind: "craft", description: "Turn a bank CSV export into settlement rows.", params: null, code: "", score: 0.91 },
+      },
+      {
+        id: "exp-2", kind: "craft", key: "triage-inbox", title: "triage-inbox", sourceWorkspace: "email-triage",
+        publishedAt: NOW - 5 * 864e5, evidence: "EMA 0.84 over 9 runs",
+        payload: { kind: "craft", description: "Sort a mailbox into the three piles the owner acts on.", params: null, code: "", score: 0.84 },
+      },
+    ]);
+  }
+
+  return null;
 }
 
 async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
@@ -439,7 +471,9 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     }]);
   }
 
-  if (path === "/api/user/devices/consents") return fixtureJson([]);
+  const plugins = pluginsFixture(path);
+
+  if (plugins !== null) return plugins;
 
   if (path === "/api/user/profile-catalog") {
     // The real digest over the real canonical bytes, hashed here with
@@ -6044,6 +6078,10 @@ async function mount() {
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // The onboarding wizard, stepped: `&step=0..3` picks which panel is open.
     ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
+    // The two primary-nav pages behind the shipped chrome; `&view=tiled`
+    // seeds the workspaces page's stored choice.
+    ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
+    ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);

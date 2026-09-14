@@ -8,12 +8,15 @@
  *     → the home page's Setup card opening an account panel in place, with
  *       the shipped chrome (sidebar + HomePage) behind the modal.
  *
+ *   /gallery.html?frame=workspaces[&view=tiled] and ?frame=plugins
+ *     → the two primary-nav pages behind the shipped chrome (sidebar + page).
+ *
  *   /gallery.html?frame=welcome&step=0..3
  *     → the onboarding wizard itself: full-screen, no chrome, stepped to the
  *       requested panel. The profile fixture answers `onboardedAt: null` for
  *       this frame, which is what makes the account a new one.
  */
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import * as v from "valibot";
 import Sidebar from "@/components/Sidebar";
@@ -24,6 +27,36 @@ import { ACCOUNT_PANELS, AccountPanelModal } from "@/components/account/AccountP
 const HomePage = lazy(() => import("@/pages/HomePage"));
 
 const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
+
+const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
+
+const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
+
+/** The shipped chrome around a primary-nav page: the rail, then the page. */
+function Chrome({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+      <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+      <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
+        <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>
+          {children}
+        </Suspense>
+      </main>
+    </div>
+  );
+}
+
+export function WorkspacesFrame() {
+  // The page reads its stored view once at mount, so the seed lands first.
+  if (new URLSearchParams(location.search).get("view") === "tiled") localStorage.setItem("kinu:workspaces-view", "tiled");
+  else localStorage.removeItem("kinu:workspaces-view");
+
+  return <Chrome><WorkspacesPage /></Chrome>;
+}
+
+export function PluginsFrame() {
+  return <Chrome><PluginsPage /></Chrome>;
+}
 
 const AccountPanelParam = v.picklist(ACCOUNT_PANELS);
 

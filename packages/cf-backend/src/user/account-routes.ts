@@ -14,6 +14,11 @@
  *   POST   /api/user/onboarding/complete  — first-run setup finished (idempotent)
  *   PATCH  /api/user/profile              — rename the owner ({ displayName })
  *   DELETE /api/user/account              — the account itself ({ confirm })
+ *   GET    /api/user/experience           — the owner's library (?kind=&limit=)
+ *
+ * The experience read sits here rather than in `routes.ts` for a plainer
+ * reason than authority: that dispatcher is at its complexity ceiling, and a
+ * new endpoint belongs in a module that can grow.
  */
 import * as v from 'valibot';
 import type { AuthIdentity } from '../auth/session';
@@ -22,13 +27,20 @@ import { forgetSharesGiven } from './shares-given';
 import {
   confirmsAccountDelete,
   displayNameProblem,
+  EXPERIENCE_KINDS,
   err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError,
+  type ExperienceEntry,
   type UserCaller,
 } from '@kinu.run/core';
 
 const ProfilePatch = v.object({ displayName: v.string() });
 
 const DeleteConfirm = v.object({ confirm: v.string() });
+
+const ExperienceQuery = v.object({
+  kind: v.picklist(EXPERIENCE_KINDS),
+  limit: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(100)),
+});
 
 export async function handleAccountRequest(request: Request, env: Env, identity: AuthIdentity): Promise<Response | null> {
   const url = new URL(request.url);
@@ -38,7 +50,8 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
 
   if (!(path === '/onboarding/complete' && request.method === 'POST')
     && !(path === '/profile' && request.method === 'PATCH')
-    && !(path === '/account' && request.method === 'DELETE')) return null;
+    && !(path === '/account' && request.method === 'DELETE')
+    && !(path === '/experience' && request.method === 'GET')) return null;
 
   let owner: UserCaller;
 
@@ -53,6 +66,28 @@ export async function handleAccountRequest(request: Request, env: Env, identity:
 
   if (path === '/onboarding/complete' && request.method === 'POST') {
     return json(await stub.completeOnboarding(owner));
+  }
+
+  if (path === '/experience' && request.method === 'GET') {
+    const limitRaw = url.searchParams.get('limit');
+
+    const query = v.safeParse(ExperienceQuery, {
+      kind: url.searchParams.get('kind'),
+      limit: limitRaw === null ? 50 : Number(limitRaw),
+    });
+
+    if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
+
+    const library: Pick<Fetcher, 'fetch'> = stub;
+
+    // SAFETY: the stub carries every method on the declared UserDO RPC surface,
+    // `searchExperience` among them. `DurableObjectStub<UserDO>`'s own RPC
+    // mapping over the JSON-carrying experience methods exceeds TypeScript's
+    // instantiation depth (TS2589 here, 2026-09-14, as at the orchestrator's
+    // publish call on 2026-09-05), so the one method is picked through fetch.
+    const entries: ExperienceEntry[] = await (library as Pick<UserDO, 'searchExperience'> & Pick<Fetcher, 'fetch'>).searchExperience(owner, query.output);
+
+    return json(entries);
   }
 
   // DELETE /api/user/account — the one that cannot be undone. The typed

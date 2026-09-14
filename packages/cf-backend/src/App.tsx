@@ -8,6 +8,8 @@ import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
 import WelcomePage from "./pages/WelcomePage";
 import SharedPage from "./pages/SharedPage";
+import WorkspacesPage from "./pages/WorkspacesPage";
+import PluginsPage from "./pages/PluginsPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
@@ -111,6 +113,8 @@ export default function App() {
             <Route path={APP_ROUTES.userSettings} element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.userMcp} element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.shared} element={<ErrorBoundary label="shared"><SharedPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.workspaces} element={<ErrorBoundary label="workspaces"><WorkspacesPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.plugins} element={<ErrorBoundary label="plugins"><PluginsPage /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
             <Route path={APP_ROUTES.explore} element={

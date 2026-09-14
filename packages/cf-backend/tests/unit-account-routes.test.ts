@@ -34,6 +34,11 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
 
       return [];
     },
+    async searchExperience(_caller: UserCaller, options: { kind?: string; limit?: number }) {
+      calls.push(`experience:${options.kind ?? '-'}:${String(options.limit)}`);
+
+      return [];
+    },
     async deleteAccount(_caller: UserCaller, ownerUserId: string) {
       calls.push(`account:delete:${ownerUserId}`);
 
@@ -102,6 +107,28 @@ describe('DELETE /api/user/account', () => {
 
     await expect(handleAccountRequest(request(JSON.stringify({ confirm: 'owner@example.test' })), env, IDENTITY))
       .rejects.toThrow('storage unavailable');
+  });
+
+  test('the experience read names its kind and bounds its limit', async () => {
+    const { env, calls } = setup('ok');
+
+    const listed = await handleAccountRequest(
+      new Request('https://kinu.test/api/user/experience?kind=craft', { method: 'GET' }), env, IDENTITY,
+    );
+
+    expect(listed?.status).toBe(200);
+    expect(v.parse(v.array(v.unknown()), await listed?.json())).toEqual([]);
+    expect(calls).toEqual(['experience:craft:50']);
+
+    for (const query of ['kind=poem', 'kind=craft&limit=500', 'kind=craft&limit=0', 'limit=5']) {
+      const refused = await handleAccountRequest(
+        new Request(`https://kinu.test/api/user/experience?${query}`, { method: 'GET' }), env, IDENTITY,
+      );
+
+      expect(refused?.status).toBe(400);
+    }
+
+    expect(calls).toEqual(['experience:craft:50']);
   });
 
   test('a path the module does not own is left to the next handler', async () => {
