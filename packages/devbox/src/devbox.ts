@@ -3480,6 +3480,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       stamp: (phase) => this.#stampPhase(phase),
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),
+      storeObjectUrl: (key) => {
+        // The mount's own egress host: the SDK's `r2EgressHandler` resolves
+        // the bucket from the binding name in the path and PREPENDS the
+        // mount's prefix (`boxes/<id>/backups`), so the URL's key segment is
+        // relative to that prefix, not to the bucket root. One PUT lands the
+        // object; s3fs's marker/placeholder writes never exist on this path.
+        const root = chainStoreRoot(this.#boxPrefix());
+
+        if (!key.startsWith(`${root}/`)) {
+          throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
+        }
+
+        return `http://r2.internal/${store.binding}/${key.slice(root.length + 1)}`;
+      },
       mountStore: async (at) => {
         // The BOX's prefix, writable, with no credential: `chainStoreRoot` and
         // `SnapshotChainPorts.mountStore` state why.
