@@ -639,11 +639,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // CLI and the chat surface as an `APICallError` with its raw `responseBody`
     // still attached and its own message saying only "AI_APICallError" — so the
     // overflow-recovery classifier would read nothing usable while the user read
-    // the endpoint's whole body. `toProviderError` puts the provider's own reason
-    // (and its status/code) in the message and keeps the raw failure on `cause`,
-    // where diagnostics can still reach it.
+    // the endpoint's whole body. `toProviderError` carries the closed code and
+    // the structured facts (status, provider code, provider id) in the message,
+    // keeps the raw failure on `cause`, and files the provider's own text on the
+    // diagnostics record.
     if (streamError !== undefined && !interrupted) {
-      throw toProviderError({ doing: 'calling the model', cause: streamError });
+      throw toProviderError({
+        doing: 'calling the model',
+        cause: streamError,
+        provider: opts.modelContext?.provider ?? opts.cache?.providerId,
+      });
     }
 
     if (deadFinalStep && !interrupted) {
