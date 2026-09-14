@@ -121,8 +121,10 @@ async function runTurn(bound: Bound, opts: {
     { runId: opts.runId ?? `run-${opts.turnId}`, turnId: opts.turnId }, mode, Date.now(),
   );
 
+  // The grant is enforced at execution: a tool the turn offers must be one the
+  // bound profile resolved, exactly as a backend resolves it from the surface.
   bound.actor.bindProfile(lease, resolveTurnProfile({
-    ...profiles, roleId: 'task', workMode: mode, availableTools: [], activeSkills: [],
+    ...profiles, roleId: 'task', workMode: mode, availableTools: Object.keys(opts.tools ?? {}), activeSkills: [],
   }), profiles);
   bound.actor.appendInput(lease, opts.input);
 
