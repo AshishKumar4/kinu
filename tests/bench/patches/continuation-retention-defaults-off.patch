@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/orchestrator/signals.ts b/packages/core/src/orchestrator/signals.ts
-index 8c9641750..3cb02512e 100644
---- a/packages/core/src/orchestrator/signals.ts
-+++ b/packages/core/src/orchestrator/signals.ts
-@@ -169,7 +169,7 @@ export class SignalDelivery implements SignalDeliverer {
-     const absorbed = this.absorbed;
-     const leftover = this.pending.splice(0);
-     const requeue = opts.completed ? leftover : [...absorbed, ...leftover];
--    this.settled = opts.completed ? absorbed : [];
-+    this.settled = opts.completed ? [] : absorbed;
+diff --git a/packages/core/src/orchestrator/inbox.ts b/packages/core/src/orchestrator/inbox.ts
+index 562ffdc86..512993da3 100644
+--- a/packages/core/src/orchestrator/inbox.ts
++++ b/packages/core/src/orchestrator/inbox.ts
+@@ -391,7 +391,7 @@ export class Inbox implements AgentInbox {
+     const leftoverEvents = leftover.filter((signal) => !isUserSignal(signal));
+     const absorbedEvents = absorbed.filter((signal) => !isUserSignal(signal));
+     const requeue = opts.completed ? leftoverEvents : [...absorbedEvents, ...leftoverEvents];
+-    this.settled = opts.completed ? absorbedEvents : [];
++    this.settled = opts.completed ? [] : absorbedEvents;
      this.absorbed = [];
      this.injections.reset();
- 
+     this.redeliver(leftoverUsers, requeue);
