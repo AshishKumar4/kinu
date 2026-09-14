@@ -1187,12 +1187,12 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    run: 'bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-09-14 after the models-section and slate-sharing UX
-    // self-tests joined this row: 265.76s over one run on the 24-thread
-    // workstation (was 190 declared against 177.63s / 175.02s on 2026-08-24).
-    seconds: 285,
+    // Measured 2026-09-14 after account-ux joined this row: 284.30s over one
+    // run on the 24-thread workstation (was 265.76s measured the same day with
+    // the models-section and slate-sharing additions, declared 285).
+    seconds: 305,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1233,7 +1233,10 @@ export const LADDER: readonly Gate[] = [
       + 'unmapped-bindings panel render at both widths in both themes with the '
       + 'warning and fork copy they owe and no rate or spend anywhere. The '
       + 'drive costs nothing measurable: 55.8s before and '
-      + '55.6s after for chat-and-files-ux alone, 2026-09-01.',
+      + '55.6s after for chat-and-files-ux alone, 2026-09-01. The account surfaces '
+      + 'join here: the setup modal over the home chrome and the settings '
+      + 'providers section, read through the shared account fixture at both '
+      + 'widths in both themes.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '

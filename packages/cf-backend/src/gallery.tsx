@@ -22,6 +22,9 @@
  *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
+ *   /gallery.html?frame=setupmodal → HomePage with an account panel open in
+ *                                  the modal the Setup card opens;
+ *                                  `&panel=providers|mcp|cli` picks which
  *   /gallery.html?frame=control  → the admin control plane: every tab, the
  *                                  account drilldown and a workspace drilldown.
  *                                  `/api/control/*` is answered by request
@@ -144,7 +147,8 @@ import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
-import { AddServerCard } from "@/pages/UserMcpPage";
+import { AddServerCard } from "@/components/account/McpServersPanel";
+import { SetupModalFrame } from "@/gallery-account";
 import SharedPage from "@/pages/SharedPage";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
@@ -264,6 +268,11 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
+/* The frames the account fixture answers: settings sections, and the surfaces
+   that mount the account panels in place (setupmodal now; the wizard, plugins
+   and workspaces frames join when their commits land). */
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal"]);
+
 /* Account-settings failure rig. The browser owns the two transitions: Codex
    stays failed until `gallery:settings-heal`; the gateway read stays pending
    until `gallery:settings-release`. Every sibling GET settles immediately, so
@@ -338,6 +347,30 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
       publicOrigin: location.origin, installCommand: "kinu setup",
       setupCommand: "kinu setup", authCommand: "kinu auth",
     });
+  }
+
+  // The setupmodal frame mounts the real HomePage chrome behind the modal, so
+  // the roster and the panel's server list both answer here — a 404 would put
+  // a failure in the sidebar and the Recent section that a real page has
+  // never shown.
+  if (path === "/api/user/workspaces") {
+    return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+  }
+
+  if (path === "/api/user/mcp/servers") {
+    return fixtureJson([
+      {
+        id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
+        transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
+        authUrl: null, error: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+      },
+      {
+        id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+        transport: "sse", status: "authenticating", toolsCount: 0,
+        allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+        error: null, createdAt: NOW - 864e5, updatedAt: NOW,
+      },
+    ]);
   }
 
   if (path === "/api/user/devices/dev-1" && method === "DELETE") {
@@ -592,7 +625,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
 
-  if (frame === "usersettingsstate" && path.startsWith("/api/user/")) {
+  if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) {
     return userSettingsFixture(path, method, init?.body);
   }
 
@@ -5983,6 +6016,9 @@ async function mount() {
         </div>
       ), entries: ["/"],
     }],
+    // The home chrome with one account panel open over it, as the Setup card
+    // draws it: `&panel=providers|mcp|cli` picks the modal's body.
+    ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
