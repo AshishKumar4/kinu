@@ -478,6 +478,14 @@ const ORCHESTRATOR_METHODS = [
   // actor it acts as. A browser cannot mint a caller.
   'slateAs',
   'slateBindingCallAs',
+  // Live shares: the share route's verified call, and the owner surfaces the
+  // app host reads. Reachable by a DO stub in this Worker, never a browser —
+  // `slateAs`'s own comment above is why none is `@callable`.
+  'routeSlateShare',
+  'readLiveShare',
+  'shareLiveWith',
+  'liveShareUrl',
+  'viewerEntryUrl',
   // The one method the supervisor entrypoint calls on the object that owns a
   // workspace: a workspace process's filesystem calls arrive here through the
   // composed `OrchestratorAgent` namespace. Listed (not sealed away) but never

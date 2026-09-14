@@ -101,6 +101,8 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
 
         return await inWorkMode(caller.workMode, () => factory.callTool({}, route.name, route.input)) ?? null;
       },
+      catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),
+      shareUrl: async () => null,
     });
 
     const call = (mode: WorkMode) => host.bindingCall({ ...ROOT_SLATE_CALLER, workMode: mode }, 'crafted', 'CALCULATE', { member: 'call', args: [{ n: 21 }], invocation: null });

@@ -61,6 +61,7 @@ import { handleFilesRequest } from "./files-routes";
 import { handleTerminalRequest } from "./terminal-route";
 import { handleInboundEmail } from "./email/handler";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
+import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest } from "./nimbus-route";
 import {
   authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
@@ -483,20 +484,29 @@ function withTransportSecurity(response: Response, url: URL, env: Env): Response
   });
 }
 
+/** The whole preview-host step: a live share is one more hostname per share —
+ *  the signed label plus its share row is the capability — checked before the
+ *  preview label so neither parser ever sees the other's input. */
+async function routePreviewHost(request: Request, env: Env): Promise<Response> {
+  const share = await handleSlateShareHostRequest(request, env);
+
+  if (share) return containPreviewResponse(share);
+  const nimbus = await handleNimbusPreviewHostRequest(request, env);
+
+  if (nimbus) return containPreviewResponse(nimbus);
+
+  return servePreviewRequest(request, env);
+}
+
 /** The host-aware route table. Transport security is settled by the caller. */
 async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL): Promise<Response> {
   // 1. Preview host — Workspace and Sandbox each get one hostname per exposed
-  //    port, capability-gated by that hostname. It is the ONLY thing served there: no
-  //    SPA, no login, no OAuth callback, so nothing ever mints a session on
-  //    those origins and hostile preview HTML has none to steal
-  //    (core preview/preview-origin.ts).
-  if (isPreviewHostRequest(url, env)) {
-    const nimbus = await handleNimbusPreviewHostRequest(request, env);
-
-    if (nimbus) return containPreviewResponse(nimbus);
-
-    return servePreviewRequest(request, env);
-  }
+  //    port, capability-gated by that hostname, and a live share is one more
+  //    hostname per share, capability = signed label + share row. It is the
+  //    ONLY thing served there: no SPA, no login, no OAuth callback, so nothing
+  //    ever mints a session on those origins and hostile preview HTML has none
+  //    to steal (core preview/preview-origin.ts).
+  if (isPreviewHostRequest(url, env)) return await routePreviewHost(request, env);
 
   // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
   if (url.pathname.startsWith("/pc/")) {

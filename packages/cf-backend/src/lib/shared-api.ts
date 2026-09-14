@@ -67,3 +67,4 @@ export async function signedInEmail(): Promise<string | null> {
 
   return v.parse(MeSchema, await res.json()).user?.email ?? null;
 }
+

@@ -4967,6 +4967,14 @@ export abstract class ActorAgent extends Think<Env> {
         const descriptor = surface.descriptors.find((d) => d.serverId === route.server && d.name === route.tool);
 
         if (descriptor === undefined) throw new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
+        // A viewer granted a read member gets `readOnly` on the route: the
+        // dispatch enforces it here, so a granted tool the server does not
+        // mark read-only cannot write through a read grant.
+
+        if (route.readOnly === true && descriptor.readOnly !== true) {
+          throw new KinuError('denied', `${descriptor.toolKey} is read-granted to viewers but ${route.server} does not mark it read-only`);
+        }
+
         requireWorkModePermission(mode, descriptor.readOnly === true, descriptor.toolKey);
         const reach = await this.slateReach(this.slateNamespaces(), [descriptor.toolKey]);
 
@@ -4980,9 +4988,13 @@ export abstract class ActorAgent extends Think<Env> {
 
         if (route.data !== undefined) metadata.data = route.data;
 
+        if (route.viewer !== undefined) metadata.viewer = route.viewer;
+
         const outcome = await this.slateInbox().send({
           kind: 'slate',
-          text: `Slate ${route.slate}: ${route.text}`,
+          text: route.viewer === undefined
+            ? `Slate ${route.slate}: ${route.text}`
+            : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`,
           metadata,
         });
 

@@ -22,6 +22,16 @@ export interface SlateCaller {
   readonly path: readonly SlateCallerHop[];
   readonly cred: VfsCred;
   readonly workMode: WorkMode;
+  /** The live share a viewer's process runs under — present only on the share
+   *  caller, so the share id travels on the reference and never on the wire. */
+  readonly share?: string;
+}
+
+/** The caller a live share's process is booted under: the workspace's own root
+ *  — the calls dispatch as the owner, S2 — carrying the share id so the
+ *  process key and every binding call stay distinct from the owner's own. */
+export function shareCaller(share: string): SlateCaller {
+  return { ...ROOT_SLATE_CALLER, share };
 }
 
 /** The workspace root acting as itself: the owner-facing surfaces mint this locally. */
@@ -32,9 +42,11 @@ export function slateCredentialKey(cred: VfsCred): string {
   return JSON.stringify([cred.uid, cred.gid, cred.groups, cred.umask]);
 }
 
-/** Structured path encoding keeps different actor names from sharing a key. */
+/** Structured path encoding keeps different actor names from sharing a key;
+ *  the share is in the key so a share's process and the owner's own preview
+ *  never coalesce — the owner's preview stays private. */
 export function slateCallerKey(caller: SlateCaller): string {
-  return JSON.stringify([slateCredentialKey(caller.cred), caller.path, caller.workMode]);
+  return JSON.stringify([slateCredentialKey(caller.cred), caller.path, caller.workMode, caller.share ?? null]);
 }
 
 /** Only the host mints these props; a process receives the stub, not authority to mint one. */

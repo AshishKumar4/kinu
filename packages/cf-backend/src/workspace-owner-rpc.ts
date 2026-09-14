@@ -9,7 +9,7 @@
  */
 
 import type {
-  BlueprintBundle, BlueprintFork, SlateAnswer, SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
+  BlueprintBundle, BlueprintFork, LiveShareRecord, ShareViewerClaim, SlateAnswer, SlateBindingRequest, SlateCallResult, SlateOperation, SlateShareRecord,
 } from '@kinu.run/core';
 import type { BlueprintReading, ShareUser } from '@kinu.run/core/slates';
 import type { SlateCaller } from './slates/bindings';
@@ -30,6 +30,12 @@ export interface WorkspaceOwnerRpc {
   blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>>;
   shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>>;
   admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>>;
+  // Live shares cross workspaces the same way: the share rail forwards a
+  // verified request to the owner's object, and the app host reads one share
+  // row back for `/live/open`. The claim is built at the edge, never trusted.
+  routeSlateShare(handle: string, claim: ShareViewerClaim, request: Request, pathname: string): Promise<Response>;
+  readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>>;
+  shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>>;
 }
 
 interface WorkspaceOwnerNamespace {

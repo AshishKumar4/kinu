@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-14",
-  "files": 2262,
-  "functions": 56433,
+  "files": 2295,
+  "functions": 57184,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -186,10 +186,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/server.ts#route",
-      "complexity": 37
-    },
-    {
       "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
       "complexity": 37
     },
@@ -227,6 +223,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/WorkPlans.tsx#WorkPlans",
+      "complexity": 36
+    },
+    {
+      "key": "packages/cf-backend/src/server.ts#route",
       "complexity": 36
     },
     {

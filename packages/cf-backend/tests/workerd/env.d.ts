@@ -20,7 +20,6 @@ import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
-import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
@@ -103,6 +102,23 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 
+/** The wire projection of `SlateCallResult` - spelled flat because declaring
+ *  the recursive `JsonValue` in the RPC surface makes the stub's
+ *  serializability check exceed the type-instantiation budget. */
+type ProbeAnswer = { ok: true; value: unknown } | { ok: false; reason: string; error?: string };
+
+interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
+  start(): Promise<void>;
+  share(): Promise<ProbeAnswer>;
+  viewerFetch(handle: string, claim: { userId: string | null; source: string }): Promise<{ status: number; body: string }>;
+  viewerBatch(handle: string, claim: { userId: string | null; source: string }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerSocket(handle: string, claim: { userId: string | null; source: string }): Promise<{ probe: string | null; mutateError: string }>;
+  replay(share: string): Promise<ProbeAnswer>;
+  requests(share: string): Promise<ProbeAnswer>;
+  revoke(share: string): Promise<ProbeAnswer>;
+  stopped(): Promise<boolean>;
+}
+
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -130,6 +146,7 @@ declare global {
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
+      SLATE_SHARE_PROBE: DurableObjectNamespace<SlateShareProbeRpc>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
