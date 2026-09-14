@@ -73,7 +73,7 @@ import {
   scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
   // Durable admission — the claim a turn is issued under, and the per-step
   // context plane its revisions are recorded on.
-  initActorClaimTables, programIdentityOf, ActorClaimStore, initPendingSendTables,
+  initActorClaimTables, programIdentityOf, ActorClaimStore, initPendingSendTables, PendingSendStore,
   type ActorTurnClaim, type ClaimOutcome,
   createActorContextPlane, type ActorContextPlane,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory,
@@ -101,7 +101,7 @@ import {
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   describeLandedSteers, USER_MESSAGE_SIGNAL_KIND,
-  type UserSteer, type AcceptedSteer, type SendLanding, type PromptFile, PromptFileSchema,
+  type UserSteer, type SendLanding, type PromptFile, PromptFileSchema,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
   OVERFLOW_RETRY_EVENT, type OverflowRecoveryDecision,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
@@ -1720,7 +1720,7 @@ export abstract class ActorAgent extends Think<Env> {
    * pressed Enter needs to know their words were taken); an idle actor runs it
    * as the next ordinary turn (`'turn'`, answered when that turn has run). The
    * decision is the inbox's, in one synchronous slice with the durable
-   * reservation {@link reservePendingSteer} writes, so a mid-turn message
+   * reservation {@link PendingSendStore.reserve} writes, so a mid-turn message
    * exists in SQL before the client hears it queued and an eviction cannot
    * turn an acknowledged chip into forgotten RAM. The caller never re-sends.
    *
@@ -1752,40 +1752,14 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * The durable half of a mid-turn message, written by the inbox in the same
-   * synchronous slice as its routing read and before its 'queued' broadcast.
-   * Bound to the turn it will land in: the running turn's durable id, or, for
-   * a message that arrived while a turn this actor admitted was still opening,
-   * that turn's driving message id — the same id `restoreTurnCheckpoint` will
-   * derive for it, so a reset restores the row into the right turn.
+   * The ONE pending-send store — core's {@link PendingSendStore} over this
+   * actor's executor and actor id. Lazy for the reason every store here is:
+   * `actorHandle()` resolves the directory row `ensureSchema` creates, which
+   * field initializers run before.
    */
-  private reservePendingSteer(steer: AcceptedSteer): void {
-    const turnId = this.durableTurnId() ?? this._startingTurnId;
-
-    if (turnId === null) throw new Error('running turn has no durable identity');
-    const actorId = this.actorHandle().actorId;
-    void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
-      VALUES (${actorId}, ${steer.id}, ${turnId}, ${steer.mode}, ${steer.text})`;
-
-    for (const file of steer.files ?? []) {
-      void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-        VALUES (${actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.url})`;
-    }
-  }
-
-  /** The attachments reserved with a pending steer, in the order they arrived. */
-  private pendingSteerFiles(steerId: string): PromptFile[] {
-    return this.sql<{ filename: string; media_type: string; url: string }>`
-      SELECT filename, media_type, url FROM pending_steer_files
-      WHERE actor_id = ${this.actorHandle().actorId} AND steer_id = ${steerId} ORDER BY seq ASC`
-      .map((row) => ({ filename: row.filename, mediaType: row.media_type, url: row.url }));
-  }
-
-  /** Retire a pending steer's reservation: the row and its attachments together. */
-  private retirePendingSteer(steerId: string): void {
-    const actorId = this.actorHandle().actorId;
-    void this.sql`DELETE FROM pending_steers WHERE actor_id = ${actorId} AND id = ${steerId}`;
-    void this.sql`DELETE FROM pending_steer_files WHERE actor_id = ${actorId} AND steer_id = ${steerId}`;
+  private _pendingSends: PendingSendStore | null = null;
+  private get pendingSends(): PendingSendStore {
+    return this._pendingSends ??= new PendingSendStore(this.boundSql, this.actorHandle().actorId);
   }
 
   /** The driving message id of a turn this actor has handed to the queue and
@@ -1829,17 +1803,15 @@ export abstract class ActorAgent extends Think<Env> {
       metadata: row.metadata,
     })));
 
-    for (const row of rows) this.retirePendingSteer(row.id);
+    this.pendingSends.retire(rows.map((row) => row.id));
   }
 
   /** The reconnect snapshot reads SQL, not the RAM drain: RAM vanishes on an
    *  eviction while these rows are the acknowledged steers still awaiting a
    *  step boundary. */
   protected pendingSteerRuns(): InlineSteer[] {
-    return this.sql<{ id: string; text: string }>`
-      SELECT id, text FROM pending_steers
-      WHERE actor_id = ${this.actorHandle().actorId} ORDER BY seq ASC`
-      .map((row) => ({ ...row, state: 'queued' as const, atStep: null }));
+    return this.pendingSends.restore()
+      .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null }));
   }
 
   /**
@@ -1882,11 +1854,7 @@ export abstract class ActorAgent extends Think<Env> {
             // rule for a turn's leftovers, so a reset changes nothing about
             // how the words come back. The live turn's rows are excluded —
             // its leftovers rerun from the inbox at settle, not from here.
-            const live = this.durableTurnId() ?? '';
-
-            const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
-              SELECT id, turn_id, mode, text FROM pending_steers
-              WHERE actor_id = ${this.actorHandle().actorId} AND turn_id <> ${live} ORDER BY seq ASC`;
+            const rows = this.pendingSends.sweepDead(this.durableTurnId() ?? '');
 
             steers = rows.length;
             let index = 0;
@@ -1896,16 +1864,16 @@ export abstract class ActorAgent extends Think<Env> {
               const group = [first];
               index++;
 
-              while (index < rows.length && rows[index]!.turn_id === first.turn_id) group.push(rows[index++]!);
+              while (index < rows.length && rows[index]!.turnId === first.turnId) group.push(rows[index++]!);
               const mode: WorkMode = group.some((row) => row.mode === 'plan') ? 'plan' : 'build';
-              const idempotencyKey = `steer-rerun:${first.turn_id}:${mode}:${first.id}`;
+              const idempotencyKey = `steer-rerun:${first.turnId}:${mode}:${first.id}`;
 
               // A duplicate terminal callback can arrive before the first admission
               // resolves. RAM closes that window; the durable idempotency key closes
               // the same window across an activation reset.
               if (this._rerunningSteerKeys.has(idempotencyKey)) continue;
               this._rerunningSteerKeys.add(idempotencyKey);
-              const files = group.flatMap((row) => this.pendingSteerFiles(row.id));
+              const files = group.flatMap((row) => this.pendingSends.files(row.id));
 
               try {
                 await this.host.enqueueTurn({
@@ -3008,7 +2976,18 @@ export abstract class ActorAgent extends Think<Env> {
           },
         },
       }, {
-        onAccept: (steer) => this.reservePendingSteer(steer),
+        onAccept: (steer) => {
+          // Bound to the turn it will land in: the running turn's durable id,
+          // or, for a message that arrived while a turn this actor admitted was
+          // still opening, that turn's driving message id — the same id
+          // `restoreTurnCheckpoint` will derive for it. This backend has no
+          // idle-queued lane: a send with no turn to name is refused, not
+          // reserved.
+          const turnId = this.durableTurnId() ?? this._startingTurnId;
+
+          if (turnId === null) throw new Error('running turn has no durable identity');
+          this.pendingSends.reserve({ ...steer, turnId });
+        },
         onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
         turnId: () => this.durableTurnId(),
       });
@@ -3625,7 +3604,7 @@ export abstract class ActorAgent extends Think<Env> {
           const retireSteerRows = () => {
             if (origin !== 'user' || steerIds === undefined) return;
 
-            for (const steerId of steerIds) this.retirePendingSteer(steerId);
+            this.pendingSends.retire(steerIds);
           };
 
           // A message arriving before this turn opens binds its reservation
@@ -6283,12 +6262,9 @@ export abstract class ActorAgent extends Think<Env> {
     // `beforeTurn` IS the handoff, and it carries what a row here could not:
     // which issued actor owns the turn, which execution epoch owns it, and the
     // program identity the turn was admitted on.
-    const pending = this.sql<{ id: string; text: string; mode: WorkMode }>`
-      SELECT id, text, mode FROM pending_steers
-      WHERE actor_id = ${this.actorHandle().actorId} AND turn_id = ${this._turnCheckpoint.turnId}
-      ORDER BY seq ASC`
+    const pending = this.pendingSends.forTurn(this._turnCheckpoint.turnId)
       .map((row) => {
-        const files = this.pendingSteerFiles(row.id);
+        const files = this.pendingSends.files(row.id);
 
         return files.length > 0 ? { ...row, files } : row;
       });
