@@ -8,9 +8,11 @@ import {
   NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
   type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer,
 } from '@kinu.run/core/web/hero-art';
-import { createCanvasRenderer, type StrokeSurface } from '../src/components/landing/search-tree/SearchTreeHero';
+import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
 
 const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
+
+const CORE_WEB = resolve(import.meta.dir, '../../core/src/web');
 
 const PALETTE: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132] };
 
@@ -115,7 +117,7 @@ describe('the frame is what both renderers read', () => {
 
   test('the WGSL palette resolves the same four tones the canvas renderer does', () => {
     const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
-    const canvas = readFileSync(resolve(TREE_DIR, 'SearchTreeHero.tsx'), 'utf8');
+    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
 
     // Tone 0 is the ordinary attempt, the fall-through of both rules.
     expect([TONE_BRIGHT, TONE_ASH, TONE_EMBER]).toEqual([1, 2, 3]);

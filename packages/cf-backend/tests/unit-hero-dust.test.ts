@@ -6,12 +6,12 @@ import { resolve } from 'node:path';
 
 import {
   createDustRenderer, DustField, type DustFrame, type DustSurface,
-} from '../src/components/landing/hero-dust/HeroDust';
+} from '@kinu.run/core/web/hero-canvas';
 import type { HeroPalette } from '@kinu.run/core/web/hero-art';
 
 const LANDING_DIR = resolve(import.meta.dir, '../src/components/landing');
 
-const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, 'hero-dust/HeroDust.tsx'), 'utf8');
+const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, '../../../../core/src/web/hero-canvas.ts'), 'utf8');
 
 const STAGE_SOURCE = readFileSync(resolve(LANDING_DIR, 'search-tree/stage.ts'), 'utf8');
 
