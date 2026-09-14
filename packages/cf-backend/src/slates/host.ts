@@ -2,14 +2,15 @@ import { exports } from 'cloudflare:workers';
 import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
-import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SqliteSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceSlates, slateDirectory,
+  SlateFiles, SlateShareStore, SqliteSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
+  type BlueprintReading, type ShareUser,
 } from '@kinu.run/core/slates';
 import {
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING,
   SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
-  type JsonValue, type SlateProject,
+  type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
@@ -86,6 +87,50 @@ export class SlateHost {
     return parseSlateProject(JSON.parse(session.vfs.as(cred).readFileString(path)));
   }
 
+  /**
+   * The blueprint plane, as the owner's root: publishing reads committed
+   * versions and content-store bytes, never the caller's live tree, and
+   * admission lands files as the workspace root the way a fork does.
+   */
+  private async blueprints(): Promise<WorkspaceBlueprints> {
+    return new WorkspaceBlueprints({
+      slates: await this.sources(CRED_SESSION_USER), content: this.content,
+      shares: new SlateShareStore(this.deps.ctx.storage.sql),
+    });
+  }
+
+  /** A blueprint answer as a value: a refusal keeps its reason across the RPC hop. */
+  private async blueprintAnswer<Value>(doing: string, body: (blueprints: WorkspaceBlueprints) => Promise<Value> | Value): Promise<SlateAnswer<Value>> {
+    try {
+      await this.deps.session();
+
+      return { ok: true, value: await body(await this.blueprints()) };
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing, cause, otherwise: 'io' })) };
+    }
+  }
+
+  /** A viewer's read of one blueprint: the row re-read now, refused when revoked. */
+  readBlueprint(share: string): Promise<SlateAnswer<BlueprintReading>> {
+    return this.blueprintAnswer('reading blueprint ' + share, (blueprints) => blueprints.read(share));
+  }
+
+  /** The bytes a fork carries; same re-read, same refusal. */
+  blueprintBundle(share: string): Promise<SlateAnswer<BlueprintBundle>> {
+    return this.blueprintAnswer('exporting blueprint ' + share, (blueprints) => blueprints.bundle(share));
+  }
+
+  /** Name users on a blueprint. The rows are the owner's record; the projection each user reads is written by the caller. */
+  shareBlueprintWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<SlateShareRecord>> {
+    return this.blueprintAnswer('sharing blueprint ' + share, (blueprints) => blueprints.shareWith(share, users));
+  }
+
+  /** Admit a blueprint into this workspace as a new slate. Never starts its
+   *  process; the landed files reach the UI through the session's own change hook. */
+  admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>> {
+    return this.blueprintAnswer('admitting a blueprint', (blueprints) => blueprints.admit(this.deps.workspace, bundle));
+  }
+
   private async sources(cred: VfsCred): Promise<WorkspaceSlates> {
     const session = await this.deps.session();
     const key = slateCredentialKey(cred);
@@ -139,6 +184,22 @@ export class SlateHost {
         case 'commit': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).commit(new SlateId(operation.id))).toData() }) };
         case 'fork': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).fork(new SlateVersionId(operation.version))).toData() }) };
         case 'restore': return { ok: true, value: projectJsonValue({ value: (await (await this.sources(caller.cred)).restore(new SlateId(operation.id), new SlateVersionId(operation.version))).toData() }) };
+        // Blueprints are the owner's to publish: a hosted actor edits its own
+        // slates but never exports one on the owner's behalf.
+        case 'inspect':
+        case 'publish':
+        case 'unshare':
+        case 'shares': {
+          if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root publishes or revokes blueprints');
+          const blueprints = await this.blueprints();
+
+          switch (operation.op) {
+            case 'inspect': return { ok: true, value: projectJsonValue({ value: blueprints.inspect(operation.id, operation.version, operation.include) }) };
+            case 'publish': return { ok: true, value: projectJsonValue({ value: await blueprints.publish(operation.id, operation.version, operation.include) }) };
+            case 'unshare': return { ok: true, value: projectJsonValue({ value: blueprints.unshare(operation.share) }) };
+            case 'shares': return { ok: true, value: projectJsonValue({ value: blueprints.list() }) };
+          }
+        }
       }
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate operation', cause, otherwise: 'io' })) };

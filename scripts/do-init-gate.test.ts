@@ -455,7 +455,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
           try {
             await reconcileInterruptedForks({
               journal: this.headJournal,
-              signals: this.orch.signals,
+              inbox: this.orch.inbox,
               resume: jobRedriveResumeGate({ recoverOrphans: () => this.jobRunner.recoverOrphans() }),
             });
             await this.reclaimSettledExplorationFacets();

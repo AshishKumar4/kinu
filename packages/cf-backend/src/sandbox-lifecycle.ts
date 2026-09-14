@@ -8,14 +8,14 @@
  * and an agent whose checkpoint has been failing for an hour with nothing at
  * all. So the sandbox's Durable Object calls
  * {@link acceptSandboxLifecycleFailure} on the workspace root stub, and the
- * failure becomes a blocker the agent is woken for.
+ * failure becomes a signal the agent is woken for.
  *
- * ── Why a blocker, and why its own turn ──────────────────────────
+ * ── Why its own announcement, and how it lands ───────────────────
  * Every stage below means work the agent is about to do — or has just done —
- * cannot be relied on. Spliced into a live step it would be read beside the
- * work it is telling the agent to stop, so it goes through the signal seam at
- * `severity: 'blocker'`, and the seam's own policy (`orchestrator/signals.ts`)
- * gives a blocker its own turn. Nothing here picks a delivery mechanism.
+ * cannot be relied on, so the incident goes through the inbox
+ * (`orchestrator/inbox.ts`) as an ordinary event signal: it sets no
+ * severity, and whether it splices into a live step or starts its own turn is
+ * the inbox's read of turn state. Nothing here picks a delivery mechanism.
  *
  * ── Exactly-once, stated exactly ─────────────────────────────────
  * The ledger below is the dedupe, keyed by the caller's `incidentId`. A row is
@@ -74,7 +74,7 @@ import { toKinuError } from '@kinu.run/core/obs';
 import type { ErrorCode } from '@kinu.run/core/obs';
 import type { RecoveryRowInput, RowOutcome } from '@kinu.run/core/analytics';
 import type {
-  AgentSignal, JsonObject, JsonValue, RawSqlExec, SignalDeliverer, SignalOutcome,
+  AgentSignal, JsonObject, JsonValue, RawSqlExec, AgentInbox, SendOutcome,
   SqlExecutor,
 } from '@kinu.run/core';
 
@@ -251,7 +251,7 @@ function readDeliveryState(
 ): {
   readonly firstSeenAt: number;
   readonly announcedAt: number | null;
-  readonly outcome: SignalOutcome | null;
+  readonly outcome: SendOutcome | null;
 } | null {
   const row = sql<IncidentRow>`SELECT incident_id, first_seen_at, announced_at, outcome
     FROM sandbox_lifecycle_incidents WHERE incident_id = ${incidentId}`[0];
@@ -268,7 +268,7 @@ function readDeliveryState(
 export interface SandboxLifecycleDeps {
   readonly sql: SqlExecutor;
   /** The one way anything asynchronous reaches the agent. */
-  readonly signals: SignalDeliverer;
+  readonly inbox: AgentInbox;
   /**
    * The fleet row for one settlement, successful or not.
    *
@@ -386,16 +386,16 @@ export async function acceptSandboxLifecycleFailure(
     text: incidentText(incident),
     metadata,
     // NAMES ITS OWN FACT. Without this the signal has no identity, so
-    // `signals.deliver` takes the non-idempotent path and a re-delivery of the
+    // `inbox.send` takes the non-idempotent path and a re-delivery of the
     // same incident lands as a second message instead of being recognised as
     // the one already announced.
     idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
   };
 
-  let outcome: SignalOutcome;
+  let outcome: SendOutcome;
 
   try {
-    outcome = await deps.signals.deliver(signal);
+    outcome = await deps.inbox.send(signal);
   } catch (cause) {
     // RECORDED AND RE-THROWN. The throw stands because the container's retry is
     // the documented recovery and answering it normally would tell the box its

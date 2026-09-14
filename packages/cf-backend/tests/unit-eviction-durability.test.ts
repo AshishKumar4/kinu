@@ -165,14 +165,14 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
       stream: () => { throw new Error('the advisor lane completes, it does not stream'); },
     }),
   });
-  const signals_ = agent.observeOrch().signals;
-  const deliver = signals_.deliver.bind(signals_);
-  Object.defineProperty(signals_, 'deliver', {
+  const inbox = agent.observeOrch().inbox;
+  const send = inbox.send.bind(inbox);
+  Object.defineProperty(inbox, 'send', {
     configurable: true,
     value: async (signal: AgentSignal) => {
       signals.push(signal);
 
-      return await deliver(signal);
+      return await send(signal);
     },
   });
 

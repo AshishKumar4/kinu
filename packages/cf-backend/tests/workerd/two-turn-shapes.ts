@@ -103,6 +103,7 @@ export const HttpCallSchema = v.object({
   stream: v.boolean(),
   users: v.array(v.string()),
   conversation: v.array(v.object({ role: v.string(), content: v.string() })),
+  fileParts: v.array(v.array(v.object({ type: v.string(), url: v.string() }))),
   authHeader: v.nullable(v.string()),
   offeredTools: v.array(v.string()),
   toolCalls: v.array(v.object({ id: v.string(), name: v.string() })),
@@ -111,7 +112,70 @@ export const HttpCallSchema = v.object({
 
 export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
-export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield';
+export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt';
+
+/** One durable input row `actor_turn_inputs` persisted — the request-owned
+ *  admission ledger the cold test reads across a reset. */
+export const InputReceiptSchema = v.object({
+  actorId: v.string(),
+  requestId: v.string(),
+  messageIds: v.array(v.string()),
+  settled: v.boolean(),
+});
+
+export type InputReceipt = v.InferOutput<typeof InputReceiptSchema>;
+
+/** A durable `pending_steers` row — the reservation a mid-turn send writes:
+ *  the client's own message id bound to the turn it will land in. */
+export const PendingSteerSchema = v.object({
+  actorId: v.string(),
+  id: v.string(),
+  turnId: v.string(),
+  mode: v.string(),
+  text: v.string(),
+});
+
+export type PendingSteer = v.InferOutput<typeof PendingSteerSchema>;
+
+/** A `pending_steer_files` row — the file parts reserved with a pending steer. */
+export const PendingSteerFileSchema = v.object({
+  actorId: v.string(),
+  steerId: v.string(),
+  filename: v.string(),
+  mediaType: v.string(),
+  url: v.string(),
+});
+
+export type PendingSteerFile = v.InferOutput<typeof PendingSteerFileSchema>;
+
+export const PreparedConversationSchema = v.object({
+  workspace: v.string(),
+  owner: v.string(),
+  /** The exact client frames that carried B and the still-pending C —
+   *  replayed verbatim after the reset. */
+  bFrame: v.string(),
+  cFrame: v.string(),
+  /** Every durable input row at prepare time (idle-path admissions only). */
+  receipts: v.array(InputReceiptSchema),
+  /** The durable mid-turn reservations at prepare time — B's in-flight send and
+   *  C's queued send, each bound to the turn it will land in. */
+  steers: v.array(PendingSteerSchema),
+  /** The file rows reserved beside the steers — the durable half of any
+   *  attachment a mid-turn send carried. */
+  steerFiles: v.array(PendingSteerFileSchema),
+});
+
+export type PreparedConversation = v.InferOutput<typeof PreparedConversationSchema>;
+
+/** A `kind='event'` row of `agent_log`, the fields an unbindStale sweep flips. */
+export const AgentLogEventSchema = v.object({
+  id: v.string(),
+  turnId: v.nullable(v.string()),
+  consumedAt: v.nullable(v.number()),
+  variant: v.string(),
+});
+
+export type AgentLogEvent = v.InferOutput<typeof AgentLogEventSchema>;
 
 export const ExerciseResultSchema = v.object({
   register: RegisterSchema,

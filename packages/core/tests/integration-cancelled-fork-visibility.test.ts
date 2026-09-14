@@ -20,7 +20,7 @@ import {
 } from '../src/heads/reconcile';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import {
   agentDynamicContext, renderDynamicContextBlock, DynamicContextLedger,
 } from '../src/prompting/volatile-context';
@@ -118,7 +118,7 @@ function idleAgent() {
     setTimer: () => {},
   };
 
-  return { enqueued, signals: new SignalDelivery(host) };
+  return { enqueued, inbox: new Inbox(host) };
 }
 
 describe('an operator-cancelled fork is not reported as running', () => {
@@ -142,7 +142,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const w = workspace();
     const agent = idleAgent();
 
-    const settled = await reconcileInterruptedForks({ journal: w.journal, signals: agent.signals });
+    const settled = await reconcileInterruptedForks({ journal: w.journal, inbox: agent.inbox });
 
     expect(settled).toEqual([
       { rootId: ROOT, rationale: RATIONALE, abandoned: HEADS, total: HEADS },
@@ -167,7 +167,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const w = workspace();
     const agent = idleAgent();
 
-    await reconcileInterruptedForks({ journal: w.journal, signals: agent.signals });
+    await reconcileInterruptedForks({ journal: w.journal, inbox: agent.inbox });
 
     // A fork vanishing from the roster retracts nothing: the agent had already
     // read that it was in flight. It gets a turn, not a silence.
@@ -210,7 +210,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     recorder.emit(RUN, { type: 'run_end', reason: 'done' });
 
     await reconcileInterruptedForks({
-      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
     });
 
     const events = recorder.read(RUN);
@@ -231,7 +231,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // ledger existed. There is no run to close, and guessing one would put a
     // fork's death on an unrelated turn's timeline.
     await reconcileInterruptedForks({
-      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
     });
 
     expect(recorder.read(RUN)).toEqual([]);
@@ -273,7 +273,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // left: the cutoff is `<`, so a same-millisecond tie counts as live and
     // waits for the next activation rather than risking live work.
     await reconcileInterruptedForks({
-      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
       now: Date.now() + 1,
     });
 
@@ -300,11 +300,11 @@ describe('an operator-cancelled fork is not reported as running', () => {
     recorder.emit(RUN, { type: 'run_start', agentId: 'a' });
 
     await reconcileInterruptedForks({
-      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
       now: Date.now() + 1,
     });
     await reconcileInterruptedForks({
-      journal: w.journal, signals: idleAgent().signals, runEvents: recorder,
+      journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
       now: Date.now() + 1,
     });
 
@@ -316,10 +316,10 @@ describe('an operator-cancelled fork is not reported as running', () => {
   test('a clean start reconciles nothing and wakes nobody', async () => {
     const w = workspace();
     const agent = idleAgent();
-    await reconcileInterruptedForks({ journal: w.journal, signals: agent.signals });
+    await reconcileInterruptedForks({ journal: w.journal, inbox: agent.inbox });
 
     const second = idleAgent();
-    expect(await reconcileInterruptedForks({ journal: w.journal, signals: second.signals })).toEqual([]);
+    expect(await reconcileInterruptedForks({ journal: w.journal, inbox: second.inbox })).toEqual([]);
     expect(second.enqueued).toHaveLength(0);
   });
 
@@ -336,7 +336,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
 
-    await reconcileInterruptedForks({ journal: w.journal, signals: idleAgent().signals });
+    await reconcileInterruptedForks({ journal: w.journal, inbox: idleAgent().inbox });
 
     // The next step: one more block at the tail (a superseding one), and the
     // frozen bytes before it untouched — the prefix-cache contract.
@@ -379,7 +379,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const agent = idleAgent();
 
     const settled = await reconcileInterruptedForks({
-      journal: w.journal, signals: agent.signals, now: activationStart,
+      journal: w.journal, inbox: agent.inbox, now: activationStart,
     });
 
     // The DEAD attempt's heads are retired — the denominator, so this cannot pass by
@@ -420,7 +420,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
 
     const settled = await reconcileInterruptedForks({
       journal: w.journal,
-      signals: agent.signals,
+      inbox: agent.inbox,
       resume: async (roots) => {
         offered.push([...roots]);
 
@@ -446,7 +446,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     const agent = idleAgent();
 
     const settled = await reconcileInterruptedForks({
-      journal: w.journal, signals: agent.signals,
+      journal: w.journal, inbox: agent.inbox,
       resume: async () => [],
       now: firstActivation + 1_000,
     });

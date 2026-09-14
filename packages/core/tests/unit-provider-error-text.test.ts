@@ -18,7 +18,9 @@ import { MockLanguageModelV3 } from 'ai/test';
 import {
   describeProviderError, providerFailureFacts, toProviderError, runChat,
 } from '../src/index';
-import { KinuError } from '../src/obs/index';
+import {
+  KinuError, createRecordingLogger, setDiagnosticsSink,
+} from '../src/obs/index';
 
 interface CircularProviderError {
   code: undefined;
@@ -189,10 +191,41 @@ describe('describeProviderError', () => {
     expect(described).toContain('self');
     expect(described).not.toContain('[object Object]');
   });
+
+  // KINU-043. The boundary message is the closed code plus the structured
+  // facts and one generic sentence; the provider's own words — where a
+  // credential echo or an injected instruction would ride — stay on the
+  // diagnostics record only.
+  test('the boundary message carries facts, not the provider\'s prose', () => {
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
+
+    try {
+      const failure = toProviderError({
+        doing: 'calling the model',
+        provider: 'openai',
+        cause: { message: 'unauthorized: sk-proj-SECRET123 is invalid', code: 'invalid_api_key', status: 401 },
+      });
+
+      expect(failure.code).toBe('denied');
+      expect(failure.message).not.toContain('sk-proj-SECRET123');
+      expect(failure.message).not.toContain('unauthorized: sk-proj');
+      expect(failure.message).toContain('401');
+      expect(failure.message).toContain('invalid_api_key');
+      expect(failure.message).toContain('openai');
+
+      const emitted = logger.emitted.find((r) => r.event === 'provider.request_failed');
+      expect(emitted?.fields.detail).toContain('sk-proj-SECRET123');
+      expect(emitted?.fields.status).toBe(401);
+      expect(emitted?.fields.providerCode).toBe('invalid_api_key');
+    } finally {
+      restore();
+    }
+  });
 });
 
 describe('runChat provider failures', () => {
-  test('rethrows a plain-object error chunk with the provider text, not [object Object]', async () => {
+  test('rethrows a plain-object error chunk as classified facts, not its prose', async () => {
     const model = inBandErrorModel({
       message: 'Your account is not active.',
       type: 'invalid_request_error',
@@ -201,30 +234,37 @@ describe('runChat provider failures', () => {
 
     const thrown = await rejectionOf(() => runToCompletion(model));
 
-    expect(thrown.message).toContain('Your account is not active.');
+    expect(thrown.message).not.toContain('Your account is not active.');
     expect(thrown.message).not.toContain('[object Object]');
+    expect(thrown.message).toContain('billing_not_active');
   });
 
-  // KINU-043. The reason rides the MESSAGE and the raw failure rides `cause`.
-  // Rethrowing the provider's own object untouched is how an APICallError
-  // reaches the CLI and the chat surface with its raw responseBody still
-  // attached while its message says only "AI_APICallError".
-  test('an Error payload crosses as a classified failure that still carries its text', async () => {
+  // KINU-043. The boundary message carries the closed code and the structured
+  // facts; the provider's own words live on `cause` and the diagnostics
+  // record — never in the message a terminal or chat surface renders.
+  test('an Error payload crosses as a classified failure without its prose in the message', async () => {
     const cause = new Error('context length exceeded');
     const thrown = await rejectionOf(() => runToCompletion(inBandErrorModel(cause)));
 
     expect(thrown).toBeInstanceOf(KinuError);
-    expect(thrown.message).toContain('context length exceeded');
+    expect(thrown.message).not.toContain('context length exceeded');
     expect(thrown.cause).toBe(cause);
   });
 
-  test('does not dump the raw payload to the console', async () => {
+  test('does not dump the raw payload to the console — only the diagnostics record carries it', async () => {
     const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
 
     try {
       await rejectionOf(() => runToCompletion(inBandErrorModel({ message: 'nope', code: 'billing_not_active' })));
       expect(consoleError).not.toHaveBeenCalled();
+      // The boundary emitted its own record: the provider's words landed on
+      // the diagnostics sink, not the terminal.
+      const emitted = logger.emitted.find((r) => r.event === 'provider.request_failed');
+      expect(emitted?.fields.detail).toBe('nope (billing_not_active)');
     } finally {
+      restore();
       consoleError.mockRestore();
     }
   });

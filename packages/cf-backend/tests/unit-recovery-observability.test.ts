@@ -32,7 +32,7 @@ import { createTestSql } from '@kinu.run/test-utils';
 import {
   KinuError, createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
-import type { AgentSignal, JsonValue, SignalOutcome } from '@kinu.run/core';
+import type { AgentSignal, JsonValue, SendOutcome } from '@kinu.run/core';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION, acceptSandboxLifecycleFailure,
   initSandboxLifecycleTable, type SandboxLifecycleDeps,
@@ -51,7 +51,7 @@ type Settlement = Omit<RecoveryRowInput, 'workspace'>;
  *  spread in conditionally — so the deps below are one shape rather than two. */
 interface LedgerScript {
   /** What the signal seam answers, or throws. */
-  readonly deliver: () => Promise<SignalOutcome>;
+  readonly deliver: () => Promise<SendOutcome>;
   /** The auxiliary log. A no-op unless a case is about its failure. */
   readonly logActivity: (event: string, detail?: string) => void;
 }
@@ -81,8 +81,8 @@ function ledger(script: Partial<LedgerScript> = {}): Ledger {
   return {
     deps: {
       sql,
-      signals: {
-        deliver: async (signal: AgentSignal) => {
+      inbox: {
+        send: async (signal: AgentSignal) => {
           delivered.push(signal);
 
           return await deliver();

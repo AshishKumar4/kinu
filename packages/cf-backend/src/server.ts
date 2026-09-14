@@ -16,7 +16,8 @@
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Kinu session is present.
  *   5. /install, /install.sh, /downloads/kinu, /api/cli/* — CLI install/auth/API.
- *   6. /api/health — public build-info endpoint (no auth).
+ *   6. /api/health, /api/shared/blueprint/<id> — public endpoints (no auth;
+ *      the blueprint id carries its own signature).
  *   6b. /mcp/v1/* — MCP server; CLI-bearer-token or session auth + ownership
  *       enforced inside (external MCP clients can't do browser OAuth).
  *   7. AUTH GATE — every other request needs a Kinu session
@@ -29,7 +30,8 @@
  *   8b. /api/control/* — admin control plane; a verified Access identity that
  *       EQUALS an allowlisted session email, and a fresh sign-in for anything
  *       that mutates.
- *   9. /api/user/* — user-scoped (profile, agents, credentials, codex flow).
+ *   9. /api/user/*, /api/shared/* — account-scoped (profile, agents,
+ *      credentials, codex flow; shared library publish, list, fork).
  *   10. /api/workspaces/<name>/* — owner check via UserDO.hasWorkspace.
  *   11. /agents/* — Think DOs (chat WebSocket).
  *   12. env.ASSETS fallback — SPA for everything else.
@@ -43,9 +45,9 @@ import {
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath, hostedActorRoute,
 } from "@kinu.run/core";
-import { handlePcRequest } from "@kinu.run/core";
+import { firstResponse, handlePcRequest } from "@kinu.run/core";
 import { servePreviewRequest } from "./preview-proxy";
-import { handleRunEventsRequest, handleWorkspaceEventRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
+import { handleRunEventsRequest, handleWorkspaceOverviewRequest } from "./run-events-routes";
 import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
@@ -53,6 +55,7 @@ import { handleUserRequest } from "./user/routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
+import { handleSharedPublicRequest, handleSharedRequest } from "./shared/routes";
 import { handleHubRequest, handleWebhookDeliveryRequest } from "./events/routes";
 import { handleFilesRequest } from "./files-routes";
 import { handleTerminalRequest } from "./terminal-route";
@@ -554,10 +557,16 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   if (cliResp) return cliResp;
 
-  // 6. Public — build-info health.
-  const healthResp = await handleHealthRequest(request, env);
+  // 6. Public JSON — health's build stamp, and a blueprint's page data by
+  //    link. The blueprint id carries a signature checked inside its handler
+  //    before any object is touched, and the owner's object re-reads the
+  //    share row on every call.
+  const publicResp = await firstResponse(request, [
+    (req) => handleHealthRequest(req, env),
+    (req) => handleSharedPublicRequest(req, env),
+  ]);
 
-  if (healthResp) return healthResp;
+  if (publicResp) return publicResp;
 
   // 6b. MCP server — its own auth (CLI bearer token for external MCP
   //     clients, which can never pass the browser-session gate below;
@@ -658,10 +667,15 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     if (controlResp) return controlResp;
   }
 
-  // 9. /api/user/* — user-scoped routes.
-  const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
+  // 9. The signed-in account APIs — /api/user/* profile and roster, and
+  //    /api/shared/* publish, list, fork. Ownership of every workspace named
+  //    in a body is claimed inside.
+  const accountResp = await firstResponse(authenticatedRequest, [
+    (req) => handleUserRequest(req, env, identity, ctx),
+    (req) => handleSharedRequest(req, env, identity),
+  ]);
 
-  if (userResp) return userResp;
+  if (accountResp) return accountResp;
 
   // 10. Per-agent routes — reject every namespace/facet path outside the
   // closed public actor grammar before ownership lookup or SDK routing.
@@ -699,7 +713,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // route never re-proves ownership.
     const agent = claim.agent;
 
-    const eventsResp = await handleWorkspaceEventRequest(reqWithId, [
+    const eventsResp = await firstResponse(reqWithId, [
       (req) => handleWorkspaceOverviewRequest(req, () => agent.getWorkspaceOverview()),
       (req) => handleRunEventsRequest(req, env),
     ]);

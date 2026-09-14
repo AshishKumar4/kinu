@@ -76,7 +76,7 @@ async function lane(over: {
     llm: 'llm' in over ? over.llm : saying(JSON.stringify(NOTE)),
     govern: (llm) => llm,
     gateOpen: over.gateOpen ?? false,
-    deliver: async (signal) => {
+    send: async (signal) => {
       delivered.push(signal);
 
       return 'queued';
@@ -603,7 +603,7 @@ describe('reviewRecordedTurn', () => {
         return llm;
       },
       gateOpen: false,
-      deliver: async () => 'queued',
+      send: async () => 'queued',
       record: () => {},
     });
 
@@ -622,7 +622,7 @@ describe('reviewRecordedTurn', () => {
       llm: saying(JSON.stringify(NOTE)),
       govern: (llm) => llm,
       gateOpen: true,
-      deliver: async (signal) => {
+      send: async (signal) => {
         delivered.push(signal);
 
         return 'queued';
@@ -639,7 +639,7 @@ describe('reviewRecordedTurn', () => {
     const bug: LLM = { async *stream() { yield ''; }, complete: async () => { throw new KinuError('bad_input', 'prompt rejected'); } };
     await expect(reviewRecordedTurn({
       snapshot: snapshot(), llm: bug, govern: (llm) => llm, gateOpen: false,
-      deliver: async () => 'queued', record: () => {},
+      send: async () => 'queued', record: () => {},
     })).rejects.toMatchObject({ code: 'bad_input' });
   });
 
@@ -647,11 +647,11 @@ describe('reviewRecordedTurn', () => {
     const throwing: LLM = { async *stream() { yield ''; }, complete: async () => { throw new Error('provider down'); } };
     expect(await reviewRecordedTurn({
       snapshot: snapshot(), llm: throwing, govern: (llm) => llm, gateOpen: false,
-      deliver: async () => 'queued', record: () => {},
+      send: async () => 'queued', record: () => {},
     })).toBeNull();
     expect(await reviewRecordedTurn({
       snapshot: snapshot(), llm: undefined, govern: (llm) => llm, gateOpen: false,
-      deliver: async () => 'queued', record: () => {},
+      send: async () => 'queued', record: () => {},
     })).toBeNull();
   });
 
@@ -696,7 +696,7 @@ describe('advisor review retries', () => {
 
       const disposition = await reviewRecordedTurn({
         snapshot: snapshot(), llm: limited, govern: (llm) => llm, gateOpen: false,
-        deliver: async (signal) => {
+        send: async (signal) => {
           delivered.push(signal);
 
           return 'queued';
@@ -732,7 +732,7 @@ describe('advisor review retries', () => {
     try {
       await expect(reviewRecordedTurn({
         snapshot: snapshot(), llm: refusing, govern: (llm) => llm, gateOpen: false,
-        deliver: async () => 'queued', record: () => {},
+        send: async () => 'queued', record: () => {},
       })).rejects.toMatchObject({ code: 'denied' });
     } finally {
       restore();
@@ -765,7 +765,7 @@ describe('advisor review retries', () => {
 
       const disposition = await reviewRecordedTurn({
         snapshot: snapshot(), llm: down, govern: (llm) => llm, gateOpen: false,
-        deliver: async (signal) => {
+        send: async (signal) => {
           delivered.push(signal);
 
           return 'queued';
@@ -804,7 +804,7 @@ describe('advisor review retries', () => {
     try {
       const disposition = await reviewRecordedTurn({
         snapshot: snapshot(), llm: burning, govern: (llm) => llm, gateOpen: false,
-        deliver: async () => 'queued', record: () => {},
+        send: async () => 'queued', record: () => {},
       });
 
       expect(disposition).toBeNull();

@@ -26,7 +26,7 @@ const EVOLUTION: EvolutionConfigView = {
   advisorMinSeverity: 'concern',
 };
 
-export const TURN = { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+export const TURN = { landed: 'turn' as const, text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
 /** Teardowns run synchronously: the unmount they flush must complete before
  *  the renderer that owns those renderables is destroyed. */
@@ -115,7 +115,6 @@ export function fakeClient(options: FakeClientOptions) {
       return () => { listeners.delete(listener); };
     },
     send: options.send ?? (async () => TURN),
-    steer: () => false,
     branch: () => false,
     fork: async () => ({ client, label: options.name }),
     stop: () => [],

@@ -141,6 +141,11 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'auth_tokens.socket': 'workspace',
   /** The Codex OAuth device flow. */
   'codex_auth': 'workspace',
+  /** The shared library: blueprints other accounts named this owner on. Owner-
+   *  only: what was shared with the owner is the owner's to read, and a
+   *  workspace forking a blueprint is the owner's browser asking, never the
+   *  workspace itself. */
+  'shares': 'owner_only',
 } as const satisfies Record<string, CapabilityFloor>;
 
 export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;

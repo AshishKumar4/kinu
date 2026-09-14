@@ -178,14 +178,14 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
     await orch.drainPendingEvents();
 
-    const step = orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
+    const step = await orch.inbox.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
 
     if (!step?.[1]) throw new Error('expected injected signal step');
     expect(String(step[1].content)).toContain('Is staging green?');
 
     // Turn end: the absorbed signal's reply turn id keys the SAME dispatch the
     // queued drain-turn path uses — the live turn's answer threads back.
-    const { absorbed } = orch.signals.settle({ completed: true });
+    const { absorbed } = orch.inbox.settle({ completed: true });
     expect(absorbed).toHaveLength(1);
     const absorbedSignal = absorbed[0];
 

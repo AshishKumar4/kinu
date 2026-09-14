@@ -117,6 +117,7 @@ describe('skill trust binds raw policy source', () => {
       skillsVfs: source,
       trust: (_path, raw) => raw === REVIEWED ? 'approved' : 'unverified',
       decisions: [] satisfies readonly InstructionApproval[],
+      admissionTokens: 10_000,
     });
 
     if (view === null) throw new Error('expected skill source');

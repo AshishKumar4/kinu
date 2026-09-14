@@ -6,7 +6,9 @@ import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, profileCatalogDigest,
   resolveTurnProfile, requireBuild, createAgentStores,
 } from '@kinu.run/core';
-import type { AgentRuntime, BroadcastEvent, ChatEvent, ProfileAuthorityInputs, WorkMode } from '@kinu.run/core';
+import type {
+  AgentRuntime, BroadcastEvent, ChatEvent, ProfileAuthorityInputs, ProgrammaticTurn, WorkMode,
+} from '@kinu.run/core';
 import { initEventsHubTables, EventLog } from '../../core/src/events/hub/index';
 import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { KinuError } from '@kinu.run/core/obs';
@@ -41,6 +43,7 @@ function sessions() {
     const handle = directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'admitted-' + name });
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
     const broadcasts: BroadcastEvent[] = [];
+    const enqueued: ProgrammaticTurn[] = [];
     // The REAL store bundle, so a turn's claim is written through the same
     // memoized ledger production uses rather than a fixture beside it.
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
@@ -49,13 +52,20 @@ function sessions() {
       engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: event => { broadcasts.push(event); },
-        enqueueTurn: async () => { throw new Error('this bounded actor fixture must not enqueue another turn'); },
+
+        // Captured rather than thrown: what the seam hands a steer back as —
+        // the user-origin rerun turn — is the assertion.
+        enqueueTurn: async (turn) => {
+          enqueued.push(turn);
+
+          return { status: 'queued' as const };
+        },
         turnInFlight: () => actor.inFlight,
         setTimer: () => { throw new Error('this bounded actor fixture must not schedule background work'); },
       },
     } });
 
-    return { actor, broadcasts, claims: stores.claims, handle };
+    return { actor, broadcasts, claims: stores.claims, handle, enqueued };
   };
 
   return { left: create('left'), right: create('right'), db };
@@ -124,7 +134,7 @@ test('logical actors in one store keep live context, mode and structured tool da
 
   try {
     await Promise.all([leftStarted.promise, rightStarted.promise]);
-    expect(right.actor.steer({ id: 'right-steer', text: 'right-only steer' })).toBe(true);
+    expect(await right.actor.send({ id: 'right-steer', text: 'right-only steer' })).toBe('mid-turn');
     releaseLeft.resolve();
     expect(await leftRun).toMatchObject({ text: 'left finished', failure: null, interrupted: false });
     expect(right.actor.inFlight).toBe(true);
@@ -141,8 +151,15 @@ test('logical actors in one store keep live context, mode and structured tool da
     expect(leftRequests).not.toContain('right-only steer');
     expect(rightRequests).not.toContain('left private input');
     expect(rightRequests).not.toContain('left dynamic context');
-    expect(right.actor.takeLeftoverSteers()).toEqual([{ id: 'right-steer', text: 'right-only steer' }]);
-    expect(left.actor.takeLeftoverSteers()).toEqual([]);
+    // The steer that never saw a step boundary reruns as a user-origin turn —
+    // what the seam hands the host when the turn settles, observed here the
+    // way the session's own pump would.
+    right.actor.orchestrator.inbox.settle({ completed: true });
+    await Promise.resolve();
+    expect(right.enqueued).toEqual([expect.objectContaining({
+      origin: 'user', text: 'right-only steer', steerIds: ['right-steer'],
+    })]);
+    expect(left.enqueued).toEqual([]);
     expect(events.find(event => event.type === 'tool-result')).toMatchObject({ success: true });
     expect(left.actor.workMode).toBe('build');
     expect(right.actor.workMode).toBe('plan');
@@ -157,7 +174,7 @@ test('logical actors in one store keep live context, mode and structured tool da
 });
 
 test('a released lease cannot mutate or execute a newer turn of the same actor', async () => {
-  const { left: { actor }, db } = sessions();
+  const { left: { actor, enqueued }, db } = sessions();
   const old = actor.beginTurn({ runId: 'run-old', turnId: 'old-turn' }, 'plan', Date.now());
   actor.finishTurn(old);
   const current = actor.beginTurn({ runId: 'run-new', turnId: 'new-turn' }, 'build', Date.now());
@@ -178,8 +195,11 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
     actor.appendInput(current, { role: 'user', content: 'new input' });
     expect(await actor.execute(current, input, event => { events.push(event); })).toMatchObject({ text: 'new answer', failure: null });
     expect(actor.inFlight).toBe(false);
-    expect(actor.steer({ id: 'after-last-step', text: 'late steer' })).toBe(false);
-    expect(actor.takeLeftoverSteers()).toEqual([]);
+    // A refused steer — no turn in flight — is never queued into the seam, so
+    // settling reruns nothing.
+    actor.orchestrator.inbox.settle({ completed: true });
+    await Promise.resolve();
+    expect(enqueued).toEqual([]);
     expect(JSON.stringify(model.doStreamCalls)).not.toContain('stale private input');
     expect(model.doStreamCalls).toHaveLength(1);
   } finally {

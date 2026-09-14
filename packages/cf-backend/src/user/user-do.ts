@@ -140,7 +140,7 @@ import {
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
-  describeMcpTool, type SerializableToolDescriptor,
+  describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
@@ -466,6 +466,17 @@ export interface WorkspaceEntry {
   createdAt: number;
   lastVisited: number;
   archivedAt: number | null;
+}
+
+/** One `user_shares_received` row: who shared which blueprint, and the title
+ *  cached at the time. `createdAt` is absent on the write side. */
+export interface SharedBlueprintReceipt {
+  ownerUserId: string;
+  ownerEmail: string;
+  workspace: string;
+  shareId: string;
+  title: string;
+  createdAt?: number;
 }
 
 /** One bounded page of the workspace roster. `total` is the whole active
@@ -4758,6 +4769,38 @@ export class UserDO extends Agent<Env> {
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
+  // ── Shared library ────────────────────────────────────────────────
+
+  /**
+   * Record that another account named this owner on a blueprint. A projection:
+   * the owner's workspace object is the authority, and every read of the row
+   * asks it again, so a share revoked after this write lists once and refuses.
+   * Idempotent per (owner, workspace, share); the cached title follows the
+   * latest write.
+   */
+  async sharesReceived_add(caller: UserCaller, row: SharedBlueprintReceipt): Promise<void> {
+    await this.requireTier(caller, 'shares');
+    this.sqlx(
+      `INSERT INTO user_shares_received (owner_user_id, owner_email, workspace, share_id, title)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (owner_user_id, workspace, share_id) DO UPDATE SET title = excluded.title, owner_email = excluded.owner_email`,
+      row.ownerUserId, row.ownerEmail, row.workspace, row.shareId, row.title,
+    );
+  }
+
+  /** Every blueprint this owner was named on, newest first. */
+  async sharesReceived_list(caller: UserCaller): Promise<SharedBlueprintReceipt[]> {
+    await this.requireTier(caller, 'shares');
+
+    return this.sqlx<{ owner_user_id: string; owner_email: string; workspace: string; share_id: string; title: string; created_at: number }>(
+      `SELECT owner_user_id, owner_email, workspace, share_id, title, created_at
+       FROM user_shares_received ORDER BY created_at DESC, share_id`,
+    ).map((row) => ({
+      ownerUserId: row.owner_user_id, ownerEmail: row.owner_email, workspace: row.workspace,
+      shareId: row.share_id, title: row.title, createdAt: row.created_at,
+    }));
+  }
+
   // ── MCP servers ────────────────────────────────────────────────────
 
   /** The manager this user's plane runs on: the SDK's own, whose activation
@@ -5399,9 +5442,20 @@ export class UserDO extends Agent<Env> {
 
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};
+    // A client that never touched an optional field still sends it as ""; the
+    // tool's admitted inputSchema decides which keys may be omitted, and the
+    // core rule drops exactly those — never a required key, never a key the
+    // server did not declare (KINU-052).
+    const tool = this.mcp.mcpConnections[serverId]?.tools.find((t) => t.name === name);
+    const parsedSchema = v.safeParse(JsonObjectSchema, tool?.inputSchema);
+
+    const callArgs = omitEmptyOptionalArgs(
+      params,
+      parsedSchema.success ? parsedSchema.output : undefined,
+    );
 
     try {
-      const result = await manager.callTool({ serverId, name, arguments: params });
+      const result = await manager.callTool({ serverId, name, arguments: callArgs });
 
       return JSON.stringify(decodeJsonValue({ value: result }));
     } catch (err) {

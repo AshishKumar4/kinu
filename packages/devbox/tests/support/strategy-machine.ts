@@ -1420,6 +1420,7 @@ function checkpointCommand(
   command: string,
   disk: ContainerDisk,
   publish: (archivePath: string, mountedPath: string) => number | undefined,
+  publishEgress: (archivePath: string, objectUrl: string) => { landed: number } | { refused: string } | undefined,
 ): ShellReply | undefined {
   const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
 
@@ -1465,6 +1466,32 @@ function checkpointCommand(
     }
 
     return shellOk(`0 ${landed}`);
+  }
+
+  // THE EGRESS PUBLICATION: `bun '<runtime>/devbox-publish.mjs' <archive>
+  // <object-url> <partBytes>` writes the staged archive to the mount's
+  // credential-less egress host — one PUT under the part size, and this fake
+  // answers it the way the publisher's own wrapper reports: `<rc> <bytes>
+  // <etag>` on stdout, the store's words on stderr.
+  const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
+    .exec(command)?.groups;
+
+  if (egress !== undefined) {
+    const landed = publishEgress(egress.archive!, egress.url!);
+
+    if (landed !== undefined && 'refused' in landed) {
+      return { stdout: '1 ', stderr: landed.refused, exitCode: 0 };
+    }
+
+    if (landed === undefined) {
+      return {
+        stdout: '2 ',
+        stderr: `no archive at ${egress.archive!}`,
+        exitCode: 0,
+      };
+    }
+
+    return shellOk(`0 ${landed.landed} "etag-${landed.landed}"`);
   }
 
   if (command.includes('df -Pk')) {
@@ -1565,13 +1592,16 @@ function processFaultReply(disk: ContainerDisk, command: string): ShellReply | u
   return { stdout: '', stderr: fault.stderr, exitCode: fault.exitCode };
 }
 
-
 function chainExec(
   disk: ContainerDisk,
   deaths: DeathWatch,
-  /** Publish a staged archive through the mount and answer what landed, or
-   *  undefined when the source is not there for `dd` to read. */
+  /** Publish a staged archive through the s3fs mount and answer what landed,
+   *  or undefined when the source is not there for `dd` to read. */
   publish: (archivePath: string, mountedPath: string) => number | undefined,
+  /** Publish a staged archive through the mount's egress host and answer
+   *  what landed: the byte count, the refusal's stderr words, or undefined
+   *  when the archive is absent. */
+  publishEgress: (archivePath: string, objectUrl: string) => { landed: number } | { refused: string } | undefined,
 ) {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
@@ -1637,7 +1667,7 @@ function chainExec(
       return ok();
     }
 
-    const checkpoint = checkpointCommand(command, disk, publish);
+    const checkpoint = checkpointCommand(command, disk, publish, publishEgress);
 
     if (checkpoint !== undefined) return checkpoint;
 
@@ -1941,7 +1971,11 @@ function snapshotChainArm(): ConformanceArm {
         put: (key: string, bytes: Uint8Array) => durable.put(key, bytes),
       };
 
-      /** One archive, moved by the container into the store. */
+      /** One archive, moved by the container into the store. The s3fs shape:
+       *  THREE durable puts per publication — `mkdir` PUTs the generation's
+       *  directory marker and `create` PUTs an empty object before the flush
+       *  lands the payload — which is the measured floor that made the egress
+       *  shape necessary (the three `put` attempts of `b20260914045438`). */
       const publish = (archivePath: string, mountedPath: string): number | undefined => {
         deaths.at('before-payload');
         const mount = this.#publishing;
@@ -1950,17 +1984,54 @@ function snapshotChainArm(): ConformanceArm {
           throw new Error(`nothing writable is mounted for ${mountedPath}`);
         }
 
+        const key = `${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`;
+        const parent = key.slice(0, key.lastIndexOf('/') + 1);
         const bytes = this.disk.readFile(archivePath);
 
+        // s3fs's own order: the marker PUT lands on `mkdir -p`, before `dd`
+        // can fail to open the archive.
+        durable.put(parent, new Uint8Array(0));
+
         if (bytes === undefined) return undefined;
+        mounted.put(key, new Uint8Array(0));
         this.disk.serveFromMount(mountedPath, bytes);
-        mounted.put(`${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`, bytes);
+        mounted.put(key, bytes);
         deaths.at('after-payload');
 
         return bytes.byteLength;
       };
 
-      const chain = chainExec(this.disk, deaths, publish);
+      /** The same archive through the mount's own egress host: ONE put. The
+       *  mount's registration is what routes the URL, so an unmounted box
+       *  refuses exactly as the handler's 403 would. */
+      const publishEgress = (archivePath: string, objectUrl: string): { landed: number } | { refused: string } | undefined => {
+        deaths.at('before-payload');
+        const mount = this.#publishing;
+
+        if (mount === undefined) {
+          return { refused: 'Access to R2 bucket is not permitted. Call mountBucket() with this bucket before accessing it.' };
+        }
+
+        const relative = /^https?:\/\/[^/]+\/[^/]+\/(?<key>.+)$/.exec(objectUrl)?.groups?.key;
+
+        if (relative === undefined || relative.includes('..')) {
+          return { refused: `PUT answered 403 for ${objectUrl}` };
+        }
+
+        const bytes = this.disk.readFile(archivePath);
+
+        if (bytes === undefined) return undefined;
+        // The handler prepends the mount's prefix, so the object lands at
+        // `${prefix}${key}` — the same place the s3fs path would have put it.
+        this.disk.serveFromMount(`${mount.at}/${relative}`, bytes);
+        mounted.put(`${mount.prefix}${relative}`, bytes);
+        deaths.at('after-payload');
+
+        return { landed: bytes.byteLength };
+      };
+
+      const chain = chainExec(this.disk, deaths, publish, publishEgress);
+
 
       const exec: typeof chain = async (command) => {
         const packed = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups?.source;
@@ -1998,6 +2069,13 @@ function snapshotChainArm(): ConformanceArm {
         writeSeedStamp: async (stamp) => { this.#seedStamp = stamp; },
         exec,
         storeRoot: () => STORE_ROOT,
+        storeObjectUrl: (key) => {
+          if (!key.startsWith(`${STORE_ROOT}/`)) {
+            throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${STORE_ROOT}`);
+          }
+
+          return `http://r2.internal/BACKUP_BUCKET/${key.slice(STORE_ROOT.length + 1)}`;
+        },
         mountStore: async (at) => {
           if (this.disk.dead) throw new ContainerDied('mountStore on a dead container');
           this.disk.mount(at, { source: `r2:${STORE_ROOT}`, fstype: 'fuse.s3fs', options: 'rw' });

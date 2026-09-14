@@ -771,23 +771,34 @@ describe('arming must ignore the row being dispatched', () => {
 
   test('the firing row does not count, so a successor is still armed', () => {
     // Due exactly now, and overdue: both are the dispatch case.
-    expect(needsArming([{ time: NOW }], NOW)).toBe(true);
-    expect(needsArming([{ time: NOW - 30 }], NOW)).toBe(true);
+    expect(needsArming([{ time: NOW }], NOW, true)).toBe(true);
+    expect(needsArming([{ time: NOW - 30 }], NOW, true)).toBe(true);
   });
 
   test('a genuine future row does count, so a restart does not double the period', () => {
-    expect(needsArming([{ time: NOW + 1 }], NOW)).toBe(false);
-    expect(needsArming([{ time: NOW + 3_600 }], NOW)).toBe(false);
+    expect(needsArming([{ time: NOW + 1 }], NOW, true)).toBe(false);
+    expect(needsArming([{ time: NOW + 3_600 }], NOW, true)).toBe(false);
   });
 
   test('no rows at all needs arming', () => {
-    expect(needsArming([], NOW)).toBe(true);
+    expect(needsArming([], NOW, true)).toBe(true);
+    expect(needsArming([], NOW, false)).toBe(true);
   });
 
   test('the firing row alongside a future row does not suppress the future one', () => {
     // The old guard and the new one agree here, and they must: arming again
     // would double the period.
-    expect(needsArming([{ time: NOW }, { time: NOW + 60 }], NOW)).toBe(false);
+    expect(needsArming([{ time: NOW }, { time: NOW + 60 }], NOW, true)).toBe(false);
+  });
+
+  test('a caller that is not dispatching counts a due row as pending work', () => {
+    // The poll case, measured on b20260914070552: a due startup row the alarm
+    // loop had not delivered yet was re-armed by every 300 ms state reading,
+    // and each arm moved the platform alarm a second away. Due and overdue
+    // rows both hold the arm; a future one still does.
+    expect(needsArming([{ time: NOW }], NOW, false)).toBe(false);
+    expect(needsArming([{ time: NOW - 30 }], NOW, false)).toBe(false);
+    expect(needsArming([{ time: NOW + 1 }], NOW, false)).toBe(false);
   });
 
   test('the guard the class uses is this one, not a row count', () => {

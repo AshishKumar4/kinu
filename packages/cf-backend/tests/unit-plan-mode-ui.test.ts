@@ -29,7 +29,7 @@ describe('Plan mode browser contract', () => {
     expect(hook).toContain('"getActivePlanReview"');
     // The composer send: mode threaded AND admission-guarded — a refused send
     // returns before any state mutation, which is what the latch is for.
-    expect(page).toContain('if (!state.sendChat(t, [...attachments.parts], effectiveChatMode)) return;');
+    expect(page).toContain('sendChat: (text, files) => state.sendChat(text, [...files], effectiveChatMode),');
     expect(page).toContain('usePlanGatedMode(subName === undefined ? state.activePlan : null, ui)');
     expect(page).toContain('locked: planGate.locked');
     expect(composer).toContain('aria-label="Turn mode"');

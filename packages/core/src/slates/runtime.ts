@@ -3,9 +3,9 @@ import type { BindingRequirement } from '@agent-core/core/facets';
 import type { EnvironmentSessionCapability, PortExposureId } from '@agent-core/core/environment-provider';
 import {
   SlateId, SlateVersionId, SlatePublicationId, SlateDeploymentId, SlateResourceId, SlatePreviewId,
-  SlateIdSource, SlateMutationSeam, SlateRuntime,
-  type Slate, type SlateMutationRequest, type SlateProvider, type SlateInvocationSeam,
-  type SlatePreviewValidationSeam, type SlateStore,
+  SlateIdSource, SlateMutationSeam, SlateRuntime, SlateSkeleton,
+  type Slate, type SlateInstantiation, type SlateMutationRequest, type SlateProvider, type SlateInvocationSeam,
+  type SlatePreviewValidationSeam, type SlatePublication, type SlateStore, type SlateVersion,
 } from '@agent-core/core/slates';
 import { nanoid } from '../utils/nanoid';
 import type { SlateFiles } from './files';
@@ -38,7 +38,9 @@ class WorkspaceSlateMutation extends SlateMutationSeam {
     return this.authority.mutate(request, () => {
       const result = mutation();
 
-      if (request.operation === 'fork' || this.restoring && request.operation === 'update') {
+      // An admitted blueprint lands its source the way a fork does: the record
+      // and the tree are one transaction, and the process is never started.
+      if (request.operation === 'fork' || request.operation === 'instantiate' || this.restoring && request.operation === 'update') {
         this.files.restore(request.slateId, request.source);
       }
 
@@ -115,12 +117,44 @@ export class WorkspaceSlates {
     return this.runtime(undefined, true).update(id, version.source, current.revision);
   }
 
-  publish(versionId: SlateVersionId, bindings: readonly BindingRequirement[]) {
-    const version = this.deps.store.getVersion(versionId);
+  /**
+   * Publish a committed version. `materialization` is the bundle a forker
+   * receives: the version's whole source by default, or the subset of it the
+   * owner chose to include, retained in the same content store.
+   */
+  publish(versionId: SlateVersionId, bindings: readonly BindingRequirement[], materialization?: ContentRef): Promise<SlatePublication> {
+    const version = this.version(versionId);
 
-    if (version === undefined || !version.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate version not found');
+    return this.runtime().publish(versionId, materialization ?? version.source, bindings);
+  }
 
-    return this.runtime().publish(versionId, version.source, bindings);
+  publication(publicationId: SlatePublicationId): SlatePublication {
+    const publication = this.deps.store.getPublication(publicationId);
+
+    if (publication === undefined || !publication.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate publication not found');
+
+    return publication;
+  }
+
+  /**
+   * The credential-free export of a publication: the identity of the bundle
+   * and its requirements, nothing that names this workspace. The vendored
+   * export projects the VERSION's source; when the owner published a subset,
+   * the bundle is the publication's materialization and the skeleton names
+   * that instead, so a forker's `instantiate` admits exactly the bytes shipped.
+   */
+  skeleton(publicationId: SlatePublicationId): SlateSkeleton {
+    const publication = this.publication(publicationId);
+    const version = this.version(publication.versionId);
+
+    if (publication.materialization.equals(version.source)) return this.runtime().exportSkeleton(publicationId);
+
+    return new SlateSkeleton(publication.materialization.digest, publication.bindings);
+  }
+
+  /** Admit a skeleton as a new slate of this workspace. Every requirement comes back unsatisfied; nothing runs. */
+  instantiate(skeleton: SlateSkeleton, source: ContentRef): Promise<SlateInstantiation> {
+    return this.runtime().instantiate(skeleton, this.deps.workspaceId, source);
   }
 
   deploy(publicationId: SlatePublicationId, externalKey: string) {
@@ -136,11 +170,15 @@ export class WorkspaceSlates {
   }
 
   source(versionId: SlateVersionId): ContentRef {
+    return this.version(versionId).source;
+  }
+
+  version(versionId: SlateVersionId): SlateVersion {
     const version = this.deps.store.getVersion(versionId);
 
     if (version === undefined || !version.workspaceId.equals(this.deps.workspaceId)) throw new KinuError('missing', 'Slate version not found');
 
-    return version.source;
+    return version;
   }
 
   private runtime(authoredId?: SlateId, restoring = false): SlateRuntime {

@@ -20,9 +20,13 @@
  */
 
 import * as v from 'valibot';
+import { jsonSchema, tool, type ToolExecutionOptions, type ToolSet } from 'ai';
 import { estimateTokens } from '../llm';
 import { stepContextLimit } from '../prompting/step-prune';
-import { JsonObjectSchema, type JsonObject } from '../utils/json';
+import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { permitInPlan } from '../execution/work-mode';
+import { withClampedToolResults, type ClampToolResultOptions } from './clamp';
+import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 import { mcpToolKey } from './mcp-naming';
 
 /** What an MCP tool looks like once it has crossed the RPC seam. Mirrors the
@@ -106,10 +110,12 @@ export function describeMcpTool(
     inputSchema: v.parse(JsonObjectSchema, tool.inputSchema),
   };
 
-  const description = nonBlank(tool.description);
+  const description = nonBlank(sanitizeRemoteProse(tool.description));
 
   if (description !== undefined) descriptor.description = description;
-  const title = nonBlank(tool.title) ?? nonBlank(tool.annotations?.title);
+
+  const title = nonBlank(sanitizeRemoteProse(tool.title))
+    ?? nonBlank(sanitizeRemoteProse(tool.annotations?.title));
 
   if (title !== undefined) descriptor.title = title;
 
@@ -122,6 +128,97 @@ export function describeMcpTool(
 
 function nonBlank(value: string | undefined): string | undefined {
   return value !== undefined && value.trim() !== '' ? value : undefined;
+}
+
+/** The prompt's own directive shapes, at the start of a line: the `## `
+ *  headings that bound system-prompt sections (prompting/sections.ts splits on
+ *  exactly that) and the `<word>` blocks that wrap live context
+ *  (`<directives>`, `<workspace_instructions>`, `<dynamic_context>`). Prose
+ *  mid-line is content; prose at a line start is what a reader can mistake
+ *  for structure the host wrote. */
+const HEADING_LINE = /^#{1,6}[ \t]+/gm;
+
+const TAG_LINE = /^<(?=\/?[a-zA-Z])/gm;
+
+/** C0 except \t and \n, then DEL and the C1 range — a loop rather than a
+ *  character-class regex, which lint forbids for control bytes. */
+function dropControlChars(text: string): string {
+  let out = '';
+
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    const kept = code === 0x09 || code === 0x0a || (code > 0x1f && !(code >= 0x7f && code <= 0x9f));
+
+    if (kept) out += ch;
+  }
+
+  return out;
+}
+
+/**
+ * The boundary between a remote server's words and this agent's instructions.
+ *
+ * A description or title is a third party's prose riding the tool channel,
+ * which is part of every request the turn makes. Before the budget clamps it,
+ * three normalizations keep that channel a carrier of FACTS, not of structure:
+ *
+ *   - control characters are dropped (except newline and tab, which carry
+ *     ordinary prose layout);
+ *   - whitespace runs collapse, so no amount of padding re-shapes the text;
+ *   - directive SHAPES at a line start are neutralized: an ATX heading loses
+ *     its marks and an XML-ish tag gets the `&lt;` escape `sealDelimiters`
+ *     already uses, so either still reads as the server's words and neither
+ *     reads as a section or block the host wrote.
+ *
+ * This is not a prompt-injection filter — it touches only the structural
+ * markers this prompt's own conventions make meaningful. The sentence "you
+ * must comply" survives untouched; `## System` at a line start does not.
+ */
+function sanitizeRemoteProse(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+
+  return dropControlChars(text)
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n[ \t]+|[ \t]+\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim()
+    .replace(HEADING_LINE, '')
+    .replace(TAG_LINE, '&lt;');
+}
+
+/**
+ * The arguments a call forwards, with one omission allowed.
+ *
+ * A form-shaped client that never touched an optional field still sends it as
+ * `""`, and a strict server then validates that empty string — it is not a
+ * URI, a date, or an enum member, it is the absence of an answer. The tool's
+ * OWN admitted `inputSchema` says which keys may be absent: a key that is
+ * declared in `properties` and absent from `required` may be dropped when its
+ * value is exactly `""`. Everything else is the caller's real input and passes
+ * through untouched — a required key's `""` included, since dropping a
+ * required field would only trade the server's own validation error for a
+ * different one.
+ */
+export function omitEmptyOptionalArgs(
+  args: JsonObject,
+  inputSchema: JsonObject | undefined,
+): JsonObject {
+  const properties = inputSchema?.properties;
+
+  if (!v.is(JsonObjectSchema, properties)) return args;
+
+  const required = new Set(
+    v.is(v.array(v.string()), inputSchema?.required) ? inputSchema.required : [],
+  );
+
+  const out: JsonObject = {};
+
+  for (const [key, value] of Object.entries(args)) {
+    if (value === '' && key in properties && !required.has(key)) continue;
+    out[key] = value;
+  }
+
+  return out;
 }
 
 /**
@@ -275,3 +372,61 @@ function clampProse(text: string | undefined, tokens: number): string | undefine
 
   return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}…`;
 }
+
+/**
+ * The admitted MCP catalog as a callable surface — the part BOTH backends
+ * built by hand before, which is how the replay claim ended up on neither.
+ * `call` is the one backend-owned piece: cf's closure RPCs into the owning
+ * UserDO and turns a protocol failure into `McpToolError`; the CLI's reaches
+ * its stdio client. Everything around it is policy this module owns:
+ *
+ *   readOnly: true on the descriptor (the server's `readOnlyHint` annotation)
+ *   is the only admission a remote tool gets — `permitInPlan` for the plan
+ *   mode and, through `withEffectClaims`' `safe` set, exemption from the
+ *   claim. An absent annotation is CLAIMED, never presumed read-only.
+ *
+ *   The clamp rides INSIDE the claim, so the result a replay returns is the
+ *   value the first attempt actually published — a stored raw output would
+ *   hand a replay bytes the budget had already refused to spend.
+ */
+export interface McpToolBuild {
+  /** Dispatch one call to the server, under the descriptor's own identity. */
+  readonly call: (
+    descriptor: SerializableToolDescriptor,
+    args: JsonObject,
+    options: ToolExecutionOptions,
+  ) => Promise<JsonValue>;
+  /** The same deps the turn's native tools claim under. */
+  readonly effectClaims: EffectClaimDeps;
+  /** The per-result clamp the builtins already run under. */
+  readonly clamp: ClampToolResultOptions;
+}
+
+export function buildMcpToolSet(
+  descriptors: readonly SerializableToolDescriptor[],
+  build: McpToolBuild,
+): ToolSet {
+  const tools: ToolSet = {};
+  const readOnly = new Set<string>();
+
+  for (const d of descriptors) {
+    const entry = tool({
+      description: d.description ?? `${d.serverName}/${d.name}`,
+      inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
+      execute: async (args, options) => build.call(d, args, options),
+    });
+
+    if (d.readOnly === true) readOnly.add(d.toolKey);
+    tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
+  }
+
+  // An MCP server is a bulk producer like any other. Same result clamp and
+  // spill path as built-in tools, then the claim outermost — the order the
+  // native surface composes them in (`buildActorTools`).
+  return withEffectClaims(
+    withClampedToolResults(tools, build.clamp),
+    build.effectClaims,
+    { safe: readOnly },
+  );
+}
+

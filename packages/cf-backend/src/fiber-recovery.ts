@@ -51,7 +51,7 @@ import {
   AdvisorRecoverySnapshotSchema, ADVISOR_LANE_FIBER, nanoid, projectJsonValue,
   type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
   type SqlExecutor,
-  JsonObjectSchema, type AgentSignal, type SignalOutcome,
+  JsonObjectSchema, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
 import type { ActorHandle } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
@@ -320,7 +320,7 @@ export interface FiberLaneTransports {
   /** Deliver one recovered signal — the fork-notice lane's replay body. The
    *  OUTCOME is load-bearing: `undelivered` means the enqueue was pre-empted
    *  and the notice is still owed. */
-  readonly deliverSignal: (signal: AgentSignal) => Promise<SignalOutcome>;
+  readonly deliverSignal: (signal: AgentSignal) => Promise<SendOutcome>;
   /**
    * Hand one lane's re-drive to the actor's detached durable carrier.
    *

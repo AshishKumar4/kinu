@@ -5,16 +5,16 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   BENCH_ACCOUNT_ID, CELL_STARTUP_MS, SANDBOX_IMAGE, boxName, boxState, checkpointOperation,
-  cleanupObservationProbes, createFixtureResources, deployFixture, destroyBox,
-  drainBucketResidue, execInBox, measureLiveC3, r2ResiduePlane, readBlockAttachMetrics,
+  cleanupObservationProbes, createFixtureResources, deployFixture, describeIncidentReasons, destroyBox,
+  drainBucketResidue, execInBox, measureLiveC3, orphanTeardownExecutor, r2ResiduePlane, readBlockAttachMetrics, readIncidentReasons,
   readRestoreProbe, sourceRevision, startupOperation, teardownLiveArms, writeFileInBox,
-  type Fixture, type StartupCompletion,
+  type Fixture, type IncidentReasonRow, type SourceRevision, type StartupCompletion, type StartupObservation, type StateReply,
 } from './bench-devbox-strategies';
 import { evaluateLiveC3, type BlockAttachMetrics, type LiveC3Observation } from '../packages/devbox/bench/c3-result';
 import type { RestorePhaseStamps } from '../packages/devbox/src/durability/contracts';
 import type { StartupState } from '../packages/devbox/bench/observation-schema';
 import { containerAppIds, delay, deleteContainerApps, publishTeardown, runTeardownOnce, runWrangler } from './fixtures/r2-bench/deploy-substrate';
-import { createManifest, replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
+import { createManifest, recoverAbandonedRuns, replayTeardown, writeManifest, type DeleteOutcome } from './fixtures/storage-matrix/cleanup';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -150,7 +150,32 @@ try {
   return row;
 }
 
-async function run(): Promise<number> {
+/** One destroy/create cycle of the `--lifecycle` run. A refused cycle keeps
+ *  its observations, its last state reading and the incident reasons, and the
+ *  loop goes on to the next cycle: the hang under study is intermittent, so
+ *  one sample is not a measurement. */
+interface LifecycleCycle {
+  initial: StartupCompletion | null;
+  exec: Awaited<ReturnType<typeof execInBox>> | null;
+  observations: StartupObservation[];
+  refusal: string | null;
+  lastState: StateReply | null;
+  incidents: IncidentReasonRow[] | null;
+}
+
+/** What the driver was invoked with: the cleanup credentials, the measured
+ *  revision and the cell selector flags, checked before the run creates
+ *  anything. */
+interface RunInvocation {
+  accessKeyId: string;
+  secretAccessKey: string;
+  revision: SourceRevision;
+  lifecycleOnly: boolean;
+  c3Only: boolean;
+  largeOnly: boolean;
+}
+
+function runInvocation(): RunInvocation {
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
   const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
 
@@ -163,6 +188,74 @@ async function run(): Promise<number> {
   if ([lifecycleOnly, c3Only, largeOnly].filter(Boolean).length > 1) throw new Error('choose only one cell selector');
 
   if (!lifecycleOnly && !process.argv.includes('--diagnostic') && revision.dirtyDigest !== 'clean') throw new Error('commit the measured source before running the two cells');
+
+  return { accessKeyId, secretAccessKey, revision, lifecycleOnly, c3Only, largeOnly };
+}
+
+/** The rows `observations.json` serializes while the run fills them: each
+ *  observer writes through here so a mid-measurement save carries the
+ *  partial row. */
+interface RunObservations {
+  c3: LiveC3Observation | null;
+  large: LargeObservation | null;
+  lifecycle: LifecycleCycle[];
+}
+
+/** The `--lifecycle` body: ten destroy/create cycles on the one box. */
+async function runLifecycle(fixture: Fixture, box: string, observed: RunObservations, save: () => void, errors: string[]): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const observations: StartupObservation[] = [];
+    const cycle: LifecycleCycle = { initial: null, exec: null, observations, refusal: null, lastState: null, incidents: null };
+    observed.lifecycle.push(cycle);
+    await destroyBox(fixture, box);
+
+    try {
+      cycle.initial = await startupOperation(fixture, box, '/create', `lifecycle empty baseline ${attempt + 1}`, ['empty'], { deadlineMs: CELL_STARTUP_MS, observations });
+      cycle.exec = await execInBox(fixture, box, 'mkdir -p /tmp/devbox-first-exec-witness');
+    } catch (cause) {
+      cycle.refusal = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    cycle.incidents = (await readIncidentReasons(fixture, box, errors)) ?? null;
+
+    try {
+      cycle.lastState = await boxState(fixture, box);
+    } catch (cause) {
+      errors.push(`lifecycle ${attempt + 1} final state: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+
+    if (cycle.refusal !== null) errors.push(`lifecycle ${attempt + 1}: ${cycle.refusal}; incident reasons: ${describeIncidentReasons(cycle.incidents ?? undefined)}`);
+    else if (cycle.exec?.ok !== true || cycle.exec.exitCode !== 0) errors.push(`lifecycle ${attempt + 1}: ${cycle.exec?.error ?? 'first exec failed'}`);
+    save();
+  }
+}
+
+/** The single-cell body: the C3 cell unless `--large-only`, then the large
+ *  cell unless `--c3-only`. */
+async function runCells(
+  fixture: Fixture, box: string, largeBox: string, runId: string,
+  selection: Pick<RunInvocation, 'c3Only' | 'largeOnly'>,
+  observed: RunObservations, save: () => void, errors: string[],
+): Promise<void> {
+  const { c3Only, largeOnly } = selection;
+
+  if (!largeOnly) {
+    const c3 = await measureLiveC3(fixture, box, runId, null, row => { observed.c3 = row; save(); }, { deadlineMs: CELL_STARTUP_MS });
+    observed.c3 = c3;
+    errors.push(...evaluateLiveC3(c3).errors, ...boundedAttachErrors({ phases: c3.restoreProbe?.phases, blockReads: c3.blockReads }));
+    errors.push(...chunkedPublicationErrors(c3.beforeDestroy?.state?.chain));
+  }
+
+  if (!c3Only) {
+    if (!largeOnly) errors.push(...await teardownLiveArms(fixture, [box]));
+    const large = await measureLarge(fixture, largeBox, row => { observed.large = row; save(); });
+    observed.large = large;
+    errors.push(...large.errors);
+  }
+}
+
+async function run(): Promise<number> {
+  const { accessKeyId, secretAccessKey, revision, lifecycleOnly, c3Only, largeOnly } = runInvocation();
   const runId = `b${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`;
   const artifacts = join(REPO, 'bench-artifacts', 'block-attach', runId);
   mkdirSync(artifacts, { recursive: true });
@@ -186,9 +279,7 @@ async function run(): Promise<number> {
   const errors: string[] = [];
   const cleanup: string[] = [];
   let live: Awaited<ReturnType<typeof deployFixture>> | null = null;
-  let c3: LiveC3Observation | null = null;
-  let large: LargeObservation | null = null;
-  const lifecycle: { initial: StartupCompletion; exec: Awaited<ReturnType<typeof execInBox>> }[] = [];
+  const observed: RunObservations = { c3: null, large: null, lifecycle: [] };
   let tail: ReturnType<typeof Bun.spawn> | undefined;
   let capture: Promise<void> | undefined;
 
@@ -196,9 +287,18 @@ async function run(): Promise<number> {
     source: revision, image: SANDBOX_IMAGE, worker: names.worker, bucket: names.bucket, workerVersion: live?.workerVersion,
     scope: lifecycleOnly ? 'empty attach then first exec; lifecycle attribution only'
       : c3Only ? 'one C3 storage cell; not full strategy admission' : largeOnly ? 'one 2GiB storage cell; not full strategy admission'
-        : 'two storage cells; not full strategy admission', c3, large, lifecycle, cleanup, errors }, null, 2));
+        : 'two storage cells; not full strategy admission', c3: observed.c3, large: observed.large, lifecycle: observed.lifecycle, cleanup, errors }, null, 2));
 
   const log = (message: string): void => { process.stderr.write(`[block-attach] ${message}\n`); };
+
+  // Abandoned runs first, before this run creates anything: a driver killed
+  // between its deploy and its teardown (`b20260914070552`, an observer
+  // ceiling on the driver's own process) leaves a manifest naming a live
+  // Worker, container application and bucket that only a later driver reads.
+  for (const earlier of await recoverAbandonedRuns(REPO, runId, orphanTeardownExecutor(residue), log)) {
+    if (earlier.failures.length > 0 || !earlier.replayed) errors.push(`earlier run ${earlier.runId} still holds resources`);
+    else cleanup.push(`earlier run ${earlier.runId}: abandoned resources deleted or absent`);
+  }
 
   const wrangle = (args: readonly string[], options: { allowFailure?: boolean } = {}): string => runWrangler(REPO, args, options);
   const deletion = (absent: boolean, name: string): DeleteOutcome => absent ? { ok: true } : { ok: false, error: `${name} is still present` };
@@ -267,6 +367,10 @@ async function run(): Promise<number> {
         pending = lines.pop() ?? '';
 
         for (const line of lines) {
+          // Every tailed line is kept: `b20260914045438` filtered to the
+          // `devbox.` events alone and lost the console lines that named
+          // why its startup never settled.
+          appendFileSync(join(artifacts, 'tail.log'), line + '\n');
           const begin = line.indexOf('{"event":"devbox.');
 
           if (begin >= 0) appendFileSync(join(artifacts, 'lifecycle.jsonl'), line.slice(begin) + '\n');
@@ -275,31 +379,8 @@ async function run(): Promise<number> {
     })();
     await delay(2500);
 
-    if (lifecycleOnly) {
-      for (let attempt = 0; attempt < 10; attempt += 1) {
-        await destroyBox(fixture, box);
-        const initial = await startupOperation(fixture, box, '/create', 'lifecycle empty baseline', ['empty'], { deadlineMs: CELL_STARTUP_MS });
-        const exec = await execInBox(fixture, box, 'mkdir -p /tmp/devbox-first-exec-witness');
-        lifecycle.push({ initial, exec });
-        save();
-
-        if (exec.ok !== true || exec.exitCode !== 0) { errors.push(exec.error ?? 'first exec failed'); break; }
-
-        await destroyBox(fixture, box);
-      }
-    } else {
-      if (!largeOnly) {
-        c3 = await measureLiveC3(fixture, box, runId, null, row => { c3 = row; save(); }, { deadlineMs: CELL_STARTUP_MS });
-        errors.push(...evaluateLiveC3(c3).errors, ...boundedAttachErrors({ phases: c3.restoreProbe?.phases, blockReads: c3.blockReads }));
-        errors.push(...chunkedPublicationErrors(c3.beforeDestroy?.state?.chain));
-      }
-
-      if (!c3Only) {
-        if (!largeOnly) errors.push(...await teardownLiveArms(fixture, [box]));
-        large = await measureLarge(fixture, largeBox, row => { large = row; save(); });
-        errors.push(...large.errors);
-      }
-    }
+    if (lifecycleOnly) await runLifecycle(fixture, box, observed, save, errors);
+    else await runCells(fixture, box, largeBox, runId, { c3Only, largeOnly }, observed, save, errors);
   } catch (cause) {
     errors.push(cause instanceof Error ? cause.message : String(cause));
   } finally {
@@ -316,7 +397,7 @@ async function run(): Promise<number> {
 
   save();
   process.stdout.write(JSON.stringify({ artifact: join(artifacts, 'observations.json'),
-    c3AttachMs: storageAttachMilliseconds(c3?.restoreProbe?.phases), largeAttachMs: storageAttachMilliseconds(large?.restoreProbe?.phases), errors }) + '\n');
+    c3AttachMs: storageAttachMilliseconds(observed.c3?.restoreProbe?.phases), largeAttachMs: storageAttachMilliseconds(observed.large?.restoreProbe?.phases), errors }) + '\n');
 
   return errors.length === 0 ? 0 : 1;
 }

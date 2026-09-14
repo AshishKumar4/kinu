@@ -34,7 +34,7 @@
  * kinu-logs/two-turn/run16 through run19), so that arm now belongs to a
  * bun-side test over the injected fetch instead.
  */
-import { env } from 'cloudflare:test';
+import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import {
@@ -42,8 +42,10 @@ import {
   DiagnosticFailureSchema,
   HistorySchema,
   HttpCallSchema,
+  PreparedConversationSchema,
   SnapshotSchema,
   type DiagnosticFailure,
+  type PendingSteer,
 } from './two-turn-shapes';
 
 const SignalProbeSchema = v.union([
@@ -62,18 +64,21 @@ describe('two real turns over the HTTP model seam', () => {
     const calls = v.parse(HttpSchema, await root.queuedConversation('signal'))
       .filter((call) => call.model === 'probe-queue');
 
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(3);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
+    // The signal ran its own turn (the THIRD call). Which side of the
+    // programmatic exchange the spliced A+B pair lands on, and whether each
+    // echo has flushed by snapshot time, is timing-dependent — the durable
+    // contract is only that both inputs reached the model after the genesis
+    // exchange, on this one turn.
+    const signalTurn = calls[2]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 
-    expect(calls[3]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'))).toEqual([
-      { role: 'user', content: genesis },
-      { role: 'assistant', content: `echo:${genesis}` },
-      { role: 'user', content: 'QUEUE-A' },
-      { role: 'assistant', content: 'echo:QUEUE-A' },
-      { role: 'user', content: 'QUEUE-B' },
-      { role: 'assistant', content: 'echo:QUEUE-B' },
-      { role: 'user', content: 'QUEUE-PROGRAMMATIC' },
-    ]);
+    expect(signalTurn?.[0]).toEqual({ role: 'user', content: genesis });
+    expect(signalTurn?.[1]).toEqual({ role: 'assistant', content: `echo:${genesis}` });
+
+    const rest = signalTurn?.slice(2).map((m) => m.content) ?? [];
+    expect(rest).toContain('QUEUE-PROGRAMMATIC');
+    expect(rest).toContain('QUEUE-A\n\nQUEUE-B');
   });
 
   it('a genesis offer still yields inside its slot to an already admitted owner message', async () => {
@@ -92,27 +97,24 @@ describe('two real turns over the HTTP model seam', () => {
     const calls = v.parse(HttpSchema, await root.queuedConversation('chat'))
       .filter((call) => call.model === 'probe-queue');
 
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
     expect(genesis).toContain('This workspace has just been created.');
     expect(calls[0]?.users).not.toContain('QUEUE-A');
     expect(calls[0]?.users).not.toContain('QUEUE-B');
 
-    const visible = (index: number) => calls[index]?.conversation
-      .filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
+    // Under the splice rule A and B were accepted mid-turn and merged into ONE
+    // user message at the held turn's next step — a single second provider call
+    // carries the completed genesis prefix plus the merged text, in order.
+    expect(calls[1]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'))).toEqual([
+      { role: 'user', content: genesis },
+      { role: 'assistant', content: `echo:${genesis}` },
+      { role: 'user', content: 'QUEUE-A\n\nQUEUE-B' },
+    ]);
 
-    expect(visible(1)).toEqual([
-      { role: 'user', content: genesis },
-      { role: 'assistant', content: `echo:${genesis}` },
-      { role: 'user', content: 'QUEUE-A' },
-    ]);
-    expect(visible(2)).toEqual([
-      { role: 'user', content: genesis },
-      { role: 'assistant', content: `echo:${genesis}` },
-      { role: 'user', content: 'QUEUE-A' },
-      { role: 'assistant', content: 'echo:QUEUE-A' },
-      { role: 'user', content: 'QUEUE-B' },
-    ]);
+    // The durable-token proof for a mid-turn send lives in the cold arm — under
+    // send a busy socket input reserves pending_steers (not actor_turn_inputs),
+    // and the row drains once the turn settles, so nothing durable remains here.
   });
 
   it('a durable programmatic submission excludes a later pending chat from its provider prefix', async () => {
@@ -121,22 +123,168 @@ describe('two real turns over the HTTP model seam', () => {
     const calls = v.parse(HttpSchema, await root.queuedConversation('peer'))
       .filter((call) => call.model === 'probe-queue');
 
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(3);
     const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
-    const programmatic = calls[3]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
+    const programmatic = calls[2]?.conversation.filter((message) => message.role !== 'system' && !message.content.startsWith('<'));
 
+    // Under the splice rule A, B and C merged into the held genesis turn, so
+    // the programmatic peer event drives the THIRD call — its own turn, ahead
+    // of the completed merged-turn prefix.
     expect(programmatic).toEqual([
       { role: 'user', content: genesis },
       { role: 'assistant', content: `echo:${genesis}` },
-      { role: 'user', content: 'QUEUE-A' },
-      { role: 'assistant', content: 'echo:QUEUE-A' },
-      { role: 'user', content: 'QUEUE-B' },
-      { role: 'assistant', content: 'echo:QUEUE-B' },
+
+      { role: 'user', content: 'QUEUE-A\n\nQUEUE-B\n\nQUEUE-C' },
+      { role: 'assistant', content: expect.stringContaining('echo:QUEUE-A\n\nQUEUE-B\n\nQUEUE-C') },
       { role: 'user', content: expect.stringContaining('QUEUE-PROGRAMMATIC') },
     ]);
-    expect(calls[3]?.users).not.toContain('QUEUE-C');
-    expect(calls[4]?.users.filter((text) => !text.startsWith('<')).at(-1)).toBe('QUEUE-C');
-    expect(calls[4]?.users.filter((text) => text === 'QUEUE-C')).toEqual(['QUEUE-C']);
+  });
+  it('keeps a queued chat on its durable token through a cold reset and replay', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));
+
+    // Genesis's model call is held; B and C are sent mid-turn and each writes a
+    // durable pending_steers reservation under the CLIENT's own message id,
+    // bound to the in-flight turn. The replay below must re-bind that token,
+    // not mint a duplicate.
+    const prepared = v.parse(PreparedConversationSchema, await root.prepareQueuedConversation('cold'));
+    const steerFor = (rows: PendingSteer[], id: string) => rows.find((row) => row.id === `input-${id}`);
+    expect(steerFor(prepared.steers, 'QUEUE-B')).toBeDefined();
+    expect(steerFor(prepared.steers, 'QUEUE-C')).toBeDefined();
+    expect(prepared.steers).toHaveLength(2);
+
+    // The reset drops the object AND its socket; the stub reacquired below is
+    // a fresh activation over the same storage.
+    await abortAllDurableObjects();
+    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));
+
+    // Replaying the exact B and C frames re-issues acceptSend under the same
+    // client message id. The durable reservation owns the token, so the ledger
+    // still holds exactly the two rows — the replay re-binds, never duplicates.
+    const replayed = await coldRoot.replayQueuedConversation(prepared);
+    expect(replayed.steers).toHaveLength(2);
+    expect(new Set(replayed.steers.map((row) => row.id))).toEqual(
+      new Set(['input-QUEUE-B', 'input-QUEUE-C']),
+    );
+
+    const done = await coldRoot.completeQueuedConversation(prepared);
+
+    const calls = v.parse(HttpSchema, done.http).filter((call) => call.model === 'probe-queue');
+
+    const realUsers = (call: (typeof calls)[number]) => call.conversation
+      .filter((m) => m.role === 'user' && !m.content.startsWith('<') && !m.content.startsWith('Continue your previous response'))
+      .map((m) => m.content);
+
+    // The recovered turn drove with B's text and spliced C at its step
+    // boundary — the model saw them in order, on one turn, after the reset.
+    const first = calls.find((call) => realUsers(call)[0] === 'QUEUE-B');
+
+    expect(first).toBeDefined();
+
+    const spliced = calls.find((call) => {
+      const users = realUsers(call);
+
+      return users.length >= 2 && users.includes('QUEUE-B') && users.includes('QUEUE-C');
+    });
+
+    expect(spliced).toBeDefined();
+
+    // Each admitted send settles exactly once under its own receipt — the
+    // reservation survived the reset and the replay did not re-mint a send.
+    for (const id of ['input-QUEUE-B', 'input-QUEUE-C']) {
+      const rows = done.receipts.filter((row) => row.messageIds.includes(id));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.settled).toBe(true);
+    }
+  });
+
+  it('splices a mid-turn attachment into the next model call as a file part', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-queue-driver'));
+
+    // The held genesis turn takes A then B mid-turn; B carries an image
+    // attachment. The spliced steer turn's model call must carry the file as
+    // a part — not drop it to the floor.
+    const calls = v.parse(HttpSchema, await root.queuedConversation('attach')).filter((call) => call.model === 'probe-queue');
+
+    const spliced = calls.find((call) =>
+      call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === 'data:image/png;base64,iVBORw0KGgo=')));
+
+    expect(spliced).toBeDefined();
+    expect(spliced!.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
+  });
+
+  it('re-delivers a mid-turn attachment with real file data through a cold reset and replay', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-cold-driver'));
+
+    // Same drive as the text-only cold arm, but B's steer carries an image —
+    // the reservation now spans TWO tables (pending_steers + pending_steer_files)
+    // and the replay must re-bind both, not leave the file row orphaned. A
+    // distinct mode keeps its workspace separate from the warm attach test's.
+    const prepared = v.parse(PreparedConversationSchema, await root.prepareQueuedConversation('attach-cold'));
+    expect(prepared.steerFiles).toHaveLength(1);
+
+    await abortAllDurableObjects();
+    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-cold-driver'));
+
+    const replayed = await coldRoot.replayQueuedConversation(prepared);
+    // The replay re-admitted B's reservation: the file row survives re-binding
+    // under the same client id, not duplicated and not dropped.
+    expect(replayed.steerFiles).toEqual([{
+      actorId: expect.any(String),
+      steerId: 'input-QUEUE-B',
+      filename: 'chart.png',
+      mediaType: 'image/png',
+      url: 'data:image/png;base64,iVBORw0KGgo=',
+    }]);
+
+    const done = await coldRoot.completeQueuedConversation(prepared);
+    const calls = v.parse(HttpSchema, done.http).filter((call) => call.model === 'probe-queue');
+
+    // The recovered turn's model call carries B's attachment as a file part —
+    // the byte-stable url the reservation stored, not a dropped reference.
+    const carried = calls.find((call) =>
+      call.fileParts.some((parts) => parts.some((part) => part.type === 'image_url' && part.url === 'data:image/png;base64,iVBORw0KGgo=')));
+
+    expect(carried).toBeDefined();
+    expect(carried!.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
+  });
+
+  it('re-delivers a buffered event after eviction when its drain lease is stale', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('evt-redelivery-driver'));
+
+    // A claim the workspace can host turns under, then the state a dead
+    // activation leaves: one webhook event already bound to a drain turn whose
+    // lease never closed, aged past the stale grace. The reset drops the
+    // object; the wake that follows must re-pend it and re-ask the question.
+    const { workspace } = await root.claimEventWorkspace();
+    await root.seedStaleDrainEventFor(workspace, 'BUFFERED-EVENT');
+    await abortAllDurableObjects();
+
+    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('evt-redelivery-driver'));
+
+    // Before the wake: the event is still bound to the dead turn's lease —
+    // the activation proved the work exists, it did not answer it yet.
+    const seeded = (await coldRoot.agentLogEventsFor(workspace)).find((row) => row.id === 'ev-seeded-BUFFERED-EVENT');
+    expect(seeded?.turnId).toBe('evt-seeded-dead');
+    expect(seeded?.consumedAt).toBe(0);
+
+    // The wake: unbindStale re-pends the unanswered lease, the drain re-binds
+    // it to a NEW synthetic turn, and the model sees the event text again. The
+    // wake joins on the marker landing in the wire log, so a return means the
+    // drain's model call carried the buffered event.
+    await coldRoot.runEventWakeFor(workspace, 'BUFFERED-EVENT');
+
+    const calls = v.parse(HttpSchema, await coldRoot.httpCalls());
+
+    const redelivered = calls.find((call) =>
+      call.conversation.some((m) => m.content.includes('BUFFERED-EVENT')));
+
+    expect(redelivered).toBeDefined();
+
+    // The re-pend and re-bind both show: the lease moved OFF the dead turn and
+    // onto the drain that just consumed it.
+    const rebound = (await coldRoot.agentLogEventsFor(workspace)).find((row) => row.id === 'ev-seeded-BUFFERED-EVENT');
+    expect(rebound?.turnId).toMatch(/^evt-/);
+    expect(rebound?.turnId).not.toBe('evt-seeded-dead');
   });
 
   it('spikes the service-binding RPC, then runs A and B end to end', async () => {

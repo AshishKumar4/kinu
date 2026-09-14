@@ -24,7 +24,10 @@ import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
-import type { CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall, QueueProbeMode } from './two-turn-shapes';
+import type {
+  AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
+  InputReceipt, PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
+} from './two-turn-shapes';
 import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
@@ -59,6 +62,15 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   httpReset(): Promise<void>;
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
   queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]>;
+  prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation>;
+  replayQueuedConversation(prepared: PreparedConversation): Promise<{ receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
+  completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
+  inputReceiptsFor(workspace: string): Promise<InputReceipt[]>;
+  pendingSteersFor(workspace: string): Promise<PendingSteer[]>;
+  claimEventWorkspace(): Promise<{ workspace: string; owner: string }>;
+  agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]>;
+  seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
+  runEventWakeFor(workspace: string, marker: string): Promise<void>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {

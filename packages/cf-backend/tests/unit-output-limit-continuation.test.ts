@@ -140,12 +140,12 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     // the model actually takes it in.
     harness.agent.declareTurnInFlight(true);
 
-    const routed = await harness.agent.observeOrch().signals.deliver({
+    const routed = await harness.agent.observeOrch().inbox.send({
       kind: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT,
     });
 
     expect(routed).toBe('mid-turn');
-    harness.agent.observeOrch().signals.prepareStep({ stepNumber: 0, messages: [] });
+    await harness.agent.observeOrch().inbox.prepareStep({ stepNumber: 0, messages: [] });
     finishTurnWith(harness, OUTPUT_LIMIT_REACHED);
 
     const delivered = await settle(harness, 'u-spliced', 'a-spliced');

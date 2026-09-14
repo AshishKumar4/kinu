@@ -288,5 +288,10 @@ export function isPublicPath(pathname: string): boolean {
 
   if (pathname.startsWith('/assets/')) return true;    // hashed static bundles
 
+  // A blueprint's read-only page: the document is public, and the data behind
+  // it (`/api/shared/blueprint/:id`) is answered before the auth gate by the
+  // shared-library route with the id's signature checked first.
+  if (pathname.startsWith('/shared/blueprint/')) return true;
+
   return false;
 }
