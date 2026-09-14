@@ -1,6 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
 import type { ModelMessage, UIMessage } from 'ai';
 import { ActorClaimStore, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
@@ -70,6 +68,11 @@ async function opening(): Promise<Harness> {
 }
 
 describe('request-owned chat inputs', () => {
+  // Ordering of two socket-queued asks and a programmatic turn's exclusion of a
+  // still-pending chat token are proven end to end through the real socket in
+  // tests/workerd/two-turn.test.ts: 'admits two websocket asks after held
+  // genesis through the installed Think queue' and 'a durable programmatic
+  // submission excludes a later pending chat from its provider prefix'.
   test('alarm recovery leaves the live Think root claim with its foreground owner', async () => {
     const harness = await opening();
     const turn = claims(harness).latestTurn();
@@ -127,30 +130,6 @@ describe('request-owned chat inputs', () => {
     expect(claims(harness).latestTurn()?.turnId).toBe(name);
   });
 
-  test.each([false, true])('two asks queued during genesis remain separate (cold=%s)', async (cold) => {
-    let harness = await opening();
-    const a = capturedInput(harness, 'ask-a', 'ask A');
-    let b = capturedInput(harness, 'ask-b', 'ask B');
-    const pendingToken = b.body.kinuRequestId;
-    a.persist();
-    b.persist();
-    await settle(harness, 'genesis-answer', 'What should I do first?');
-    const intakeOrder: ModelMessage[] = [GENESIS, { role: 'user', content: 'ask A' }, { role: 'user', content: 'ask B' }, GENESIS_REPLY];
-    const first = await harness.agent.beforeTurn(config(intakeOrder, a.body));
-    expect(texts(first?.messages)).toEqual([GENESIS.content, GENESIS_REPLY.content, 'ask A']);
-    await settle(harness, 'answer-a', 'answer A');
-
-    if (cold) {
-      harness = await reactivateOrchestratorHarness(harness.db);
-      harness.agent.harnessAdmitChat();
-      b = capturedInput(harness, 'ask-b', 'ask B');
-      expect(b.body.kinuRequestId).toBe(pendingToken);
-    }
-
-    const second = await harness.agent.beforeTurn(config([...intakeOrder, { role: 'assistant', content: 'answer A' }], b.body));
-    expect(texts(second?.messages)).toEqual([GENESIS.content, GENESIS_REPLY.content, 'ask A', 'answer A', 'ask B']);
-    expect(claims(harness).latestTurn()?.turnId).toBe('ask-b');
-  });
 
   test('interleaved persistence cannot attach an intake to another request', async () => {
     const harness = await opening();
@@ -233,31 +212,5 @@ describe('request-owned chat inputs', () => {
     await settle(harness, 'answer-a', 'answer A');
     expect(claims(harness).input(String(a.body.kinuRequestId))).toBeNull();
     expect(a.body.kinuRequestId).not.toBe('forged');
-  });
-
-  test('a programmatic turn cannot consume a still-pending chat token inherited through lastBody', async () => {
-    const harness = await opening();
-    const pending = capturedInput(harness, 'pending-chat', 'ask B');
-    pending.persist();
-    await settle(harness, 'genesis-answer', 'What should I do first?');
-    const sdk = readFileSync(fileURLToPath(import.meta.resolve('@cloudflare/think')), 'utf8');
-    const ddl = /CREATE TABLE IF NOT EXISTS cf_think_submissions \([^)]*\)/.exec(sdk)?.[0];
-
-    if (ddl === undefined) throw new Error('the installed SDK has no durable submission table');
-    harness.db.run(ddl);
-    harness.db.run(`INSERT INTO cf_think_submissions
-      (submission_id, request_id, status, messages_json, created_at) VALUES (?, ?, ?, ?, ?)`, [
-      'harness-admitted', 'harness-admitted', 'running', JSON.stringify([
-        { id: 'durable-notice', role: 'user', parts: [{ type: 'text', text: 'the durable job notification' }] },
-      ]), 1,
-    ]);
-    harness.agent.harnessAdmitChat('submission');
-
-    const prepared = await harness.agent.beforeTurn(config([
-      GENESIS, GENESIS_REPLY, { role: 'user', content: 'the durable job notification' },
-    ], pending.body));
-
-    expect(texts(prepared?.messages).at(-1)).toBe('the durable job notification');
-    expect(claims(harness).input(String(pending.body.kinuRequestId))).toEqual(['pending-chat']);
   });
 });
