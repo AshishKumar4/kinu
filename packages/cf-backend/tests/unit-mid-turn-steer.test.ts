@@ -349,10 +349,17 @@ describe('a steer that never saw a step boundary', () => {
     });
 
     expect(h.enqueued).toHaveLength(1);
+    // The rerun key names the turn it interrupts and the steer it re-runs,
+    // exactly — never a private id or a shape a same-form key could fake.
+    const runs = await h.agent.listRuns({ limit: 1 });
+    expect(runs.items).toHaveLength(1);
+    const runId = runs.items[0]!.runId;
+    const steerId = steerFrames(h.frames).find((frame) => frame.status === 'queued')?.steerId;
+    expect(steerId).toBeDefined();
     expect(h.enqueued[0]).toMatchObject({
       text: 'one more thing',
       metadata: { kinuAuthor: 'operator', kinuMode: 'build' },
-      idempotencyKey: expect.stringMatching(/^steer-rerun:(?:run|turn)-[\w-]+:build:steer-/),
+      idempotencyKey: `steer-rerun:${runId}:build:${steerId}`,
     });
     // NO kinuEvent: every provenance decision downstream reads this as the
     // user's own next message, which is what it is. Stamping an event here

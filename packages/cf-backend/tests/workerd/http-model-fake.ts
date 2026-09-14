@@ -40,7 +40,18 @@ export interface CapturedHttpCall {
 
 const log: CapturedHttpCall[] = [];
 
-let heldFirstRequest: { readonly arrived: PromiseWithResolvers<void>; readonly release: PromiseWithResolvers<void> } | null = null;
+interface HeldGate {
+  readonly arrived: PromiseWithResolvers<void>;
+  readonly release: PromiseWithResolvers<void>;
+}
+
+/** Armed by `/queue/hold`: either the FIRST `probe-queue` call (no `from`), or
+ *  every `probe-queue` call numbered `from` onward until `/queue/release`. The
+ *  second shape is how a drive parks ONE turn's model call — the queued ask,
+ *  the durable submission, the continuation — while the turns before it run
+ *  to completion. `arrived` resolves on the first call actually held, so a
+ *  prepare RPC can join on "the held call exists" rather than a counter. */
+let heldRequest: { readonly gate: HeldGate; readonly from: number } | null = null;
 
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
@@ -293,20 +304,23 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
   if (url.host === 'probe-control.invalid') {
     if (url.pathname === '/queue/hold' && request.method === 'POST') {
-      heldFirstRequest = { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() };
+      const raw = await request.text();
+      const spec = v.parse(v.looseObject({ from: v.optional(v.number()) }), raw === '' ? {} : JSON.parse(raw));
+      heldRequest = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1 };
 
       return Response.json({ ok: true });
     }
 
     if (url.pathname === '/queue/arrived' && request.method === 'GET') {
-      if (heldFirstRequest === null) throw new Error('queue model hold was not armed');
-      await heldFirstRequest.arrived.promise;
+      if (heldRequest === null) throw new Error('queue model hold was not armed');
+      await heldRequest.gate.arrived.promise;
 
       return Response.json({ ok: true });
     }
 
     if (url.pathname === '/queue/release' && request.method === 'POST') {
-      heldFirstRequest?.release.resolve();
+      heldRequest?.gate.release.resolve();
+      heldRequest = null;
 
       return Response.json({ ok: true });
     }
@@ -339,10 +353,12 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
       switch (body.model) {
         case 'probe-queue': {
-          if (log.filter((call) => call.model === 'probe-queue').length === 1) {
-            if (heldFirstRequest === null) throw new Error('queue model hold was not armed');
-            heldFirstRequest.arrived.resolve();
-            await heldFirstRequest.release.promise;
+          const ordinal = log.filter((call) => call.model === 'probe-queue').length;
+
+          if (ordinal >= (heldRequest?.from ?? Number.POSITIVE_INFINITY)) {
+            if (heldRequest === null) throw new Error('queue model hold was not armed');
+            heldRequest.gate.arrived.resolve();
+            await heldRequest.gate.release.promise;
           }
 
           return echoBody(body);

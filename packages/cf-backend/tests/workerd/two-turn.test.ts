@@ -34,7 +34,7 @@
  * kinu-logs/two-turn/run16 through run19), so that arm now belongs to a
  * bun-side test over the injected fetch instead.
  */
-import { env } from 'cloudflare:test';
+import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import {
@@ -42,6 +42,8 @@ import {
   DiagnosticFailureSchema,
   HistorySchema,
   HttpCallSchema,
+  InputReceiptSchema,
+  PreparedConversationSchema,
   SnapshotSchema,
   type DiagnosticFailure,
 } from './two-turn-shapes';
@@ -113,6 +115,14 @@ describe('two real turns over the HTTP model seam', () => {
       { role: 'assistant', content: 'echo:QUEUE-A' },
       { role: 'user', content: 'QUEUE-B' },
     ]);
+
+    // Each socket input was bound to its own request id — the durable ledger
+    // proves the two asks never cross-bound to one request or minted a third.
+    const receipts = v.parse(v.array(InputReceiptSchema), await root.inputReceiptsFor('queue-chat-workspace'));
+    const rowFor = (id: string) => receipts.filter((row) => row.messageIds.includes(`input-${id}`));
+    expect(rowFor('QUEUE-A')).toHaveLength(1);
+    expect(rowFor('QUEUE-B')).toHaveLength(1);
+    expect(rowFor('QUEUE-A')[0]?.requestId).not.toBe(rowFor('QUEUE-B')[0]?.requestId);
   });
 
   it('a durable programmatic submission excludes a later pending chat from its provider prefix', async () => {
@@ -128,6 +138,7 @@ describe('two real turns over the HTTP model seam', () => {
     expect(programmatic).toEqual([
       { role: 'user', content: genesis },
       { role: 'assistant', content: `echo:${genesis}` },
+
       { role: 'user', content: 'QUEUE-A' },
       { role: 'assistant', content: 'echo:QUEUE-A' },
       { role: 'user', content: 'QUEUE-B' },
@@ -138,6 +149,81 @@ describe('two real turns over the HTTP model seam', () => {
     expect(calls[4]?.users.filter((text) => !text.startsWith('<')).at(-1)).toBe('QUEUE-C');
     expect(calls[4]?.users.filter((text) => text === 'QUEUE-C')).toEqual(['QUEUE-C']);
   });
+  it('keeps a queued chat on its durable token through a cold reset and replay', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));
+
+    // Genesis and A run to completion; B is admitted and parked on a held
+    // model call, and a third chat C is queued and durable behind it. The
+    // returned receipts are the durable rows as the object stored them BEFORE
+    // the reset.
+    const prepared = v.parse(PreparedConversationSchema, await root.prepareQueuedConversation('cold'));
+    const before = (id: string) => prepared.receipts.find((row) => row.messageIds.includes(`input-${id}`));
+    const bBefore = before('QUEUE-B');
+    const cBefore = before('QUEUE-C');
+    expect(bBefore?.settled).toBe(false);
+    expect(cBefore?.settled).toBe(false);
+
+    // The reset drops the object AND its socket; the stub reacquired below is
+    // a fresh activation over the same storage.
+    await abortAllDurableObjects();
+    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cold-queue-driver'));
+
+    // Replaying the exact B and C frames the client would resend must resolve
+    // each to its own durable token, not mint new ones.
+    const replayed = v.parse(v.array(InputReceiptSchema), await coldRoot.replayQueuedConversation(prepared));
+    const after = (id: string) => replayed.filter((row) => row.messageIds.includes(`input-${id}`));
+    expect(after('QUEUE-B')[0]?.requestId).toBe(bBefore?.requestId);
+    expect(after('QUEUE-C')[0]?.requestId).toBe(cBefore?.requestId);
+    expect(after('QUEUE-B')).toHaveLength(1);
+    expect(after('QUEUE-C')).toHaveLength(1);
+
+    const done = await coldRoot.completeQueuedConversation(prepared);
+
+    const calls = v.parse(HttpSchema, done.http).filter((call) => call.model === 'probe-queue');
+    const genesis = calls[0]?.users.find((message) => !message.startsWith('<'));
+
+    const realUsers = (call: (typeof calls)[number]) => call.conversation
+      .filter((m) => m.role === 'user' && !m.content.startsWith('<') && !m.content.startsWith('Continue your previous response'))
+      .map((m) => m.content);
+
+    // The B admission ran once, carrying the completed genesis+A prefix plus B.
+    // The post-reset recovery may append a Think continuation turn (same
+    // request, same turn — not a second send), so the assertion names the call
+    // whose own driving user is QUEUE-B, not simply the last call.
+    const bTurn = calls.find((call) => realUsers(call).at(-1) === 'QUEUE-B');
+    expect(bTurn).toBeDefined();
+    const bConversation = bTurn!.conversation.map((m) => `${m.role}:${m.content}`);
+    expect(bConversation).toContain(`assistant:echo:${genesis}`);
+    expect(bConversation).toContain('user:QUEUE-A');
+    expect(bConversation).toContain('assistant:echo:QUEUE-A');
+
+    // THE CONTINUATION PROPERTY: a queued input is owned by its own durable
+    // row, and a recovery continuation cannot consume it. C's text is present
+    // in later turns' HISTORY (its user row persisted at send time), so the
+    // proof is the ledger, not history text: exactly one C input row ever
+    // exists, it kept C's own requestId across the reset, and it settled under
+    // that same id — never B's, never a re-minted one.
+    const cTurn = calls.find((call) => realUsers(call).at(-1) === 'QUEUE-C');
+    expect(cTurn).toBeDefined();
+    const cRows = done.receipts.filter((row) => row.messageIds.includes('input-QUEUE-C'));
+    expect(cRows[0]?.requestId).toBe(cBefore?.requestId);
+    expect(cRows[0]?.settled).toBe(true);
+
+    // Ownership is the actor's own row, and the settled flag now names the
+    // token consumed — the proof the replay, not a second send, closed it.
+    const bSettled = done.receipts.find((row) => row.requestId === bBefore?.requestId);
+    expect(bSettled?.actorId).toBe(bBefore?.actorId);
+    expect(bSettled?.settled).toBe(true);
+
+    // THE SETTLED-NOT-REPLAYED PROPERTY: the replay already re-sent B's and C's
+    // frames after the reset, and each kept its single durable row — a settled
+    // token re-acknowledged by the ledger is never re-minted or rebound to a
+    // neighbour, so the admitted set is exactly the three original rows.
+    expect(done.receipts).toHaveLength(3);
+    expect(new Set(done.receipts.map((row) => row.requestId)).size).toBe(3);
+    expect(done.receipts.filter((row) => row.settled)).toHaveLength(3);
+  });
+
 
   it('spikes the service-binding RPC, then runs A and B end to end', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('driver'));
