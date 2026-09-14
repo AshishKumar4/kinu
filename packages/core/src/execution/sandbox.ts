@@ -1002,9 +1002,6 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
    * The wire keeps `name` and `errorResponse` as own properties and drops the
    * prototype, so `code` — a getter — never survives; the response object does.
    */
-  // A Map, like obs/error.ts's CODE_BY_ERROR_NAME: the key is an ARBITRARY
-  // string read off a caught value, so `.get()` returning undefined is the
-  // honest signature.
   const SDK_ERRNO = new Map<string, VfsErrorCode>([
     ['FILE_NOT_FOUND', 'ENOENT'],
     ['FILE_EXISTS', 'EEXIST'],
@@ -1013,6 +1010,8 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     ['PERMISSION_DENIED', 'EACCES'],
     ['READ_ONLY', 'EROFS'],
     ['FILESYSTEM_ERROR', 'EIO'],
+    ['FILE_TOO_LARGE', 'EIO'],
+    ['VALIDATION_FAILED', 'EIO'],
   ]);
 
   const SDK_ERRNO_BY_NAME = new Map<string, VfsErrorCode>([
@@ -1020,6 +1019,8 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     ['FileExistsError', 'EEXIST'],
     ['PermissionDeniedError', 'EACCES'],
     ['FileSystemError', 'EIO'],
+    ['FileTooLargeError', 'EIO'],
+    ['ValidationFailedError', 'EIO'],
   ]);
 
   const errnoOf = (cause: Error): VfsErrorCode | null => {
