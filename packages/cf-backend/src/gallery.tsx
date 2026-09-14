@@ -22,6 +22,10 @@
  *                                  one column
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
+ *   /gallery.html?frame=app&path=/ → the SHIPPED shell (`Layout`, its rail,
+ *                                  the living background) routed to `path`:
+ *                                  `/`, `/user/settings` or `/shared`. What the
+ *                                  background's contrast is measured on.
  *   /gallery.html?frame=control  → the admin control plane: every tab, the
  *                                  account drilldown and a workspace drilldown.
  *                                  `/api/control/*` is answered by request
@@ -142,6 +146,7 @@ import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useConversationUiState } from "@/hooks/use-conversation-ui-state";
 import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { WorkspaceOverviewsProvider } from "@/hooks/use-workspace-overviews";
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/pages/UserMcpPage";
@@ -5940,6 +5945,44 @@ function DeviceSandboxFrame() {
   );
 }
 
+/** The shipped shell as App.tsx composes it — `Layout` owns the rail, the
+ *  overview store and the living background — routed to one of the surfaces
+ *  the background shows under. This is the frame the background's contrast
+ *  and its UX gate are measured on: a hand-composed shell would leave the
+ *  canvas, its z-order and its mask out of the picture. */
+async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
+  const { default: HomePage } = await import("@/pages/HomePage");
+
+  return {
+    entries: [new URLSearchParams(location.search).get("path") ?? "/"],
+    node: (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route index element={<HomePage />} />
+          <Route path="/user/settings" element={<UserSettingsPage />} />
+          <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
+          <Route path="/shared" element={<SharedPage fixture={SHARED_LIBRARY} workspaces={STOCK_ROSTER.entries} />} />
+        </Route>
+      </Routes>
+    ),
+  };
+}
+
+/** The exploration frames photograph a swarm card under the workspace route,
+ *  the way a reviewer lands on it; every other frame keeps the node and the
+ *  entries its branch already chose. */
+function explore(node: React.ReactNode, entries: string[], frame: string) {
+  if (frame in EXPLORATION_FRAMES) {
+    return {
+      entries: [`/workspace/${GALLERY_WORKSPACE}`],
+      node: <Routes><Route path="/workspace/:agentId" element={node} /></Routes>,
+    };
+  }
+
+  return { node, entries };
+}
+
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -6208,19 +6251,25 @@ async function mount() {
     const { default: HomePage } = await import("@/pages/HomePage");
     // The real chrome, not the page alone: the sidebar's own route logic
     // decides what it renders at "/", and photographing the page without the
-    // rail would pass a sidebar the app never shows.
+    // rail would pass a sidebar the app never shows. The cards read their
+    // overviews through the same store the shell mounts.
     node = (
-      <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
-        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-        <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
-      </div>
+      <WorkspaceOverviewsProvider>
+        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><HomePage /></main>
+        </div>
+      </WorkspaceOverviewsProvider>
     );
-  } else node = <All />;
-
-  if (frame in EXPLORATION_FRAMES) {
-    entries = [`/workspace/${GALLERY_WORKSPACE}`];
-    node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
   }
+  // The shipped shell as App.tsx composes it — `Layout` owns the rail, the
+  // overview store and the living background — routed to one of the surfaces
+  // the background shows under.
+  else if (frame === "app") ({ node, entries } = await appShellFrame());
+  else node = <All />;
+
+  ({ node, entries } = explore(node, entries, frame));
+
 
   createRoot(document.getElementById("root")!).render(
     <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,

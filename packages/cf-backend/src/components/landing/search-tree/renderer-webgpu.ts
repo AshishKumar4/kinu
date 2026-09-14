@@ -4,7 +4,7 @@ import {
 } from 'vgpu';
 
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
+import { type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE } from '@kinu.run/core/web/art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
 import compositeSource from './composite.wgsl';
@@ -12,26 +12,28 @@ import nodesSource from './nodes.wgsl';
 import pulsesSource from './pulses.wgsl';
 import strokesSource from './strokes.wgsl';
 
-/** Instance capacity, sized above what the simulation reaches in an hour;
- *  a frame past it draws its first strokes and drops the rest. */
-const STROKE_CAPACITY = 2_048;
+/** Instance capacity, sized above what any picture reaches: the search
+ *  tree in an hour, the connectome's full mat (`MESH_SEGMENTS` plus its
+ *  fusions) at birth. A frame past it draws its first strokes and drops
+ *  the rest. */
+const STROKE_CAPACITY = 16_384;
 
 const NODE_CAPACITY = 1_024;
 
-const PULSE_CAPACITY = 256;
+const PULSE_CAPACITY = 1_024;
 
 const STROKE_SEGMENTS = 14;
 
 /** The halo's weight over the scene: enough to read as light, not enough to lift the ground under the copy. */
-const BLOOM_STRENGTH: Record<HeroPalette['mode'], number> = { dark: 0.7, light: 0.35 };
+const BLOOM_STRENGTH: Record<ArtPalette['mode'], number> = { dark: 0.7, light: 0.35 };
 
 export type WebGpuRendererOutcome =
-  | { readonly kind: 'renderer'; readonly renderer: SearchTreeRenderer }
+  | { readonly kind: 'renderer'; readonly renderer: ArtRenderer }
   | { readonly kind: 'unsupported'; readonly reason: string }
   | { readonly kind: 'failed'; readonly reason: string };
 
-function paletteUniform(palette: HeroPalette) {
-  const unit = ([red, green, blue]: HeroPalette['accent']): readonly number[] => [red / 255, green / 255, blue / 255, 1];
+function paletteUniform(palette: ArtPalette) {
+  const unit = ([red, green, blue]: ArtPalette['accent']): readonly number[] => [red / 255, green / 255, blue / 255, 1];
 
   return {
     accent: unit(palette.accent),
@@ -64,7 +66,7 @@ function bloomSize(width: number, height: number): readonly [number, number] {
  */
 export async function createWebGpuRenderer(
   canvas: HTMLCanvasElement,
-  initialPalette: HeroPalette,
+  initialPalette: ArtPalette,
   width: number,
   height: number,
   ratio: number,
@@ -169,7 +171,7 @@ export async function createWebGpuRenderer(
 
     let faultHandler: ((error: Error) => void) | null = null;
 
-    const renderer: SearchTreeRenderer = {
+    const renderer: ArtRenderer = {
       kind: 'webgpu',
       resize(nextWidth, nextHeight, nextRatio) {
         if (disposed) return;
@@ -192,7 +194,7 @@ export async function createWebGpuRenderer(
         nodes.set({ palette: paletteUniform(palette) });
         composite.set({ composite: { strength: BLOOM_STRENGTH[palette.mode] } });
       },
-      render(current: SearchTreeFrame) {
+      render(current: ArtFrame) {
         if (disposed) return;
         const strokeCount = Math.min(current.count, STROKE_CAPACITY);
         const nodeCount = Math.min(current.nodeCount, NODE_CAPACITY);
