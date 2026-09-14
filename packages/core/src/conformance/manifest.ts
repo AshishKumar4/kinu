@@ -464,6 +464,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_content_chunks: EVERYWHERE,
     slate_invocations: EVERYWHERE,
     slate_receipts: EVERYWHERE,
+    // Ownership grants on a published slate — the recipient roster a share
+    // names and revokes. Shared schema like the publication tables above: every
+    // root carries the row so a subordinate reading a share sees the same
+    // owner-only surface the workspace does.
+    slate_shares: EVERYWHERE,
+    slate_share_users: EVERYWHERE,
     // Which workspace instruction bytes the owner approved for system placement
     // (KINU-N028). EVERYWHERE for the same reason prompt_section_versions is:
     // the prompt builder classifies AGENTS.md and skills on every turn on every
