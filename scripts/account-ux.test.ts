@@ -277,4 +277,108 @@ describe('account panels', () => {
       process.stdout.write(`account-ux account: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
   }, 240_000);
+
+  test('the primary nav, the workspaces page, the plugins page and the shared page render at both widths in both themes', async () => {
+    await withGallery(async (gallery) => {
+      const shots: string[] = [];
+
+      for (const theme of ['dark', 'light'] as const) {
+        for (const viewport of ['desktop', 'mobile'] as const) {
+          // The nav lives inside the existing rail, which the phone keeps in a
+          // drawer: its links are asserted at desktop width, where it is drawn.
+          if (viewport === 'desktop') {
+            const home = await freshPage(gallery, 'home', theme, viewport);
+
+            try {
+              const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
+                anchors.map((a) => ({ label: a.textContent?.trim() ?? '', current: a.getAttribute('aria-current') })));
+
+              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Shared', 'Plugins']);
+              expect(links[0]?.current).toBe('page');
+              // The rail's own furniture is untouched around it: the roster
+              // eyebrow above the rows, the account row at the foot. (The New
+              // workspace button is absent on the home route by design.)
+              const rail = await home.evaluate(() => document.querySelector('aside')?.innerText ?? '');
+              expect(rail).toContain('WORKSPACES');
+              expect(rail).toContain('Checkout coupon bug');
+              expect(rail).toContain('ashish@example.com');
+              shots.push(await shoot(home, `sidebar-nav-${theme}`));
+            } finally {
+              await home.close();
+            }
+          }
+
+          for (const view of ['list', 'tiled'] as const) {
+            const page = await freshPage(gallery, view === 'tiled' ? 'workspaces&view=tiled' : 'workspaces', theme, viewport);
+
+            try {
+              await page.waitForSelector('[aria-label="Search workspaces"]', { timeout: 10_000 });
+              const body = await page.evaluate(() => document.body.innerText);
+              expect(body).toContain('Workspaces');
+
+              for (const name of ['Checkout coupon bug', 'Perf audit', 'Email triage automation', 'Design system v2']) {
+                expect(body).toContain(name);
+              }
+
+              expect(await page.$eval('[aria-pressed="true"]', (button) => button.getAttribute('aria-label')))
+                .toBe(view === 'tiled' ? 'Tiled view' : 'List view');
+              expect(await page.$eval('[data-workspaces-view]', (section) => section.getAttribute('data-workspaces-view'))).toBe(view);
+              shots.push(await shoot(page, `workspaces-${view}-${viewport}-${theme}`));
+
+              await page.type('[aria-label="Search workspaces"]', 'perf');
+              await page.waitForFunction(
+                () => document.querySelectorAll('[data-workspaces-view] a').length === 1, { timeout: 10_000 },
+              );
+              expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Perf audit');
+            } finally {
+              await page.close();
+            }
+          }
+
+          const plugins = await freshPage(gallery, 'plugins', theme, viewport);
+
+          try {
+            await plugins.waitForFunction(
+              () => document.querySelectorAll('[data-plugin]').length >= 6, { timeout: 10_000 },
+            );
+            const body = await plugins.evaluate(() => document.body.innerText);
+
+            // Section eyebrows are uppercased by the CSS role, and innerText
+            // reads them as drawn.
+            for (const text of ['MCP SERVERS', 'github', 'auth needed', 'CRAFTED TOOLS', 'parse-ledger', 'from checkout-fixes',
+              'SKILLS', 'audit-implementation', 'built in', 'DEVICE GRANTS', 'Workstation', 'workspace checkout-fixes', 'allowed']) {
+              expect(body).toContain(text);
+            }
+
+            shots.push(await shoot(plugins, `plugins-${viewport}-${theme}`));
+            await plugins.evaluate(() => {
+              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Manage');
+
+              if (button === undefined) throw new Error('no manage button');
+              button.click();
+            });
+            await plugins.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            expect(await dialogText(plugins)).toContain('Add MCP server');
+          } finally {
+            await plugins.close();
+          }
+
+          const shared = await freshPage(gallery, 'shared', theme, viewport);
+
+          try {
+            const body = await shared.evaluate(() => document.body.innerText);
+
+            for (const heading of ['My shared', 'Shared with me', 'Public', 'From people I know']) expect(body).toContain(heading);
+            expect(body).toContain('Nothing public yet');
+            shots.push(await shoot(shared, `shared-four-${viewport}-${theme}`));
+          } finally {
+            await shared.close();
+          }
+        }
+      }
+
+      expect(shots.length).toBe(18);
+      process.stdout.write(`account-ux nav: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+    });
+  }, 300_000);
 });

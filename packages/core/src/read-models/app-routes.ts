@@ -6,7 +6,7 @@
  * routes but two carries a workspace name the owner chose, so a report keyed on
  * the raw path publishes account content into a log sink. The answer is the
  * TEMPLATE — `/workspace/:agentId`, never `/workspace/quarterly-billing-fix` —
- * which is a fixed vocabulary of twelve strings and identifies the surface just as
+ * which is a fixed vocabulary of fourteen strings and identifies the surface just as
  * precisely.
  *
  * `App.tsx` reads its `path` props from here rather than spelling them again,
@@ -25,6 +25,8 @@ export const APP_ROUTES = {
   home: '/',
   userSettings: '/user/settings',
   welcome: '/welcome',
+  workspaces: '/workspaces',
+  plugins: '/plugins',
   userMcp: '/user/settings/mcp',
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
@@ -43,7 +45,7 @@ type AppRoute = (typeof APP_ROUTES)[keyof typeof APP_ROUTES];
 /**
  * What a path outside the table reports as.
  *
- * A path, never a word: it sits in the same field as the twelve templates, and a
+ * A path, never a word: it sits in the same field as the fourteen templates, and a
  * reader scanning that field should not have to know which values are paths and
  * which are prose. Reached by a 404 the SPA fallback served, and by a route
  * someone added to the router and not to `APP_ROUTES` — which is a finding
