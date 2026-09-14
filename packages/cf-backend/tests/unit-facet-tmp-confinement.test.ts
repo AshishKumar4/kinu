@@ -84,6 +84,19 @@ async function openOwner(): Promise<OwnerFixture> {
 
   const durable = new Map<string, unknown>();
 
+  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
+    const entries = new Map<string, unknown>();
+
+    for (const [key, value] of durable) {
+      if (key.startsWith(options.prefix)) entries.set(key, value);
+    }
+
+    // SAFETY: the storage list contract types each row by the caller's T,
+    // which the untyped stand-in rows cannot name; `never` keeps the Map
+    // assignable to every T.
+    return entries as Map<string, never>;
+  };
+
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
     env: {},
@@ -94,6 +107,13 @@ async function openOwner(): Promise<OwnerFixture> {
         delete: async (key) => { durable.delete(key); },
         deleteAll: async () => { durable.clear(); },
         deleteAlarm: async () => undefined,
+        list: listDurable,
+        transaction: async (body) => body({
+          get: async (key) => durable.get(key),
+          put: async (key, value) => { durable.set(key, value); },
+          delete: async (key) => { durable.delete(key); },
+          list: listDurable,
+        }),
       },
     },
     shell: workspace.shell,
