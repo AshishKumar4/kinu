@@ -41,7 +41,7 @@ import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
-import { diagnostics, toKinuError } from './obs/index';
+import { diagnostics, toKinuError, type KinuError } from './obs/index';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 
 export type ChatEvent =
@@ -633,6 +633,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       interrupted = true;
     }
 
+    /** The streamed failure as a classified KinuError: the provider the request
+     *  went to is the resolved model's when the caller named one, else the cache
+     *  plan's routing — which is where the request was actually sent. */
+    const providerErrorFor = (failure: { readonly cause: unknown }): KinuError =>
+      toProviderError({
+        doing: 'calling the model',
+        cause: failure.cause,
+        provider: opts.modelContext?.provider ?? opts.cache?.providerId,
+      });
+
     // A DEFINITIVE provider or transport failure crosses as a CLASSIFIED failure
     // when the caller did not cancel the turn. Rethrown verbatim it would reach the
     // CLI and the chat surface as an `APICallError` with its raw `responseBody`
@@ -642,13 +652,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // the structured facts (status, provider code, provider id) in the message,
     // keeps the raw failure on `cause`, and files the provider's own text on the
     // diagnostics record.
-    if (streamError !== undefined && !interrupted) {
-      throw toProviderError({
-        doing: 'calling the model',
-        cause: streamError,
-        provider: opts.modelContext?.provider ?? opts.cache?.providerId,
-      });
-    }
+    if (streamError !== undefined && !interrupted) throw providerErrorFor({ cause: streamError });
 
     if (deadFinalStep && !interrupted) {
       // Deliberately still a bare throw, unlike the interrupt: this turn was
