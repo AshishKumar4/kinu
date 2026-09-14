@@ -140,7 +140,7 @@ import {
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
-  describeMcpTool, type SerializableToolDescriptor,
+  describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
@@ -5442,9 +5442,20 @@ export class UserDO extends Agent<Env> {
 
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};
+    // A client that never touched an optional field still sends it as ""; the
+    // tool's admitted inputSchema decides which keys may be omitted, and the
+    // core rule drops exactly those — never a required key, never a key the
+    // server did not declare (KINU-052).
+    const tool = this.mcp.mcpConnections[serverId]?.tools.find((t) => t.name === name);
+    const parsedSchema = v.safeParse(JsonObjectSchema, tool?.inputSchema);
+
+    const callArgs = omitEmptyOptionalArgs(
+      params,
+      parsedSchema.success ? parsedSchema.output : undefined,
+    );
 
     try {
-      const result = await manager.callTool({ serverId, name, arguments: params });
+      const result = await manager.callTool({ serverId, name, arguments: callArgs });
 
       return JSON.stringify(decodeJsonValue({ value: result }));
     } catch (err) {

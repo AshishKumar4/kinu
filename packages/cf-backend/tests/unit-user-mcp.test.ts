@@ -21,7 +21,7 @@ import {
 } from '../src/user/mcp';
 import {
   isMcpToolKey, mcpToolKey, stepContextLimit,
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
+  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
   type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import { tool, jsonSchema, type ToolSet } from 'ai';
@@ -223,6 +223,42 @@ describe('describeMcpTool', () => {
   });
 });
 
+// ── 1b2. omitEmptyOptionalArgs — what the call path forwards ──────────────
+
+describe('omitEmptyOptionalArgs', () => {
+  // KINU-052. An HTML-form-style client serializes an untouched optional field
+  // as "", which a strict server then validates against (an '' is not a valid
+  // URI/date/enum). Only a DECLARED OPTIONAL key carrying exactly '' may be
+  // dropped: a required '' is the caller's real answer and an undeclared key
+  // is forwarded untouched — the surface does not invent arguments.
+  const schema = {
+    type: 'object',
+    properties: {
+      required: { type: 'string' },
+      optional: { type: 'string' },
+      optionalInt: { type: 'integer' },
+    },
+    required: ['required'],
+  };
+
+  test('empty strings are stripped from declared-optional keys only', () => {
+    expect(omitEmptyOptionalArgs(
+      { required: '', optional: '', extra: '' },
+      schema,
+    )).toEqual({ required: '', extra: '' });
+  });
+
+  test('a non-empty optional value and a non-string empty pass through', () => {
+    expect(omitEmptyOptionalArgs(
+      { optional: 'x', optionalInt: 0 },
+      schema,
+    )).toEqual({ optional: 'x', optionalInt: 0 });
+  });
+
+  test('no schema or no declared properties means verbatim forwarding', () => {
+    expect(omitEmptyOptionalArgs({ a: '' }, undefined)).toEqual({ a: '' });
+    expect(omitEmptyOptionalArgs({ a: '' }, { type: 'object' })).toEqual({ a: '' });
+  });
 });
 
 // ── 1c. admitMcpDescriptors — the budget that already existed ──────────────

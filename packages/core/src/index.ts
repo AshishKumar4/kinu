@@ -646,7 +646,7 @@ export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } f
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
 
 export {
-  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
+  describeMcpTool, admitMcpDescriptors, toolSurfaceTokens, omitEmptyOptionalArgs,
   SerializableToolDescriptorSchema, McpToolSurfaceSchema,
   type SerializableToolDescriptor, type RemoteMcpTool,
   type McpSurfaceBudget, type McpDescriptorAdmission,
