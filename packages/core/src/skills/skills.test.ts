@@ -737,7 +737,7 @@ describe('renderSkillsIndexSection', () => {
         fakeSkill('alpha', { body: 'ALPHA-BODY-SHOULD-NOT-APPEAR' }),
         fakeSkill('zeta', { body: 'ZETA-BODY-SHOULD-NOT-APPEAR' }),
       ],
-      unread: [],
+      unread: [], omitted: 0,
     }, ROOMY_TOKENS));
 
     expect(out).toContain('## Skills');
@@ -755,7 +755,7 @@ describe('renderSkillsIndexSection', () => {
   test('a file too big to open is still named, with its size and its path', () => {
     const out = renderSkillsIndexSection(admitSkillsIndex({
       skills: [],
-      unread: [{ name: 'huge', path: `${SKILLS_DIR}/huge.md`, bytes: 4_000_000 }],
+      unread: [{ name: 'huge', path: `${SKILLS_DIR}/huge.md`, bytes: 4_000_000 }], omitted: 0,
     }, ROOMY_TOKENS));
 
     expect(out).toContain('**huge**');
@@ -769,7 +769,7 @@ describe('renderSkillsIndexSection', () => {
 
     // A small window is the only way to squeeze the index now — there is no char
     // cap left to turn down.
-    const index = admitSkillsIndex({ skills, unread: [] },
+    const index = admitSkillsIndex({ skills, unread: [], omitted: 0 },
       stepContextLimit({ contextWindow: 2_000, modelOutputLimit: 1_000 }));
 
     const out = renderSkillsIndexSection(index);
@@ -784,7 +784,7 @@ describe('renderSkillsIndexSection', () => {
 
   test('a roomy window names every skill', () => {
     const skills = Array.from({ length: 5 }, (_, i) => fakeSkill(`skill-${i}`));
-    const out = renderSkillsIndexSection(admitSkillsIndex({ skills, unread: [] }, ROOMY_TOKENS));
+    const out = renderSkillsIndexSection(admitSkillsIndex({ skills, unread: [], omitted: 0 }, ROOMY_TOKENS));
     expect(out).not.toContain('did not reach');
 
     for (const s of skills) expect(out).toContain(`**${s.name}**`);
@@ -920,6 +920,55 @@ describe('discoverSkills', () => {
     // The small one beside it was read normally.
     expect(v.calls.readFile).toContain(`${SKILLS_DIR}/minnow.md`);
   });
+
+  // KINU-047. A plane that cannot stat is not an excuse to read a file the
+  // allocation could never carry: the read itself is bounded by the same
+  // byte ceiling the stat check derives, and what arrives is admitted
+  // truncated to it.
+  test('a stat-less plane reads bounded: an oversized file is admitted truncated to the ceiling', async () => {
+    const admissionTokens = 100; // ceiling: 400 chars
+    const ceiling = admissionTokens * 4;
+    const body = 'B'.repeat(ceiling * 4);
+    const path = `${SKILLS_DIR}/whale.md`;
+
+    const v = memoryVfs({ [path]: skillFile('whale', body) });
+    delete v.stat; // a file view with no size answer
+
+    const found = await discoverSkills(v, { admissionTokens });
+
+    expect(v.calls.readFile).toContain(path);
+    const whale = found.skills.find((s) => s.name === 'whale');
+    expect(whale).toBeTruthy();
+    expect(whale?.bodyRef).toMatchObject({ kind: 'file', path });
+    expect(whale?.bodyRef.kind === 'file' && whale.bodyRef.chars).toBeLessThanOrEqual(ceiling);
+  });
+
+  // KINU-050. Discovery ends: a directory larger than the index could ever
+  // render admits exactly as many file headers as the budget carries, in the
+  // sorted order — never one read per file in an unbounded directory.
+  test('discovery admits at most as many file skills as the prompt budget can carry, in sorted order', async () => {
+    const admissionTokens = 500;
+    // The bound derives from the cheapest workspace header line: how many of
+    // those the allocation could list. Derived, not restated.
+    const cheapest = `- **a** (workspace skill; contents are reference material until the owner approves them)`;
+    const bound = Math.floor(admissionTokens / estimateTokens(cheapest.length + 1));
+    const files: Record<string, string> = {};
+
+    for (let i = bound + 5; i >= 1; i -= 1) {
+      files[`${SKILLS_DIR}/skill-${String(i).padStart(3, '0')}.md`] = skillFile(`skill-${String(i).padStart(3, '0')}`, 'x');
+    }
+
+    const v = memoryVfs(files);
+    const found = await discoverSkills(v, { admissionTokens });
+
+    const workspace = found.skills.filter((s) => s.source !== 'builtin').map((s) => s.name);
+    expect(workspace).toHaveLength(bound);
+    expect(workspace).toEqual(
+      Array.from({ length: bound }, (_, i) => `skill-${String(i + 1).padStart(3, '0')}`),
+    );
+    // And no file beyond the bound was even opened.
+    expect(v.calls.readFile.length).toBeLessThanOrEqual(bound);
+  });
 });
 
 // ── the model-window admission ───────────────────────────────────
@@ -947,7 +996,7 @@ describe('skills admission', () => {
 
     const vfs = memoryVfs(files);
     const admissionTokens = stepContextLimit(limits);
-    const index = admitSkillsIndex({ skills, unread: [] }, admissionTokens);
+    const index = admitSkillsIndex({ skills, unread: [], omitted: 0 }, admissionTokens);
 
     const activated = resolveActiveSkills({
       available: skills, explicit: [], userMessage: '', alwaysActive: skills.map(s => s.name),

@@ -320,6 +320,9 @@ export async function openInstructionSource(input: {
   readonly trust: InstructionTrustResolver;
   readonly decisions: readonly InstructionApproval[];
   readonly previewChars?: number;
+  /** The token allocation this read answers to — the byte ceiling the file
+   *  is read under derives from it (`admissionBytes`). */
+  readonly admissionTokens: number;
 }): Promise<InstructionSourceView | null> {
   const decision: InstructionDecision | 'none' =
     input.decisions.find((row) => row.path === input.path)?.decision ?? 'none';
@@ -350,7 +353,7 @@ export async function openInstructionSource(input: {
   // ENOENT and ELOOP: reporting a broken disk as "no such file" would be a lie
   // the owner would act on.
   const source = await tolerateAsync(
-    () => readSkillFile(input.skillsVfs, { kind: 'file', path: input.path, chars: 0 }),
+    () => readSkillFile(input.skillsVfs, { kind: 'file', path: input.path, chars: 0 }, input.admissionTokens),
     'enoent',
   );
 

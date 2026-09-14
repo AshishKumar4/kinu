@@ -143,8 +143,13 @@ describe('compactShared wiring through runSwarmAction', () => {
 
     const tool = agentsTool({
       mode: 'build',
+      // The child's own answer is ~116k estimated tokens — past the estimate
+      // gate — so this run needs the barrier's compactor to reach its
+      // grandchild at all; without one the documented loud failure is an
+      // admission refusal before the request is sent.
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
         originContext: () => origin,
+        compactShared: async () => [{ role: 'user' as const, content: MARKER }],
       }),
     });
 
@@ -229,5 +234,35 @@ describe('compactShared wiring through runSwarmAction', () => {
     for (const sibling of siblings) {
       expect([...sibling].some((m) => m.role === 'assistant' && JSON.stringify(m.content).includes(BULK.slice(0, 64)))).toBe(false);
     }
+  }, 120_000);
+
+  // KINU-048's gate against this seam: the child's request is measured AS IT
+  // IS SENT, so the barrier's compacted prefix — not the transcript it
+  // replaced — is what admission sees.
+  test('a child over the estimate gate on the verbatim prefix is admitted on the compacted one', async () => {
+    const { rt, db } = createTestRuntime();
+    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    const prompts: TurnPrompt[] = [];
+    let sawMassInBarrier = 0;
+
+    const compactShared = async (messages: readonly ModelMessage[]) => {
+      // The barrier received the transcript whose verbatim mass would have
+      // pushed the child request past the 64k estimate gate.
+      if (JSON.stringify(messages).includes(BULK.slice(0, 64))) sawMassInBarrier += 1;
+
+      return [{ role: 'user' as const, content: MARKER }];
+    };
+
+    const tool = agentsTool({
+      mode: 'build',
+      swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
+    });
+
+    await tool.execute(forkCall(1));
+
+    // Both nodes reported: the depth-2 request — which carried the compacted
+    // prefix, not the ~116k-token verbatim one — was admitted and answered.
+    expect(sawMassInBarrier).toBe(1);
+    expect(prompts.length).toBe(2);
   }, 120_000);
 });

@@ -256,6 +256,10 @@ export function branchPrompt(input: {
   /** The parent's answer, when this child inherits it. Null at the root, and null
    *  wherever the search or the proposal said not to inherit. */
   readonly inherited: string | null;
+  /** True when the *Inherited context* barrier already handed this child the
+   *  compacted view of that answer: the prompt then NAMES the continuation and
+   *  never re-embeds the verbatim mass the barrier compacted away. */
+  readonly inheritedCompacted?: boolean;
   /** The parents this child FANS IN, under `expand:'aggregate'`. Empty for a sampling
    *  child, which continues from one parent. */
   readonly aggregated: readonly FanInParent[];
@@ -283,12 +287,15 @@ export function branchPrompt(input: {
   // Keyed off what this child ACTUALLY received rather than off an axis, because a
   // proposal may override inheritance per branch and the instruction has to match
   // the text above it.
-  const instruction = input.inherited
+  const instruction = input.inherited !== null
     ? ' Improve what you have been given rather than starting over.'
     : ' Write your approach from scratch; do not assume what is already there is a good start.';
 
-  const inherited = input.inherited
-    ? `\n\nThe answer this branch continues from:\n${input.inherited}`
+  // When the *Inherited context* barrier compacted the parent's transcript, the
+  // compacted prefix IS the answer this child continues from — re-embedding the
+  // verbatim mass beside it would double what admission measures past the gate.
+  const inherited = input.inherited !== null
+    ? `\n\nThe answer this branch continues from${input.inheritedCompacted === true ? ' is the compacted context you inherited.' : `:\n${input.inherited}`}`
     : '';
 
   const combining = aggregatedAnswers(input.aggregated);
@@ -448,12 +455,19 @@ export function branchSeed(input: {
   readonly context: BranchContext;
   /** The parents this child FANS IN. Empty for a sampling child. */
   readonly aggregated: readonly FanInParent[];
+  /** True when the *Inherited context* barrier already handed this child the
+   *  compacted view of the parent's work: the seed then points at the artifact
+   *  by path and digest and never re-embeds the verbatim conclusion the barrier
+   *  compacted away. */
+  readonly inheritedCompacted?: boolean;
 }): ModelMessage {
   const { parent, measured } = input;
   const parts: string[] = [];
 
   if (parent.conclusion) {
-    parts.push(`What the node you continue from concluded:\n${parent.conclusion}`);
+    parts.push(input.inheritedCompacted === true
+      ? 'What the node you continue from concluded is the compacted context you inherited.'
+      : `What the node you continue from concluded:\n${parent.conclusion}`);
   }
 
   if (input.verifier && parent.artifact !== null) {
@@ -605,11 +619,19 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   /** The DAG's edges as the row-writing loop needs them: ids, not nodes. */
   const edges = input.aggregated.map((fanned) => fanned.id);
 
+  // THE PREFIX ALREADY CARRIES THE MASS WHEN THE BARRIER FIRED. The compacted
+  // view every sibling inherited is what turn admission measures the request
+  // against; the parent's verbatim answer must not ride the seed and the brief
+  // a second time beside it, or the compaction the barrier bought is undone in
+  // the very request it was bought for.
+  const inheritedCompacted = input.context === 'inherit' && parent.compacted !== undefined;
+
   const prompt = branchPrompt({
     resolved, mode, languages, measured, baseline,
     index: input.index, branches: input.width,
     task: input.task,
-    inherited: input.inherited, aggregated: input.aggregated,
+    inherited: input.inherited, inheritedCompacted,
+    aggregated: input.aggregated,
     ancestors: input.ancestors, atDepth, maxDepth,
     // The records store's best for this objective, read once before the loop: a fan-in's
     // vertex is asked to beat the same number every sampled child is.
@@ -662,6 +684,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   const seed = branchSeed({
     parent, measured, baseline, verifier, atDepth, maxDepth,
     focus: prompt.user, context: input.context, aggregated: input.aggregated,
+    inheritedCompacted,
   });
 
   const run = await runNodeAgent({
