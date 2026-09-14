@@ -105,13 +105,14 @@ interface LayerRules {
   readonly drift: number;
 }
 
-/** The seed sits right of the copy's column; the deeper layers start from
- *  their own seeds, smaller, slower, and fainter, and drift with the pointer
- *  the way a far plane does. */
+/** The seed sits right of the copy's column and below the headline's band
+ *  (the mount hands the tree that band as a keep-out); the deeper layers
+ *  start from their own seeds, smaller, slower, and fainter, and drift with
+ *  the pointer the way a far plane does. */
 const LAYERS: readonly LayerRules[] = [
-  { foreground: true, generationSeconds: 24, rootX: 0.42, rootY: 0.5, stepLength: 0.062, growthSeconds: 1.15, population: 240, width: 1.25, alpha: 1, drift: 0 },
-  { foreground: false, generationSeconds: 31, rootX: 0.5, rootY: 0.24, stepLength: 0.05, growthSeconds: 1.5, population: 120, width: 0.9, alpha: 0.4, drift: 0.012 },
-  { foreground: false, generationSeconds: 37, rootX: 0.58, rootY: 0.78, stepLength: 0.042, growthSeconds: 2, population: 80, width: 0.7, alpha: 0.22, drift: 0.026 },
+  { foreground: true, generationSeconds: 24, rootX: 0.5, rootY: 0.58, stepLength: 0.062, growthSeconds: 1.15, population: 240, width: 1.25, alpha: 0.8, drift: 0 },
+  { foreground: false, generationSeconds: 31, rootX: 0.58, rootY: 0.72, stepLength: 0.05, growthSeconds: 1.5, population: 120, width: 0.9, alpha: 0.34, drift: 0.012 },
+  { foreground: false, generationSeconds: 37, rootX: 0.74, rootY: 0.3, stepLength: 0.042, growthSeconds: 2, population: 80, width: 0.7, alpha: 0.2, drift: 0.026 },
 ];
 
 /** Scores are unbounded verifier progress: root 0, each attempt its parent's
@@ -139,8 +140,10 @@ const RIGHT_EDGE = 0.94;
  *  so the search keeps advancing and its history recedes to the left. */
 const FOLLOW_X = 0.8;
 
-/** The camera parks the best frontier here after a restart. */
-const REGROW_X = 0.3;
+/** The camera parks the best frontier here after a restart, or right of
+ *  the keep-out when one is set, so the strongest branch never sits behind
+ *  the headline. */
+const REGROW_X = 0.5;
 
 /** History recedes: left of here a branch fades, gone before the edge. */
 const HISTORY_X = 0.34;
@@ -167,6 +170,15 @@ const BEND_RATE = 7;
 const Y_MIN = 0.07;
 
 const Y_MAX = 0.93;
+
+/** How far outside the keep-out a tip must land, in view units. */
+const KEEP_OUT_MARGIN = 0.03;
+
+/** Every stroke colour recedes this far toward the page's ground before it
+ *  is drawn, on the GPU and on the CPU alike: the art sits behind the copy.
+ *  Measured 2026-09-14 on the dark ground: the kept path's gold reads 8.9:1
+ *  against the ground unmixed and 4.6:1 at this mix. */
+export const RECESS = 0.32;
 
 interface LayerState {
   readonly rules: LayerRules;
@@ -202,6 +214,16 @@ export interface SearchTreeOptions {
   readonly seed: number;
   /** Height over width of the drawn box. */
   readonly aspect: number;
+}
+
+/** A box in view units no tip may land in: the headline's, so no branch
+ *  crosses behind the copy. Growth that would enter it turns away, the
+ *  way it turns at the top and bottom of the view. */
+export interface KeepOut {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
 }
 
 /** The pointer's contract: it reaches this far and displaces at most this much. */
@@ -276,6 +298,8 @@ export class SearchTree {
 
   private driftY = 0;
 
+  private keepOut: KeepOut | null = null;
+
   private strokes = new Float32Array(new ArrayBuffer(4 * STROKE_STRIDE * 512));
 
   private nodes = new Float32Array(new ArrayBuffer(4 * NODE_STRIDE * 256));
@@ -291,6 +315,10 @@ export class SearchTree {
 
   setAspect(aspect: number): void {
     this.aspect = aspect;
+  }
+
+  setKeepOut(box: KeepOut | null): void {
+    this.keepOut = box;
   }
 
   setPointer(x: number, y: number): void {
@@ -395,7 +423,7 @@ export class SearchTree {
         }
 
         if (branch.parent < 0) {
-          nodeCount = this.pushNode(nodeCount, branch.outX1, branch.outY1, 3.4 * layer.rules.width, 0.85, TONE_BRIGHT, layer.rules.alpha, branch.layer);
+          nodeCount = this.pushNode(nodeCount, branch.outX1, branch.outY1, 3.4 * layer.rules.width, 0.6, TONE_BRIGHT, 0.8 * layer.rules.alpha, branch.layer);
           continue;
         }
 
@@ -632,20 +660,20 @@ export class SearchTree {
     if (branch.phase === 'ember') {
       const fade = 1 - branch.phaseAge / EMBER_SECONDS;
 
-      return [TONE_EMBER, 0.25 + 0.35 * fade, 0.28 + 0.5 * fade, layer.rules.width * 0.9];
+      return [TONE_EMBER, 0.2 + 0.3 * fade, 0.18 + 0.34 * fade, layer.rules.width * 0.9];
     }
 
-    if (branch.phase === 'ash') return [TONE_ASH, 0, 0.14 * (1 - branch.phaseAge / ASH_SECONDS), layer.rules.width * 0.75];
+    if (branch.phase === 'ash') return [TONE_ASH, 0, 0.1 * (1 - branch.phaseAge / ASH_SECONDS), layer.rules.width * 0.75];
 
     if (branch.onPath) {
       const lead = clamp(1 - (bestValue - branch.value) / (GLOW_SPAN * 3), 0, 1);
 
-      return [TONE_BRIGHT, 0.6 + 0.4 * lead, 1, layer.rules.width * (1.5 + 0.8 * lead)];
+      return [TONE_BRIGHT, 0.5 + 0.35 * lead, 0.78, layer.rules.width * (1.4 + 0.7 * lead)];
     }
 
     const strength = clamp(1 - (bestValue - branch.value) / GLOW_SPAN, 0, 1);
 
-    return [TONE_ACCENT, 0.15 + 0.85 * strength, 0.55 + 0.45 * strength, layer.rules.width * (0.85 + 0.75 * strength)];
+    return [TONE_ACCENT, 0.12 + 0.68 * strength, 0.34 + 0.3 * strength, layer.rules.width * (0.85 + 0.65 * strength)];
   }
 
   private bestValueOf(layer: LayerState): number {
@@ -766,20 +794,26 @@ export class SearchTree {
     else if (improved) children = roll < 0.2 ? 2 : roll < 0.7 ? 3 : 4;
     else children = roll < 0.4 ? 0 : roll < 0.8 ? 1 : 2;
 
-    if (branch.x1 - layer.offset > RIGHT_EDGE) children = 0;
+    // Past the view's edge, or behind the headline, an attempt spawns nothing.
+    if (branch.x1 - layer.offset > RIGHT_EDGE || this.inKeepOut(branch.x1 - layer.offset, branch.y1)) children = 0;
 
     // Siblings fan out around the parent's own heading, so a subtree keeps
     // to its band instead of crossing its neighbours.
+    let spawned = 0;
+
     for (let index = 0; index < children; index += 1) {
       const fan = children === 1 ? 0 : (index / (children - 1) - 0.5) * 0.85;
       const jitter = (layer.random() - 0.5) * 0.3;
-      this.spawn(layer, branch, branch.angle * 0.55 + fan + jitter, 1);
+
+      if (this.spawn(layer, branch, branch.angle * 0.55 + fan + jitter, 1)) spawned += 1;
     }
 
-    return children;
+    return spawned;
   }
 
-  private spawn(layer: LayerState, parent: Branch, angle: number, reach: number): void {
+  /** Grow one attempt from `parent`; false when the only place it could
+   *  land is behind the headline, in which case nothing is grown. */
+  private spawn(layer: LayerState, parent: Branch, angle: number, reach: number): boolean {
     const rules = layer.rules;
     const length = rules.stepLength * this.reach() * reach * (0.8 + layer.random() * 0.5);
     let heading = clamp(angle, -1.2, 1.2);
@@ -790,7 +824,16 @@ export class SearchTree {
       y1 = clamp(parent.y1 + Math.sin(heading) * length / this.aspect, Y_MIN, Y_MAX);
     }
 
+    const away = this.turnAway(layer, parent, heading, length, y1);
+
+    if (away !== null) {
+      heading = away;
+      y1 = clamp(parent.y1 + Math.sin(heading) * length / this.aspect, Y_MIN, Y_MAX);
+    }
+
     const x1 = parent.x1 + Math.cos(heading) * length;
+
+    if (this.inKeepOut(x1 - layer.offset, y1)) return false;
     // A branch bows away from its parent's line, the way a fan opens.
     const bow = (0.1 + layer.random() * 0.35) * length * Math.sign(heading - parent.angle || 1);
     const noise = (layer.random() + layer.random() + layer.random() - 1.5) * 0.35;
@@ -839,6 +882,34 @@ export class SearchTree {
     parent.liveChildren += 1;
     layer.branches.set(id, branch);
     this.dress(layer, branch, this.bestValueOf(layer), 1);
+
+    return true;
+  }
+
+  /** Whether a view point lies in the keep-out, its margin included. */
+  private inKeepOut(x: number, y: number): boolean {
+    const box = this.keepOut;
+
+    return box !== null
+      && x >= box.left - KEEP_OUT_MARGIN && x <= box.right + KEEP_OUT_MARGIN
+      && y >= box.top - KEEP_OUT_MARGIN && y <= box.bottom + KEEP_OUT_MARGIN;
+  }
+
+  /** Where the camera parks the frontier after a restart: REGROW_X, or past the keep-out. */
+  private parkX(): number {
+    return this.keepOut === null ? REGROW_X : Math.max(REGROW_X, this.keepOut.right + KEEP_OUT_MARGIN);
+  }
+
+  /** The heading that keeps a tip out of the keep-out, or null when the
+   *  one given already does. A tip that would land inside turns to the side
+   *  of the box its parent is on, at least a shallow angle, still rightward. */
+  private turnAway(layer: LayerState, parent: Branch, heading: number, length: number, y1: number): number | null {
+    const box = this.keepOut;
+
+    if (box === null || !this.inKeepOut(parent.x1 + Math.cos(heading) * length - layer.offset, y1)) return null;
+    const side = parent.y1 >= (box.top + box.bottom) / 2 ? 1 : -1;
+
+    return side * Math.max(0.35, Math.abs(heading) * 0.8);
   }
 
   private bend(layer: LayerState, dt: number): void {
@@ -884,7 +955,7 @@ export class SearchTree {
 
     const best = layer.branches.get(layer.bestId);
 
-    if (best !== undefined) layer.offsetTarget = Math.max(layer.offsetTarget, best.x1 - REGROW_X);
+    if (best !== undefined) layer.offsetTarget = Math.max(layer.offsetTarget, best.x1 - this.parkX());
   }
 
   private regrow(layer: LayerState): void {
@@ -899,7 +970,7 @@ export class SearchTree {
     if (frontier === undefined) return;
     frontier.expanded = false;
     frontier.spawnAt = this.elapsed;
-    const ancestors = path.slice(1).filter((branch) => branch.x1 - layer.offsetTarget > 0.02);
+    const ancestors = path.slice(1).filter((branch) => branch.x1 - layer.offsetTarget > 0.02 && !this.inKeepOut(branch.x1 - layer.offsetTarget, branch.y1));
 
     for (let index = 0; index < 2 && ancestors.length > 0; index += 1) {
       const pick = ancestors.splice(Math.floor(layer.random() * ancestors.length), 1)[0];
@@ -930,12 +1001,14 @@ export type Rgb = readonly [red: number, green: number, blue: number];
 
 /** The theme's own tokens, read from the document: accent is the gold,
  *  bright is `--c-accent-fg` (silk on dark, deep gold on paper), ash is the
- *  dim text role a pruned branch fades into. No colour is invented here. */
+ *  dim text role a pruned branch fades into, ground is the page behind the
+ *  art, which every tone recedes toward by RECESS. No colour is invented here. */
 export interface HeroPalette {
   readonly mode: 'dark' | 'light';
   readonly accent: Rgb;
   readonly bright: Rgb;
   readonly ash: Rgb;
+  readonly ground: Rgb;
 }
 
 /** The CSS colour string a Canvas2D fill or stroke takes. */

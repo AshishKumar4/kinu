@@ -2,7 +2,7 @@
 // triangle strip of SEGMENTS steps with a soft edge. Positions arrive in
 // view-normalised units; the View uniform turns them into pixels.
 
-import { Palette, View, glow_scale, to_clip, tone_color } from "./palette.wgsl";
+import { Palette, View, glow_scale, recede, to_clip, tone_color } from "./palette.wgsl";
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var<uniform> palette: Palette;
@@ -43,7 +43,7 @@ struct Varying {
   let half_width = (tip.w * view.ratio * taper + 0.9) * 0.5;
   let pixel = point + normal * side * half_width;
   let glow = look.x;
-  let rgb = tone_color(palette, look.y, glow) * glow_scale(palette, glow);
+  let rgb = recede(palette, tone_color(palette, look.y, glow)) * glow_scale(palette, glow);
 
   var out: Varying;
   out.position = to_clip(view, pixel);

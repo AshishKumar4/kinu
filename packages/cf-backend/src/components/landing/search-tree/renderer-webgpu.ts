@@ -4,7 +4,7 @@ import {
 } from 'vgpu';
 
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { NODE_STRIDE, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
+import { NODE_STRIDE, RECESS, STROKE_STRIDE, type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer } from '@kinu.run/core/web/hero-art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
 import compositeSource from './composite.wgsl';
@@ -19,7 +19,8 @@ const NODE_CAPACITY = 1_024;
 
 const STROKE_SEGMENTS = 14;
 
-const BLOOM_STRENGTH: Record<HeroPalette['mode'], number> = { dark: 1.15, light: 0.55 };
+/** The halo's weight over the scene: enough to read as light, not enough to lift the ground under the copy. */
+const BLOOM_STRENGTH: Record<HeroPalette['mode'], number> = { dark: 0.7, light: 0.35 };
 
 export type WebGpuRendererOutcome =
   | { readonly kind: 'renderer'; readonly renderer: SearchTreeRenderer }
@@ -33,8 +34,9 @@ function paletteUniform(palette: HeroPalette) {
     accent: unit(palette.accent),
     bright: unit(palette.bright),
     ash: unit(palette.ash),
+    ground: unit(palette.ground),
     mode: palette.mode === 'light' ? 1 : 0,
-    pad0: 0,
+    recess: RECESS,
     pad1: 0,
     pad2: 0,
   };

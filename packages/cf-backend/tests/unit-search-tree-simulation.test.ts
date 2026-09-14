@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_EMBER, type SearchTreeFrame,
+  NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_EMBER, type KeepOut, type SearchTreeFrame,
 } from '@kinu.run/core/web/hero-art';
 
 const ASPECT = 700 / 1280;
@@ -124,6 +124,92 @@ describe('the camera follows the frontier smoothly', () => {
     const second = run(417, 30).frame();
 
     expect(strokesOf(first)).toEqual(strokesOf(second));
+  });
+});
+
+describe('the tree keeps out of the headline', () => {
+  /** The headline's band at 1440×900: the shell's copy from 6% to 69% across, the top quarter to the middle. */
+  const HEADLINE: KeepOut = { left: 0.06, top: 0.2, right: 0.69, bottom: 0.475 };
+
+  /** The foreground's best node: the frame marks it by its radius, wider than a tip and narrower than the seed. */
+  const BEST_RADIUS = 3.2 * 1.25;
+
+  function inside(x: number, y: number, box: KeepOut): boolean {
+    return x > box.left && x < box.right && y > box.top && y < box.bottom;
+  }
+
+  /** Over a run through a restart: how many tips were spawned inside the
+   *  box (a stroke's first frame is its spawn, one frame of pan at most
+   *  behind), how many frames found the best node inside it, and how many
+   *  tips were spawned at all. */
+  function watch(tree: SearchTree, seconds: number, box: KeepOut) {
+    let previous = keyedStrokes(tree.frame());
+    let spawnedInside = 0;
+    let bestInside = 0;
+    let spawned = 0;
+
+    for (let index = 0; index < seconds * 60; index += 1) {
+      tree.step(DT);
+      const frame = tree.frame();
+      const current = keyedStrokes(frame);
+
+      for (const [key, row] of current) {
+        if (previous.has(key)) continue;
+        spawned += 1;
+
+        if (inside(row[4] ?? 0, row[5] ?? 0, box)) spawnedInside += 1;
+      }
+
+      for (let node = 0; node < frame.nodeCount; node += 1) {
+        const at = node * NODE_STRIDE;
+
+        if (frame.nodes[at + 6] !== 0 || Math.abs((frame.nodes[at + 2] ?? 0) - BEST_RADIUS) > 1e-6) continue;
+
+        if (inside(frame.nodes[at] ?? 0, frame.nodes[at + 1] ?? 0, box)) bestInside += 1;
+      }
+
+      previous = current;
+    }
+
+    return { spawnedInside, bestInside, spawned, generation: tree.frame().generation };
+  }
+
+  /** Where the unconstrained tree lives: the lower right, a step past the seed. */
+  const LOWER: KeepOut = { left: 0.62, top: 0.55, right: 0.95, bottom: 0.95 };
+
+  test('nothing spawns behind the headline and the best node never sits there, through a restart', () => {
+    for (const box of [HEADLINE, LOWER]) {
+      const kept = new SearchTree({ seed: 417, aspect: ASPECT });
+      kept.setKeepOut(box);
+      const withBox = watch(kept, 45, box);
+
+      expect(withBox.generation).toBeGreaterThanOrEqual(1);
+      expect(withBox.spawned).toBeGreaterThan(150);
+      expect(withBox.spawnedInside).toBe(0);
+      expect(withBox.bestInside).toBe(0);
+    }
+
+    // The red direction: the same seed, unconstrained, grows through both
+    // boxes and parks its frontier in the lower one.
+    const throughHeadline = watch(new SearchTree({ seed: 417, aspect: ASPECT }), 45, HEADLINE);
+    const throughLower = watch(new SearchTree({ seed: 417, aspect: ASPECT }), 45, LOWER);
+
+    expect(throughHeadline.spawnedInside).toBeGreaterThan(5);
+    expect(throughLower.spawnedInside).toBeGreaterThan(50);
+    expect(throughLower.bestInside).toBeGreaterThan(300);
+  });
+
+  test('the box is a boundary, not a wall: the tree still grows past its right edge in the band', () => {
+    const tree = new SearchTree({ seed: 417, aspect: ASPECT });
+    tree.setKeepOut(HEADLINE);
+    run(417, 14, tree);
+    let pastIt = 0;
+
+    for (const [, , , , x1, y1, , , , , alpha] of strokesOf(tree.frame())) {
+      if ((alpha ?? 0) > 0.004 && (x1 ?? 0) > HEADLINE.right && (y1 ?? 0) < HEADLINE.bottom) pastIt += 1;
+    }
+
+    expect(pastIt).toBeGreaterThan(5);
   });
 });
 

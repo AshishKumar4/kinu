@@ -7,7 +7,7 @@
  */
 
 import {
-  cssRgba, NODE_STRIDE, seededRandom, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+  cssRgba, NODE_STRIDE, RECESS, seededRandom, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
   type HeroPalette, type Rgb, type SearchTreeRenderer,
 } from './hero-art';
 
@@ -52,6 +52,11 @@ function toneColor(palette: HeroPalette, tone: number, glow: number): Rgb {
 
   // Tone 0, an ordinary attempt.
   return mix(palette.ash, palette.accent, 0.35 + 0.65 * glow);
+}
+
+/** Every tree colour sits behind the copy: it recedes toward the ground by RECESS. */
+function recede(palette: HeroPalette, color: Rgb): Rgb {
+  return mix(color, palette.ground, RECESS);
 }
 
 /**
@@ -109,7 +114,7 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Her
         const lineWidth = strokes[at + 7] ?? 1;
 
         if (alpha <= 0.004) continue;
-        const color = toneColor(palette, tone, glow);
+        const color = recede(palette, toneColor(palette, tone, glow));
 
         if (glow > 0.55) {
           curve(strokes, at);
@@ -134,7 +139,7 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Her
         const alpha = nodes[at + 5] ?? 0;
 
         if (alpha <= 0.004) continue;
-        const color = mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6);
+        const color = recede(palette, mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6));
 
         if (glow > 0.5) {
           context.beginPath();
