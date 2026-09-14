@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useState, useTransition } from "react";
+import { type FormEvent, useState, useTransition } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -11,9 +11,9 @@ import {
 } from "@/hooks/use-create-workspace";
 import { APP_ROUTES } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
-import { getWorkspaceOverview, type WorkspaceEntry } from "@/lib/user-api";
+import { lastValue } from "@/hooks/use-async-resource";
+import { RECENT_WORKSPACES, useWorkspaceOverview } from "@/hooks/use-workspace-overviews";
+import type { WorkspaceEntry } from "@/lib/user-api";
 import { timeAgo } from "@kinu.run/core";
 import { OverviewEvidence, OverviewLabel } from "@/pages/home-overview-label";
 
@@ -37,7 +37,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-bg">
+    <div className="h-full overflow-y-auto">
       <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
           {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
@@ -110,7 +110,7 @@ export default function HomePage() {
               {listFailed && <span className="p-t-status p-warning">could not load</span>}
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
-              {workspaces.slice(0, 5).map((agent, index) => (
+              {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (
                 <HomeWorkspaceRow key={agent.name} workspace={agent} first={index === 0} />
               ))}
             </div>
@@ -121,19 +121,12 @@ export default function HomePage() {
   );
 }
 
-/** The shared cadence the workspace surfaces already poll at — the card asks
- *  the same question they do and inherits their rhythm rather than growing a
- *  second timer policy. Module scope because `useAsyncResource` keys its timer
- *  effect on this identity. */
-const overviewRevalidate = (): number => LIVE_DATA_REFRESH_MS;
-
 /** One workspace row: the name renders the moment the roster lands; the
  *  overview loads beside it and fails independently. The retry button sits
  *  BESIDE the link — a button inside an anchor is nested interactive content,
  *  so the row is a wrapper holding the link and the action separately. */
 function HomeWorkspaceRow({ workspace, first }: { workspace: WorkspaceEntry; first: boolean }) {
-  const load = useCallback(() => getWorkspaceOverview(workspace.name), [workspace.name]);
-  const { resource, reload } = useAsyncResource(load, overviewRevalidate, workspace.name);
+  const { resource, reload } = useWorkspaceOverview(workspace.name);
 
   const overview = lastValue(resource);
   const stale = resource.status === "error" && overview !== null;
