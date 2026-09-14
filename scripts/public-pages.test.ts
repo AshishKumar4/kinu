@@ -61,6 +61,15 @@ interface RailFact {
   readonly roster: string;
 }
 
+interface HeroBackdropFact {
+  /** The living search tree's host is in the DOM. */
+  readonly tree: boolean;
+  /** The dust layer's canvas is in the DOM and drawing. */
+  readonly dust: boolean;
+  /** Column tracks of the hero copy's grid: one where the copy stacks, two beside the tree. */
+  readonly columns: number;
+}
+
 interface MovieFact {
   readonly typing: boolean;
   readonly tools: boolean;
@@ -97,6 +106,8 @@ interface Facts {
   copied?: boolean;
   rail?: RailFact;
   railPhoneHidden?: boolean;
+  /** Which backdrop the hero mounted at a width, beside how many columns the copy's grid has there. */
+  heroBackdrop: Record<string, HeroBackdropFact>;
   movie?: MovieFact;
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
@@ -120,6 +131,7 @@ let browser: Browser;
 let origin: string;
 
 const facts: Facts = {
+  heroBackdrop: {},
   landingOverflow: {},
   publicOverflow: {},
   wideColumns: {},
@@ -727,6 +739,22 @@ beforeAll(async () => {
 
       expect(surfacesFit, `landing@${label}: a preview left the viewport`).toBeTrue();
 
+      if (label === '390' || label === '1280') {
+        // The backdrop swaps at the width where the copy's grid gains its
+        // second column: a phone must never mount the tree (it runs through
+        // the stacked paragraph) and a desktop must never mount the dust.
+        await page.waitForSelector('[data-hero-graph] canvas[data-renderer], [data-hero-dust] canvas[data-renderer]', { timeout: 10_000 });
+        facts.heroBackdrop[label] = await page.evaluate(() => {
+          const grid = document.querySelector('#top [class*="lg:grid-cols-"]');
+
+          return {
+            tree: document.querySelector('[data-hero-graph]') !== null,
+            dust: document.querySelector('[data-hero-dust] canvas')?.getAttribute('data-renderer') === 'canvas',
+            columns: grid === null ? 0 : getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+          };
+        });
+      }
+
       if (label === '390') {
         facts.landingTargets = await page.evaluate(() => [
           ...document.querySelectorAll('#top a[href="/login"], #top a[href="#deploy"]'),
@@ -874,6 +902,13 @@ describe('the landing frames reuse the app rail', () => {
 
   test('the rail hides below md the way the app hides it', () => {
     expect(facts.railPhoneHidden).toBeTrue();
+  });
+});
+
+describe('the hero backdrop follows the copy', () => {
+  test('a phone gets the dust under one column, a desktop the tree beside two', () => {
+    expect(required(facts.heroBackdrop['390'], 'phone hero backdrop')).toEqual({ tree: false, dust: true, columns: 1 });
+    expect(required(facts.heroBackdrop['1280'], 'desktop hero backdrop')).toEqual({ tree: true, dust: false, columns: 2 });
   });
 });
 
