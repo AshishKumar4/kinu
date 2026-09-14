@@ -52,6 +52,7 @@ import { handleMcpRequest } from "./mcp-server";
 import { handleHealthRequest } from "@kinu.run/core";
 import { handleClientErrorRequest } from "./client-error/route";
 import { handleUserRequest } from "./user/routes";
+import { handleAccountRequest } from "./user/account-routes";
 import { handleCliRequest } from "./cli/routes";
 import { handleAuthRequest } from "./auth/routes";
 import { handleLandingRequest } from "./landing-route";
@@ -669,8 +670,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
 
   // 9. The signed-in account APIs — /api/user/* profile and roster, and
   //    /api/shared/* publish, list, fork. Ownership of every workspace named
-  //    in a body is claimed inside.
+  //    in a body is claimed inside. The account-authority endpoints answer
+  //    first: their writes land on owner_only UserDO methods, so they never
+  //    pass through the workspace-token surface behind them.
   const accountResp = await firstResponse(authenticatedRequest, [
+    (req) => handleAccountRequest(req, env, identity),
     (req) => handleUserRequest(req, env, identity, ctx),
     (req) => handleSharedRequest(req, env, identity),
   ]);

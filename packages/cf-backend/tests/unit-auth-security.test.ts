@@ -674,13 +674,13 @@ async function cloudflareSignIn(env: Env, tokenJson: JsonValue, userResult: Json
     const picker = source('src/components/ModelPicker.tsx');
     const workspace = source('src/pages/WorkspacePage.tsx');
     const home = source('src/pages/HomePage.tsx');
-    const settings = source('src/pages/UserSettingsPage.tsx');
+    const providers = source('src/components/account/ProvidersPanel.tsx');
     expect(picker).not.toContain('(no providers connected)');
     expect(picker).toContain('Connect Workers AI');
     expect(picker).toContain('cloudflareReconnectPath');
     expect(workspace).toContain('ConnectedModelPicker');
     expect(home).toContain('CloudflareAIConnectNotice');
-    expect(settings).toContain('CloudflareAIConnectNotice');
+    expect(providers).toContain('CloudflareAIConnectNotice');
   });
 });
 
