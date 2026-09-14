@@ -1,6 +1,7 @@
 /** Profile identity vocabulary, declared at the platform layer: a role id is
  *  the one token every layer passes around, resolved by the catalog. */
 
+import * as v from 'valibot';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
 import type { NamedSwarmPreset } from './swarm';
 
@@ -20,6 +21,13 @@ export type BuiltinTierId = (typeof TIER_IDS)[number];
 
 /** A tier the catalog holds: one of the builtins or one the owner added. */
 export type TierId = string;
+
+/** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
+const TIER_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
+const TIER_ID_MAX_LEN = 32;
+
+export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(TIER_ID_MAX_LEN));
 
 export interface TierAssignment {
   model: string;

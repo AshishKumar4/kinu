@@ -1,5 +1,6 @@
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
+import { TierIdSchema } from '../types/profile';
 import { renderIssues } from '../utils/json';
 import { SLATE_READ_MODELS } from './read-models';
 
@@ -8,7 +9,10 @@ const Name = v.pipe(v.string(), v.minLength(1));
 const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path.includes('\0') && !path.split('/').includes('..'), 'must name a file inside this Slate'));
 
 const Binding = v.variant('kind', [
-  v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)) }),
+  v.pipe(
+    v.strictObject({ kind: v.literal('namespace'), namespace: Name, members: v.optional(v.array(Name)), paths: v.optional(v.array(Name)) }),
+    v.check((binding) => binding.paths === undefined || binding.namespace === 'workspace', 'paths scope only a workspace namespace binding'),
+  ),
   v.strictObject({ kind: v.literal('rpc'), methods: v.pipe(v.array(v.picklist(SLATE_READ_MODELS)), v.minLength(1)) }),
   v.strictObject({ kind: v.literal('mcp'), server: Name, tools: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('app'), id: Name }),
@@ -16,6 +20,8 @@ const Binding = v.variant('kind', [
   v.strictObject({ kind: v.literal('memory'), members: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('tasks'), members: v.optional(v.array(Name)) }),
   v.strictObject({ kind: v.literal('web'), members: v.optional(v.array(Name)) }),
+  v.strictObject({ kind: v.literal('agent') }),
+  v.strictObject({ kind: v.literal('ai'), tier: v.optional(TierIdSchema) }),
 ]);
 
 const SlateMetadata = v.strictObject({

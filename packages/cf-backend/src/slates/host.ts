@@ -291,6 +291,10 @@ export class SlateHost {
       case 'rpc': return { ok: true, value: await this.deps.dispatch(caller, route) };
       case 'tool':
       case 'codemode': return { ok: true, value: await this.deps.dispatch(caller, route) };
+      // The agent's inbox and the model call are the calling actor's own
+      // surfaces, answered inside the same dispatch as the capability planes.
+      case 'agent':
+      case 'ai': return { ok: true, value: await this.deps.dispatch(caller, route) };
       // The hop keeps the CALLER's authority: the callee runs for whoever asked, never as its author.
       case 'app': return this.call(caller, route.id, route.method, [...route.args], route.chain);
     }

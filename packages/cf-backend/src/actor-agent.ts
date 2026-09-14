@@ -235,6 +235,7 @@ import {
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, renderToolResult, successfulToolOutcome,
   toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
+  type AgentSignal, type SignalDeliverer,
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
 import {
@@ -4822,6 +4823,16 @@ export abstract class ActorAgent extends Think<Env> {
     );
 
     return await this.actorHost().run(entry.reference, async (actor) => {
+      if (route.kind === 'ai') {
+        // A hosted actor runs the model call through its OWN profile, resolved
+        // now — the same authority a hosted native call resolves under.
+        return await this.slateAiRun(route, actor.handle);
+      }
+
+      if (route.kind === 'agent') {
+        throw new KinuError('denied', 'a hosted actor has no inbox of its own; the agent binding answers on the workspace actor');
+      }
+
       if (route.kind !== 'namespace' && route.kind !== 'tool' && route.kind !== 'codemode') {
         // A hosted actor connects no MCP servers and holds no slate read model
         // of its own: those are workspace-level surfaces reached through the
@@ -4902,9 +4913,96 @@ export abstract class ActorAgent extends Think<Env> {
         return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, route.server, route.tool, route.args)));
       }
 
+      case 'agent': {
+        const metadata: JsonObject = { slate: route.slate };
+
+        if (route.data !== undefined) metadata.data = route.data;
+
+        const outcome = await this.slateInbox().deliver({
+          kind: 'slate',
+          text: `Slate ${route.slate}: ${route.text}`,
+          metadata,
+        });
+
+        return { outcome };
+      }
+
+      case 'ai': return await this.slateAiRun(route);
+
       case 'rpc': return this.slateReadModel(route.method);
       case 'app': throw new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
     }
+  }
+
+  /** The ONE adapter site between a slate's `agent` binding and the delivery
+   *  seam the turn machinery owns. When feat/send merges, the deliver line
+   *  becomes `this.orch.inbox.send(signal)` and nothing else moves. */
+  private slateInbox(): SignalDeliverer {
+    return { deliver: (signal: AgentSignal) => this.orch.signals.deliver(signal) };
+  }
+
+  /**
+   * One `ai` binding call: resolve the profile the way this actor's own turn
+   *  would — the live role label and the call's tier as the explicit tier —
+   *  then run a single `generateText` under a spend row keyed `slate`.
+   *
+   * `actor` is the hosted actor the binding hopped to, or absent for this
+   *  actor itself; the two differ only in whose profile resolves.
+   */
+  private async slateAiRun(
+    route: Extract<SlateBindingRoute, { kind: 'ai' }>,
+    actor?: ActorHandle,
+  ): Promise<JsonValue> {
+    let spec: string;
+
+    try {
+      if (actor === undefined) {
+        spec = resolveAgentTurnProfile({
+          ...(await this.profileInputs()),
+          activeRoleId: this.activeRoleLabel(),
+          workMode: 'build',
+          availableTools: [],
+          activeSkills: [],
+          explicitTier: route.tier ?? this.config.getAssignedTier() ?? undefined,
+        }).tier.model;
+      } else {
+        spec = (await this.hostedActorProfile({
+          actor, workMode: 'build', availableTools: [], explicitTier: route.tier,
+        })).profile.tier.model;
+      }
+    } catch (cause) {
+      // The resolver names an unknown or malformed tier in a plain Error; the
+      // binding surface reports it as bad input, not as an internal failure.
+      if (cause instanceof Error && /invalid explicit tier|unknown tier/.test(cause.message)) {
+        throw new KinuError('bad_input', cause.message, { cause });
+      }
+
+      throw cause;
+    }
+
+    const model = this.ownedModelServices.resolveModel(spec);
+
+    const operation = beginModelOperation(
+      { source: 'slate', operations: this.modelOperations }, 'complete', { spec },
+    );
+
+    let answer;
+
+    try {
+      const input: Parameters<typeof generateText>[0] = { model, prompt: route.prompt };
+
+      if (route.system !== undefined) input.system = route.system;
+
+      answer = await generateText(input);
+    } catch (cause) {
+      operation.failed({ cause });
+      throw cause;
+    }
+
+    const usage = normalizeUsage(answer.usage);
+    operation.completed({ usage, modelId: spec });
+
+    return v.parse(JsonValueSchema, { text: answer.text, model: spec, usage });
   }
 
   /** Native and crafted calls share the codemode factory over this caller's runtime. */
@@ -7003,7 +7101,6 @@ export abstract class ActorAgent extends Think<Env> {
       }),
     });
   }
-
   /**
    * THE SAME AUTHORITY, resolved for ONE hosted actor rather than for the root.
    *
@@ -7034,6 +7131,8 @@ export abstract class ActorAgent extends Think<Env> {
     readonly actor: ActorHandle;
     readonly availableTools: readonly string[];
     readonly workMode: WorkMode;
+    /** A binding's named tier overrides the actor's assignment for this call. */
+    readonly explicitTier?: string | undefined;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profileInputs();
     const config = input.actor.config;
@@ -7045,7 +7144,7 @@ export abstract class ActorAgent extends Think<Env> {
         workMode: input.workMode,
         availableTools: [...input.availableTools],
         activeSkills: [],
-        explicitTier: config.getAssignedTier() ?? undefined,
+        explicitTier: input.explicitTier ?? config.getAssignedTier() ?? undefined,
       }),
       inputs,
     };
