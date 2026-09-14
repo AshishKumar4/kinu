@@ -71,6 +71,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]>;
   seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
   runEventWakeFor(workspace: string, marker: string): Promise<void>;
+  firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; factsCompressed: number }>;
+  firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; submissions: Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>; failures: Array<{ event: string; code: string; cause: string }> }>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
