@@ -176,7 +176,13 @@ describe(SUITE, () => {
         ));
 
         const memory = calls.filter((call) => call.name === 'memory');
-        const saved = memory.find((call) => actionOf(call) === 'save' && answered(call));
+
+        // `save` or `remember`: both write a fact the search must find, and the
+        // prompt says "save the fact" — an agent that remembers it wrote what it
+        // was asked. Measured live (post-publish-ac73ffc5e): the turn wrote via
+        // `remember` and the search answered `[fact: every-tool_probe] … ok`.
+        const saved = memory.find((call) =>
+          (actionOf(call) === 'save' || actionOf(call) === 'remember') && answered(call));
 
         const found = memory.find((call) =>
           actionOf(call) === 'search' && answered(call) && textOf(call.result).includes(TASK_TITLE));
@@ -184,9 +190,9 @@ describe(SUITE, () => {
         subgoals.push({
           what: 'memory-saved-and-found', reached: saved !== undefined && found !== undefined,
           detail: saved !== undefined && found !== undefined
-            ? `save memory#${saved.toolCallId}, search memory#${found.toolCallId} answered with `
+            ? `memory#${saved.toolCallId} (${actionOf(saved) || '?'}) wrote, search memory#${found.toolCallId} answered with `
               + excerpt(textOf(found.result))
-            : `save ${saved === undefined ? 'missing' : 'ok'}, search naming the fact `
+            : `write ${saved === undefined ? 'missing' : 'ok'}, search naming the fact `
               + `${found === undefined ? 'missing' : 'ok'}; memory calls: `
               + (memory.length === 0 ? 'none' : memory.map((call) =>
                 `${actionOf(call) || '?'} ${describeFailure(call)} result=${excerpt(textOf(call.result), 80)}`).join('; ')),
