@@ -263,6 +263,11 @@ interface OwnerOnlyCall {
  * `owner_only` and refuses them before any method runs.
  */
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
+  // The account's own authorities: onboarding's finish and the owner's
+  // display name. A workspace token that could write either could reset
+  // every sibling workspace's setup or rename the account it lives under.
+  { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
+  { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
   { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
   // The device Sandbox switch. A workspace holds no device authority at all
   // after F5/F6; this one additionally names the reason it can never move to a

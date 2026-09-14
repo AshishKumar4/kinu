@@ -2546,6 +2546,15 @@ export {
 } from './read-models/app-routes';
 
 export {
+  type AccountOnboarding,
+  needsOnboarding,
+  ONBOARDING_STEPS,
+  type OnboardingStepId,
+} from './read-models/account';
+
+export { DISPLAY_NAME_MAX, displayNameProblem } from './read-models/account';
+
+export {
   CLIENT_ERROR_ENDPOINT,
   CLIENT_RENDER_FAILED,
   CLIENT_ERROR_MAX_REQUEST_BYTES,

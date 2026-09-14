@@ -4,9 +4,14 @@
  * that mount panels onto other chrome, so `mount` stays a dispatch and the
  * frame bodies stay out of it.
  *
- *   ?frame=setupmodal&panel=providers|mcp|cli
+ *   /gallery.html?frame=setupmodal&panel=providers|mcp|cli
  *     → the home page's Setup card opening an account panel in place, with
  *       the shipped chrome (sidebar + HomePage) behind the modal.
+ *
+ *   /gallery.html?frame=welcome&step=0..3
+ *     → the onboarding wizard itself: full-screen, no chrome, stepped to the
+ *       requested panel. The profile fixture answers `onboardedAt: null` for
+ *       this frame, which is what makes the account a new one.
  */
 import { lazy, Suspense } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -18,7 +23,24 @@ import { ACCOUNT_PANELS, AccountPanelModal } from "@/components/account/AccountP
 // photograph; the modal frame keeps the same boundary through lazy().
 const HomePage = lazy(() => import("@/pages/HomePage"));
 
+const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
+
 const AccountPanelParam = v.picklist(ACCOUNT_PANELS);
+
+const WelcomeStepParam = v.picklist(["0", "1", "2", "3"]);
+
+/** The wizard alone: `mount` wraps every frame in the account provider, so
+ *  the frame supplies nothing but the page — no sidebar, no chrome the wizard
+ *  would never ship behind. */
+export function WelcomeFrame() {
+  const parsed = v.safeParse(WelcomeStepParam, new URLSearchParams(location.search).get("step"));
+
+  return (
+    <Suspense fallback={<div className="flex h-screen items-center justify-center p-bg"><Loader size="base" /></div>}>
+      <WelcomePage initialStep={parsed.success ? Number(parsed.output) : 0} />
+    </Suspense>
+  );
+}
 
 export function SetupModalFrame() {
   const parsed = v.safeParse(AccountPanelParam, new URLSearchParams(location.search).get("panel"));

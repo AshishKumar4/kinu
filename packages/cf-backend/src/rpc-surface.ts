@@ -224,6 +224,7 @@ function inheritedDescriptor<Instance extends object>(instance: Instance, name: 
  */
 const USER_DO_METHODS = [
   'createReleaseChange',
+  'completeOnboarding',
   'decideReleaseApproval',
   'deleteCredential',
   'deviceRpc',
@@ -295,6 +296,7 @@ const USER_DO_METHODS = [
   'setConfig',
   'setCredential',
   'setDeviceTier',
+  'setDisplayName',
   'setWorkspaceDisplayName',
   'startCodexDeviceFlow',
   'touchWorkspace',

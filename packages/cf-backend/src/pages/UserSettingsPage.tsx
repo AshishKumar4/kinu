@@ -29,13 +29,13 @@
  */
 import { startTransition, useState, useCallback, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Button, Loader } from "@cloudflare/kumo";
 import {
   PlugIcon, PlugsConnectedIcon, UserCircleIcon, ArrowSquareOutIcon, TrashIcon,
   ArrowLeftIcon, DesktopTowerIcon, WarningIcon, PencilSimpleIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  getProfile,
+  getProfile, setDisplayName,
   acknowledgeUnstoppedDevice, registerDevice, renameDevice, revokeDevice,
   listDeviceConsents, revokeDeviceConsent, setDeviceSandboxTier,
   type UserDevice, type DeviceConsent,
@@ -51,9 +51,47 @@ import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevic
 import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
+import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain } from '@kinu.run/core/obs';
+
+/** The Profile card's editable half: the shared DisplayNameField plus the
+ *  quiet Save that stays asleep until the name actually changed. Kept out of
+ *  the CardSlot body because it owns state. */
+function ProfileNameEditor({ profile, onSaved }: {
+  profile: { email: string; displayName: string | null } | null;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(profile?.displayName ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const stored = profile?.displayName ?? '';
+  const changed = name.trim() !== stored.trim();
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+
+    try { await setDisplayName(name); onSaved(); }
+    catch (cause) { setError(renderThrownChain({ cause })); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <DisplayNameField value={name} onChange={setName} saving={saving} />
+        </div>
+        <Button variant="secondary" size="sm" disabled={!changed || saving} onClick={save}>
+          {saving ? <Loader size="sm" /> : null} Save
+        </Button>
+      </div>
+      {error && <p className="text-xs p-danger">{error}</p>}
+    </div>
+  );
+}
 
 /** The page frame both states of the page share: the way back, the title,
  *  and what everything under it applies to. */
@@ -112,16 +150,19 @@ export default function UserSettingsPage() {
           <Card title="Profile" icon={UserCircleIcon}>
             <CardSlot resource={profile.resource} what="your profile" onRetry={profile.reload}>
               {(p) => (
-                <dl className="grid gap-5 sm:grid-cols-2">
-                  <div>
-                    <dt className="p-meta p-text-3">Email</dt>
-                    <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
-                  </div>
-                  <div>
-                    <dt className="p-meta p-text-3">Member since</dt>
-                    <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
-                  </div>
-                </dl>
+                <div className="space-y-5">
+                  <ProfileNameEditor profile={p} onSaved={profile.reload} />
+                  <dl className="grid gap-5 sm:grid-cols-2">
+                    <div>
+                      <dt className="p-meta p-text-3">Email</dt>
+                      <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
+                    </div>
+                    <div>
+                      <dt className="p-meta p-text-3">Member since</dt>
+                      <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
+                    </div>
+                  </dl>
+                </div>
               )}
             </CardSlot>
           </Card>

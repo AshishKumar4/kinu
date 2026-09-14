@@ -26,9 +26,11 @@ import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, P
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
-import { removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
+import { removeWorkspace, type WorkspaceEntry } from "../lib/user-api";
+import { useAccount } from "@/hooks/use-account";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
+import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { agentTitle, workspaceTitle } from "./SubordinateTabs";
@@ -178,23 +180,17 @@ export default function Sidebar() {
     remove: removeFromRoster,
   } = useWorkspaceRoster();
 
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [profileFailed, setProfileFailed] = useState(false);
+  const account = useAccount();
+  const profile = lastValue(account.profile);
+  const profileFailed = account.profile.status === "error";
   const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const userMenuRef = useRef<HTMLDivElement>(null);
-
-
-  useEffect(() => {
-    getProfile().then(
-      (profile) => { setProfile(profile); setProfileFailed(false); },
-      () => setProfileFailed(true),
-    );
-  }, []);
 
   // Reflect the open workspace's live status on its roster row, and carry its
   // nested agent roster for the mock's indented block.

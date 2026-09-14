@@ -148,7 +148,8 @@ import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspa
 import { CreateWebhookModal, NewWebhookCard, SupervisePage } from "@/pages/SupervisePage";
 import type { EvolutionEntry } from "@/components/surfaces/supervise-evolution";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { SetupModalFrame } from "@/gallery-account";
+import { SetupModalFrame, WelcomeFrame } from "@/gallery-account";
+import { AccountProvider } from "@/hooks/use-account";
 import SharedPage from "@/pages/SharedPage";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
@@ -235,7 +236,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   // fixture that type-checks can still fail the schema it is read through.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
-    createdAt: NOW - 90 * 864e5, lastSeenAt: NOW,
+    createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
   },
   // The registry answers { entries, total }, the envelope `listWorkspaces`
   // validates; a bare array parses as nothing and HomePage photographs its
@@ -269,9 +270,9 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
 });
 
 /* The frames the account fixture answers: settings sections, and the surfaces
-   that mount the account panels in place (setupmodal now; the wizard, plugins
-   and workspaces frames join when their commits land). */
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal"]);
+   that mount the account panels in place — the setup modal and the wizard
+   today; plugins and workspaces join when their commits land. */
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome"]);
 
 /* Account-settings failure rig. The browser owns the two transitions: Codex
    stays failed until `gallery:settings-heal`; the gateway read stays pending
@@ -293,8 +294,26 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
 }
 
 async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
+  if (path === "/api/user/onboarding/complete" && method === "POST") {
+    return fixtureJson({ onboardedAt: NOW });
+  }
+
+  if (path === "/api/user/profile" && method === "PATCH") {
+    const patch = v.safeParse(v.object({ displayName: v.string() }), JSON.parse(v.parse(v.string(), body)));
+    const displayName = patch.success ? patch.output.displayName : "Owner";
+
+    return fixtureJson({
+      email: "owner@example.com", displayName,
+      createdAt: NOW - 864e5, lastSeenAt: NOW,
+      onboardedAt: frame === "welcome" ? null : NOW - 864e5,
+    });
+  }
+
   if (path === "/api/user/profile") {
-    return fixtureJson({ email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW });
+    return fixtureJson({
+      email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
+      onboardedAt: frame === "welcome" ? null : NOW - 864e5,
+    });
   }
 
   if (path === "/api/user/credentials") {
@@ -6019,6 +6038,8 @@ async function mount() {
     // The home chrome with one account panel open over it, as the Setup card
     // draws it: `&panel=providers|mcp|cli` picks the modal's body.
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
+    // The onboarding wizard, stepped: `&step=0..3` picks which panel is open.
+    ["welcome", { node: <WelcomeFrame />, entries: ["/welcome"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -6259,7 +6280,7 @@ async function mount() {
   }
 
   createRoot(document.getElementById("root")!).render(
-    <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
+    <StrictMode><MemoryRouter initialEntries={entries}><AccountProvider><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></AccountProvider></MemoryRouter></StrictMode>,
   );
 }
 
