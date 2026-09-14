@@ -96,16 +96,16 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, initRunEventTables,
+  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY, initRunEventTables,
   parseJsonValue, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
-import { createUserUiMessage, type AgentTurnResult } from '../../packages/cli/src/agent-client';
+import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
-  compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
+  absorbingRunId, compareRunEventOrder, createTestSql, evalNameSlug, evalTargetVerdict, evalWorkspaceName,
   infraBoundary, resolveEvalBackend, scoreTrajectory, testActorHandle, workerSession,
   EVAL_BACKEND_ENV,
   type EvalScoreRow,
@@ -393,6 +393,10 @@ export interface PublicResponseFrame {
   readonly body?: string;
   readonly done?: boolean;
   readonly error?: boolean;
+  /** The DO's own admission verdict, on the done frame alone: 'mid-turn' when
+   *  the send was spliced into the run already open, 'turn' when it opened one
+   *  of its own. Absent on streamed bodies and on builds that predate the field. */
+  readonly landed?: 'mid-turn' | 'turn';
   /** Set by the DO on every frame of a stream it REPLAYS. Carried because the
    *  accumulator needs it to stay idempotent across a resume. */
   readonly replay?: boolean;
@@ -423,6 +427,7 @@ const FrameSchema = v.object({
   id: v.optional(v.string()),
   body: v.optional(v.string()),
   done: v.optional(v.boolean()),
+  landed: v.optional(v.picklist(['mid-turn', 'turn'])),
   /** The DO sets `error: true` on a terminal failure frame and carries the text
    *  in `body`; an RPC reply's `error` is the failure itself, which may be a
    *  string or a structured value. One field, two producers, so both shapes are
@@ -463,6 +468,7 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
         done: frame.output.done,
         error: frame.output.error === true,
         replay: frame.output.replay,
+        landed: frame.output.landed,
       },
     };
   }
@@ -527,12 +533,21 @@ function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
 /** What one turn produced. The SHIPPED result type, because the accumulator
  *  behind it is the shipped one: a second shape would be a second thing to keep
  *  in step with the chunk vocabulary. */
-export type PublicTurn = AgentTurnResult;
+/** What a send resolves to: the turn it opened, or the absorbing run's id
+ *  when the done frame answered `mid-turn` — the run whose close the case's
+ *  observation window is open until. */
+export type PublicSendResult =
+  | { readonly landed: 'mid-turn'; readonly absorbedBy: string | null }
+  | ({ readonly landed: 'turn' } & AgentTurnResult);
+
+/** The recorder's settled value is the wire's own result — what the send's
+ *  done frame SAID — before the absorbing run's close is known. */
+export type PublicTurn = AgentSendResult;
 
 export interface PublicTurnRecorder {
   /** Feed one response frame. */
   apply(frame: PublicResponseFrame): void;
-  /** The settled turn, or null while it is still open. */
+  /** The send's settled result, or null while it is still open. */
   settled(): PublicTurn | null;
 }
 
@@ -548,9 +563,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
   let settled: PublicTurn | null = null;
 
   const stream = new CloudTurnStream(() => {}, (result) => {
-    // A mid-turn send carries no turn of its own — it spliced into one this
-    // recorder is not tracking, so the settled record stays null.
-    if (result.landed === 'turn') settled = result;
+    settled = result;
   });
 
   return {
@@ -567,7 +580,14 @@ export function recordPublicTurn(): PublicTurnRecorder {
         stream.apply(frame.body, frame.replay === true);
       }
 
-      if (frame.done === true) stream.settle();
+      // The done frame is the DO's verdict on WHERE the send landed. A
+      // mid-turn answer opens no stream of its own — `settle` would mint a
+      // turn record out of nothing, and the caller would hold a zero-step
+      // turn beside the absorbing run that actually answered.
+      if (frame.done === true) {
+        if (frame.landed === 'mid-turn') stream.landedMidTurn();
+        else stream.settle();
+      }
     },
     settled: () => settled,
   };
@@ -754,12 +774,17 @@ const HistorySchema = v.array(v.object({
     type: v.string(),
     text: v.optional(v.string()),
   }))),
+  metadata: v.optional(v.record(v.string(), JsonValueSchema)),
 }));
 
 /** One durable message, as the web pane's seed carries it. */
 export interface PublicMessage {
   readonly role: string;
   readonly text: string;
+  /** For a user row that landed mid-turn: the step index of the step it was
+   *  spliced into — the product's own statement of where inside the absorbing
+   *  turn the model read it. Absent on every other row. */
+  readonly landedAtStep?: number;
 }
 
 /** A turn in flight: the id the DO knows it by, and the promise it settles. A
@@ -767,7 +792,7 @@ export interface PublicMessage {
  *  issued while this one is still open. */
 export interface PublicSubmission {
   readonly requestId: string;
-  readonly settled: Promise<PublicTurn>;
+  readonly settled: Promise<PublicSendResult>;
 }
 
 /** The display name every eval workspace is created under, used twice when a
@@ -873,6 +898,10 @@ export class KinuPublicSession {
     readonly resolve: (turn: PublicTurn) => void;
     readonly reject: (error: Error) => void;
   }>();
+  /** Done-frame arrival instants for sends the DO answered `mid-turn` — the
+   *  landing instant the absorbing run is named at, in the run events' own
+   *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
+  private readonly midTurnLandings = new Map<string, string>();
   private readonly rpcs = new Map<string, {
     readonly resolve: (result: JsonValue) => void;
     readonly reject: (error: Error) => void;
@@ -966,24 +995,68 @@ export class KinuPublicSession {
       this.rpc('setSoul', [markdown]));
   }
 
-  /** Start a turn and hand back its id and its promise. */
+  /** Start a turn and hand back its id and its promise. The promise resolves
+   *  when the run that ANSWERS the prompt closes — the prompt's own turn, or
+   *  the run it spliced into when the done frame answers `mid-turn`. */
   submit(text: string): PublicSubmission {
     const socket = this.requireSocket();
     const requestId = this.mintId('turn');
     const recorder = recordPublicTurn();
 
-    const settled = new Promise<PublicTurn>((resolve, reject) => {
+    const admitted = new Promise<PublicTurn>((resolve, reject) => {
       this.turns.set(requestId, { recorder, resolve, reject });
       socket.send(encodeChatRequest({ requestId, text }));
+    });
+
+    // The observation window IS the absorbing run: a mid-turn landing is
+    // counted under the run that was open when it landed, so the send resolves
+    // only when THAT run's `run_end` is on the wire — not at the done frame,
+    // which precedes the steps the splice provokes.
+    const settled: Promise<PublicSendResult> = admitted.then(async (result) => {
+      if (result.landed !== 'mid-turn') return result;
+
+      const landedAt = this.midTurnLandings.get(requestId) ?? null;
+      this.midTurnLandings.delete(requestId);
+
+      return { landed: 'mid-turn', absorbedBy: await this.awaitAbsorbingRunEnd(landedAt) };
     });
 
     return { requestId, settled };
   }
 
+  /**
+   * Poll the run log until the run that absorbed a mid-turn send has closed.
+   *
+   * `landedAt` names the landing instant; the absorbing run is the one open
+   * then (see {@link absorbingRunId}). The run is found on the FIRST read —
+   * its `run_start` precedes the landing by definition — but its `run_end`
+   * trails the done frame, so the loop waits on that rather than on finding
+   * it. `null` rather than a hang when the log shows nothing the landing
+   * could belong to.
+   */
+  private async awaitAbsorbingRunEnd(landedAt: string | null): Promise<string | null> {
+    const deadline = Date.now() + 300_000;
+
+    for (;;) {
+      const events = await this.runEvents();
+      const runId = absorbingRunId(events, landedAt ?? new Date().toISOString());
+
+      if (runId === null) return null;
+
+      if (events.some((event) => event.runId === runId && event.type === 'run_end')) return runId;
+
+      if (Date.now() >= deadline) return null;
+
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
   /** One user turn, awaited to settle. Every ledger row a suite reads is written
    *  when the turn closes, so a read before settle reports a zero denominator
-   *  from a turn that was merely still running. */
-  prompt(text: string): Promise<PublicTurn> {
+   *  from a turn that was merely still running. A send the DO answers
+   *  `mid-turn` resolves when the run it spliced into closes — the same
+   *  denominator rule, one run further up. */
+  prompt(text: string): Promise<PublicSendResult> {
     return infraBoundary(`turn on ${this.input.origin}/${this.workspace}`, () =>
       this.submit(text).settled);
   }
@@ -1131,13 +1204,23 @@ export class KinuPublicSession {
       },
     );
 
-    return rows.map((row) => ({
-      role: row.role,
-      text: (row.parts ?? [])
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text ?? '')
-        .join(''),
-    }));
+    return rows.map((row) => {
+      const spliceStep = v.safeParse(v.number(), row.metadata?.[STEER_STEP_METADATA_KEY]);
+
+      const message: PublicMessage = {
+        role: row.role,
+        text: (row.parts ?? [])
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text ?? '')
+          .join(''),
+      };
+
+      // SAFETY: `v.number()` above already proved the metadata value is a
+      // number — the splice step is a field the row either carries or lacks.
+      if (spliceStep.success) return { ...message, landedAtStep: spliceStep.output };
+
+      return message;
+    });
   }
 
   /**
@@ -1378,6 +1461,11 @@ export class KinuPublicSession {
     const turn = this.turns.get(frame.frame.id);
 
     if (!turn) return;
+
+    if (frame.frame.done === true && frame.frame.landed === 'mid-turn') {
+      this.midTurnLandings.set(frame.frame.id, new Date().toISOString());
+    }
+
     turn.recorder.apply(frame.frame);
     const done = turn.recorder.settled();
 
@@ -1393,6 +1481,7 @@ export class KinuPublicSession {
   private failInFlight(reason: string): void {
     const turns = [...this.turns.values()];
     this.turns.clear();
+    this.midTurnLandings.clear();
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();
 

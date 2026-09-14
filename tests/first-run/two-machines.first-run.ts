@@ -125,7 +125,7 @@ describe(SUITE, () => {
             + 'ask me which one.',
           );
 
-          const unnamedReply = await lastAnswer(session, unnamed.text);
+          const unnamedReply = await lastAnswer(session, unnamed.landed === 'turn' ? unnamed.text : '');
           // The ask the executor is required to raise, by its own words
           // (`deviceFleetAsk`): both machines named, so the person or the model
           // can choose. Matched on the two NAMES rather than on the sentence:
@@ -143,7 +143,7 @@ describe(SUITE, () => {
             + 'it printed and nothing else.',
           );
 
-          const namedReply = await lastAnswer(session, named.text);
+          const namedReply = await lastAnswer(session, named.landed === 'turn' ? named.text : '');
           const alphaLog = alpha.execLog();
           const betaLog = beta.execLog();
 
