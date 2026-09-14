@@ -1203,6 +1203,34 @@
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "relative",
+      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "egress",
+      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "egress",
+      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "relative",
+      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
+      "decision": "protected"
     }
   ]
 }
