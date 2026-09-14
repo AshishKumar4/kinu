@@ -823,7 +823,7 @@ describe('discoverSkills', () => {
     for (const fragment of [
       'class Slate extends SlateObject', 'this.storage', 'this.sql',
       'kinu:slate', 'slate://', 'env.agent.send', 'env.ai.run',
-      'persists across restarts once Nimbus retains the facet',
+      'persists across code edits, restarts and eviction',
     ]) {
       expect(skill!.body).toContain(fragment);
     }
