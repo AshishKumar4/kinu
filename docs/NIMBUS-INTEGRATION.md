@@ -9,32 +9,29 @@ describes lives in `packages/cf-backend/src/runtime.ts` and
 The tree carries no Nimbus source. Four Nimbus patches live under `patches/`,
 listed below. Earlier fixes went upstream to `AshishKumar4/Nimbus` and published.
 Packages come from the registry at exact pinned versions, checked against the
-package manifests and `bun.lock` on 2026-08-24:
+package manifests and `bun.lock` on 2026-09-14:
 
 | Package | Version | Declared in |
 |---|---|---|
-| `@nimbus-sh/core` | 0.6.0 | `packages/core`, `packages/cf-backend` |
-| `@nimbus-sh/sdk` | 0.3.1 | `packages/cf-backend` |
-| `@nimbus-sh/worker` | 0.4.0 | `packages/cf-backend` |
+| `@nimbus-sh/core` | 0.8.0 | `packages/core`, `packages/cf-backend`, `packages/cli-backend` |
+| `@nimbus-sh/sdk` | 0.5.0 | `packages/cf-backend` |
+| `@nimbus-sh/worker` | 0.6.0 | `packages/cf-backend` |
 | `@nimbus-sh/runtime-bash` | 5.2.37 | `packages/cli-backend` |
 | `@nimbus-sh/runtime-cpython` | 3.13.14 | `packages/cli-backend` |
 
-`packages/core` is the only workspace package that declares
-`@nimbus-sh/fabric`, at 0.2.0 (`packages/core/package.json:15`), and it imports
+`packages/core` and `packages/cf-backend` are the two workspace packages that declare
+`@nimbus-sh/fabric`, at 0.4.0 (`packages/core/package.json:28`), and core imports
 it directly: `core/src/events/outbox.ts:30` builds its outbox on
 `@nimbus-sh/fabric/outbox.js`. `@nimbus-sh/worker` also depends on fabric, so
 the resolved tree holds it either way.
 
-`patches/` holds nine files. Eight are `patchedDependencies` entries that bun
-applies at install. Four of those are Nimbus patches:
-`@nimbus-sh%2Fcore@0.6.0.patch`, `@nimbus-sh%2Ffabric@0.2.0.patch`,
-`@nimbus-sh%2Fplatform@0.1.0.patch`, and `@nimbus-sh%2Fworker@0.4.0.patch`. The
-other four are `@plannotator%2Fui@0.30.0.patch`,
-`@cloudflare%2Fsandbox@0.12.8.patch`, `agents@0.22.0.patch`, and
-`@cloudflare%2Fcodemode@0.5.1.patch`. The core patch
-re-points `esbuild-wasm` at its browser entrypoint (`esbuild-wasm/esm/browser.js`) so the
-Worker bundle does not instantiate the Go-imports build. All eight are declared in
-the root `package.json`'s `patchedDependencies`. The sandbox patch makes the SDK's handler-map assignments MERGE, so configuring a bucket
+No Nimbus package is patched: `@nimbus-sh/core` 0.8.0, `fabric` 0.4.0,
+`worker` 0.6.0, `sdk` 0.5.0 and `platform` 0.3.0 (published 2026-09-14) carry
+everything the four earlier patches did. The `patchedDependencies` entries
+that remain are `@plannotator%2Fui@0.30.0.patch`,
+`@cloudflare%2Fsandbox@0.12.8.patch`, `@cloudflare%2Fcontainers@0.3.7.patch`,
+`agents@0.22.0.patch`, `@cloudflare%2Fcodemode@0.5.1.patch` and
+`@cloudflare%2Fthink@0.17.0.patch`, all declared in the root `package.json`. The sandbox patch makes the SDK's handler-map assignments MERGE, so configuring a bucket
 mount cannot unbind an outbound handler the host installed
 (`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). The codemode
 patch adds the `./normalize` subpath export and the `dist/normalize.js` behind

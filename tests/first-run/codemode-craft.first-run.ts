@@ -53,6 +53,7 @@ import type { RunEvent } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
+import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 
 const SUITE = 'First-run · codemode-craft';
 
@@ -114,7 +115,14 @@ describe(SUITE, () => {
         const before = new Set((await session.craftedTools()).map((tool) => tool.name));
 
         const turn = await session.prompt(ASK);
-        const events = await session.runEvents();
+
+        // The ask may have spliced into genesis: its calls are the absorbing
+        // run's, from the step the splice landed in onward.
+        const events = firstRunTurnEvents(await session.runEvents(), ASK, {
+          splicedAtStep: firstRunSpliceStep(await session.history(), ASK),
+          absorbedBy: turn.landed === 'mid-turn' ? turn.absorbedBy : undefined,
+        });
+
         const calls = events.filter(isToolCallEnd);
         const codemode = calls.filter((call) => call.name === 'execute_tools');
 
@@ -139,7 +147,10 @@ describe(SUITE, () => {
         // The reply, from the durable transcript rather than from the streamed
         // turn: what a user reads when they come back is the stored answer.
         const history = await session.history();
-        const reply = history.filter((row) => row.role === 'assistant').at(-1)?.text ?? turn.text;
+
+        const reply = history.filter((row) => row.role === 'assistant').at(-1)?.text
+          ?? (turn.landed === 'turn' ? turn.text : '');
+
         // Digits-only comparison, so a reply that writes `45` inside a sentence
         // counts and one that writes `450` or `4.5` does not.
         const carriesAnswer = new RegExp(`(?<![0-9.])${String(ANSWER)}(?![0-9.])`).test(reply);

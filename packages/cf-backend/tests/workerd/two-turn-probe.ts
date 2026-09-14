@@ -123,9 +123,11 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
+    Reflect.deleteProperty(this, 'submissionRows');
+    Reflect.deleteProperty(this, 'inboxState');
     Reflect.deleteProperty(this, 'seedStaleDrainEvent');
     Reflect.deleteProperty(this, 'runEventWake');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'seedStaleDrainEvent', 'runEventWake']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'submissionRows', 'inboxState', 'seedStaleDrainEvent', 'runEventWake']);
   }
 
   /** The request-owned input rows the real chat intake persisted, exactly as
@@ -187,6 +189,29 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       }));
   }
 
+
+  /** The durable submission rows a rerun leaves: whether the resumed turn was
+   *  admitted (`accepted`), and which status it reached — the row that says the
+   *  first prompt's turn ran its model call or never opened one. */
+  async submissionRows(): Promise<Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>> {
+    return this.actorState.storage.sql
+      .exec('SELECT submission_id, idempotency_key, status, messages_applied_at, completed_at FROM cf_think_submissions ORDER BY created_at')
+      .toArray()
+      .map((row) => ({
+        submissionId: String(row.submission_id),
+        idempotencyKey: row.idempotency_key === null ? null : String(row.idempotency_key),
+        status: String(row.status),
+        appliedAt: row.messages_applied_at === null ? null : Number(row.messages_applied_at),
+        completedAt: row.completed_at === null ? null : Number(row.completed_at),
+      }));
+  }
+
+  /** Whether the inbox reads a turn in flight — the public `busy` getter the
+   *  busy route itself consults, so a probe sees the admission the same way
+   *  `routeBusyChat` does. */
+  async inboxState(): Promise<{ busy: boolean }> {
+    return { busy: this.orch.inbox.busy };
+  }
   /** The state a dead activation leaves behind: an event bound to a drain turn
    *  whose lease outlived it. `consumed_at = 0` is older than any grace, so the
    *  next wake's unbindStale must re-pend it rather than skip it as live work. */
@@ -378,9 +403,11 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
-  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'seedStaleDrainEvent' | 'runEventWake'>;
+  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'submissionRows' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake'>;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
+
+type SocketHistory = v.InferOutput<typeof SocketHistorySchema>;
 
 /** The drive result shapes live in `./two-turn-shapes` — same schemas, same
  *  InferOutput types, but importable from the workerd typecheck project,
@@ -762,10 +789,16 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
   /** One chat frame over a real socket, persisted before it returns, and the
    *  exact wire it sent — the frame the cold test replays after the reset. */
+  private async socketHistory(target: QueueTarget, workspace: string): Promise<SocketHistory> {
+    const page = await target.fetch(`https://probe/agents/orchestrator-agent/${workspace}/get-messages`);
+
+    return v.parse(SocketHistorySchema, await page.json());
+  }
+
   private async sendChatFrame(
     target: QueueTarget, workspace: string, text: string,
     file?: { filename: string; mediaType: string; url: string },
-  ): Promise<string> {
+  ): Promise<{ wire: string; landed: string | null }> {
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
       headers: { Upgrade: 'websocket' },
     }));
@@ -774,6 +807,25 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
     if (response.status !== 101 || socket === null) throw new Error('queue probe did not receive a real WebSocket');
     socket.accept();
+
+    // The done frame carries `landed` — 'mid-turn' when the request was
+    // busy-routed into a splice, 'turn' when it opened its own turn. Capture
+    // it so a probe can assert WHICH admission the prompt took, not only that
+    // it persisted.
+    const landed = Promise.withResolvers<string | null>();
+    socket.addEventListener('message', (event) => {
+      const raw = v.is(v.string(), event.data) ? event.data : '';
+
+      const frame = v.safeParse(
+        v.object({ type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()) }),
+        raw.startsWith('{') ? JSON.parse(raw) : {},
+      );
+
+      if (frame.success && frame.output.type === 'cf_agent_use_chat_response'
+        && frame.output.done === true && frame.output.id === text) {
+        landed.resolve(frame.output.landed ?? null);
+      }
+    });
 
     const wire = JSON.stringify({
       type: 'cf_agent_use_chat_request', id: text,
@@ -801,11 +853,18 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
         if (Date.now() - began > 20000) throw new Error(`socket input ${text} left no durable trace`);
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
+
+      // Wait on the done frame for `landed` — but a busy-routed frame can close
+      // before the socket echoes it, so bound the wait and fall back to null.
+      const landedValue = await Promise.race([
+        landed.promise,
+        new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+
+      return { wire, landed: landedValue };
     } finally {
       socket.close(1000, 'frame sent');
     }
-
-    return wire;
   }
 
 
@@ -830,8 +889,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
       : undefined;
 
-    const bWire = await this.sendChatFrame(target, workspace, 'QUEUE-B', attach);
-    const cWire = await this.sendChatFrame(target, workspace, 'QUEUE-C');
+    const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', attach)).wire;
+    const cWire = (await this.sendChatFrame(target, workspace, 'QUEUE-C')).wire;
 
     // Both admissions are durable before the reset: B's and C's mid-turn sends
     // each wrote a pending_steers row bound to the turn they will land in.
@@ -956,6 +1015,124 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     await target.runEventWake(marker);
   }
 
+  /** A fresh workspace's first chat: the claim, the socket's real
+   *  first-run bench never saw. Returns the model-call count and the turn's
+   *  terminal evidence so the test can say where the drive stopped. */
+  async firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; factsCompressed: number }> {
+    const workspace = 'first-chat-workspace';
+    const owner = 'first-chat-owner';
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'First Chat');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-queue');
+    await target.setSoul('# First Chat\n\n## Mission\n\nAnswer briefly.');
+    await this.httpReset();
+
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    try {
+      // One real chat frame — the same wire the composer's first prompt puts
+      // on the socket. No held genesis, no queue arm: the first-run repro is
+      // whether this one intake reaches the model.
+      const { wire } = await this.sendChatFrame(target, workspace, 'FIRST-CHAT');
+
+      void wire;
+
+      // The model call, if it happens, is the discriminating datum — wait on
+      // it directly rather than on the turn's settle, which the stall never
+      // reaches.
+      const began = Date.now();
+
+      for (;;) {
+        const calls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
+
+        if (calls.length > 0) break;
+
+        if (Date.now() - began > 20000) break; // stall is the finding, not a hang
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      }
+
+      return {
+        http: await this.httpCalls(),
+        steers: await target.pendingSteers(),
+        receipts: await target.inputReceipts(),
+        factsCompressed: recording.emitted.filter((e) => e.event === 'memory.facts_compressed').length,
+      };
+    } finally {
+      restore();
+    }
+  }
+
+
+  /** The first-run regression: a workspace born with a mission (genesis turn
+   *  running) receives its owner's first chat — which lands as a mid-turn
+   *  steer — and the resume after genesis settles must reach the model. */
+  async firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; inbox: { busy: boolean }; landed: string | null; transcript: SocketHistory; submissions: Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>; failures: Array<{ event: string; code: string; cause: string }> }> {
+    const workspace = 'first-gen-workspace';
+    const owner = 'first-gen-owner';
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'First Gen');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-queue');
+    await target.setSoul('# First Gen\n\n## Mission\n\nAnswer briefly.');
+    await this.httpReset();
+
+    const recording = createRecordingLogger();
+    setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    // A real genesis turn — the shape create-with-mission leaves. No hold:
+    // the first-run stall is a FIRST turn that admits but never calls the
+    // model, so genesis runs to its own completion while the owner chat lands
+    // inside it (a steer) and is answered by that same turn.
+    const genesis = await target.beginGenesisTurn();
+
+    if (!genesis.started) throw new Error('first-gen probe genesis did not start');
+
+    const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT');
+
+    // The first prompt is a steer on the live genesis turn: it lands inside
+    // that turn's step, not behind it — one model call carries both. Wait on
+    // the call AND the turn's close (busy falls when genesis settles) so the
+    // landed row and the retired steer are both observable before the read.
+    const began = Date.now();
+
+    for (;;) {
+      const calls = (await this.httpCalls()).filter((call) => call.model === 'probe-queue');
+      const inbox = await target.inboxState();
+
+      if (calls.length >= 1 && !inbox.busy) break;
+
+      if (Date.now() - began > 30000) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    }
+
+    return {
+      http: await this.httpCalls(),
+      steers: await target.pendingSteers(),
+      receipts: await target.inputReceipts(),
+      submissions: await target.submissionRows(),
+      inbox: await target.inboxState(),
+      landed,
+      transcript: await this.socketHistory(target, workspace),
+      failures: recording.emitted
+        .filter((e) => e.code !== null)
+        .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
+    };
+  }
 
 
   /** One parameterized drive for the lifecycle variants: its own workspace so

@@ -103,6 +103,7 @@ import {
   resolvePublicSessionPlan,
   scorePublicLedger,
   type KinuPublicSession,
+  type PublicSendResult,
   type PublicSessionPlan,
 } from './public-session';
 import { DEGENERATE_EVENTS, LEDGER_EVENTS } from './fixtures/public-session-frames';
@@ -201,6 +202,11 @@ interface TrajectoryCase {
     readonly events: readonly RunEvent[];
     readonly history: readonly { readonly role: string; readonly text: string }[];
     readonly steerLanding: 'mid-turn' | 'turn' | null;
+    /** Prompt → the run that answered it when its send landed `mid-turn` —
+     *  the absorbing run's id, read off the send result at settle. Absent for
+     *  prompts that opened their own turn, and on the credential-free fixtures
+     *  that never held a socket. */
+    readonly absorbedBy?: ReadonlyMap<string, string>;
   }): Promise<readonly EvalSubgoal[]>;
 }
 
@@ -272,12 +278,12 @@ const CASES: readonly TrajectoryCase[] = [
       'Read public-artifact.txt back with your file tool and reply with only its exact contents.',
     ],
     budget: { ...PUBLIC_BUDGET },
-    async verify({ session, events, history }) {
+    async verify({ session, events, history, absorbedBy }) {
       const bytes = await session.readFile('public-artifact.txt', { allowMissing: true });
       const answers = history.filter((row) => row.role === 'assistant');
       const users = history.filter((row) => row.role === 'user');
       const lastAnswer = answers.at(-1)?.text ?? '';
-      const calls = promptToolCalls(events, this.turns[1]);
+      const calls = promptToolCalls(events, this.turns[1], absorbedBy);
       requireMeasuredToolOutcomes(calls);
       const reads = calls.filter((call) => fileActionOn(call, 'read', 'public-artifact.txt'));
 
@@ -369,7 +375,7 @@ const CASES: readonly TrajectoryCase[] = [
       + 'reply with only PASS or FAIL.',
     ],
     budget: { ...PUBLIC_BUDGET },
-    async verify({ session, events, history }) {
+    async verify({ session, events, history, absorbedBy }) {
       const originalTests = await session.readFile('broken.test.mjs', { allowMissing: true });
       const fixedSource = await session.readFile('broken.mjs', { allowMissing: true });
 
@@ -386,8 +392,8 @@ const CASES: readonly TrajectoryCase[] = [
       }
 
       const fixed = originalTests === BROKEN_TEST && result.exitCode === 0;
-      const firstCalls = promptToolCalls(events, this.turns[0]).filter(isRecoveryTestRun);
-      const reruns = promptToolCalls(events, this.turns[1]).filter(isRecoveryTestRun);
+      const firstCalls = promptToolCalls(events, this.turns[0], absorbedBy).filter(isRecoveryTestRun);
+      const reruns = promptToolCalls(events, this.turns[1], absorbedBy).filter(isRecoveryTestRun);
       requireMeasuredToolOutcomes(firstCalls);
       requireMeasuredToolOutcomes(reruns);
 
@@ -433,19 +439,19 @@ const CASES: readonly TrajectoryCase[] = [
       + 'the single word BLUEBIRD into found-public.txt with your file tool. Reply with only DONE.',
     ],
     budget: { ...PUBLIC_BUDGET },
-    async verify({ session, events }) {
+    async verify({ session, events, absorbedBy }) {
       const found = await session.readFile('found-public.txt', { allowMissing: true });
 
-      const saves = promptToolCalls(events, this.turns[0])
+      const saves = promptToolCalls(events, this.turns[0], absorbedBy)
         .filter((call) => toolActionOn(call, 'memory', 'save'));
 
-      const searches = promptToolCalls(events, this.turns[1])
+      const searches = promptToolCalls(events, this.turns[1], absorbedBy)
         .filter((call) => toolActionOn(call, 'memory', 'search'));
 
       requireMeasuredToolOutcomes(saves);
       requireMeasuredToolOutcomes(searches);
 
-      const writes = promptToolCalls(events, this.turns[1])
+      const writes = promptToolCalls(events, this.turns[1], absorbedBy)
         .filter((call) => fileActionOn(call, 'write', 'found-public.txt'));
 
       return [
@@ -479,13 +485,13 @@ const CASES: readonly TrajectoryCase[] = [
       + 'status-public.txt with your file tool. Reply with only DONE.',
     ],
     budget: { ...PUBLIC_BUDGET },
-    async verify({ session, events }) {
+    async verify({ session, events, absorbedBy }) {
       const status = await session.readFile('status-public.txt', { allowMissing: true });
 
-      const adds = promptToolCalls(events, this.turns[0])
+      const adds = promptToolCalls(events, this.turns[0], absorbedBy)
         .filter((call) => toolActionOn(call, 'tasks', 'add'));
 
-      const second = promptToolCalls(events, this.turns[1]);
+      const second = promptToolCalls(events, this.turns[1], absorbedBy);
       const updates = second.filter((call) => toolActionOn(call, 'tasks', 'update'));
       const lists = second.filter((call) => toolActionOn(call, 'tasks', 'list'));
       requireMeasuredToolOutcomes(adds);
@@ -525,10 +531,18 @@ function isToolCallEnd(event: RunEvent): event is Extract<RunEvent, { type: 'too
 }
 
 /** Identify the requested prompt's run, not a later autonomous run or an
- * earlier run that happens to use the same tool. Missing identity earns no credit. */
-function promptToolCalls(events: readonly RunEvent[], prompt: string | undefined): Extract<RunEvent, { type: 'tool_call_end' }>[] {
+ * earlier run that happens to use the same tool. Missing identity earns no
+ * credit. A prompt absorbed mid-turn opens no `run_start` of its own: its run
+ * is the one it landed in, read off `absorbedBy` rather than the log. */
+function promptToolCalls(
+  events: readonly RunEvent[], prompt: string | undefined,
+  absorbedBy?: ReadonlyMap<string, string>,
+): Extract<RunEvent, { type: 'tool_call_end' }>[] {
   if (prompt === undefined) return [];
   const runs = new Set(events.filter((event) => event.type === 'run_start' && event.userMessage === prompt).map((event) => event.runId));
+  const absorbed = absorbedBy?.get(prompt);
+
+  if (absorbed !== undefined) runs.add(absorbed);
 
   return events.filter(isToolCallEnd).filter((call) => runs.has(call.runId));
 }
@@ -935,12 +949,22 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         for (const file of entry.seed) await session.writeFile(file.path, file.content);
 
         let steerLanding: 'mid-turn' | 'turn' | null = null;
+        const absorbedBy = new Map<string, string>();
         const [first, ...rest] = entry.turns;
 
         if (first === undefined) throw new Error(`${entry.id} declares no turns`);
 
+        // A send the DO answers `mid-turn` is answered by the run it spliced
+        // into, and that run's id comes back on the result — the case's
+        // subgoals read their tool calls off it through `absorbedBy`.
+        const recordLanding = (prompt: string, result: PublicSendResult): void => {
+          if (result.landed === 'mid-turn' && result.absorbedBy !== null) {
+            absorbedBy.set(prompt, result.absorbedBy);
+          }
+        };
+
         if (entry.steer === undefined) {
-          await session.prompt(first);
+          recordLanding(first, await session.prompt(first));
         } else {
           // The composer's own race, driven deliberately: the turn is submitted
           // and the correction goes in while it is open. `send` answers
@@ -950,10 +974,10 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           // one happens is a property of the model's pace.
           const submission = session.submit(first);
           steerLanding = await session.steer(entry.steer);
-          await submission.settled;
+          recordLanding(first, await submission.settled);
         }
 
-        for (const turn of rest) await session.prompt(turn);
+        for (const turn of rest) recordLanding(turn, await session.prompt(turn));
 
         const { events, history } = await collect();
         observedModels.note(events);
@@ -963,7 +987,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         // recorded no closed turn or no tool call is refused rather than scored.
         refuseDegenerateTrajectory(entry.id, totals);
 
-        const subgoals = await entry.verify({ session, events, history, steerLanding });
+        const subgoals = await entry.verify({ session, events, history, steerLanding, absorbedBy });
         // THE EVIDENCE, before any verdict on it. The ledger, the durable
         // transcript and the verdicts land under the directory the record names,
         // so a missed subgoal can be read back from what the trajectory did.
@@ -1004,13 +1028,23 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         console.warn(`    [trajectory] ${outcome.detail}`);
 
         // ── Denominators first ─────────────────────────────────────────────
-        // The CONVERSATION before the subgoals: a run that closed one turn is
-        // not a multi-turn measurement, and holding it to a continuity subgoal
-        // would report an agent failure for a transport one.
-        expect(totals.turns,
-          `${entry.id} closed ${String(totals.turns)} turn(s) over `
-          + `${String(entry.turns.length)} prompts — a conversation this family can measure needs `
-          + 'at least two closed turns').toBeGreaterThanOrEqual(2);
+        // The CONVERSATION before the subgoals, stated the way the product
+        // answers prompts: EVERY prompt's absorbing turn closed. A prompt the
+        // DO spliced mid-turn opens no run of its own, so counting closed runs
+        // against prompt count would report the absorb semantic as a stall.
+        const closedRuns = new Set(events.filter((event) => event.type === 'run_end').map((event) => event.runId));
+
+        const unclosed = entry.turns.filter((prompt) => {
+          const own = events.find((event) => event.type === 'run_start' && event.userMessage === prompt);
+          const runId = own?.runId ?? absorbedBy.get(prompt);
+
+          return runId === undefined || !closedRuns.has(runId);
+        });
+
+        expect(unclosed,
+          `${entry.id}: ${unclosed.length} prompt(s) have no closed absorbing turn over `
+          + `${String(totals.turns)} closed turn(s) — the first-run measurement needs every `
+          + 'prompt answered').toEqual([]);
 
         // The SUBGOALS, each named in its own failure. Recorded above whatever
         // happens here, so the record carries the partial credit either way.

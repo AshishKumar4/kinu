@@ -33,7 +33,7 @@ import { resolve } from 'node:path';
 import { workerSession, type EvalObservation, type EvalSubgoal } from '@kinu.run/test-utils';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, type RunEvent } from '../../packages/core/src/index';
 import { runTuiInPty } from '../../packages/cli/tests/helpers/pty-screen';
-import { firstRunTurnSettlement } from './turn-settlement';
+import { firstRunSpliceStep, firstRunTurnSettlement } from './turn-settlement';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -203,14 +203,20 @@ async function turnLanded(
  */
 async function turnSettled(
   session: {
-    history(): Promise<readonly { role: string; text: string }[]>;
+    history(): Promise<readonly { role: string; text: string; landedAtStep?: number }[]>;
     runEvents(): Promise<readonly RunEvent[]>;
   },
   marker: string,
 ): Promise<'replied' | { ended: string }> {
   for (;;) {
     const history = await session.history();
-    const outcome = firstRunTurnSettlement(await session.runEvents(), marker);
+
+    // A marker the TUI sent while a turn was live is spliced into that turn —
+    // the settlement to await is the absorbing run's, and the splice step on
+    // the marker's row keeps the run's own pre-landing work out of the window.
+    const outcome = firstRunTurnSettlement(await session.runEvents(), marker, {
+      splicedAtStep: firstRunSpliceStep(history, marker),
+    });
 
     if (outcome !== 'pending' && outcome !== 'replied') return outcome;
     const user = history.findIndex((row) => row.role === 'user' && row.text.includes(marker));

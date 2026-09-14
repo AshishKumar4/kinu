@@ -99,10 +99,13 @@ echo "Operator-only checks need their explicit target and authority; skipped cas
 # `bun --bun` is REQUIRED, not stylistic: the pty case spawns through
 # `Bun.spawnSync` and the public session opens a header-carrying WebSocket,
 # neither of which exists under node-hosted vitest.
+# Positional arguments are case file filters, passed straight to vitest — a
+# targeted re-drive of a named subset needs no second runner, and the spend
+# and JUnit assertions below apply to it the same way.
 # A failing suite must still report the spend it incurred.
 set +e
 bun --bun vitest run --config vitest.first-run.config.ts \
-  --reporter=default --reporter=junit --outputFile="$JUNIT"
+  --reporter=default --reporter=junit --outputFile="$JUNIT" "$@"
 STATUS=$?
 
 # WHAT IT SPENT, and the assertion that it spent anything. Two of the five cases

@@ -127,7 +127,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     '  async fetch() { return new Response("not found", { status: 404 }); }',
     '}',
   ].join('\n'), bindChain = true, cred: VfsCred = CRED_SESSION_USER,
-  browser?: string, project: Record<string, JsonValue> = { main: 'server.ts' }): Promise<void> {
+  browser?: string, project: Record<string, JsonValue> = { main: 'server.ts' },
+  app: { port: number } | null = { port: 8789 }): Promise<void> {
     await this.stop();
     const root = '/home/user/slates/notes';
     const files = this.vfs.as(CRED_KERNEL);
@@ -139,7 +140,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     const storageStub = this.env.SLATE_PROCESS_PROBE.get(this.ctx.id);
 
     const boot = {
-      key: crypto.randomUUID(), owner: JSON.stringify([this.ctx.id.toString(), root, cred]), root, port: 8789, cred,
+      key: crypto.randomUUID(), owner: JSON.stringify([this.ctx.id.toString(), root, cred]), root, app, cred,
       globalOutbound: codemodeEgress(),
       project: parseSlateProject(project),
     };
@@ -244,6 +245,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     try {
       const request = new Request('https://slate.invalid/__rpc', { headers: { Upgrade: 'websocket', 'x-slate-call': invocation } });
+
+      if (process.port === null) throw new KinuError('unavailable', 'a private slate process has no port');
       const response = await this.ports.routeRequest(process.port, request, '/__rpc');
 
       if (response === null) return { error: 'no process listening' };
@@ -273,6 +276,8 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     SlateProcessProbeDO.invocations.set(invocation, { id: 'probe', chain });
 
     try {
+      if (process.port === null) throw new KinuError('unavailable', 'a private slate process has no port');
+
       const response = await this.ports.routeRequest(process.port,
         new Request(`https://slate.invalid${path}`, { headers: { 'x-slate-call': invocation } }),
         path);

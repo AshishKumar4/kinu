@@ -452,7 +452,7 @@ export class OrchestratorAgent extends ActorAgent {
 
         if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
       },
-      refreshPreview: (port) => this.slates.refreshPreview(port),
+      ensureSlate: (owner) => this.slates.ensureDurable(owner),
       slateInvocation: (port) => this.slates.previewInvocation(port),
     });
 
@@ -5099,12 +5099,10 @@ export class OrchestratorAgent extends ActorAgent {
       registerPort: (pid, port, target, owner) => this.hostedWorkspace().registerPort(pid, port, target, owner),
       unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
-      expose: async (port) => {
-        const ports = this.hostedWorkspace().box('agent:main').ports;
-
-        if (!ports?.expose) throw new KinuError('unsupported', 'Workspace port exposure is not available');
-
-        return ports.expose(port);
+      apps: {
+        ensure: (input) => this.hostedWorkspace().apps.ensure(input),
+        remove: (owner) => this.hostedWorkspace().apps.remove(owner),
+        url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       },
     });
 
