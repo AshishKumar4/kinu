@@ -86,6 +86,7 @@ export const FIRST_RUN_CASES = [
   'workspace-title',
   'snapshot-after-turn',
   'every-tool',
+  'sandbox-mount-write',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -234,6 +235,23 @@ export const FIRST_RUN_DEFECTS = {
       + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
       + 'closed with an error or a refusal; `reported` when the agent never says DONE.',
   },
+  'sandbox-mount-write': {
+    id: 'sandbox-mount-write',
+    found: 'Writing a new file through the /sandbox mount was refused `io` — '
+      + '"FileNotFoundError: File not found: /workspace/broken.mjs" — while the same '
+      + 'container write through sandbox.writeFile in a program succeeded, and '
+      + 'sandbox.listFiles(\'\') refused on the SDK\'s ValidationFailedError.',
+    missedBecause: 'the conformance double answered a missing read with an exit code, the SDK\'s '
+      + 'old contract; the deployed SDK throws FileNotFoundError, which the file view passed '
+      + 'through unclassified, so the write path\'s create-vs-overwrite probe read a create as an '
+      + 'I/O failure. No test ever called listFiles with an empty path.',
+    provedRedAt: 'b4d2c6001',
+    redDirection: 'retained run bench-artifacts/trajectory-product-1789381033344/'
+      + 'public-failure-recovery/events.jsonl on 2026-09-14: event 9 is the refused create '
+      + '(reason io, FileNotFoundError on a path the list at event 7 showed absent), event 12 is '
+      + 'the namespace write succeeding where the mount write failed and listFiles(\'\') refusing '
+      + 'on ValidationFailedError.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -334,6 +352,7 @@ const SHORT_SUBJECT = {
   'workspace-title': 'title',
   'snapshot-after-turn': 'snapshot',
   'every-tool': 'tools',
+  'sandbox-mount-write': 'mount',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
