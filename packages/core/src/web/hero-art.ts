@@ -66,6 +66,11 @@ interface Branch {
   bendX: number;
   bendY: number;
   boost: number;
+  /** The drawn look, eased toward what the phase asks so a cut fades. */
+  tone: number;
+  glow: number;
+  alpha: number;
+  width: number;
   outX0: number;
   outY0: number;
   outCx: number;
@@ -142,7 +147,20 @@ const HISTORY_X = 0.34;
 
 const REGROW_DELAY = 1.1;
 
-const PAN_RATE = 1.6;
+/** The camera is a critically damped follow: it leaves rest gently, never
+ *  passes PAN_SPEED (view widths per second) or changes speed faster than
+ *  PAN_ACCEL, and settles on its target without overshoot. Measured
+ *  2026-09-14: a first-order ease moved the picture 0.014 view widths in
+ *  the one frame after a restart, from near rest; the cap here is 0.004. */
+const PAN_OMEGA = 1.3;
+
+const PAN_SPEED = 0.25;
+
+const PAN_ACCEL = 0.6;
+
+/** How fast a branch's drawn look follows its phase: a prune or a restart
+ *  reads as a fade of about a quarter second, never a one-frame cut. */
+const LOOK_RATE = 4;
 
 const BEND_RATE = 7;
 
@@ -156,6 +174,8 @@ interface LayerState {
   readonly random: () => number;
   offset: number;
   offsetTarget: number;
+  /** The camera's speed, view widths per second. */
+  velocity: number;
   generationStart: number;
   regrowAt: number;
   bestId: number;
@@ -188,6 +208,11 @@ export interface SearchTreeOptions {
 export interface PointerReach {
   readonly radius: number;
   readonly maxBend: number;
+}
+
+/** The camera's contract: the picture never moves faster than this, in view widths per second. */
+export interface PanReach {
+  readonly maxSpeed: number;
 }
 
 /** mulberry32: small, fast, and identical on every engine. */
@@ -227,6 +252,8 @@ function pointOnCurve(branch: Branch, t: number): readonly [number, number] {
 export class SearchTree {
   static readonly pointer: PointerReach = { radius: POINTER_RADIUS, maxBend: MAX_BEND };
 
+  static readonly pan: PanReach = { maxSpeed: PAN_SPEED };
+
   private readonly layers: LayerState[];
 
   private readonly sparks: Spark[] = [];
@@ -242,6 +269,12 @@ export class SearchTree {
   private pointerX: number | null = null;
 
   private pointerY: number | null = null;
+
+  /** The parallax the far layers drift by, eased toward the pointer so a
+   *  pointer entering or leaving the stage never moves them in one frame. */
+  private driftX = 0;
+
+  private driftY = 0;
 
   private strokes = new Float32Array(new ArrayBuffer(4 * STROKE_STRIDE * 512));
 
@@ -332,6 +365,7 @@ export class SearchTree {
 
   step(dt: number): void {
     this.elapsed += dt;
+    this.settleDrift(dt);
 
     for (const layer of this.layers) this.stepLayer(layer, dt);
     this.stepSparks(dt);
@@ -340,16 +374,10 @@ export class SearchTree {
   frame(): SearchTreeFrame {
     let count = 0;
     let nodeCount = 0;
-    const pointerX = this.pointerX;
-    const pointerY = this.pointerY;
-    const driftX = pointerX === null ? 0 : pointerX - 0.5;
-    const driftY = pointerY === null ? 0 : pointerY - 0.5;
 
     for (const layer of this.layers) {
-      const shiftX = -layer.offset - driftX * layer.rules.drift;
-      const shiftY = -driftY * layer.rules.drift * this.aspect;
-      const best = layer.branches.get(layer.bestId);
-      const bestValue = best === undefined ? ROOT_SCORE : best.value;
+      const shiftX = -layer.offset - this.driftX * layer.rules.drift;
+      const shiftY = -this.driftY * layer.rules.drift * this.aspect;
 
       for (const branch of layer.branches.values()) {
         const parent = layer.branches.get(branch.parent);
@@ -372,42 +400,14 @@ export class SearchTree {
         }
 
         if (branch.outX1 < -0.05 && branch.outX0 < -0.05) continue;
-        const eased = easeGrowth(branch.progress);
-        const strength = clamp(1 - (bestValue - branch.value) / GLOW_SPAN, 0, 1);
-        let glow = 0.15 + 0.85 * strength;
-        let tone = TONE_ACCENT;
-        let alpha = 0.55 + 0.45 * strength;
-        let width = layer.rules.width * (0.85 + 0.75 * strength);
-
-        if (branch.onPath) {
-          const lead = clamp(1 - (bestValue - branch.value) / (GLOW_SPAN * 3), 0, 1);
-          glow = 0.6 + 0.4 * lead;
-          tone = TONE_BRIGHT;
-          alpha = 1;
-          width = layer.rules.width * (1.5 + 0.8 * lead);
-        }
-
-        if (branch.phase === 'ember') {
-          const fade = 1 - branch.phaseAge / EMBER_SECONDS;
-          tone = TONE_EMBER;
-          glow = 0.25 + 0.35 * fade;
-          alpha = 0.28 + 0.5 * fade;
-          width = layer.rules.width * 0.9;
-        } else if (branch.phase === 'ash') {
-          tone = TONE_ASH;
-          glow = 0;
-          alpha = 0.14 * (1 - branch.phaseAge / ASH_SECONDS);
-          width = layer.rules.width * 0.75;
-        }
-
-        glow = clamp(glow + branch.boost * 0.5, 0, 1);
+        const glow = clamp(branch.glow + branch.boost * 0.5, 0, 1);
         const recede = clamp((branch.outX1 + 0.04) / HISTORY_X, 0, 1);
-        alpha = clamp(alpha + branch.boost * 0.3, 0, 1) * layer.rules.alpha * recede;
-        count = this.pushStroke(count, branch, eased, width, glow, tone, alpha);
+        const alpha = clamp(branch.alpha + branch.boost * 0.3, 0, 1) * layer.rules.alpha * recede;
+        count = this.pushStroke(count, branch, easeGrowth(branch.progress), branch.width, glow, branch.tone, alpha);
 
         if (branch.phase === 'alive' && (branch.liveChildren === 0 || branch.id === layer.bestId)) {
           const radius = branch.id === layer.bestId ? 3.2 * layer.rules.width : 1.9 * layer.rules.width;
-          nodeCount = this.pushNode(nodeCount, branch.outX1, branch.outY1, radius, glow, tone, alpha, branch.layer);
+          nodeCount = this.pushNode(nodeCount, branch.outX1, branch.outY1, radius, glow, branch.tone, alpha, branch.layer);
         }
       }
     }
@@ -417,8 +417,8 @@ export class SearchTree {
 
       if (layer === undefined) continue;
       const life = 1 - spark.age / spark.life;
-      const shiftX = -layer.offset - driftX * layer.rules.drift;
-      const shiftY = -driftY * layer.rules.drift * this.aspect;
+      const shiftX = -layer.offset - this.driftX * layer.rules.drift;
+      const shiftY = -this.driftY * layer.rules.drift * this.aspect;
       nodeCount = this.pushNode(nodeCount, spark.x + shiftX, spark.y + shiftY, spark.size * life, 0.7 * life, TONE_EMBER, 0.75 * life * layer.rules.alpha, spark.layer);
     }
 
@@ -525,6 +525,10 @@ export class SearchTree {
       bendX: 0,
       bendY: 0,
       boost: 0,
+      tone: TONE_BRIGHT,
+      glow: 0,
+      alpha: 0,
+      width: 0,
       outX0: 0,
       outY0: 0,
       outCx: 0,
@@ -539,6 +543,7 @@ export class SearchTree {
       random,
       offset: 0,
       offsetTarget: 0,
+      velocity: 0,
       generationStart: 0,
       regrowAt: -1,
       bestId: id,
@@ -548,7 +553,7 @@ export class SearchTree {
   }
 
   private stepLayer(layer: LayerState, dt: number): void {
-    layer.offset += (layer.offsetTarget - layer.offset) * (1 - Math.exp(-dt * PAN_RATE));
+    this.pan(layer, dt);
     let population = 0;
 
     for (const branch of layer.branches.values()) {
@@ -570,6 +575,7 @@ export class SearchTree {
     this.backUp(layer);
     this.markPath(layer);
     this.prune(layer);
+    this.settleLooks(layer, dt);
 
     // Children spawned here join the walk at its end, still growing, and
     // match none of the branches below; a deleted entry is simply skipped.
@@ -599,6 +605,69 @@ export class SearchTree {
     } else if (layer.regrowAt < 0 && this.elapsed - layer.generationStart >= layer.rules.generationSeconds) {
       this.restart(layer);
     }
+  }
+
+  /** A critically damped follow with a speed cap: the camera leaves rest
+   *  gently and settles on its target without overshoot, so the picture
+   *  never moves faster than `SearchTree.pan.maxSpeed`. */
+  private pan(layer: LayerState, dt: number): void {
+    const gap = layer.offsetTarget - layer.offset;
+    const pull = clamp(PAN_OMEGA * PAN_OMEGA * gap - 2 * PAN_OMEGA * layer.velocity, -PAN_ACCEL, PAN_ACCEL);
+    layer.velocity = clamp(layer.velocity + pull * dt, -PAN_SPEED, PAN_SPEED);
+    layer.offset += layer.velocity * dt;
+  }
+
+  /** The far layers' parallax follows the pointer at the bend's own rate,
+   *  and returns to rest when it leaves. */
+  private settleDrift(dt: number): void {
+    const ease = 1 - Math.exp(-dt * BEND_RATE);
+    const targetX = this.pointerX === null ? 0 : this.pointerX - 0.5;
+    const targetY = this.pointerY === null ? 0 : this.pointerY - 0.5;
+    this.driftX += (targetX - this.driftX) * ease;
+    this.driftY += (targetY - this.driftY) * ease;
+  }
+
+  /** What a branch's phase asks it to look like this instant. */
+  private lookOf(layer: LayerState, branch: Branch, bestValue: number): readonly [tone: number, glow: number, alpha: number, width: number] {
+    if (branch.phase === 'ember') {
+      const fade = 1 - branch.phaseAge / EMBER_SECONDS;
+
+      return [TONE_EMBER, 0.25 + 0.35 * fade, 0.28 + 0.5 * fade, layer.rules.width * 0.9];
+    }
+
+    if (branch.phase === 'ash') return [TONE_ASH, 0, 0.14 * (1 - branch.phaseAge / ASH_SECONDS), layer.rules.width * 0.75];
+
+    if (branch.onPath) {
+      const lead = clamp(1 - (bestValue - branch.value) / (GLOW_SPAN * 3), 0, 1);
+
+      return [TONE_BRIGHT, 0.6 + 0.4 * lead, 1, layer.rules.width * (1.5 + 0.8 * lead)];
+    }
+
+    const strength = clamp(1 - (bestValue - branch.value) / GLOW_SPAN, 0, 1);
+
+    return [TONE_ACCENT, 0.15 + 0.85 * strength, 0.55 + 0.45 * strength, layer.rules.width * (0.85 + 0.75 * strength)];
+  }
+
+  private bestValueOf(layer: LayerState): number {
+    return layer.branches.get(layer.bestId)?.value ?? ROOT_SCORE;
+  }
+
+  /** Move a branch's drawn look toward what its phase asks by `mix` of the gap. */
+  private dress(layer: LayerState, branch: Branch, bestValue: number, mix: number): void {
+    const [tone, glow, alpha, width] = this.lookOf(layer, branch, bestValue);
+    branch.tone = tone;
+    branch.glow += (glow - branch.glow) * mix;
+    branch.alpha += (alpha - branch.alpha) * mix;
+    branch.width += (width - branch.width) * mix;
+  }
+
+  /** Every branch's drawn look eases toward what its phase asks, so a prune
+   *  or a restart is a fade and never a one-frame cut. */
+  private settleLooks(layer: LayerState, dt: number): void {
+    const bestValue = this.bestValueOf(layer);
+    const ease = 1 - Math.exp(-dt * LOOK_RATE);
+
+    for (const branch of layer.branches.values()) this.dress(layer, branch, bestValue, ease);
   }
 
   private backUp(layer: LayerState): void {
@@ -636,8 +705,7 @@ export class SearchTree {
   }
 
   private prune(layer: LayerState): void {
-    const best = layer.branches.get(layer.bestId);
-    const bestValue = best === undefined ? ROOT_SCORE : best.value;
+    const bestValue = this.bestValueOf(layer);
 
     for (const branch of layer.branches.values()) {
       if (branch.phase !== 'alive' || branch.onPath || branch.phaseAge < branch.grace) continue;
@@ -756,6 +824,10 @@ export class SearchTree {
       bendX: 0,
       bendY: 0,
       boost: 0,
+      tone: TONE_ACCENT,
+      glow: 0,
+      alpha: 0,
+      width: 0,
       outX0: 0,
       outY0: 0,
       outCx: 0,
@@ -766,6 +838,7 @@ export class SearchTree {
 
     parent.liveChildren += 1;
     layer.branches.set(id, branch);
+    this.dress(layer, branch, this.bestValueOf(layer), 1);
   }
 
   private bend(layer: LayerState, dt: number): void {
