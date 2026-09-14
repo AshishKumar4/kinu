@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/orchestrator/signals.ts b/packages/core/src/orchestrator/signals.ts
-index 8c9641750..6cb492833 100644
---- a/packages/core/src/orchestrator/signals.ts
-+++ b/packages/core/src/orchestrator/signals.ts
-@@ -150,7 +150,7 @@ export class SignalDelivery implements SignalDeliverer {
-     for (const signal of drained) this.moveCard(signal.cardId, 'shown');
-     const bodies = [...drained, ...steering].map(stepBody);
+diff --git a/packages/core/src/orchestrator/inbox.ts b/packages/core/src/orchestrator/inbox.ts
+index 562ffdc86..1b8e817df 100644
+--- a/packages/core/src/orchestrator/inbox.ts
++++ b/packages/core/src/orchestrator/inbox.ts
+@@ -365,7 +365,7 @@ export class Inbox implements AgentInbox {
  
--    return this.injections.drain(ctx, bodies.length > 0
-+    return this.injections.drain(ctx, bodies.length > 1
-       ? [{ message: { role: 'user', content: bodies.join('\n\n') } }]
-       : []);
-   }
+     const bodies = [...events, ...steering].map(stepBody);
+ 
+-    if (bodies.length > 0) {
++    if (bodies.length > 1) {
+       entries.push({ message: { role: 'user', content: bodies.join('\n\n') }, durable: false });
+     }
+ 
