@@ -46,6 +46,9 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('history'), id: SlateDirectoryName }),
   v.strictObject({ op: v.literal('fork'), version: VersionId }),
   v.strictObject({ op: v.literal('restore'), id: SlateDirectoryName, version: VersionId }),
+  // The one explicit end of a slate: its processes, its durable application
+  // (port, capability, retained storage) and its tree. Versions stay.
+  v.strictObject({ op: v.literal('remove'), id: SlateDirectoryName }),
   // Blueprints: what a version would export, publishing it, and the rows.
   v.strictObject({ op: v.literal('inspect'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
   v.strictObject({ op: v.literal('publish'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
@@ -57,7 +60,7 @@ export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
 
 const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
   list: true, history: true, inspect: true, shares: true,
-  preview: false, call: false, commit: false, fork: false, restore: false, publish: false, unshare: false,
+  preview: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
 };
 
 /** The parsed operation contract: listing, history, inspection and the share rows read; every other operation can change resources or run authored code. */

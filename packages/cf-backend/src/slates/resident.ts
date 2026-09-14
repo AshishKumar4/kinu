@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { ContentRef } from '@agent-core/core';
 import type { ContentStore } from '@agent-core/core/content';
 import { processes, type ResidentFacetEnv } from '@nimbus-sh/fabric/workerd-facet-host.js';
-import { facetImagePath, facetImagePathDigest, type ResidentBootSpec } from '@nimbus-sh/fabric/process-fabric.js';
+import { facetImagePath, facetImagePathDigest, type ProcessHostParams, type ResidentBootSpec } from '@nimbus-sh/fabric/process-fabric.js';
 import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import { CRED_KERNEL, type RouteableFacetTarget, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
@@ -11,6 +11,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import slateVendor from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
+import { acquireDurableFacetSlot } from '../nimbus-programmatic';
 
 /** The bundle texts a booted slate serves — `client` and `shell` only when
  *  the slate declares a browser surface. */
@@ -21,6 +22,8 @@ export interface SlateBootArtifacts {
 }
 
 export interface ResidentSlateProcess extends SlateProcess {
+  /** The port the durable application listens on; null for a caller's private process, which is reached by RPC alone. */
+  readonly port: number | null;
   request(request: Request): Promise<Response>;
   /** The browser's WebSocket upgrade against the process's own entrypoint. */
   connect(request: Request): Promise<Response>;
@@ -41,11 +44,17 @@ export interface ResidentSlateDeps {
 
 export interface ResidentSlateBoot {
   readonly key: string;
-  /** Logical identity independent of source revision and process incarnation. */
+  /** Logical identity independent of source revision and process incarnation: the slate id. */
   readonly owner: string;
   readonly root: string;
   readonly project: SlateProject;
-  readonly port: number;
+  /**
+   * Set when this process IS the slate's durable application: it binds the
+   * reserved port and boots into the facet pinned for the owner, whose SQLite
+   * is kept across every launch. Null spawns a private process — no port, an
+   * ephemeral facet wiped on release.
+   */
+  readonly app: { readonly port: number } | null;
   /** Whose file plane compiles the authored tree: the caller's, never the origin's on its behalf. */
   readonly cred: VfsCred;
   readonly bindings: Readonly<Record<string, Fetcher>>;
@@ -450,6 +459,14 @@ export class ResidentSlateProcesses {
       },
     };
 
+    const params: ProcessHostParams = { pid: entry.pid, workerKey: input.key, boot, writerId, startArgs: {} };
+
+    // The durable application's facet name is allocated out of this object's
+    // storage and pinned for the owner, so `this.sql` re-attaches to the same
+    // store on every launch; a released durable facet is aborted, never
+    // deleted. An ephemeral facet takes a reused slot and is wiped on release.
+    if (input.app !== null) params.facet = { name: await acquireDurableFacetSlot(this.deps.ctx, input.owner), durable: true };
+
     const process = processes(this.deps.ctx, this.deps.env).spawn(
       () => ({ readFile: async (path) => {
         const digest = facetImagePathDigest(path);
@@ -459,7 +476,7 @@ export class ResidentSlateProcesses {
         return this.deps.content.get(new ContentRef(`sha256:${digest}`));
       } }),
       { doId: this.deps.workspace, pid: entry.pid, writerId },
-      { pid: entry.pid, workerKey: input.key, boot, writerId, startArgs: {} },
+      params,
     );
 
     let methods: readonly string[];
@@ -488,7 +505,7 @@ export class ResidentSlateProcesses {
       throw cause;
     }
 
-    await this.deps.registerPort(entry.pid, input.port, process, input.owner);
+    if (input.app !== null) await this.deps.registerPort(entry.pid, input.app.port, process, input.owner);
 
     session.processes.setTerminator(entry.pid, () => {
       this.deps.unregisterPorts(entry.pid);
@@ -505,7 +522,7 @@ export class ResidentSlateProcesses {
     }
 
     return {
-      id: String(entry.pid), port: input.port, methods, artifacts,
+      id: String(entry.pid), port: input.app?.port ?? null, methods, artifacts,
       request: (request) => process.handleHttpRequest(request),
       connect: (request) => process.handleWebSocketRequest(request),
       isRunning: async () => session.processes.get(entry.pid)?.state === 'running',

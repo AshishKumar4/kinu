@@ -91,7 +91,11 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       session: async () => ({ vfs, processes: new SessionProcessSupervisor() }),
       registerPort: async () => { throw new Error('binding probe does not boot a process'); },
       unregisterPorts: () => { throw new Error('binding probe does not register a port'); },
-      expose: async () => { throw new Error('binding probe does not expose a preview'); },
+      apps: {
+        ensure: async () => { throw new Error('binding probe does not boot a process'); },
+        remove: async () => { throw new Error('binding probe does not keep durable applications'); },
+        url: async () => { throw new Error('binding probe does not expose a preview'); },
+      },
       dispatch: async (caller, route) => {
         if (route.kind !== 'tool') throw new Error('Expected a tool binding');
 

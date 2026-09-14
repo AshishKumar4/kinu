@@ -37,6 +37,16 @@ export interface WorkspacePreviewHost {
   token: string;
 }
 
+/**
+ * The URL an exposed port is reachable at, or why this deployment cannot mint
+ * one for this workspace. The reason is written for the Ports surface: without
+ * one, a port that is listening and has no URL vanishes from that surface, and
+ * a single fixed message blames a missing preview host whatever the cause.
+ */
+export type WorkspacePreviewUrl =
+  | { readonly url: string; readonly unavailable?: undefined }
+  | { readonly url?: undefined; readonly unavailable: string };
+
 export function parseWorkspacePreviewLabel(label: string): WorkspacePreviewHost | null {
   const lower = label.toLowerCase();
   const portEnd = lower.indexOf('-');

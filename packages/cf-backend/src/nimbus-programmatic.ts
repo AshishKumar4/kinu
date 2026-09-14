@@ -2,13 +2,14 @@
  * The one reach into `@nimbus-sh/worker`'s session internals.
  *
  * Nimbus's programmatic surface — background processes, listening ports, the R2
- * runtime catalogue, capability-routed preview requests, `git` — is written
- * against a plain host object (`ProgrammaticHost`) rather than against the
- * session Durable Object that usually supplies one. That is exactly what lets
- * Kinu compose it over the workspace it already owns: the functions here run in
- * the actor's own isolate, against the actor's own `ctx.storage.sql`.
+ * runtime catalogue, capability-routed preview requests, durable applications,
+ * `git` — is written against a plain host object (`ProgrammaticHost`) rather
+ * than against the session Durable Object that usually supplies one. That is
+ * exactly what lets Kinu compose it over the workspace it already owns: the
+ * functions here run in the actor's own isolate, against the actor's own
+ * `ctx.storage.sql`.
  *
- * WHY THE PATHS LOOK LIKE THIS. `@nimbus-sh/worker@0.4.0` publishes an
+ * WHY THE PATHS LOOK LIKE THIS. `@nimbus-sh/worker@0.6.0` publishes an
  * `exports` map that stops at `.`, `./router`, `./auth`, `./session-id`,
  * `./preview-host` and `./workspace`, so `@nimbus-sh/worker/session/programmatic`
  * does not resolve — a package-name import is a build error, not a subtlety.
@@ -31,14 +32,32 @@ import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worke
 import type * as routesModule from '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
 import type * as gitModule from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
 
-// The persisted exposure codec is a lightweight Nimbus-owned storage read.
-// It must remain usable on a cold route without importing the runtime graph.
-export { readPortExposure } from '../../../node_modules/@nimbus-sh/worker/dist/session/port-capability.js';
+// The per-port reservation record is Nimbus-owned storage: the owner that holds
+// a port, the capability its URL is built on, and its visibility. These reads
+// and the owner-gated re-adoption stay usable on a cold route without
+// importing the runtime graph.
+export {
+  clearPortCapability,
+  listPortReservations,
+  readPortExposure,
+  readPortReservationByOwner,
+  releasePortReservation,
+  restoreReservedPortCapability,
+} from '../../../node_modules/@nimbus-sh/worker/dist/session/port-capability.js';
+
+// A durable application's facet name, pinned per owner in Durable Object
+// storage so its SQLite is the same store on every launch.
+export {
+  acquireDurableFacetSlot,
+  freeDurableFacetSlot,
+} from '../../../node_modules/@nimbus-sh/worker/dist/facets/durable-slots.js';
 
 export type {
   ProgrammaticExecOptions,
   ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+
+export type { ResidentAppSummary, ResidentIdentity } from '../../../node_modules/@nimbus-sh/worker/dist/facets/manager.js';
 
 type Programmatic = typeof programmaticModule;
 
@@ -48,6 +67,7 @@ type Git = typeof gitModule;
 
 export interface NimbusProgrammatic {
   readonly ensureProgrammaticReady: Programmatic['ensureProgrammaticReady'];
+  readonly rpcEnsureDurableApp: Programmatic['rpcEnsureDurableApp'];
   readonly rpcEnsureRuntimes: Programmatic['rpcEnsureRuntimes'];
   readonly rpcExec: Programmatic['rpcExec'];
   readonly rpcExposePort: Programmatic['rpcExposePort'];
@@ -57,6 +77,7 @@ export interface NimbusProgrammatic {
   readonly rpcListProcesses: Programmatic['rpcListProcesses'];
   readonly rpcListRuntimes: Programmatic['rpcListRuntimes'];
   readonly rpcProcessLogs: Programmatic['rpcProcessLogs'];
+  readonly rpcRemoveDurableApp: Programmatic['rpcRemoveDurableApp'];
   readonly rpcRouteCapabilityPort: Programmatic['rpcRouteCapabilityPort'];
   readonly rpcRunCode: Programmatic['rpcRunCode'];
   readonly rpcStartProcess: Programmatic['rpcStartProcess'];
@@ -67,9 +88,10 @@ export interface NimbusProgrammatic {
    *  this one keeps fetch semantics. */
   readonly routeCapabilityPort: Routes['routeCapabilityPort'];
   /** `git` over a Nimbus filesystem — isomorphic-git against SqliteVFS, with no
-   *  child process and nothing reaching a host's git. Registered by the
-   *  workspace host here, because Kinu composes the workspace itself. */
-  readonly registerGitCommands: Git['registerGitCommands'];
+   *  child process and nothing reaching a host's git. The session registers
+   *  the command itself; the workspace host does the same here, because Kinu
+   *  composes the workspace itself. */
+  readonly runGitCommand: Git['runGitCommand'];
 }
 
 let loading: Promise<NimbusProgrammatic> | null = null;
@@ -84,6 +106,7 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
 
     return {
       ensureProgrammaticReady: programmatic.ensureProgrammaticReady,
+      rpcEnsureDurableApp: programmatic.rpcEnsureDurableApp,
       rpcEnsureRuntimes: programmatic.rpcEnsureRuntimes,
       rpcExec: programmatic.rpcExec,
       rpcExposePort: programmatic.rpcExposePort,
@@ -93,12 +116,13 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
       rpcListProcesses: programmatic.rpcListProcesses,
       rpcListRuntimes: programmatic.rpcListRuntimes,
       rpcProcessLogs: programmatic.rpcProcessLogs,
+      rpcRemoveDurableApp: programmatic.rpcRemoveDurableApp,
       rpcRouteCapabilityPort: programmatic.rpcRouteCapabilityPort,
       rpcRunCode: programmatic.rpcRunCode,
       rpcStartProcess: programmatic.rpcStartProcess,
       rpcUnexposePort: programmatic.rpcUnexposePort,
       routeCapabilityPort: routes.routeCapabilityPort,
-      registerGitCommands: git.registerGitCommands,
+      runGitCommand: git.runGitCommand,
     };
   })();
 

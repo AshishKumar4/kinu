@@ -74,7 +74,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
-  start(source?: string, bindChain?: boolean, cred?: VfsCred, browser?: string, project?: Record<string, JsonValue>): Promise<void>;
+  start(source?: string, bindChain?: boolean, cred?: VfsCred, browser?: string, project?: Record<string, JsonValue>, app?: { port: number } | null): Promise<void>;
   stop(): Promise<void>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   socket(method: string, args?: JsonValue[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
