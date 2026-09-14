@@ -287,6 +287,50 @@ describe('two real turns over the HTTP model seam', () => {
     expect(rebound?.turnId).not.toBe('evt-seeded-dead');
   });
 
+  it('a fresh workspace\'s first chat reaches the model and the turn closes', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('first-chat-driver'));
+
+    // The first-run regression: a fresh workspace's first `cf_agent_use_chat_request`
+    // on the socket — no held genesis, no queue arm — must reach the model.
+    // `spend.json` on the live build had zero calls for these cases.
+    const out = await root.firstChat();
+    const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
+
+    // The admission itself is durable evidence: the first chat writes its own
+    // input receipt, and the model call proves the intake became a turn.
+    expect(out.receipts.length).toBeGreaterThanOrEqual(1);
+    expect(calls.length).toBe(1);
+    expect(out.factsCompressed).toBe(1);
+  });
+
+  it('the owner\'s first chat after genesis rides the genesis turn', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('first-gen-driver'));
+
+    // The absorb contract: the create queues genesis, the owner's first prompt
+    // lands mid-genesis as a steer, and the NEXT step of that same turn carries
+    // it to the model — one call, both prompts, no second turn. The regression
+    // the bench saw was the prompt going nowhere at all: the run admitted but
+    // spend.json showed zero calls. `landed:'mid-turn'` is the done frame's own
+    // report that the splice, not a fresh turn, answered the prompt.
+    const out = await root.firstChatAfterGenesis();
+    const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
+
+    expect(calls).toHaveLength(1);
+
+    // The one call's user rows, in order: the genesis prompt first, then the
+    // chat text spliced in as the landed steer.
+    const human = calls[0]?.users.filter((text) => !text.startsWith('<')) ?? [];
+    expect(human[0]).toContain('This workspace has just been created.');
+    expect(human[1]).toBe('FIRST-PROMPT');
+
+    // The prompt's durable trace: the pending steer row is retired, the landed
+    // user row is persisted under the chat's own id, and the turn closed.
+    expect(out.steers).toHaveLength(0);
+    expect(out.transcript.some((row) => row.role === 'user' && row.id === 'input-FIRST-PROMPT')).toBe(true);
+    expect(out.inbox.busy).toBe(false);
+    expect(out.landed).toBe('mid-turn');
+  });
+
   it('spikes the service-binding RPC, then runs A and B end to end', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('driver'));
 

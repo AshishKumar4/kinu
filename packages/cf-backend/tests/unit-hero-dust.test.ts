@@ -15,9 +15,9 @@ const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, '../../../../core/src/web/
 
 const STAGE_SOURCE = readFileSync(resolve(LANDING_DIR, 'search-tree/stage.ts'), 'utf8');
 
-const DARK: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132] };
+const DARK: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
-const LIGHT: HeroPalette = { mode: 'light', accent: [216, 154, 68], bright: [122, 85, 20], ash: [94, 83, 68] };
+const LIGHT: HeroPalette = { mode: 'light', accent: [216, 154, 68], bright: [122, 85, 20], ash: [94, 83, 68], ground: [233, 226, 211] };
 
 function fieldAfter(seconds: number, seed = 91, count = 56, aspect = 1): DustField {
   const field = new DustField({ seed, count });

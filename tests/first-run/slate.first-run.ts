@@ -73,7 +73,9 @@ describe(SUITE, () => {
         }
 
         const history = await session.history();
-        const reply = history.filter((entry) => entry.role === 'assistant').at(-1)?.text ?? turn.text;
+
+        const reply = history.filter((entry) => entry.role === 'assistant').at(-1)?.text
+          ?? (turn.landed === 'turn' ? turn.text : '');
 
         const subgoals: EvalSubgoal[] = [
           {

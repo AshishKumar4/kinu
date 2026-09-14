@@ -3,7 +3,7 @@
  *
  * Kinu's deployed workspace is `@nimbus-sh/worker`'s session Durable Object,
  * reached through `@nimbus-sh/sdk`. Its extra commands are registered by
- * `initSession` — `git` at dist/session/init.js:457, `npm` at :1927, `npx` at
+ * `initSession` — `git` at dist/session/init.js:460, `npm` at :1927, `npx` at
  * :2311, `node` at :698, `bun` at :847 — and none of them needs a runtime
  * catalog. The interpreter runtimes DO: `nimbus install` reads them out of R2
  * through `env.NIMBUS_RUNTIME_CACHE`, and Kinu does not bind that bucket.
@@ -23,7 +23,7 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { registerGitCommands } from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
+import { runGitCommand } from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
 import { ensureRuntimesProgrammatic } from '../../../node_modules/@nimbus-sh/worker/dist/runtime/package-manager.js';
 
 const databases: Database[] = [];
@@ -74,8 +74,10 @@ async function hostedWorkspace(): Promise<NimbusWorkspace> {
 
   // The two arguments after the filesystem are the Durable Object's own context
   // and env, which only the NETWORK subcommands reach (clone/fetch/pull/push go
-  // through the git-network facet). Local history needs neither.
-  registerGitCommands(workspace.registry, workspace.vfs, undefined, {});
+  // through the git-network facet). Local history needs neither. The session
+  // registers this handler at init.js:460 with its own ctx/env; the probe has
+  // no DO behind it, so both are absent here.
+  workspace.registry.register('git', async (ctx) => runGitCommand(ctx, workspace.vfs, undefined, {}));
 
   return workspace;
 }

@@ -7,34 +7,40 @@ import { resolve } from 'node:path';
 import * as realReact from 'react';
 
 import {
-  NODE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
+  NODE_STRIDE, PULSE_STRIDE, RECESS, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
   type HeroPalette, type SearchTreeFrame, type SearchTreeRenderer,
 } from '@kinu.run/core/web/hero-art';
 import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { SearchTreeHero, type SearchTreeHandle } from '../src/components/landing/search-tree/SearchTreeHero';
 import { createWebGpuRenderer } from '../src/components/landing/search-tree/renderer-webgpu';
+import { keepOutOf } from '../src/components/landing/search-tree/stage';
 
 const TREE_DIR = resolve(import.meta.dir, '../src/components/landing/search-tree');
 
 const CORE_WEB = resolve(import.meta.dir, '../../core/src/web');
 
-const PALETTE: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132] };
+const PALETTE: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
 interface Recording {
   strokes: number;
   fills: number;
+  gradients: number;
   readonly styles: Set<string>;
+  readonly gradientStyles: string[];
 }
 
 /** A CanvasRenderingContext2D that remembers what was asked of it. */
 function recordingSurface(): StrokeSurface & Recording {
   const styles = new Set<string>();
+  const gradientStyles: string[] = [];
 
   const surface: StrokeSurface & Recording = {
     strokes: 0,
     fills: 0,
+    gradients: 0,
     styles,
+    gradientStyles,
     lineWidth: 1,
     lineCap: 'butt',
     strokeStyle: '',
@@ -48,11 +54,30 @@ function recordingSurface(): StrokeSurface & Recording {
     arc: () => undefined,
     stroke: () => {
       surface.strokes += 1;
-      styles.add(String(surface.strokeStyle));
+      const style = String(surface.strokeStyle);
+      styles.add(style);
+
+      if (style.startsWith('gradient(')) gradientStyles.push(style);
     },
     fill: () => {
       surface.fills += 1;
       styles.add(String(surface.fillStyle));
+    },
+    createLinearGradient: () => {
+      surface.gradients += 1;
+      const stops: { offset: number; color: string }[] = [];
+
+      const gradient = {
+        stops,
+        addColorStop(offset: number, color: string): void {
+          stops.push({ offset, color });
+        },
+        toString(): string {
+          return `gradient(${stops.map((stop) => `${stop.color}@${String(stop.offset)}`).join(',')})`;
+        },
+      };
+
+      return gradient;
     },
   };
 
@@ -69,13 +94,15 @@ function frameAfter(seconds: number): SearchTreeFrame {
 
 describe('the frame is what both renderers read', () => {
   test('the canvas renderer draws every visible stroke and node of a frame, nothing else', () => {
-    const frame = frameAfter(8);
+    const frame = frameAfter(12);
     const surface = recordingSurface();
     const renderer: SearchTreeRenderer = createCanvasRenderer(surface, PALETTE);
     renderer.resize(1280, 640, 2);
     renderer.render(frame);
     let visibleStrokes = 0;
     let haloStrokes = 0;
+    let visiblePulses = 0;
+    let haloPulses = 0;
     let visibleNodes = 0;
     let haloNodes = 0;
 
@@ -89,6 +116,16 @@ describe('the frame is what both renderers read', () => {
       if (glow > 0.55) haloStrokes += 1;
     }
 
+    for (let index = 0; index < frame.pulseCount; index += 1) {
+      const alpha = frame.pulses[index * PULSE_STRIDE + 11] ?? 0;
+      const glow = frame.pulses[index * PULSE_STRIDE + 9] ?? 0;
+
+      if (alpha <= 0.004 || (frame.pulses[index * PULSE_STRIDE + 6] ?? 0) === (frame.pulses[index * PULSE_STRIDE + 7] ?? 0)) continue;
+      visiblePulses += 1;
+
+      if (glow > 0.55) haloPulses += 1;
+    }
+
     for (let index = 0; index < frame.nodeCount; index += 1) {
       const alpha = frame.nodes[index * NODE_STRIDE + 5] ?? 0;
       const glow = frame.nodes[index * NODE_STRIDE + 3] ?? 0;
@@ -100,11 +137,52 @@ describe('the frame is what both renderers read', () => {
     }
 
     expect(visibleStrokes).toBeGreaterThan(30);
-    expect(surface.strokes).toBe(visibleStrokes + haloStrokes);
+    expect(frame.pulseCount).toBeGreaterThan(0);
+    expect(surface.strokes).toBe(visibleStrokes + haloStrokes + visiblePulses + haloPulses);
     expect(surface.fills).toBe(visibleNodes + haloNodes);
 
-    // Every colour it painted is one of the three tokens or a mix of them.
-    for (const style of surface.styles) expect(style).toMatch(/^rgba\(\d+,\d+,\d+,[\d.e-]+\)$/u);
+    // Every colour it painted is one of the three tokens or a mix of them: a
+    // flat rgba, or a pulse's gradient from a transparent tail to its head.
+    for (const style of surface.styles) {
+      expect(style).toMatch(/^(?:rgba\(\d+,\d+,\d+,[\d.e-]+\)|gradient\(rgba\(\d+,\d+,\d+,[\d.e-]+\)@0,rgba\(\d+,\d+,\d+,[\d.e-]+\)@1\))$/u);
+    }
+  });
+
+  test('the canvas renderer strokes every pulse with a gradient from a transparent tail to its head', () => {
+    const frame = frameAfter(12);
+    const surface = recordingSurface();
+    const renderer: SearchTreeRenderer = createCanvasRenderer(surface, PALETTE);
+    renderer.resize(1280, 640, 2);
+    renderer.render(frame);
+    let visiblePulses = 0;
+    let haloPulses = 0;
+
+    for (let index = 0; index < frame.pulseCount; index += 1) {
+      const alpha = frame.pulses[index * PULSE_STRIDE + 11] ?? 0;
+      const glow = frame.pulses[index * PULSE_STRIDE + 9] ?? 0;
+
+      if (alpha <= 0.004 || (frame.pulses[index * PULSE_STRIDE + 6] ?? 0) === (frame.pulses[index * PULSE_STRIDE + 7] ?? 0)) continue;
+      visiblePulses += 1;
+
+      if (glow > 0.55) haloPulses += 1;
+    }
+
+    expect(frame.pulseCount).toBeGreaterThan(0);
+    expect(surface.gradients).toBe(visiblePulses + haloPulses);
+
+    for (const style of surface.gradientStyles) {
+      const stops = style.slice('gradient('.length, -1).split(',rgba(');
+      const first = stops[0];
+      const second = stops[1];
+
+      if (first === undefined || second === undefined) throw new Error(`not a two-stop gradient: ${style}`);
+      expect(first).toMatch(/,0\)@0$/u);
+      const headAlpha = Number(second.slice(second.lastIndexOf(',') + 1, second.indexOf(')@')));
+
+      expect(headAlpha).toBeGreaterThan(0);
+    }
+
+    expect(surface.gradientStyles).toHaveLength(visiblePulses + haloPulses);
   });
 
   test('the WebGPU renderer uploads the same arrays at the same strides', () => {
@@ -114,10 +192,13 @@ describe('the frame is what both renderers read', () => {
     // counts, at the simulation's strides: no repacking in between.
     expect(source).toContain('strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE))');
     expect(source).toContain('nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE))');
+    expect(source).toContain('pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE))');
     expect(source).toContain("attributes: { curve: 'float32x4', tip: 'float32x4', look: 'float32x4' }");
     expect(source).toContain("attributes: { point: 'float32x4', look: 'float32x4' }");
+    expect(source).toContain("attributes: { curve: 'float32x4', span: 'float32x4', look: 'float32x4', identity: 'float32x4' }");
     expect(STROKE_STRIDE).toBe(12);
     expect(NODE_STRIDE).toBe(8);
+    expect(PULSE_STRIDE).toBe(16);
   });
 
   test('the WGSL palette resolves the same four tones the canvas renderer does', () => {
@@ -135,6 +216,62 @@ describe('the frame is what both renderers read', () => {
     expect(canvas).toContain('mix(palette.accent, palette.ash, 0.35)');
     expect(wgsl).toContain('mix(palette.ash.rgb, palette.accent.rgb, 0.35 + 0.65 * glow)');
     expect(canvas).toContain('mix(palette.ash, palette.accent, 0.35 + 0.65 * glow)');
+  });
+
+  test('a pulse wears the hot-core mix a node does, in both renderers', () => {
+    const pulses = readFileSync(resolve(TREE_DIR, 'pulses.wgsl'), 'utf8');
+    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
+
+    expect(pulses).toContain('import { Palette, View, glow_scale, recede, to_clip, tone_color } from "./palette.wgsl"');
+    // The tone colour pulled toward bright by its glow, then receded, on the GPU.
+    expect(pulses).toContain('recede(palette, mix(tone_color(palette, look.z, glow), palette.bright.rgb, glow * 0.6)) * glow_scale(palette, glow)');
+    // The same mix on the CPU, shared by nodes and pulses.
+    expect(canvas.split('mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6)').length - 1).toBe(2);
+  });
+
+  test('every tree colour recedes toward the ground by the same RECESS in both renderers', () => {
+    const wgsl = readFileSync(resolve(TREE_DIR, 'palette.wgsl'), 'utf8');
+    const canvas = readFileSync(resolve(CORE_WEB, 'hero-canvas.ts'), 'utf8');
+    const webgpu = readFileSync(resolve(TREE_DIR, 'renderer-webgpu.ts'), 'utf8');
+
+    expect(RECESS).toBeGreaterThan(0.2);
+    expect(RECESS).toBeLessThan(0.5);
+    expect(wgsl).toContain('mix(color, palette.ground.rgb, palette.recess)');
+    expect(canvas).toContain('mix(color, palette.ground, RECESS)');
+    expect(webgpu).toContain('recess: RECESS');
+
+    // Stroke, pulse, and node shaders all draw through it, as all canvas paths do.
+    for (const shader of ['strokes.wgsl', 'pulses.wgsl', 'nodes.wgsl']) {
+      expect(readFileSync(resolve(TREE_DIR, shader), 'utf8')).toContain('recede(palette, ');
+    }
+
+    expect(canvas.split('recede(palette, ').length - 1).toBe(3);
+
+    // The ground the palette carries is what the canvas renderer draws with: a
+    // stroke drawn in the kept path's gold lands between the gold and the ground.
+    const frame = frameAfter(8);
+    const surface = recordingSurface();
+    createCanvasRenderer(surface, PALETTE).render(frame);
+    const goldFull = `rgba(${String(PALETTE.accent[0])},${String(PALETTE.accent[1])},${String(PALETTE.accent[2])},`;
+    const receded = PALETTE.accent.map((channel, index) => Math.round(channel + ((PALETTE.ground[index] ?? 0) - channel) * RECESS));
+    const goldReceded = `rgba(${String(receded[0])},${String(receded[1])},${String(receded[2])},`;
+
+    expect([...surface.styles].some((style) => style.startsWith(goldFull))).toBeFalse();
+    expect([...surface.styles].some((style) => style.startsWith(goldReceded))).toBeTrue();
+  });
+
+  test('the headline box reaches the tree in the host\'s view units', () => {
+    const host = { left: 0, top: 60, right: 1440, bottom: 750, width: 1440, height: 690 };
+    const headline = { left: 88, top: 200, right: 988, bottom: 391, width: 900, height: 191 };
+    const box = keepOutOf(host, headline);
+
+    expect(box).not.toBeNull();
+    expect(box?.left).toBeCloseTo(88 / 1440, 6);
+    expect(box?.top).toBeCloseTo(140 / 690, 6);
+    expect(box?.right).toBeCloseTo(988 / 1440, 6);
+    expect(box?.bottom).toBeCloseTo(331 / 690, 6);
+    expect(keepOutOf(host, null)).toBeNull();
+    expect(keepOutOf({ ...host, width: 0 }, headline)).toBeNull();
   });
 
   test('the frame stays inside the unit box after a long run, so neither renderer clips', () => {
@@ -284,10 +421,20 @@ interface FakeCanvas {
   remove(): void;
 }
 
+interface FakeRect { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number; readonly width: number; readonly height: number }
+
+interface FakeStage {
+  addEventListener(): void;
+  removeEventListener(): void;
+  /** The headline the mount measures for the keep-out; null when the fake has none. */
+  querySelector(selector: string): { getBoundingClientRect(): FakeRect } | null;
+}
+
 interface FakeHost {
-  readonly parentElement: { addEventListener(): void; removeEventListener(): void };
-  appendChild(child: FakeCanvas): void;
-  getBoundingClientRect(): { readonly left: number; readonly top: number; readonly width: number; readonly height: number };
+  readonly parentElement: FakeStage;
+  readonly firstChild: FakeCanvas | null;
+  insertBefore(child: FakeCanvas, before: FakeCanvas | null): void;
+  getBoundingClientRect(): FakeRect;
 }
 
 let hostElement: FakeHost;
@@ -385,9 +532,13 @@ const fakeDocument = {
   removeEventListener(): void {},
 };
 
-const fakeStage = {
+/** The headline's rect the fake stage answers with, in the fake host's page coordinates. */
+let headlineRect: FakeRect | null;
+
+const fakeStage: FakeStage = {
   addEventListener(): void {},
   removeEventListener(): void {},
+  querySelector: (selector) => (selector === 'h1' && headlineRect !== null ? { getBoundingClientRect: () => headlineRect ?? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } } : null),
 };
 
 interface FakeWindow {
@@ -412,12 +563,14 @@ beforeEach(() => {
   rafQueue = [];
   rafNext = 0;
   clock = 0;
+  headlineRect = { left: 60, top: 120, right: 780, bottom: 300, width: 720, height: 180 };
   hostElement = {
     parentElement: fakeStage,
-    appendChild(child: FakeCanvas): void {
-      hostChildren.push(child);
+    firstChild: null,
+    insertBefore(child: FakeCanvas): void {
+      hostChildren.unshift(child);
     },
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1200, height: 600 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 1200, bottom: 600, width: 1200, height: 600 }),
   };
   installGlobal('window', fakeWindow);
   installGlobal('document', fakeDocument);

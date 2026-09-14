@@ -44,20 +44,30 @@ import type { SupervisorOpResult, WorkspaceBundle, WorkspaceSession } from '@kin
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
   JsonValue,
-  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult,
+  NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { KinuError, tolerate } from '@kinu.run/core/obs';
+import { KinuError, tolerate, type Refusal } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+import { deleteFacetStorage } from '@nimbus-sh/fabric/workerd-facet-host.js';
 import {
   HOST_FABRIC_COMPOSITION,
+  clearPortCapability,
+  freeDurableFacetSlot,
+  listPortReservations,
   nimbusProgrammatic,
   readPortExposure,
+  readPortReservationByOwner,
+  releasePortReservation,
+  restoreReservedPortCapability,
   type ProgrammaticHost,
+  type ResidentAppSummary,
 } from './nimbus-programmatic';
+import type { DurableApps } from '@kinu.run/core/slates';
 
 /**
  * A read whose only tolerated failure is "there is no such path".
@@ -167,16 +177,6 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
   };
 }
 
-/**
- * The URL an exposed port is reachable at, or why this deployment cannot mint
- * one for this workspace. The reason is written for the Ports surface: without
- * one, a port that is listening and has no URL vanishes from that surface, and
- * a single fixed message blames a missing preview host whatever the cause.
- */
-export type WorkspacePreviewUrl =
-  | { readonly url: string; readonly unavailable?: undefined }
-  | { readonly url?: undefined; readonly unavailable: string };
-
 export interface HostedWorkspaceDeps {
   readonly ctx: DurableObjectState;
   readonly env: Env;
@@ -188,7 +188,14 @@ export interface HostedWorkspaceDeps {
    */
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   onFilesChanged?(paths: readonly string[]): void;
-  refreshPreview?(port: number): Promise<void>;
+  /**
+   * Bring the slate that owns a durable port to life before a preview request
+   * is routed to it: the process a reset took is re-driven, a process whose
+   * source changed is replaced, a live one is answered as it is. A refusal
+   * says why the slate cannot serve — `missing` once its tree is gone, the
+   * compiler's `bad_input` when its source is broken.
+   */
+  ensureSlate?(owner: string): Promise<Refusal | null>;
   /** Mint the app invocation a preview request runs under, so a slate cannot
    *  keep its bindings and replay them as an unnamed root lineage. */
   slateInvocation?(port: number): { readonly value: string; release: () => void } | null;
@@ -216,8 +223,14 @@ export interface HostedWorkspace {
    * same memoized open with the same failure-clearing retry.
    */
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
-  registerPort(pid: number, port: number, target: RouteableFacetTarget, owner?: string): Promise<void>;
+  /**
+   * A resident process has bound its port. `owner` is the durable identity it
+   * serves; the reservation Nimbus holds for that owner is what decides
+   * whether the port's stored capability is re-adopted or retired.
+   */
+  registerPort(pid: number, port: number, target: RouteableFacetTarget, owner: string): Promise<void>;
   unregisterPorts(pid: number): void;
+  readonly apps: DurableApps;
   /**
    * Route a preview request whose signed hostname the edge has already
    * verified. `handle` is the capability prefix that hostname carried — the full
@@ -239,24 +252,30 @@ export interface HostedWorkspace {
  */
 export const PREVIEW_CAPABILITY_HANDLE_LENGTH = 10;
 
+/** A URL that names nothing this object serves. Never a 403: a wrong handle
+ *  must not confirm that the port is listening at all. */
+function previewNotFound(): Response {
+  return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+}
+
 /**
- * The marker for a preview URL whose capability is still the persisted one but
- * whose listener did not survive the isolate — the workspace was recycled.
- *
- * Modelled on the container plane's `SDK_STALE_PREVIEW`: a status that is not
- * 404 and a machine-readable body, so a caller can tell "this link never named
- * anything" from "this link names an exposure that an eviction took and only a
- * re-expose can bring back".
+ * The slate behind a durable URL could not be brought to life: its source no
+ * longer compiles, or its boot was refused. The refusal is the body, so the
+ * visitor sees the compiler's own words rather than a blank page, and the
+ * status invites a retry once the author has fixed the tree.
  */
-const RECYCLED_PREVIEW = {
-  status: 410,
-  body: JSON.stringify({
-    error: 'Preview URL is stale because the workspace was recycled',
-    code: 'RECYCLED_WORKSPACE_PREVIEW',
-    detail: 'The workspace process that served this port did not survive eviction. '
-      + 'Re-expose the port to get a working preview URL.',
-  }),
-} as const;
+function previewUnavailable(refusal: Refusal): Response {
+  return new Response(JSON.stringify({ reason: refusal.reason, error: refusal.error }), {
+    status: 503,
+    headers: { 'cache-control': 'no-store', 'content-type': 'application/json', 'retry-after': '3' },
+  });
+}
+
+/** The identity of a resident process this host registered a port for. */
+interface ResidentPort {
+  readonly owner: string;
+  readonly port: number;
+}
 
 
 /**
@@ -284,14 +303,15 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
 
   // One registry per isolate, exactly as a session has one: a port is a live
-  // listener in this isolate's memory, and its capability is persisted through
-  // `ctx.storage` by the programmatic surface. What survives an eviction is the
-  // DURABLE VALUE ONLY — nothing restarts the workspace's processes on wake
-  // (they are waitUntil-held, and `facetManager` is null below), so a URL that
-  // outlived its isolate names a port nobody is listening on until the agent
-  // re-exposes it. `routePreview` is where that distinction becomes an answer.
+  // listener in this isolate's memory. What survives an eviction is Nimbus's
+  // reservation record in `ctx.storage` — the owner that holds the port and
+  // the capability its URL carries. A resident process is re-driven from that
+  // record on the next request for its URL (`routePreview`), never on wake:
+  // an object that is never asked never boots anything.
   const portRegistry = new PortRegistry();
-  const portOwners = new Map<number, string>();
+  // The resident processes this host registered a port for, by pid: the
+  // identity Nimbus's app verbs ask this host about (`residentIdentity`).
+  const residents = new Map<number, ResidentPort>();
   let composing: Promise<ProgrammaticHost> | undefined;
 
   const host = async (): Promise<ProgrammaticHost> => {
@@ -302,16 +322,16 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // no child process and nothing reaching a host's git. The Durable Object
         // context and env are what the NETWORK subcommands (clone/fetch/pull/push)
         // reach through the git-network facet; local history needs neither, and
-        // both are real here.
-        const { registerGitCommands } = await nimbusProgrammatic();
-        registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
+        // both are real here. Registered the way the session registers its own.
+        const { runGitCommand } = await nimbusProgrammatic();
+        session.registry.register('git', (command) => runGitCommand(command, session.vfs, deps.ctx, deps.env));
 
         // Nothing here refuses the network `git` subcommands or the fetching
         // `npm` subcommands. `git clone` and friends reach their dynamic-worker
         // facets through the composed fabric, and `npm install` streams in
         // process — one tarball entry at a time, never a buffered whole — so
         // neither exhausts this isolate.
-        return programmaticHost(session, portRegistry, deps, portOwners);
+        return programmaticHost(session, portRegistry, deps, residents);
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
         // the whole actor isolate, and a cached rejection would poison every
@@ -347,54 +367,66 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
       if (occupied !== undefined && occupied.pid !== pid) throw new KinuError('io', `Workspace port ${port} is already in use`);
 
-      if (owner !== undefined) portOwners.set(pid, owner);
+      residents.set(pid, { owner, port });
       portRegistry.bindFacetStub(pid, target);
       portRegistry.register(port, pid);
-      const retained = await readPortExposure(deps.ctx, port);
+      // The capability is bound to identity, not to the port: the stored one
+      // is re-adopted only when the reservation names this owner. Any other
+      // occupant retires it, so a link handed out for the reservation's owner
+      // 404s rather than reaching a program it was never minted for — the
+      // owner's reservation itself survives.
+      const adopted = await restoreReservedPortCapability({ ctx: deps.ctx, portRegistry }, port, owner);
 
-      if (retained !== null && retained.owner === (owner ?? null) && portRegistry.get(port)?.pid === pid) {
-        portRegistry.restoreCapability(port, retained.capability);
-      }
+      if (adopted === null) await clearPortCapability({ ctx: deps.ctx, portRegistry }, port);
     },
-    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); portOwners.delete(pid); },
+    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); residents.delete(pid); },
+    apps: {
+      async ensure({ owner, preferredPort }) {
+        const self = await host();
+        const nimbus = await nimbusProgrammatic();
+        const held = await readPortReservationByOwner(deps.ctx, owner);
+
+        // The declaration moved: the identity moves with it. The old
+        // reservation is released — never silently kept beside a port the
+        // author no longer named — and a fresh port and capability are minted
+        // below. The facet slot is untouched, so the application's own
+        // storage follows it to the new address.
+        if (held !== null && preferredPort !== undefined && held.port !== preferredPort) {
+          await releasePortReservation(deps.ctx, { owner, port: held.port });
+        }
+
+        const reserved = await nimbus.rpcEnsureDurableApp(self, { owner, preferredPort, visibility: 'scoped' });
+
+        if (reserved.capability === null) {
+          throw new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`);
+        }
+
+        return { port: reserved.port, capability: reserved.capability };
+      },
+      async remove(owner) {
+        const removed = await (await nimbusProgrammatic()).rpcRemoveDurableApp(await host(), owner);
+
+        return { removed: removed.removed, port: removed.port };
+      },
+    },
     async routePreview(port, handle, request, pathname) {
-      const capability = portRegistry.get(port)?.capability;
+      // The URL was minted from the durable record, so the record is what the
+      // handle is checked against — a port nothing was ever handed a URL for
+      // is a 404 whether or not something listens on it now.
+      const exposure = await readPortExposure(deps.ctx, port);
 
-      // A port re-exposed under a fresh capability: the link named an exposure
-      // that is not this one, in an isolate that still holds one.
-      if (capability !== undefined) {
-        if (capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
-          return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-        }
-      } else {
-        // An in-memory miss, answered from the DURABLE copy. Two states share
-        // it, and only the persisted value can tell them apart: a URL for a
-        // port this isolate never saw is a plain 404, while a URL whose
-        // capability is still the persisted one belongs to an exposure an
-        // eviction took with the listener that served it — the workspace was
-        // recycled, and the agent has to re-expose the port before this link
-        // resolves again. A bare 404 would hide that from both the visitor and
-        // the operator; this names it.
-        const persisted = await readPortExposure(deps.ctx, port);
+      if (exposure === null || exposure.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return previewNotFound();
 
-        if (persisted !== null && persisted.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle) {
-          return new Response(RECYCLED_PREVIEW.body, {
-            status: RECYCLED_PREVIEW.status,
-            headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
-          });
-        }
+      // A durable application answers its URL whether or not its process
+      // survived: the owner is brought to life (or replaced, when its source
+      // changed) before anything is routed. A port exposed without an owner
+      // has nothing to re-drive and is served only while it listens.
+      if (exposure.owner !== null) {
+        const refusal = await deps.ensureSlate?.(exposure.owner) ?? null;
 
-        return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+        if (refusal !== null) return refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
       }
 
-      // Booted only past the miss arm: a stale or unknown link is answered
-      // above without composing the workspace.
-      await deps.refreshPreview?.(port);
-      const refreshed = portRegistry.get(port)?.capability;
-
-      if (refreshed === undefined) return new Response(RECYCLED_PREVIEW.body, { status: RECYCLED_PREVIEW.status, headers: { 'cache-control': 'no-store', 'content-type': 'application/json' } });
-
-      if (refreshed.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return new Response('Not found', { status: 404 });
       const publicRequest = new Request(request);
       // The visitor's own header is dropped first, then the host names this
       // request's invocation. A preview entry is a root lineage, and naming it
@@ -405,20 +437,95 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
       const self = await host();
 
-      // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
+      // Nimbus routes with the WHOLE capability and checks it against the live
+      // registration itself; this object only ever compared the handle. An
+      // upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
       try {
         if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-          return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
+          return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, exposure.capability, publicRequest, pathname);
         }
 
-        return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
+        return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, exposure.capability, publicRequest, pathname);
       } finally {
         invocation?.release();
       }
     },
     destroy: () => bundle.destroy(),
+  };
+}
+
+/**
+ * What Nimbus's application verbs ask the embedder about its resident
+ * processes: who a pid is, whether it is one, how to end it, and what the
+ * durable applications of this workspace are. Nimbus's own session answers
+ * these from the launch journal its facet manager keeps; here the processes
+ * are spawned by the slate host, so the host that registered their ports is
+ * the one that knows them.
+ */
+function residentFacetManager(
+  ctx: DurableObjectState,
+  portRegistry: PortRegistry,
+  residents: ReadonlyMap<number, ResidentPort>,
+  processes: SessionProcessSupervisor,
+): NonNullable<ProgrammaticHost['facetManager']> {
+  return {
+    kill: (pid) => processes.kill(pid),
+    hasResidentProcess: (pid) => residents.has(pid),
+    residentIdentity: async (pid) => {
+      const resident = residents.get(pid);
+
+      return resident === undefined ? null : { owner: resident.owner, ephemeral: false, port: resident.port };
+    },
+    listResidentApps: async () => {
+      const live = new Map<string, number>();
+
+      for (const [pid, resident] of residents) live.set(resident.owner, pid);
+      const apps: ResidentAppSummary[] = [];
+
+      for (const [port, reservation] of await listPortReservations(ctx)) {
+        if (reservation.owner === null) continue;
+        const pid = live.get(reservation.owner) ?? null;
+
+        apps.push({
+          owner: reservation.owner, name: reservation.name ?? null, port, pid,
+          status: pid === null ? 'stopped' : 'running',
+          visibility: reservation.visibility, capability: reservation.capability,
+          restart: 'never', diagnostic: null,
+        });
+      }
+
+      return apps;
+    },
+    // One ordered teardown, the order Nimbus's own manager keeps: the live
+    // process first (a durable facet's release only aborts, so nothing else
+    // ends it), then the reservation, then the facet's SQLite and its slot —
+    // last, so a crash mid-removal leaves a name still claimed rather than a
+    // store nobody can reach.
+    removeDurableApp: async (owner) => {
+      let removed = false;
+
+      for (const [pid, resident] of residents) {
+        if (resident.owner !== owner) continue;
+        processes.kill(pid);
+        removed = true;
+      }
+
+      const held = await readPortReservationByOwner(ctx, owner);
+
+      if (held !== null) {
+        await releasePortReservation(ctx, { owner, port: held.port });
+        const live = portRegistry.get(held.port);
+
+        if (live !== undefined && residents.get(live.pid)?.owner === owner) portRegistry.unregister(held.port);
+        removed = true;
+      }
+
+      const name = await freeDurableFacetSlot(ctx, owner, (slot) => { deleteFacetStorage(ctx, slot); });
+
+      return removed || name !== null;
+    },
   };
 }
 
@@ -435,17 +542,12 @@ function programmaticHost(
   session: WorkspaceSession,
   portRegistry: PortRegistry,
   deps: HostedWorkspaceDeps,
-  portOwners: ReadonlyMap<number, string>,
+  residents: ReadonlyMap<number, ResidentPort>,
 ): ProgrammaticHost {
   const storage = deps.ctx.storage;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
 
   return {
-    portCapabilityOwner: (port) => {
-      const entry = portRegistry.get(port);
-
-      return entry === undefined ? null : portOwners.get(entry.pid) ?? null;
-    },
     _w1SessionDestroyed: false,
     // The runtime catalogue's bucket and nothing else: this env is read by
     // `nimbus install` alone, so handing over the actor's whole Env would put
@@ -462,6 +564,12 @@ function programmaticHost(
         // Narrowed to the port's own contract: Durable Object storage answers a
         // delete with whether a row was there, and no caller here reads that.
         delete: async (key) => { await storage.delete(key); },
+        list: (options) => storage.list(options),
+        // A port reservation is claimed and released inside ONE storage
+        // transaction — the read, the owner check and the write — so a
+        // concurrent claim on the same port cannot interleave. The real
+        // Durable Object transaction is the only thing that makes that true.
+        transaction: (body) => storage.transaction(body),
         // NEVER `storage.deleteAll()`. A session owns its Durable Object; a
         // workspace SHARES one, and the actor's conversation, ledgers and
         // identity are rows in the same SQLite. Destruction goes through
@@ -485,9 +593,9 @@ function programmaticHost(
     sqliteFs: session.vfs,
     processes: session.processes,
     portRegistry,
-    // The workspace owns resident module processes directly through Fabric.
-    // A second session process owner would split lifetime and port ownership.
-    facetManager: null,
+    // The slate host spawns resident processes directly through Fabric; what
+    // Nimbus's application verbs need to know about them is answered here.
+    facetManager: residentFacetManager(deps.ctx, portRegistry, residents, session.processes),
     viteDevServer: null,
     cirrusReal: null,
     _cpRegistry: session.registry,
