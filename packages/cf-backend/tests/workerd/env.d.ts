@@ -28,6 +28,9 @@ import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   InputReceipt, PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
 } from './two-turn-shapes';
+import type {
+  DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
+} from './slate-durability-shapes';
 import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
@@ -87,6 +90,17 @@ interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   readPrivateSourceAsAgent(): Promise<{ content?: string; error?: string }>;
 }
 
+interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
+  serveSlate(input: {
+    workspace: string; owner: string; id: string; body: string; preferredPort?: number;
+  }): Promise<ServedSlate>;
+  portReservations(workspace: string): Promise<DurabilityReservation[]>;
+  drivePreview(url: string): Promise<PreviewAnswer>;
+  rpcPreview(url: string, method: string, args?: JsonValue[]): Promise<RpcAnswer>;
+  removeSlate(workspace: string, id: string): Promise<RemovedSlate>;
+}
+
+
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -118,6 +132,7 @@ declare global {
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
+      SLATE_DURABILITY_PROBE: DurableObjectNamespace<SlateDurabilityProbeRpc>;
   // A devbox's readiness refusal must serialise over Workers RPC as data,
   // not as a thrown class name. The probe is a narrow DO exposing only the
   // two halves of `RestoreReadiness` plus the normalization control —
