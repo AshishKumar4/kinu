@@ -1045,6 +1045,64 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
 
     expect(container.scheduleRows.filter(row => row.callback === 'devboxStartup')).toEqual([]);
   });
+
+  test('a poll after the armed row comes due leaves that row and its alarm alone', async () => {
+    // MEASURED on b20260914070552, cycles 2, 3, 5 and 6: one admission
+    // refusal armed the retry row a second out, the driver read `/state`
+    // every 300 ms, and once the row was due each reading re-armed it. The
+    // SDK's `schedule()` resets the object's one platform alarm a second out
+    // on every call, so the alarm was moved out of reach faster than the
+    // platform could deliver it: 50 s of `unstarted`, the incident never
+    // delivered, the heartbeat silent, and the platform reporting the alarm
+    // `Canceled`. A due row the alarm loop has not run yet is pending work;
+    // only its own dispatch may look past it.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    try {
+      const harnessed = harness(TestBox);
+      const { box, container } = harnessed;
+      failAttempt(harnessed, 'OPERATION_INTERRUPTED');
+      await expect(box.devboxStartup()).rejects.toThrow('OPERATION_INTERRUPTED');
+      const armsBefore = container.schedules.filter(name => name === 'devboxStartup').length;
+      expect({ armed: armed(container), arms: armsBefore }).toEqual({ armed: 1, arms: 1 });
+
+      // The row is due and the alarm loop has not delivered it yet.
+      const due = container.scheduleRows.find(row => row.callback === 'devboxStartup')!.time;
+      now = Math.ceil(due) * 1000 + 500;
+
+      for (let poll = 0; poll < 4; poll += 1) await box.devboxState();
+      await expect(box.exec('ls')).rejects.toThrow('A startup is armed');
+
+      expect({ armed: armed(container), arms: container.schedules.filter(name => name === 'devboxStartup').length })
+        .toEqual({ armed: 1, arms: armsBefore });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test('a callback dispatching its own due row still arms its successor', async () => {
+    // The direction the guard was first written for, kept red: the SDK
+    // deletes a fired row only after the callback returns, so the heartbeat
+    // sees its own due row and must look past it or the chain dies.
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
+    try {
+      const { box, container } = harness(TestBox);
+      await box.exec('true');
+      const heartbeats = (): { time: number }[] => container.scheduleRows.filter(row => row.callback === 'devboxHeartbeat');
+      expect(heartbeats()).toHaveLength(1);
+      const due = heartbeats()[0]!.time;
+      now = Math.ceil(due) * 1000 + 500;
+
+      await box.devboxHeartbeat();
+
+      expect(heartbeats().filter(row => row.time > now / 1000)).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });
 
 // ── one budget for the whole restoration ────────────────────────────────────

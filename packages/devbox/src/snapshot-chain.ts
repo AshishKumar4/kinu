@@ -79,6 +79,102 @@ import {
  */
 const CHAIN_STORE_MOUNT = '/backups';
 
+/** The multipart part size the publisher uses above it. R2's floor for a
+ *  part is 5 MiB and only the LAST part may run short, so a smaller part is
+ *  refused mid-upload rather than merely slower. */
+const PUBLISH_PART_BYTES = 5 * 1024 * 1024;
+
+/** The publisher run container-side by {@link publishCommand}. One staged
+ *  archive becomes ONE store object through the mount's own credential-less
+ *  egress host: a single PUT at or below the part size, one multipart upload
+ *  above it. s3fs cannot publish in one attempt — `mkdir` PUTs a directory
+ *  marker and `create` PUTs an empty object before the flush, measured live
+ *  (`b20260914045438`) and with no option to skip either — so the archive
+ *  never goes through the mount; the mount stays for reads and for the
+ *  egress route its registration opens.
+ *
+ *  Prints `<bytes> <etag>` on success; every refusal is its own exit code
+ *  with the store's words on stderr. A `Bun.file` SLICE is a fetch body that
+ *  sends nothing under the pinned image's Bun 1.3.12 (measured 2026-09-14,
+ *  `/tmp/o1-publisher/`): parts therefore send `slice.stream()` with an
+ *  explicit Content-Length, and the whole archive sends the file itself. */
+const PUBLISH_SCRIPT = `// devbox-publish-v1
+const [archive, url, partArg] = process.argv.slice(2);
+const partBytes = Number(partArg);
+
+function refuse(code, message) {
+  process.stderr.write(message + '\\n');
+  process.exit(code);
+}
+
+if (archive === undefined || url === undefined || !Number.isSafeInteger(partBytes) || partBytes <= 0) {
+  refuse(2, 'usage: publish.mjs <archive> <url> <partBytes>');
+}
+
+const file = Bun.file(archive);
+
+if (!(await file.exists())) refuse(2, 'no archive at ' + archive);
+const size = file.size;
+
+if (size <= 0) refuse(2, archive + ' is empty');
+
+async function answered(label, response) {
+  if (response.ok) return response;
+  const body = (await response.text()).slice(0, 300);
+  throw new Error(label + ' answered ' + response.status + ': ' + body);
+}
+
+function tag(text, name) {
+  const found = new RegExp('<' + name + '>([^<]*)</' + name + '>').exec(text);
+
+  return found === null ? '' : found[1];
+}
+
+let etag = '';
+
+if (size <= partBytes) {
+  const put = await answered('PUT', await fetch(url, { method: 'PUT', body: file }));
+  etag = put.headers.get('etag') ?? '';
+} else {
+  const opened = await answered('POST ?uploads', await fetch(url + '?uploads=', { method: 'POST' }));
+  const uploadId = tag(await opened.text(), 'UploadId');
+
+  if (uploadId.length === 0) refuse(1, 'the multipart upload was opened without an id');
+  const id = encodeURIComponent(uploadId);
+  const parts = [];
+
+  try {
+    for (let number = 1, offset = 0; offset < size; number += 1, offset += partBytes) {
+      const slice = file.slice(offset, Math.min(size, offset + partBytes));
+      const part = await answered('PUT part ' + number, await fetch(url + '?partNumber=' + number + '&uploadId=' + id, {
+        method: 'PUT',
+        headers: { 'content-length': String(slice.size) },
+        body: slice.stream(),
+      }));
+      parts.push('<Part><PartNumber>' + number + '</PartNumber><ETag>' + (part.headers.get('etag') ?? '') + '</ETag></Part>');
+    }
+
+    const completed = await answered('POST ?uploadId', await fetch(url + '?uploadId=' + id, {
+      method: 'POST', body: '<CompleteMultipartUpload>' + parts.join('') + '</CompleteMultipartUpload>',
+    }));
+    etag = tag(await completed.text(), 'ETag');
+  } catch (error) {
+    const aborted = await fetch(url + '?uploadId=' + id, { method: 'DELETE' });
+    refuse(1, String(error && error.message ? error.message : error) + '; multipart ' + uploadId + (aborted.ok ? ' aborted' : ' NOT aborted (' + aborted.status + ')'));
+  }
+}
+
+const head = await answered('HEAD', await fetch(url, { method: 'HEAD' }));
+const landed = Number(head.headers.get('content-length'));
+
+if (landed !== size) refuse(3, 'the store reports ' + landed + ' bytes for ' + url + ' where ' + size + ' were sent');
+process.stdout.write(size + ' ' + etag);
+`;
+
+/** `PUBLISH_SCRIPT` as it travels inside {@link publishCommand}: base64, so
+ *  no byte of it can become shell syntax. */
+const PUBLISH_SCRIPT_B64 = btoa(PUBLISH_SCRIPT);
+
 class ContainerChangedDuringAttach extends Error {
   constructor() {
     super('the container generation changed while snapshot-chain attached its lower layers');
@@ -596,18 +692,30 @@ export interface SnapshotChainPorts {
   /** This box's chain root in the store, see {@link chainStoreRoot}. A port
    *  because the box's identity is the host's. */
   storeRoot(): string;
+  /** The object URL the store mount's own egress host answers for `key`: the
+   *  SDK's credential-less `r2.internal` handler resolves the bucket out of
+   *  the mount's binding name and prepends the mount's prefix, so the host
+   *  hands the strategy a URL the publisher PUTs to directly — one object
+   *  attempt where `dd` through s3fs could not do better than three (see
+   *  `PUBLISH_SCRIPT`). A key outside the mount's prefix has no URL: the host
+   *  refuses it rather than minting an address the handler would write under
+   *  a different object. */
+  storeObjectUrl(key: string): string;
   /** Mount THIS BOX's chain root at `at`, writable. ONE MOUNT, ONE SETTING, ONE
    *  PREFIX ({@link CHAIN_STORE_MOUNT}), so the host has no choice to make.
    *  CREDENTIALS NEVER LEAVE THE DURABLE OBJECT: the container's s3fs holds a
    *  dummy password file and a Worker entrypoint resolves its intercepted
    *  requests against the binding, so writable hands the container nothing it
-   *  can read or replay. */
+   *  can read or replay. Writable is required twice over: the mount serves
+   *  reads, and the egress route it registers is what `storeObjectUrl` PUTs
+   *  through. */
   mountStore(at: string): Promise<void>;
   /** Release the mount at `at` THROUGH THE SDK, not the kernel: a raw
    *  `fusermount3` leaves the SDK's registry claiming the path forever. Called
    *  only on a bare path, to drop the entry a replaced container's mount left
    *  (`mountStoreOnce`). A RELEASE IS NOT A FLUSH: a lazy unmount returns as
-   *  the mount leaves the namespace, so `publishArchive` checks its own flush. */
+   *  the mount leaves the namespace, and no publication relies on one — the
+   *  publisher's own HEAD and `objectFacts` read the store, not the mount. */
   unmountStore(at: string): Promise<void>;
   /** A phase of the attach landed: the store mount, the base layer. The host
    *  keeps the clock; the strategy owes the call because only it knows which
@@ -892,20 +1000,20 @@ function chainShell(exec: ContainerExec, root: string) {
 
       return bytes;
     },
-    /** Move one staged archive into the store THROUGH THE MOUNT, and answer
-     *  what the mount then holds. {@link publishCommand} states why the copy
-     *  is a `dd` with `conv=fsync`. WRITTEN STRAIGHT TO THE FINAL NAME: a
-     *  temporary name plus a rename is a server-side COPY of every byte on
-     *  s3fs, and the object becomes visible only when s3fs completes the
-     *  upload, so a reader never sees a partial. dd's transfer summary stays
-     *  on stderr as this path's only throughput reading. */
-    publishArchive: async (archivePath: string, mountedPath: string): Promise<number> => {
-      const result = await exec(publishCommand({ archivePath, mountedPath }));
-      const [code, size] = result.stdout.trim().split(/\s+/);
+    /** Move one staged archive into the store as ONE object attempt, and
+     *  answer what the store then holds for it. {@link publishCommand} states
+     *  why the write is an HTTP PUT to the mount's egress host rather than a
+     *  `dd` through s3fs. WRITTEN STRAIGHT TO THE FINAL NAME: a temporary
+     *  name plus a rename is a server-side COPY of every byte, and the object
+     *  becomes visible only when the PUT completes, so a reader never sees a
+     *  partial. The publisher's stderr stays this path's diagnostics. */
+    publishArchive: async (archivePath: string, objectUrl: string): Promise<number> => {
+      const result = await exec(publishCommand({ archivePath, objectUrl }));
+      const [code, size, etag] = result.stdout.trim().split(/\s+/);
 
       if (code !== '0') {
         throw new Error(
-          `publishing ${archivePath} through ${mountedPath} failed (${code ?? '?'}): `
+          `publishing ${archivePath} to ${objectUrl} failed (${code ?? '?'}): `
           + `${result.stderr.trim() || 'no output'}`,
         );
       }
@@ -914,8 +1022,9 @@ function chainShell(exec: ContainerExec, root: string) {
 
       if (!Number.isFinite(bytes) || bytes <= 0) {
         throw new Error(
-          `the store mount reports ${mountedPath} as ${size ?? 'absent'} after a publication `
-          + `that reported success: ${result.stderr.trim() || 'no diagnostics'}`,
+          `the store reports ${objectUrl} as ${size ?? 'absent'} after a publication `
+          + `that reported success${etag === undefined ? '' : ` (etag ${etag})`}: `
+          + `${result.stderr.trim() || 'no diagnostics'}`,
         );
       }
 
@@ -1638,10 +1747,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   /**
-   * Move a staged archive into the store through the mount and return what
-   * the store then holds: the second half of every publication, shared by
-   * whole-tree and chunked stages. `tmpStaged` says the archive sits on
-   * tmpfs, which is returned whether or not the record below is written.
+   * Move a staged archive into the store through the mount's egress host and
+   * return what the store then holds: the second half of every publication,
+   * shared by whole-tree and chunked stages. `tmpStaged` says the archive
+   * sits on tmpfs, which is returned whether or not the record below is
+   * written.
    */
   const publishStagedArchive = async (
     key: string,
@@ -1649,8 +1759,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     storeHeld: boolean,
     tmpStaged: boolean,
   ): Promise<ChainLayer> => {
+    // The mount is still taken here even though no byte goes through s3fs:
+    // its registration is what routes `r2.internal` to the bucket, and the
+    // same mount serves the layers' reads for the container's life.
     if (!storeHeld) await mountStoreOnce();
-    const published = await shell.publishArchive(staged, mountedLayerPath(CHAIN_STORE_MOUNT, root, key));
+    const objectUrl = ports.storeObjectUrl(key);
+    const published = await shell.publishArchive(staged, objectUrl);
     const landed = await ports.objectFacts(key);
 
     if (tmpStaged) {
@@ -1665,14 +1779,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     if (landed === undefined) {
       throw new Error(
-        `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
+        `the container published ${key} to ${objectUrl} and the store holds no `
         + 'such object, so nothing has been recorded.',
       );
     }
 
     if (landed.bytes !== published) {
       throw new Error(
-        `the store holds ${landed.bytes} bytes for ${key} where the container flushed `
+        `the store holds ${landed.bytes} bytes for ${key} where the container uploaded `
         + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
       );
     }
@@ -1685,22 +1799,23 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    * store then holds for it.
    *
    * THE BYTES NEVER REACH THIS ISOLATE. The container stages the archive on
-   * its own disk and copies it into the store through the writable mount.
+   * its own disk and PUTs it to the store through the mount's egress host.
    * Relaying it through this isolate (base64 SSE frames in, the R2 binding
    * out) measured 3.34 MiB/s at 64 MiB and 3.64 at 256 MiB on a live
    * container against a real store, against 23.22 and 39.00 MiB/s for the
    * same bytes moved by the container; the relay was the only arm that got
    * SLOWER as the archive grew.
    *
-   * THE RECORD DESCRIBES WHAT THE STORE HOLDS, checked against the container's
-   * reading of the same object after the flush: two independent measurements
-   * of one upload, so a disagreement is a flush that lost bytes. The staged
+   * THE RECORD DESCRIBES WHAT THE STORE HOLDS, checked against the
+   * container's reading of the same object after the upload: two independent
+   * measurements of one upload, so a disagreement is an upload that lost
+   * bytes. The staged
    * count is NOT the comparison: it is taken before the copy, and a deployed
    * run recorded that drift as `delta archive is 702791680 bytes, state
    * declares 700387328`, after which every wake refused. NO CONTENT DIGEST
    * IS COMPUTED HERE: a `sha256sum` over the staged archive is a full CPU
    * pass over every byte of every checkpoint. The record carries the identity
-   * the STORE has, which for a mount-written archive is its upload version.
+   * the STORE has, which for an egress-written archive is its upload version.
    */
   const stageAndPut = async (
     key: string,
@@ -2391,29 +2506,29 @@ export function archiveCommand(input: {
 }
 
 /**
- * Copy a staged archive onto the store mount, flush it, and print
- * `<exit> <bytes>`. ONE COMMAND, for the reason {@link archiveCommand} states.
+ * Publish a staged archive to the store mount's egress host and print
+ * `<exit> <bytes> <etag>`. ONE COMMAND, for the reason {@link archiveCommand}
+ * states: it writes the publisher script into the runtime directory (the
+ * container's disk is ephemeral, so nothing remembers it from one generation
+ * to the next) and runs it under bun, the runtime the image already carries.
  *
- * `conv=fsync` IS THE CORRECTNESS. s3fs uploads on flush, a shell redirect
- * drops the close error, and an unmount can return before the upload
- * finishes. With the fsync inside the command, a store that did not take the
- * bytes is a non-zero exit HERE, before the record names the object. `bs=4M`
- * is large enough that s3fs sees whole multipart parts (its default part size
- * on an R2 mount is 5 MB) and small enough to be ordinary container memory.
+ * THE WRITE DOES NOT GO THROUGH s3fs. s3fs cannot publish in one attempt —
+ * `mkdir` PUTs a directory marker and `create` PUTs an empty object before
+ * the flush's own PUT, measured live as the three attempts of
+ * `b20260914045438` with no option to skip either. The mount's egress host
+ * answers the SDK's credential-less `r2.internal` handler instead: one PUT
+ * at or below the part size, one multipart upload above it. The script's own
+ * HEAD afterwards is the flush check the mount used to owe `conv=fsync`; a
+ * store that did not take the bytes is a non-zero exit HERE, before the
+ * record names the object. The mount itself is still held for the layers'
+ * reads, and its registration is what makes the URL route at all.
  */
-export function publishCommand(input: { archivePath: string; mountedPath: string }): string {
-  // THE GENERATION'S DIRECTORY FIRST, in the same command: s3fs shows no
-  // parent for a key nothing lives under yet, so `dd` refuses with `failed to
-  // open …: No such file or directory` (measured live, run e2e20260902083130,
-  // on the first checkpoint of a fresh box). `mkdir -p` writes the directory
-  // marker the copy then opens through.
-  const parent = input.mountedPath.slice(0, input.mountedPath.lastIndexOf('/'));
+export function publishCommand(input: { archivePath: string; objectUrl: string }): string {
+  const script = `${DEVBOX_RUNTIME_DIR}/devbox-publish.mjs`;
 
-  return `mkdir -p ${shellPath(parent)}; `
-    + `dd if=${shellPath(input.archivePath)} of=${shellPath(input.mountedPath)} `
-    + 'bs=4M conv=fsync; '
-    + `rc=$?; printf '%s %s' "$rc" `
-    + `"$(stat -c %s ${shellPath(input.mountedPath)} 2>/dev/null || echo 0)"`;
+  return `mkdir -p ${shellPath(DEVBOX_RUNTIME_DIR)} && printf %s ${shellPath(PUBLISH_SCRIPT_B64)} | base64 -d > ${shellPath(script)}; `
+    + `out=$(bun ${shellPath(script)} ${shellPath(input.archivePath)} ${shellPath(input.objectUrl)} ${String(PUBLISH_PART_BYTES)}); `
+    + `rc=$?; printf '%s %s' "$rc" "$out"`;
 }
 
 /** The uncompressed size of what an archive of `sourceDir` would hold, as a

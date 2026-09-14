@@ -204,6 +204,11 @@ async function driverC3Proof(publishDuringOverwrite: boolean) {
     }
 
     if (url.pathname === '/restore-probe') return Response.json({ ok: true, probe: { at: probeAt, wallMs: 1, phases: { containerStart: 0, attached: 1, bootId: 1 } } });
+
+    // The ledger a startup edge always reads, attached or refused — an empty
+    // one here, since the fake box files nothing.
+    if (url.pathname === '/incidents') return Response.json({ ok: true, incidents: [] });
+
     throw new Error(`unexpected route ${url.pathname}`);
   };
 

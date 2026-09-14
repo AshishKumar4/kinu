@@ -55,7 +55,7 @@ import {
   StateReplySchema, KickReplySchema, DestroyReplySchema, TeardownReplySchema,
   type ExecReply, type CheckpointReply, type FileObservation,
   type AttachOutcome, type StateReply, type KickReply, type StartupPoll, type StartupCompletion,
-  type StartupObservation, type DestroyReply, type TeardownReply,
+  type StartupObservation, type StartupIncidents, type DestroyReply, type TeardownReply,
 } from '../packages/devbox/bench/observation-schema';
 
 export type { ExecReply, CheckpointReply, FileObservation, StateReply, StartupPoll, StartupCompletion, StartupObservation } from '../packages/devbox/bench/observation-schema';
@@ -1672,6 +1672,18 @@ async function observeContinuity(fixture: Fixture, box: string, label: string): 
   return row;
 }
 
+/** The ledger as one line for a refusal message: newest last, each row's
+ *  stage, delivery and reason. An absent ledger says so rather than reading
+ *  as an empty one. */
+export function describeIncidentReasons(rows: readonly IncidentReasonRow[] | undefined): string {
+  if (rows === undefined) return 'unread';
+
+  if (rows.length === 0) return 'none filed';
+
+  return rows.map((incident) =>
+    `[${incident.stage ?? '?'}${incident.delivered === true ? '' : ', undelivered'}] ${incident.reason ?? '(no reason)'}`).join(' | ');
+}
+
 /** One mountpoint's row in `/proc/mounts`, whose fields are
  *  `device mountpoint fstype options dump pass`. Naming that layout once is
  *  what keeps a caller from indexing field 2 and calling it a filesystem. */
@@ -1693,7 +1705,7 @@ function mountAt(mounts: string, mountpoint: string): { line: string; fstype: st
  * route serves every strategy. A missed read notes its gap — the totals
  * alone cannot say what the box filed.
  */
-async function readIncidentReasons(
+export async function readIncidentReasons(
   fixture: Fixture,
   box: string,
   notes: string[],
@@ -5322,14 +5334,37 @@ export async function measureLiveC3(
 
   const initialObservations: StartupObservation[] = [];
   const restorationObservations: StartupObservation[] = [];
+  const incidents: StartupIncidents = { initial: null, restoration: null };
 
   const row: LiveC3Observation = {
     event: 'matched.chain.C3.observations', case: 'snapshot-chain/C3', runId, box,
     identity: fixture.identity ?? null, workload: C3_WORKLOAD, prefix: null, preparation: { cleanup: preparation, destroy: null },
     initial: null, initialObservations, baselineCommand: null, baselineCheckpoint: null,
     overwriteCommand: null, rounds: [round], beforeDestroy: null, destroyReceipt: null,
-    restoration: null, restorationObservations, restoreProbe: null, file: null,
+    restoration: null, restorationObservations, incidents, restoreProbe: null, file: null,
     correctness: 'unmeasured', errors: [], cleanup: null,
+  };
+
+  /** Each startup edge reads the ledger whether it attached or was refused:
+   *  `b20260914045438` recorded eight incident totals and no reason string,
+   *  so its 55 s refusal named nothing a fix could act on. */
+  const startupWithReasons = async (
+    edge: keyof StartupIncidents,
+    path: '/create' | '/wake',
+    operation: string,
+    allowedKinds: readonly string[],
+    observations: StartupObservation[],
+  ): Promise<StartupCompletion> => {
+    try {
+      return await startupOperation(fixture, box, path, operation, allowedKinds, { ...startupBounds, observations });
+    } catch (cause) {
+      const reasons = await readIncidentReasons(fixture, box, row.errors);
+      incidents[edge] = reasons ?? null;
+
+      throw new Error(`${describeThrown({ cause })}; incident reasons: ${describeIncidentReasons(reasons)}`, { cause });
+    } finally {
+      if (incidents[edge] === null) incidents[edge] = (await readIncidentReasons(fixture, box, row.errors)) ?? null;
+    }
   };
 
   const harness = `/tmp/kinu-c3-${createHash('sha256').update(runId).digest('hex').slice(0, 16)}`;
@@ -5357,7 +5392,7 @@ export async function measureLiveC3(
   try {
     if (row.identity === null) throw new Error('live C3 requires the deployed build identity');
     row.preparation.destroy = await destroyBox(fixture, box);
-    row.initial = await startupOperation(fixture, box, '/create', 'C3 empty baseline', ['empty'], { ...startupBounds, observations: initialObservations });
+    row.initial = await startupWithReasons('initial', '/create', 'C3 empty baseline', ['empty'], initialObservations);
     row.prefix = row.initial.state.storePrefix ?? null;
 
     if (row.prefix === null) throw new Error('the C3 box did not report its store prefix');
@@ -5399,7 +5434,7 @@ export async function measureLiveC3(
 
     row.beforeDestroy = await boxState(fixture, box);
     row.destroyReceipt = await destroyBox(fixture, box);
-    row.restoration = await startupOperation(fixture, box, '/wake', 'C3 cold restore', ['attached'], { ...startupBounds, observations: restorationObservations });
+    row.restoration = await startupWithReasons('restoration', '/wake', 'C3 cold restore', ['attached'], restorationObservations);
     row.restoreProbe = await readRestoreProbe(fixture, box, 'destroy-cold-restore', C3_WORKLOAD.baselineBytes, row.errors, row.restoration.startedAt);
     row.blockReads = await readBlockAttachMetrics(fixture, box);
     observe(row);

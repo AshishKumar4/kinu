@@ -320,6 +320,14 @@ export interface DevboxReport {
     readonly total: number;
     readonly undelivered: number;
   };
+  /** How long each in-flight attempt has been open, or null when none is:
+   *  the startup flight (allocation and control-listener proof) and the start
+   *  hook (restore). A box reporting `unstarted` with a startup flight open
+   *  for minutes is waiting on the platform, not on a caller. */
+  readonly flights: {
+    readonly startupMs: number | null;
+    readonly hookMs: number | null;
+  };
 }
 
 /**
@@ -532,9 +540,17 @@ type ReadStreamOptions = NonNullable<ReadArms['stream']['args'][1]>;
 
 type ReadValueOptions = NonNullable<ReadArms['value']['args'][1]>;
 
+/** One attempt in flight and when it opened, so a report can say how long a
+ *  box has been waiting on it rather than only that it is. */
+interface Flight {
+  readonly generation: number;
+  readonly run: Promise<void>;
+  readonly since: number;
+}
+
 export class Devbox<Env = unknown> extends Sandbox<Env> {
   #storage: DevboxStorage | undefined;
-  #gateRestore: { readonly generation: number; readonly run: Promise<void> } | undefined;
+  #gateRestore: Flight | undefined;
   /**
    * The lifecycle attempt this box is on, and the fence for every write below.
    *
@@ -552,7 +568,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** The attempt in flight and the generation that owns it. A caller joins it
    *  only when the generation still matches: joining a superseded attempt means
    *  waiting on work whose result is already discarded. */
-  #startup: { readonly generation: number; readonly run: Promise<void> } | undefined;
+  #startup: Flight | undefined;
   /** The clock of the restore in flight, opened by the attempt on its
    *  hook and read by every phase stamp until the attempt settles.
    *  Memory only: a witness that wants the stamps past a reset keeps them
@@ -921,15 +937,32 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   async #restoreInStartGate(): Promise<void> {
     const pending = this.#gateRestore;
 
-    if (pending?.generation === this.#generation) return await pending.run;
+    if (pending?.generation === this.#generation) {
+      this.#trace('startup.hook.join', { generation: pending.generation, sinceMs: Date.now() - pending.since });
+
+      return await pending.run;
+    }
+
+    const since = Date.now();
+    const generation = this.#generation;
+    this.#trace('startup.hook.enter', { generation, phase: this.#restoration.phase });
     const run = this.#runStartHook();
-    this.#gateRestore = { generation: this.#generation, run };
+    this.#gateRestore = { generation, run, since };
+    let settled = false;
 
     try {
       await run;
+      settled = true;
     } finally {
       if (this.#gateRestore?.run === run) this.#gateRestore = undefined;
+      this.#trace('startup.hook.exit', { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
     }
+  }
+
+  /** One structured line per lifecycle edge, on the console the platform
+   *  tails. Primitives only: a reader who wants the object asks `/state`. */
+  #trace(event: string, fields: Record<string, string | number | boolean | undefined>): void {
+    console.log(JSON.stringify({ event: `devbox.${event}`, at: Date.now(), ...fields }));
   }
 
   /** One budget includes adoption, restore, resumption and durable settlement. */
@@ -1387,12 +1420,23 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   async devboxStartup(): Promise<void> {
-    // The SDK may already have buffered a row that the completed hook deleted.
-    // That stale callback cannot reopen the hook around an active caller.
-    if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
-    await this.#startContainer();
+    const since = Date.now();
+    this.#trace('startup.callback.enter', {
+      generation: this.#generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase,
+    });
 
-    if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
+    try {
+      await this.#dispatch(STARTUP_CALLBACK, async () => {
+        // The SDK may already have buffered a row that the completed hook deleted.
+        // That stale callback cannot reopen the hook around an active caller.
+        if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
+        await this.#startContainer();
+
+        if (this.#restoration.phase === 'unattached') throw new Error(this.#restoration.reason);
+      });
+    } finally {
+      this.#trace('startup.callback.exit', { generation: this.#generation, ms: Date.now() - since, phase: this.#restoration.phase });
+    }
   }
 
   /** All delivered startup doors share admission and destructive recovery. */
@@ -1404,14 +1448,25 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
     const pending = this.#startup;
 
-    if (pending?.generation === this.#generation) return await pending.run;
+    if (pending?.generation === this.#generation) {
+      this.#trace('startup.flight.join', { generation: pending.generation, sinceMs: Date.now() - pending.since });
+
+      return await pending.run;
+    }
+
+    const since = Date.now();
+    const generation = this.#generation;
+    this.#trace('startup.flight.open', { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
     const run = this.#recoverAndStart();
-    this.#startup = { generation: this.#generation, run };
+    this.#startup = { generation, run, since };
+    let settled = false;
 
     try {
       await run;
+      settled = true;
     } finally {
       if (this.#startup?.run === run) this.#startup = undefined;
+      this.#trace('startup.flight.exit', { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
     }
   }
 
@@ -1450,6 +1505,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Instance allocation and control-listener proof are outside the hook budget. */
   async #admitControlListener(): Promise<void> {
     const generation = this.#generation;
+    const since = Date.now();
+    this.#trace('startup.admit.enter', { generation, running: this.ctx.container?.running === true });
 
     try {
       await this.startAndWaitForPorts({
@@ -1461,17 +1518,24 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
           abort: AbortSignal.timeout(this.policy.portWaitMs),
         },
       });
+      this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
     } catch (cause) {
+      const reason = describe({ cause });
+      this.#trace('startup.admit.exit', {
+        generation, ms: Date.now() - since, admitted: false, owned: this.#owns(generation),
+        running: this.ctx.container?.running === true, reason,
+      });
+
       // A superseded admission is not a failure to tolerate but a newer claim
       // on this generation — the catch only observes it, so this branch
       // logs and falls off the end rather than yielding out of the catch.
       if (this.#owns(generation)) {
         const failure = classifyRecovery({ cause });
-        await this.#record('attach', `[${failure} → retry] ${describe({ cause })}`);
+        await this.#record('attach', `[${failure} → retry] ${reason}`);
 
         if (this.#owns(generation)) await this.#arm(STARTUP_CALLBACK, 1);
       } else {
-        console.error(`[devbox] superseded admission refused: ${describe({ cause })}`);
+        console.error(`[devbox] superseded admission refused: ${reason}`);
       }
     }
   }
@@ -1514,7 +1578,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         }
       })();
 
-      this.#startup = { generation, run };
+      this.#startup = { generation, run, since: Date.now() };
 
       try {
         await run;
@@ -1586,11 +1650,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * when the boot comparison refutes a settled generation. Destructive recovery
    * may preserve its own startup flight while retiring the container it owns.
    */
-  #invalidateGeneration(recoveryFlight?: { readonly run: Promise<void> }): void {
+  #invalidateGeneration(recoveryFlight?: Flight): void {
     this.#generation += 1;
     this.#startup = recoveryFlight === undefined
       ? undefined
-      : { generation: this.#generation, run: recoveryFlight.run };
+      : { generation: this.#generation, run: recoveryFlight.run, since: recoveryFlight.since };
     this.#restoration = { phase: 'unstarted' };
     this.#adoptionPending = false;
     // The settled phase named the identity this turnover just retired. A row
@@ -2070,6 +2134,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** Requests may start a stopped box, then adopt the hook's settled generation. */
   async resolveReadiness(): Promise<RestoreReadiness> {
     const wasRunning = this.ctx.container?.running === true;
+    this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
     if (!wasRunning) await this.#startContainer();
     // Join application readiness without withholding the hook's RPC replies.
@@ -2747,6 +2812,10 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       supervised,
       ports,
       incidents: incidentTotals(incidents.values()),
+      flights: {
+        startupMs: this.#startup === undefined ? null : Date.now() - this.#startup.since,
+        hookMs: this.#gateRestore === undefined ? null : Date.now() - this.#gateRestore.since,
+      },
     };
   }
 
@@ -3005,14 +3074,33 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     body: () => Promise<number | null>,
   ): Promise<void> {
     let nextSeconds: number | null = retrySeconds;
+    const since = Date.now();
+    this.#trace('schedule.enter', { callback, running: this.ctx.container?.running === true });
+
+    await this.#dispatch(callback, async () => {
+      try {
+        nextSeconds = await body();
+      } catch (error) {
+        console.error(`[devbox] scheduled ${callback} failed: ${describe({ cause: error })}`);
+      }
+
+      this.#trace('schedule.exit', { callback, ms: Date.now() - since, nextSeconds: nextSeconds ?? undefined });
+
+      if (nextSeconds !== null) await this.#arm(callback, nextSeconds);
+    });
+  }
+
+  /** The SDK's alarm loop, traced at its edges: a loop that stops firing is
+   *  otherwise indistinguishable from one whose callbacks never became due. */
+  override async alarm(alarmProps?: AlarmInvocationInfo): Promise<void> {
+    const since = Date.now();
+    this.#trace('alarm.enter', { running: this.ctx.container?.running === true, retry: alarmProps?.isRetry === true });
 
     try {
-      nextSeconds = await body();
-    } catch (error) {
-      console.error(`[devbox] scheduled ${callback} failed: ${describe({ cause: error })}`);
+      await super.alarm(alarmProps);
+    } finally {
+      this.#trace('alarm.exit', { ms: Date.now() - since, running: this.ctx.container?.running === true });
     }
-
-    if (nextSeconds !== null) await this.#arm(callback, nextSeconds);
   }
 
   /**
@@ -3392,6 +3480,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       stamp: (phase) => this.#stampPhase(phase),
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),
+      storeObjectUrl: (key) => {
+        // The mount's own egress host: the SDK's `r2EgressHandler` resolves
+        // the bucket from the binding name in the path and PREPENDS the
+        // mount's prefix (`boxes/<id>/backups`), so the URL's key segment is
+        // relative to that prefix, not to the bucket root. One PUT lands the
+        // object; s3fs's marker/placeholder writes never exist on this path.
+        const root = chainStoreRoot(this.#boxPrefix());
+
+        if (!key.startsWith(`${root}/`)) {
+          throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
+        }
+
+        return `http://r2.internal/${store.binding}/${key.slice(root.length + 1)}`;
+      },
       mountStore: async (at) => {
         // The BOX's prefix, writable, with no credential: `chainStoreRoot` and
         // `SnapshotChainPorts.mountStore` state why.
@@ -3549,11 +3651,27 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.schedule(delaySeconds, callback, null);
   }
 
-  /** Is a row for this callback already scheduled in the FUTURE? The question
-   *  `#arm` asks before writing one, and the question `ensureReady` asks before
-   *  driving a retry the schedule already owes. */
+  /** Is a row for this callback already pending? The question `#arm` asks
+   *  before writing one. A callback dispatching its own row sees that row and
+   *  looks past it; every other caller counts it, because a due row nobody
+   *  has delivered is still owed and arming beside it moves the alarm away. */
   async #pending(callback: string): Promise<boolean> {
-    return !needsArming(await this.listSchedules(callback), Date.now() / 1000);
+    return !needsArming(await this.listSchedules(callback), Date.now() / 1000, this.#dispatching.has(callback));
+  }
+
+  /** The callbacks the alarm loop is dispatching right now, by name. */
+  readonly #dispatching = new Set<string>();
+
+  /** Run one scheduled callback's body with its name marked as dispatching,
+   *  so the row still in the table under it is read as its own. */
+  async #dispatch<T>(callback: string, body: () => Promise<T>): Promise<T> {
+    this.#dispatching.add(callback);
+
+    try {
+      return await body();
+    } finally {
+      this.#dispatching.delete(callback);
+    }
   }
 }
 
