@@ -13,7 +13,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  buildWorkspaceOverview, workspaceOverviewStatus, WorkspaceOverviewSchema,
+  buildWorkspaceOverview, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema,
   type WorkspaceOverviewInputs,
 } from '../src/read-models/workspace-overview';
 import type { PendingAction } from '../src/read-models/pending-actions';
@@ -111,5 +111,81 @@ describe('workspaceOverviewStatus', () => {
     expect(workspaceOverviewStatus(buildWorkspaceOverview({ ...EMPTY, unfinished: true }))).toEqual({ kind: 'unfinished' });
 
     expect(workspaceOverviewStatus(buildWorkspaceOverview(EMPTY))).toEqual({ kind: 'idle' });
+  });
+});
+
+describe('workspaceOverviewEvidence', () => {
+  test('an idle card with no run says exactly "No runs yet" — never a run word', () => {
+    expect(workspaceOverviewEvidence(buildWorkspaceOverview(EMPTY))).toEqual([
+      { key: 'empty', text: 'No runs yet', tone: 'quiet' },
+    ]);
+  });
+
+  test('an idle card with unread updates lists them — the empty row is the last resort', () => {
+    const overview = buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('unseen_changes')] });
+
+    expect(workspaceOverviewStatus(overview)).toEqual({ kind: 'idle' });
+    expect(workspaceOverviewEvidence(overview)).toEqual([
+      { key: 'updates', text: 'Updates to read', tone: 'muted' },
+    ]);
+  });
+
+  test('waiting, working, updates and the sealed run each list, in order', () => {
+    const overview = buildWorkspaceOverview({
+      ...EMPTY,
+      working: true,
+      pendingActions: [action('release_approval'), action('deferred_action'), action('unseen_changes')],
+      latestRun: { status: 'completed', task: 'Sort this week\'s receipts into the ledger' },
+    });
+
+    expect(workspaceOverviewEvidence(overview)).toEqual([
+      { key: 'decisions', text: '2 decisions waiting', tone: 'warning' },
+      { key: 'working', text: 'Working now', tone: 'accent' },
+      { key: 'updates', text: 'Updates to read', tone: 'muted' },
+      { key: 'run', text: 'Last run: completed', tone: 'success' },
+      { key: 'task', text: 'Sort this week\'s receipts into the ledger', tone: 'quiet' },
+    ]);
+  });
+
+  test('a failed run warns and an unfinished workspace still names its leftovers', () => {
+    const overview = buildWorkspaceOverview({
+      ...EMPTY,
+      unfinished: true,
+      pendingActions: [action('unseen_changes')],
+      latestRun: { status: 'failed', task: 'Regenerate the token sheet' },
+    });
+
+    expect(workspaceOverviewEvidence(overview)).toEqual([
+      { key: 'unfinished', text: 'Unfinished work', tone: 'muted' },
+      { key: 'updates', text: 'Updates to read', tone: 'muted' },
+      { key: 'run', text: 'Last run: failed', tone: 'warning' },
+      { key: 'task', text: 'Regenerate the token sheet', tone: 'quiet' },
+    ]);
+  });
+
+  test('a run whose end recorded no reason is unknown, and error statuses are quoted plainly', () => {
+    const unsealed = buildWorkspaceOverview({ ...EMPTY, latestRun: { status: null, task: null } });
+    const errored = buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'error', task: null } });
+
+    expect(workspaceOverviewEvidence(unsealed)).toEqual([
+      { key: 'run', text: 'Last run: unknown', tone: 'muted' },
+    ]);
+    expect(workspaceOverviewEvidence(errored)).toEqual([
+      { key: 'run', text: 'Last run: error', tone: 'muted' },
+    ]);
+  });
+
+  test('the task line holds the wire bound: 240 characters, nothing beyond', () => {
+    const overview = buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'completed', task: 'x'.repeat(400) } });
+
+    const evidence = workspaceOverviewEvidence({
+      ...overview,
+      latestRun: { status: 'completed', task: 'y'.repeat(400) },
+    });
+
+    const task = evidence.find((fact) => fact.key === 'task');
+
+    expect(task?.text.length).toBe(240);
+    expect(task?.text.endsWith('y')).toBe(true);
   });
 });

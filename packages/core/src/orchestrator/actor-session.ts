@@ -454,17 +454,7 @@ export class ActorSession {
         switch (event.type) {
           case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
           case 'tool-call': pending.push(event); break;
-          case 'tool-result': {
-            let index = pending.length - 1;
-
-            while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
-            const call = index < 0 ? undefined : pending.splice(index, 1)[0];
-            this.orchestrator.acc.recordToolCall(event.success
-              ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.result }
-              : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
-                  execution: event.execution, error: event.error ?? event.result });
-            break;
-          }
+          case 'tool-result': this.recordToolResult(pending, event); break;
 
           case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
           case 'error': {
@@ -529,6 +519,24 @@ export class ActorSession {
       admittedMessages: active.claim === null ? [] : this.options.claims.admittedFor(active.claim).messages,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };
+  }
+
+  /** Pair a tool's outcome with the most recent issued call that owns it and
+   *  record the whole exchange — success or refusal — on the turn's spend.
+   *  The most-recent match is last-in-first-out: a tool-call event for the same
+   *  id issued after this one already matched and was removed. */
+  private recordToolResult(
+    pending: Array<Extract<ChatEvent, { type: 'tool-call' }>>,
+    event: Extract<ChatEvent, { type: 'tool-result' }>,
+  ): void {
+    let index = pending.length - 1;
+
+    while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
+    const call = index < 0 ? undefined : pending.splice(index, 1)[0];
+    this.orchestrator.acc.recordToolCall(event.success
+      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.result }
+      : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
+          execution: event.execution, error: event.error ?? event.result });
   }
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {

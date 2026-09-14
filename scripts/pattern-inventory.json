@@ -85,6 +85,34 @@
       "decision": "sourceGate"
     },
     {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "34f3dba73bc93b78de7c5c749d8a46c024e13fa8331ab1406c633d855ce77e50",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "e8627f3c73bf523de4d88bba418743213f0ad06d5cd1437b5e67d5997127b0d4",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "b42a5bfc90617b79189d12c5c99df7a59d4de46a9b2f349235bb584f22ba18c0",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-activity-cache-pane.test.ts",
+      "kind": "regex-literal",
+      "owner": "<module>",
+      "sourceSha256": "9785ca4f2bf40697b6c3093a1e7eb1286d38a2309c364369bf9c7003f014f908",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/cf-backend/tests/unit-agent-registry.test.ts",
       "kind": "regex-literal",
       "owner": "<module>",
@@ -249,7 +277,7 @@
       "file": "packages/cli-backend/tests/local-session.test.ts",
       "kind": "regex-literal",
       "owner": "isDynamicBlock",
-      "sourceSha256": "ee2e907f3d06430e8ed7bc75970c459360236d9ebc1b742b50a37b2554b7a2ae",
+      "sourceSha256": "bb27f6801ea8e2f550822598f178bdafdaf5fc7cf45061c83eeffd12e148957f",
       "decision": "lexical"
     },
     {
@@ -641,7 +669,7 @@
       "file": "packages/core/tests/unit-volatile-context.test.ts",
       "kind": "regex-literal",
       "owner": "BLOCK_OPEN",
-      "sourceSha256": "ee2e907f3d06430e8ed7bc75970c459360236d9ebc1b742b50a37b2554b7a2ae",
+      "sourceSha256": "bb27f6801ea8e2f550822598f178bdafdaf5fc7cf45061c83eeffd12e148957f",
       "decision": "lexical"
     },
     {
