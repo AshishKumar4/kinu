@@ -22,6 +22,7 @@ import type {
   Rpc,
   SubordinateActivityEvent,
   TabPresence,
+  SendLanding,
 } from "@kinu.run/core";
 import type { BackgroundJob, SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import type { ExecutorInfo } from "@kinu.run/core";
@@ -86,6 +87,14 @@ export interface BranchRun {
   /** Errored: the honest reason the branch produced no comparison. */
   message?: string;
 }
+
+/** Where `sendChat` put the message: a turn this pane started, or the actor's
+ *  running turn — whose `settled` answer says whether it was spliced there or,
+ *  the turn having just ended, run as the next turn. Null: nothing was sent. */
+export type SendAdmission =
+  | { readonly landed: "turn" }
+  | { readonly landed: "mid-turn"; readonly settled: Promise<SendLanding> }
+  | null;
 
 /** One mid-turn steer as the chat renders it — driven entirely by the server's
  *  steer_status broadcasts, so every open tab agrees about whether the model
@@ -1414,28 +1423,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     }
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
-  /**
-   * Send a message WITHOUT stopping the running turn.
-   *
-   * The actor decides in its own turn queue: `"mid-turn"` means it was spliced
-   * into the running turn's next step, `"queued"` means that turn had already
-   * ended and the actor enqueued it as the next ordinary turn. Either way the
-   * text has landed somewhere, which is why nothing here re-sends it. Answering
-   * `"idle"` and leaving the client to call `sendChat` afterwards would make the
-   * decision and the enqueue two non-atomic steps, so guidance meant for one
-   * turn could become an ordinary turn after another had started.
-   */
-  const steerChat = useCallback(async (
-    text: string, mode: "plan" | "build" = "build",
-  ): Promise<"mid-turn" | "queued"> => {
-    // `mode` rides the enqueued turn as its `kinuMode`, the same way `sendChat`
-    // binds it: a Plan-locked composer whose steer missed its turn must queue a
-    // PLAN turn, not silently become a build one.
-    const { landed } = await rpc<{ landed: "mid-turn" | "queued" }>("steerTurn", [text, mode]);
-
-    return landed;
-  }, [rpc]);
-
   // Listen for MCTS progress broadcasts from the server. We attach to the
   // outer `agent` EventTarget — NOT the inner `_ws` private field — so the
   // listener survives partysocket auto-reconnects without a close→open gap
@@ -1959,35 +1946,60 @@ export function useKinu(target?: string | KinuActorAddress) {
   );
 
   /**
-   * Start a turn with this text and these attachments.
+   * Send this text and these attachments to the actor — the composer's one
+   * submit, whatever the actor is doing.
    *
-   * Answers whether the send was ADMITTED. `false` means a turn already holds
-   * this conversation's send latch and nothing was sent, so the caller must
-   * keep the composer's contents; callers must not pre-check streaming state,
-   * because a reactive pre-check is the race this closes.
+   * Nothing is running: the send starts a turn under this conversation's send
+   * latch, through the SDK's own chat path (that IS the start-a-turn path), and
+   * answers `'turn'`. A turn holds the latch or is streaming: the message goes
+   * through the actor's `send` RPC, which splices it into the running turn's
+   * next step — or, when that turn had just ended, runs it as the next ordinary
+   * turn itself, atomically in its own queue — and `settled` says which. Either
+   * way the text has landed somewhere, which is why nothing here re-sends it.
+   * `null` means nothing was sent (an empty draft); the caller keeps it.
    *
-   * File attachments ride as data-URL FileUIParts ahead of the text part — the
-   * whole downstream pipeline (WS transport, DO persistence, Think's
-   * convertToModelMessages) natively carries them to multimodal models.
+   * The decision reads the latch, not reactive streaming state alone: two
+   * presses inside one tick both see the not-yet-committed `isStreaming`, and
+   * the latch is what makes the second one a message to the first's turn
+   * rather than a second turn beside it.
+   *
+   * File attachments ride as data-URL FileUIParts ahead of the text part on
+   * both paths — the whole downstream pipeline (WS transport, DO persistence,
+   * Think's convertToModelMessages, the inbox's merged user message) natively
+   * carries them to multimodal models.
    */
   const sendChat = useCallback((
     content: string,
     files: FileUIPart[] = [],
     mode: "plan" | "build" = "build",
-  ): boolean => {
+  ): SendAdmission => {
     const parts: UIMessage["parts"] = [
       ...files,
       ...(content ? [{ type: "text" as const, text: content }] : []),
     ];
 
-    if (parts.length === 0) return false;
+    if (parts.length === 0) return null;
 
-    return startTurn(() => {
-      setChatError(null);
+    if (sendLatch.current.owner === null && !isStreaming) {
+      const admitted = startTurn(() => {
+        setChatError(null);
 
-      return sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
-    });
-  }, [startTurn, sendMessage]);
+        return sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
+      });
+
+      if (admitted) return { landed: "turn" };
+    }
+
+    // `mode` rides the message as its `kinuMode`, the same fact the SDK path
+    // binds: a Plan-locked composer whose message misses its turn must run a
+    // PLAN turn, not silently become a build one.
+    const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
+
+    return {
+      landed: "mid-turn",
+      settled: rpc<{ landed: SendLanding }>("send", [content, attachments, mode]).then((result) => result.landed),
+    };
+  }, [startTurn, sendMessage, isStreaming, rpc]);
 
   /**
    * Re-run the turn that failed — the SDK's own `regenerate`, not a fresh send.
@@ -2248,7 +2260,6 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** Mid-turn steers the server has taken, queued → landed. Dropped ones are
      *  removed by the server's `returned` broadcast, not by the surface. */
     steerRuns,
-    steerChat,
     /**
      * Fork this agent at a message. Returns the new agent's navigation URL
      * on success, or throws on error ('agent busy', 'fork point not found',

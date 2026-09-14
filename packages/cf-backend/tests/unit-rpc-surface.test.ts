@@ -464,7 +464,7 @@ describe('the agent surfaces cannot drift from their classes', () => {
    */
   test('the shared control plane is declared on ActorAgent and not on the root', () => {
     const shared = [
-      'getStoredModelSpec', 'setModel', 'steerTurn', 'cancelCurrentWork', 'getChatHistoryPage',
+      'getStoredModelSpec', 'setModel', 'send', 'cancelCurrentWork', 'getChatHistoryPage',
     ];
 
     const onActor = actorMembers.map((m) => m.name).filter((name) => shared.includes(name));

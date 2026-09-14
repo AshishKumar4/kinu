@@ -124,7 +124,7 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
  */
 const DECORATED = [
   { name: 'OrchestratorAgent', cls: OrchestratorAgent, floor: 100, witness: 'branchTurn' },
-  { name: 'ActorAgent', cls: ActorAgent, floor: 14, witness: 'steerTurn' },
+  { name: 'ActorAgent', cls: ActorAgent, floor: 14, witness: 'send' },
 ] as const;
 
 describe('KINU-065 — the real decorated classes load and keep their callable metadata', () => {

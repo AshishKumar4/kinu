@@ -38,7 +38,7 @@ import {
   type HeadInput, type HeadReport, type HeadRuntime,
   type NimbusExecResult,
   type FactsStore, type SleepTimeUpdate,
-  type AgentSignal, type SignalOutcome, type ReleaseBoard,
+  type AgentSignal, type SendOutcome, type ReleaseBoard,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { platformGatewayEnv } from './platform-gateway';
@@ -319,7 +319,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Start the durable pieces of a turn the model-free harness does not drive. */
   harnessBeginTurn(turnId: string): void {
     this.declareTurnCheckpoint(turnId);
-    this.orch.signals.beginTurn(false);
+    this.orch.inbox.beginTurn(false);
   }
 
   /**
@@ -352,9 +352,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Replace the delivery seam for a terminal-effect test. The actor still runs
    *  the real signal policy and terminal ledger around this one external port. */
   harnessSetSignalDeliverer(
-    deliver: (signal: AgentSignal) => Promise<SignalOutcome>,
+    deliver: (signal: AgentSignal) => Promise<SendOutcome>,
   ): void {
-    Object.defineProperty(this.orch.signals, 'deliver', {
+    Object.defineProperty(this.orch.inbox, 'send', {
       configurable: true,
       value: deliver,
     });
@@ -365,12 +365,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  and sweep the rows no live turn owns, exactly as restoreTurnCheckpoint
    *  does inside the real beforeTurn. */
   harnessRestorePendingSteers(turnId: string): void {
-    this.orch.signals.interrupt();
+    this.orch.inbox.interrupt();
 
     const pending = this.sql<{ id: string; text: string; mode: WorkMode }>`
       SELECT id, text, mode FROM pending_steers WHERE turn_id = ${turnId} ORDER BY seq ASC`;
 
-    this.orch.signals.restorePending(pending);
+    this.orch.inbox.restorePending(pending);
     this.sweepOrphanedSteers();
   }
 

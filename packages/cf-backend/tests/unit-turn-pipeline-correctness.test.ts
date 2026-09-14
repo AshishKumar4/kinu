@@ -694,14 +694,14 @@ describe('turn-pipeline correctness wiring', () => {
 
   test('the settle spine runs FIRST and hands the turn status to the one delivery seam', () => {
     // What the aborted turn does with absorbed/leftover signals is core's
-    // (SignalDelivery.settle — behaviourally pinned in core's
+    // (Inbox.settle — behaviourally pinned in core's
     // unit-signals.test.ts). What THIS backend must do is call the spine before
     // anything that can throw or return early, and tell it how the turn ended.
     const hook = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
     const preEarlyReturn = hook.slice(0, hook.indexOf('if (result.status !== "completed")'));
     expect(preEarlyReturn).toContain('this.settleTurnEvents(result)');
     const helper = actor.slice(actor.indexOf('protected async settleTurnEvents(result: ChatResponseResult)'));
-    expect(helper).toContain('this.orch.signals.settle({ completed })');
+    expect(helper).toContain('this.orch.inbox.settle({ completed })');
     // No second re-delivery path on this side — the seam owns it.
     expect(actor).not.toContain('reenqueue');
   });
@@ -929,10 +929,10 @@ describe('turn-pipeline correctness wiring', () => {
         throw new Error('failed to put the harness actor in a turn');
       }
 
-      const signals = harness.agent.observeOrch().signals;
-      expect(await signals.deliver({ kind: 'event_drain', text: 'a build finished', replyTurnId }))
+      const inbox = harness.agent.observeOrch().inbox;
+      expect(await inbox.send({ kind: 'event_drain', text: 'a build finished', replyTurnId }))
         .toBe('mid-turn');
-      await signals.prepareStep({ stepNumber: 0, messages: [] });
+      await inbox.prepareStep({ stepNumber: 0, messages: [] });
     }
 
     test('a spliced drain settles once, and the activation sweep will not redeliver it', async () => {
@@ -1284,7 +1284,7 @@ describe('turn-pipeline correctness wiring', () => {
     // neither can report a pick as queued without waiting for the delivery.
     const pick = takePick.slice(takePick.indexOf('export async function pickAlternateTake('));
     expect(pick).toContain('let continuationQueued = false');
-    expect(pick).toContain('const outcome = await deps.signals.deliver');
+    expect(pick).toContain('const outcome = await deps.inbox.send');
     expect(pick).toContain("continuationQueued = outcome !== 'undelivered'");
     expect(pick).not.toContain('continuationQueued = true');
     expect(source).toContain('await pickAlternateTake(');

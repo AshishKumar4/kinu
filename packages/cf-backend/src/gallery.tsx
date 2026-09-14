@@ -2969,7 +2969,7 @@ function ComposerFrame() {
         </div>
         <div className="space-y-1">
           <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
-          <Composer {...shared} value={value} streaming onSteer={() => {}} onBranch={() => {}}
+          <Composer {...shared} value={value} streaming onBranch={() => {}}
             modelPicker={picker()} />
         </div>
         <div className="space-y-1">
