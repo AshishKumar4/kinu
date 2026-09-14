@@ -101,6 +101,7 @@ export interface ExecProbeStamp {
   execStarted: number | null;
   execFinished: number | null;
   execResult: { exitCode?: number; stdoutHead?: string; error?: string } | null;
+  startError?: string;
 }
 
 const EXEC_KEY = 'probe:exec';
@@ -137,8 +138,11 @@ export class OnStartExecProbe extends Sandbox<ProbeBindings> {
     await this.runProbeExec();
   }
 
-  /** `mode` is 'start' | 'ports'. A reset leaves the row in storage with
-   *  `execStarted` set and `execFinished` null. */
+  /** `mode` is 'start' | 'ports' | 'bench'. A reset leaves the row in storage
+   *  with `execStarted` set and `execFinished` null. `bench` is the bench
+   *  fixture's admission window (`portWaitMs` 6,000, 100 ms polls, abort at
+   *  the window); its refusal is returned in `startError` so the caller can
+   *  re-drive the way the settlement driver does. */
   async probeStart(mode: string): Promise<ExecProbeStamp> {
     const row: ExecProbeStamp = {
       mode, startEntered: Date.now(), startReturned: null,
@@ -147,7 +151,23 @@ export class OnStartExecProbe extends Sandbox<ProbeBindings> {
 
     await this.ctx.storage.put(EXEC_KEY, row);
 
-    if (mode === 'ports') {
+    if (mode === 'bench') {
+      try {
+        await this.startAndWaitForPorts({
+          ports: this.defaultPort,
+          cancellationOptions: {
+            instanceGetTimeoutMS: 6_000, portReadyTimeoutMS: 6_000, waitInterval: 100, abort: AbortSignal.timeout(6_000),
+          },
+        });
+      } catch (error) {
+        const refused = (await this.ctx.storage.get<ExecProbeStamp>(EXEC_KEY)) ?? row;
+        refused.startReturned = Date.now();
+        refused.startError = error instanceof Error ? error.message : String(error);
+        await this.ctx.storage.put(EXEC_KEY, refused);
+
+        return refused;
+      }
+    } else if (mode === 'ports') {
       await this.startAndWaitForPorts({ ports: this.defaultPort });
     } else {
       await this.start();
