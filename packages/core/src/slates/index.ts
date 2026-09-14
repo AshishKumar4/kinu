@@ -30,3 +30,5 @@ export {
 export { SlateShareStore, initSlateShareTables, type NewSlateShare, type ShareUser } from './shares';
 
 export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReading } from './blueprints';
+
+export type { DurableAppIdentity, DurableApps } from './durable-app';

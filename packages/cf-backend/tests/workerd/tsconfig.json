@@ -22,6 +22,7 @@
   "exclude": [
     "./decorated-agent.test.ts",
     "./plan-announce-probe.ts",
+    "./slate-durability-probe.ts",
     "./slate-actor-probe.ts",
     "./two-turn-probe.ts",
     "./user-socket-probe.ts"
