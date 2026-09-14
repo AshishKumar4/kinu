@@ -90,7 +90,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 export { ObservedOrchestrator as OrchestratorAgent };
 
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-  'claimOwner' | 'slateAs' | 'writeExecutorFileChunk'> & Pick<ObservedOrchestrator, 'portReservations'>;
+  'claimOwner' | 'slateAs' | 'writeExecutorFileChunk' | 'executeInExecutor'> & Pick<ObservedOrchestrator, 'portReservations'>;
 
 const PreviewValueSchema = v.object({ url: v.string(), port: v.number() });
 
@@ -266,5 +266,16 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeEnv> {
     const value = v.parse(RemovedValueSchema, removed.value);
 
     return { ok: value.removed, port: value.port };
+  }
+
+  /** One command through the workspace executor, the way the `run` tool
+   *  reaches it: a process left running beside a served slate. */
+  async runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }> {
+    const target = await this.workspaceTarget(workspace);
+    const answer = await target.executeInExecutor('workspace', command);
+
+    if ('error' in answer) return { exitCode: 1, stdout: answer.error };
+
+    return { exitCode: answer.exitCode, stdout: answer.stdout };
   }
 }
