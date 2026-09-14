@@ -161,7 +161,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
       .filter((index) => (frame.motes[index * stride + 3] ?? 0) > 0.004)
       .length;
 
-    expect(DUST_SOURCE).toContain('dark: 0.19, light: 0.18');
+    expect(DUST_SOURCE).toContain('dark: 0.28, light: 0.28');
     expect(visible).toBeGreaterThan(0);
     expect(surface.fills).toBe(visible * 2);
     expect(surface.clears).toBe(1);
@@ -170,7 +170,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
     for (const style of surface.styles) {
       expect(style.startsWith('rgba(224,164,88,')).toBe(true);
       const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
-      expect(alpha).toBeLessThanOrEqual(0.19);
+      expect(alpha).toBeLessThanOrEqual(0.28);
     }
   });
 
@@ -191,7 +191,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
     for (const style of surface.styles) {
       expect(style.startsWith('rgba(122,85,20,')).toBe(true);
       const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
-      expect(alpha).toBeLessThanOrEqual(0.18);
+      expect(alpha).toBeLessThanOrEqual(0.28);
     }
   });
 });
