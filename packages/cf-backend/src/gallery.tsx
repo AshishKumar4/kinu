@@ -4139,12 +4139,15 @@ const BLUEPRINT_INSPECTION: BlueprintInspection = {
 
 const SHARED_LIBRARY: SharedLibrary = {
   mine: [
-    { id: BLUEPRINT_ID, title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
-    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
+    { id: BLUEPRINT_ID, kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", kind: "blueprint", share: "h2Lm9sQ4dF7gJ1kP", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
+    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Triage board", description: "The running issue triage slate.", createdAt: NOW - 864e5, bindings: 3, visibility: "users", workspace: "checkout-fixes", users: ["pat@example.com"] },
   ],
   received: [
-    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, owner: "sam@example.com" },
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, workspace: "sam-mail", owner: "sam@example.com" },
   ],
+  public: [],
+  known: [],
 };
 
 /** The share dialog over the Issue triage slate, at the inspection step. */

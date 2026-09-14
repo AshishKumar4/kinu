@@ -24,6 +24,7 @@
     "./plan-announce-probe.ts",
     "./slate-durability-probe.ts",
     "./slate-actor-probe.ts",
+    "./slate-share-probe.ts",
     "./two-turn-probe.ts",
     "./user-socket-probe.ts"
   ]

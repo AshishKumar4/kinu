@@ -18,9 +18,11 @@
 import * as v from 'valibot';
 import {
   err, json, safeJson, ownerCaller, OwnerCapabilityUnavailableError, retryTransientDO,
-  formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
+  formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, LiveShareRecordSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type BlueprintFork, type UserCaller,
+  LiveShareCreatedSchema,
 } from '@kinu.run/core';
+import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
@@ -109,6 +111,12 @@ export async function handleSharedRequest(request: Request, env: Env, identity: 
 
   if (path === '/fork' && request.method === 'POST') return fork(request, env, identity);
 
+  if (path === '/live' && request.method === 'POST') return shareLive(request, env, identity, owner);
+
+  if (path === '/live/revoke' && request.method === 'POST') return revokeLive(request, env, identity);
+
+  if (path === '/live/open' && request.method === 'POST') return openLive(request, env, identity);
+
   return null;
 }
 
@@ -140,8 +148,25 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
       if (id === null) continue;
 
       mine.push({
-        id, title: reading.value.view.title, description: reading.value.view.description, createdAt: share.createdAt,
-        bindings: reading.value.view.bindings.length, workspace: workspace.name, users: share.users,
+        id, kind: 'blueprint', share: share.id, title: reading.value.view.title, description: reading.value.view.description,
+        createdAt: share.createdAt, bindings: reading.value.view.bindings.length, workspace: workspace.name, users: share.users,
+      });
+    }
+
+    const live = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
+
+    if (!live.ok) throw new Error(`listing live shares of ${workspace.name}: ${live.reason}: ${live.error}`);
+
+    for (const share of v.parse(v.array(LiveShareRecordSchema), live.value)) {
+      if (share.revokedAt !== null) continue;
+      const reading = await owned.readLiveShare(share.id);
+
+      if (!reading.ok) continue;
+
+      mine.push({
+        id: share.id, kind: 'live', share: share.id, title: reading.value.title, description: reading.value.description,
+        createdAt: share.createdAt, bindings: share.grant.members.length, visibility: share.visibility,
+        workspace: workspace.name, users: share.users,
       });
     }
   }
@@ -151,7 +176,23 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
   // Each received row is a projection; the owner's object is asked again and a
   // refusal drops the row, so a revoked blueprint is not offered for forking.
   for (const receipt of await userDO.sharesReceived_list(owner)) {
-    const reading = await workspaceOwner(env, receipt.workspace).readBlueprint(receipt.shareId);
+    const object = workspaceOwner(env, receipt.workspace);
+    // A receipt names one share row on the owner's object, whichever table
+    // holds it: a live share reads as itself, a blueprint as its view, and a
+    // row neither table answers is dropped — a revoked share is not offered.
+    const live = await object.readLiveShare(receipt.shareId);
+
+    if (live.ok) {
+      received.push({
+        id: receipt.shareId, kind: 'live', share: receipt.shareId,
+        title: live.value.title, description: live.value.description, createdAt: live.value.record.createdAt,
+        bindings: live.value.record.grant.members.length, visibility: live.value.record.visibility,
+        workspace: receipt.workspace, owner: receipt.ownerEmail,
+      });
+      continue;
+    }
+
+    const reading = await object.readBlueprint(receipt.shareId);
 
     if (!reading.ok) continue;
     const id = await mintBlueprintId(env, receipt.workspace, receipt.shareId);
@@ -159,12 +200,13 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
     if (id === null) continue;
 
     received.push({
-      id, title: reading.value.view.title, description: reading.value.view.description, createdAt: reading.value.view.createdAt,
-      bindings: reading.value.view.bindings.length, owner: receipt.ownerEmail,
+      id, kind: 'blueprint', share: receipt.shareId, title: reading.value.view.title,
+      description: reading.value.view.description, createdAt: reading.value.view.createdAt,
+      bindings: reading.value.view.bindings.length, workspace: receipt.workspace, owner: receipt.ownerEmail,
     });
   }
 
-  return { mine, received };
+  return { mine, received, public: [], known: [] };
 }
 
 async function publish(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
@@ -227,4 +269,92 @@ async function fork(request: Request, env: Env, identity: AuthIdentity): Promise
   const result: BlueprintFork = admitted.value;
 
   return json(result, { status: 201 });
+}
+
+const LiveShareBody = v.object({
+  workspace: v.string(),
+  slate: v.string(),
+  visibility: v.picklist(['users', 'public']),
+  emails: v.optional(v.array(v.pipe(v.string(), v.trim(), v.email()))),
+  approved: v.optional(v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() }))),
+});
+
+const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
+
+/** Mint or return the live share over one of my slates. `emails` names users
+ *  on a `users` share; `approved` is the mutating grant the dialog checked. */
+async function shareLive(request: Request, env: Env, identity: AuthIdentity, owner: UserCaller): Promise<Response> {
+  const body = await safeJson(request, LiveShareBody);
+
+  if (!body) return err(400, 'Body must be { workspace, slate, visibility, emails?, approved? }');
+  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+
+  if (!claim.ok) return err(claim.status, claim.error);
+
+  const owned = workspaceOwner(env, body.workspace);
+
+  const created = await owned.slateAs(ROOT_SLATE_CALLER, {
+    op: 'share', id: body.slate, visibility: body.visibility, approved: body.approved ?? [],
+  });
+
+  if (!created.ok) return err(created.reason === 'bad_input' ? 400 : created.reason === 'missing' ? 404 : 409, created.error);
+
+  const { share, url } = v.parse(LiveShareCreatedSchema, created.value);
+  const emails = [...new Set((body.emails ?? []).map((email) => email.toLowerCase()).filter((email) => email !== identity.email.toLowerCase()))];
+
+  if (share.visibility === 'users' && emails.length > 0) {
+    const named = await Promise.all(emails.map(async (email) => ({ userId: await deriveUserId(email), email })));
+    const recorded = await owned.shareLiveWith(share.id, named);
+
+    if (!recorded.ok) return err(409, recorded.error);
+
+    const reading = await owned.readLiveShare(share.id);
+
+    const receipt: SharedBlueprintReceipt = {
+      ownerUserId: identity.userId, ownerEmail: identity.email, workspace: body.workspace, shareId: share.id,
+      title: reading.ok ? reading.value.title : share.slate,
+    };
+
+    for (const user of named) {
+      const recipient = env.UserDO.get(env.UserDO.idFromName(user.userId));
+      await retryTransientDO('sharesReceived_add', () => recipient.sharesReceived_add(owner, receipt));
+    }
+  }
+
+  return json({ share, url }, { status: 201 });
+}
+
+async function revokeLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, LiveIdBody);
+
+  if (!body) return err(400, 'Body must be { workspace, share }');
+  const claim = await claimOwnedWorkspace(env, identity.userId, body.workspace);
+
+  if (!claim.ok) return err(claim.status, claim.error);
+  const revoked = await workspaceOwner(env, body.workspace).slateAs(ROOT_SLATE_CALLER, { op: 'unshare', share: body.share });
+
+  if (!revoked.ok) return err(revoked.reason === 'missing' ? 404 : 409, revoked.error);
+
+  return json(revoked.value);
+}
+
+/** The URL the signed-in user opens a live share at: the share's own origin,
+ *  or the ticket-bearing entry that names this account on a `users` share. */
+async function openLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
+  const body = await safeJson(request, LiveIdBody);
+
+  if (!body) return err(400, 'Body must be { workspace, share }');
+  const reading = await workspaceOwner(env, body.workspace).readLiveShare(body.share);
+
+  if (!reading.ok) return err(404, NOT_FOUND);
+
+  const { handle, visibility } = reading.value.record;
+
+  const url = visibility === 'public'
+    ? await slateShareUrl(env, body.workspace, handle)
+    : await viewerEntryUrl(env, body.workspace, handle, identity.userId);
+
+  if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
+
+  return json({ url });
 }
