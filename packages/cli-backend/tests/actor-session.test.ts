@@ -272,3 +272,84 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
     db.close();
   }
 });
+
+test('bound steer persistence reserves on accept and lands rows at the drain', async () => {
+  // The seam's two halves, observed in order: a send reaching a busy actor
+  // calls onAccept BEFORE its 'queued' broadcast (the row precedes the
+  // acknowledgement), and the step boundary calls onDrain with the described
+  // rows — the two moments a durable backend keys its reservation table on.
+  const { left: { actor }, db } = sessions();
+  const accepted: string[] = [];
+  const drained: string[][] = [];
+  actor.bindSteerPersistence({
+    onAccept: (steer) => { accepted.push(steer.id); },
+    onDrain: (rows) => { drained.push(rows.map((row) => row.id)); },
+  });
+
+  // Gating the tool's execution holds the turn open past the tool call's own
+  // step boundary: the send lands while the step is in flight, and the drain
+  // (the onDrain call) is what the second model request's prompt proves.
+  const toolGate = Promise.withResolvers<void>();
+  const firstCall = Promise.withResolvers<void>();
+  const secondCall = Promise.withResolvers<void>();
+  const prompts: ModelMessage[][] = [];
+
+  const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: async (options) => {
+    prompts.push(options.prompt);
+    (prompts.length === 1 ? firstCall : secondCall).resolve();
+    const first = !options.prompt.some((message) => message.role === 'tool');
+
+    if (first) return {
+      content: [{ type: 'tool-call', toolCallId: 'hold', toolName: 'hold', input: '{}' }],
+      finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
+    };
+
+    return { content: [{ type: 'text', text: 'done' }],
+      finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
+  } });
+
+  const tools = { hold: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+    execute: async () => {
+      await toolGate.promise;
+
+      return 'held';
+    } }) };
+
+  const lease = bind(actor, 'steer-turn', 'build', { role: 'user', content: 'hold on' }, tools);
+
+  const run = actor.execute(lease, {
+    task: 'hold', loopVersion: 0,
+    chat: { model, system: 'sys', tools }, extensions: [], dynamic: () => ({}),
+  }, () => {});
+
+  try {
+    // The tool call is issued; the tool is held. The send buffers now.
+    await firstCall.promise;
+    const sent = actor.send({ id: 'steer-1', text: 'reserved before acknowledged' });
+    expect(accepted).toEqual(['steer-1']);
+    expect(await sent).toBe('mid-turn');
+    expect(drained).toEqual([]);
+
+    // Releasing the tool crosses the step boundary: the drain writes its rows
+    // and the next model request already carries the landed message.
+    toolGate.resolve();
+    await secondCall.promise;
+    expect(drained).toEqual([['steer-1']]);
+
+    const texts = prompts[1]!
+      .filter((m): m is Extract<ModelMessage, { role: 'user' }> => m.role === 'user')
+      .flatMap((m) => (Array.isArray(m.content)
+        ? m.content.filter((p) => p.type === 'text').map((p) => p.text)
+        : [m.content]));
+
+    expect(texts.some((t) => t.includes('reserved before acknowledged'))).toBe(true);
+
+    expect(await run).toMatchObject({ text: 'done', failure: null });
+    expect(actor.landedSteers.map((row) => row.id)).toEqual(['steer-1']);
+  } finally {
+    toolGate.resolve();
+    await Promise.allSettled([run]);
+    actor.finishTurn(lease);
+    db.close();
+  }
+});

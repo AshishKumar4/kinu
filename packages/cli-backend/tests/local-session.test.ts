@@ -3596,6 +3596,335 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
   });
 });
 
+describe('LocalAgentSession — a pending send is durable before it is acknowledged', () => {
+  /** The reservation an accepted send leaves: `pending_steers` is the local
+   *  peer of the cf table of the same name — every row an acknowledgement the
+   *  process alone could lose. */
+  const pendingSends = (db: Database) => db.query<{
+    id: string; turn_id: string | null; mode: string; text: string;
+  }, []>(`SELECT id, turn_id, mode, text FROM pending_steers ORDER BY seq`).all();
+
+  /** A turn held open at TWO points: call #1 announces a tool call and parks
+   *  on `stepGate` (the mid-turn window), call #2 drains the steer at its step
+   *  boundary then parks on `endGate` — the window where the steer HAS landed
+   *  but the turn has not committed. */
+  function drainWindowModel(answer: string) {
+    const prompts: PromptMessage[][] = [];
+    const stepGate = Promise.withResolvers<void>();
+    const endGate = Promise.withResolvers<void>();
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let calls = 0;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+        calls += 1;
+
+        if (calls === 1) {
+          return {
+            stream: new ReadableStream({
+              async start(controller) {
+                options.abortSignal?.addEventListener('abort', () => {
+                  controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+                }, { once: true });
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call-1', toolName: 'fact',
+                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                });
+                await stepGate.promise;
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+
+        return {
+          stream: new ReadableStream({
+            async start(controller) {
+              options.abortSignal?.addEventListener('abort', () => {
+                controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              }, { once: true });
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              await endGate.promise;
+              controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    return { model, prompts, stepGate, endGate };
+  }
+
+  /** Single-step model that streams one delta, then holds the turn open until
+   *  release() — a deterministic mid-turn window with no second step behind it. */
+  function gatedTextModel(answer: string) {
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const gate = Promise.withResolvers<void>();
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream({
+          async start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            controller.enqueue({ type: 'text-start', id: '0' });
+            controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+            abortSignal?.addEventListener('abort', () => {
+              controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            }, { once: true });
+            await gate.promise;
+
+            if (abortSignal?.aborted) return;
+            controller.enqueue({ type: 'text-end', id: '0' });
+            controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      }),
+    });
+
+    return { model, release: gate.resolve };
+  }
+
+  test('a mid-turn send is in SQLite before send() resolves, and the drain retires it', async () => {
+    const { model, stepGate, endGate } = drainWindowModel('done');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+
+    // The row must exist BEFORE the client hears the acceptance: the write is
+    // the acceptance. Reading it off this microtask boundary, not after the
+    // await, is what makes the order the assertion and not the timing.
+    const steer = session.send('also check X');
+    const pending = pendingSends(db);
+    // Two reservations: the opening send's own idle row (turn_id NULL — the
+    // queue held it, and it is retired when THIS turn commits) and the steer
+    // bound to the running turn.
+    expect(pending).toHaveLength(2);
+    const bound = pending.find((row) => row.text === 'also check X');
+    expect(bound?.mode).toBe('build');
+    expect(bound?.turn_id).not.toBeNull();
+
+    expect(await steer).toBe('mid-turn');
+    stepGate.resolve();
+    await waitFor(() => steerStatuses(events).some((s) => s.status === 'landed'));
+    endGate.resolve();
+    await turn;
+
+    // Landed: the reservation is spent, the durable user row carries the
+    // steer's own id, and nothing is left to restore.
+    expect(pendingSends(db)).toEqual([]);
+
+    const row = db.query<{ role: string; content: string }, []>(
+      `SELECT role, content FROM actor_messages WHERE content = 'also check X'`,
+    ).all();
+
+    expect(row).toEqual([{ role: 'user', content: 'also check X' }]);
+    await session.end();
+  });
+
+  test("a landed steer's durable row exists at the step boundary, not only at turn end", async () => {
+    const { model, stepGate, endGate } = drainWindowModel('done');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    expect(await session.send('also check X')).toBe('mid-turn');
+    stepGate.resolve();
+
+    // The drain ran — the turn is still open, parked on endGate. A process
+    // dying HERE used to lose the landed row.
+    await waitFor(() => steerStatuses(events).some((s) => s.status === 'landed'));
+    const landedId = steerStatuses(events).find((s) => s.status === 'landed')!.steerId!;
+    expect(db.query<{ c: number }, [string]>(
+      `SELECT count(*) AS c FROM actor_messages WHERE id = ? AND role = 'user'`,
+    ).get(landedId)?.c).toBe(1);
+    // The steer's reservation is spent; the opening send's own row (turn_id
+    // NULL) is still owed — its turn has not committed yet.
+    expect(pendingSends(db).map((row) => row.text)).toEqual(['main question']);
+
+    endGate.resolve();
+    await turn;
+    await session.end();
+  });
+
+  test('a send a dead process acknowledged before the drain is restored into the next turn', async () => {
+    const { model } = drainWindowModel('stuck forever');
+    const { db, rt, session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    expect(await session.send('lost mid-turn')).toBe('mid-turn');
+    // What the process acknowledged: the steer's bound row, and the opening
+    // send's own reservation — its turn never committed. After this the first
+    // session is dead: nothing below may release its model gate.
+    expect(pendingSends(db).map((row) => row.text)).toEqual(['main question', 'lost mid-turn']);
+
+    // The next process over the same database, restoring what the dead one
+    // left acknowledged. The turn's own rows are gone with it; the reservation
+    // is what survives.
+    const nextEvents: SessionEvent[] = [];
+    const nextPrompts: PromptMessage[][] = [];
+
+    const next = new LocalAgentSession({
+      rt, db, model: historyCapturingModel('the next answer', (m) => { nextPrompts.push(m); }),
+      noAutoEvolve: true, onEvent: (e) => nextEvents.push(e),
+    });
+
+    await next.send('the next turn');
+    // ONE turn ran: the dead turn's own message re-queued as the recovered
+    // turn, and the new send — mid-turn while it ran — landed in it too.
+    await waitFor(() => nextEvents.some((e) => e.type === 'turn-end'));
+    expect(turnStarts(nextEvents).map((s) => [s.kind, s.text])).toEqual([
+      ['user', 'main question'],
+    ]);
+
+    // The restored steer landed in the recovered turn's first step — the
+    // model saw it on the very first request that turn made.
+    const first = nextPrompts[0]!;
+
+    const texts = first
+      .filter((m): m is Extract<PromptMessage, { role: 'user' }> => m.role === 'user')
+      .flatMap((m) => m.content.filter((p) => p.type === 'text').map((p) => p.text));
+
+    expect(texts.some((t) => t.includes('lost mid-turn'))).toBe(true);
+    expect(pendingSends(db)).toEqual([]);
+
+    // The durable thread carries it as a steer-stamped user row.
+    const row = db.query<{ metadata: string | null }, []>(
+      `SELECT metadata FROM actor_messages WHERE content = 'lost mid-turn'`,
+    ).all();
+
+    expect(row).toHaveLength(1);
+    expect(v.parse(JsonObjectSchema, JSON.parse(row[0]!.metadata ?? 'null')))
+      .toMatchObject({ [STEER_METADATA_KEY]: true });
+
+    // The dead session's turn is still parked; interrupt releases it cleanly.
+    session.interrupt();
+    await turn;
+    await session.end();
+    await next.end();
+  });
+
+  test('an idle-queued send survives the process dying before its turn committed', async () => {
+    const { model } = drainWindowModel('the dead turn');
+    const { db, rt, session, events } = setup('unused', model);
+
+    // send() resolves when the turn commits — so while the gate holds, the
+    // send is accepted, its turn is running, and its pending row is the only
+    // durable record of it (the user row lands with the commit).
+    const turn = session.send('queued behind nothing');
+    await waitFor(() => events.some((e) => e.type === 'turn-start'));
+    const pending = pendingSends(db);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.text).toBe('queued behind nothing');
+    // No turn owned it yet when it was accepted — the queue IS the record.
+    expect(pending[0]!.turn_id).toBeNull();
+
+    // Process death: the model gate never releases. The next session must
+    // re-enter the message in the pump — in seq order, as a turn of its own.
+    const nextEvents: SessionEvent[] = [];
+
+    const next = new LocalAgentSession({
+      rt, db, model: fakeModel('re-run answer'), noAutoEvolve: true,
+      onEvent: (e) => nextEvents.push(e),
+    });
+
+    expect(await next.send('the follow-up')).toBe('mid-turn');
+    // One recovered turn: the dead session's acknowledged send re-entered the
+    // pump as its own turn, and the new send — mid-turn while it ran —
+    // landed inside it.
+    await waitFor(() => nextEvents.some((e) => e.type === 'turn-end'));
+    expect(turnStarts(nextEvents).map((s) => [s.kind, s.text])).toEqual([
+      ['user', 'queued behind nothing'],
+    ]);
+    expect(pendingSends(db)).toEqual([]);
+
+    const rows = db.query<{ role: string; content: string }, []>(
+      `SELECT role, content FROM actor_messages WHERE content IN ('queued behind nothing', 'the follow-up')`,
+    ).all();
+
+    expect(rows).toContainEqual({ role: 'user', content: 'queued behind nothing' });
+    expect(rows).toContainEqual({ role: 'user', content: 'the follow-up' });
+
+    session.interrupt();
+    await turn;
+    await session.end();
+    await next.end();
+  });
+
+  test('an interrupt retires the pending row — a restart does not re-deliver a returned steer', async () => {
+    const { model, release } = gatedTextModel('never finishes');
+    const { db, rt, session, events } = setup('unused', model);
+
+    const turn = session.send('long task');
+    await waitFor(() => events.some((e) => e.type === 'text-delta'));
+    expect(await session.send('change of plans')).toBe('mid-turn');
+    expect(pendingSends(db).map((row) => row.text)).toEqual(['long task', 'change of plans']);
+
+    // The composer took the words back: the surface owns them again, so the
+    // durable reservation is spent rather than owed.
+    expect(session.interrupt()).toEqual(['change of plans']);
+    await turn;
+    // Both reservations spent: the returned steer's by the interrupt, the
+    // turn's own by the commit its abort still reaches.
+    expect(pendingSends(db)).toEqual([]);
+
+    const next = new LocalAgentSession({
+      rt, db, model: fakeModel('should not re-run'), noAutoEvolve: true, onEvent: () => {},
+    });
+
+    await next.send('something else');
+    expect(db.query<{ c: number }, [string]>(
+      `SELECT count(*) AS c FROM actor_messages WHERE content = ?`,
+    ).get('change of plans')?.c).toBe(0);
+
+    release();
+    await session.end();
+    await next.end();
+  });
+
+  test('a refused send retires its reservation — a restart cannot re-deliver what was rejected', async () => {
+    const { db, rt, session } = setup('unused');
+    session.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
+
+    // The send was ACKNOWLEDGED before the lease answered: the row exists, and
+    // the refusal is the gate's, not the message's — so the reservation dies
+    // with it rather than outliving a rejection the caller already saw.
+    await expect(session.send('not mine to run')).rejects.toThrow('another process is driving');
+    expect(pendingSends(db)).toEqual([]);
+
+    // The ledger owes nothing: a fresh session over the same database does not
+    // run a turn for the refused message.
+    const next = new LocalAgentSession({
+      rt, db, model: fakeModel('must not run'), noAutoEvolve: true, onEvent: () => {},
+    });
+
+    expect(await next.send('real work')).toBe('turn');
+    expect(db.query<{ c: number }, [string]>(
+      `SELECT count(*) AS c FROM actor_messages WHERE content = ?`,
+    ).get('not mine to run')?.c).toBe(0);
+
+    await session.end();
+    await next.end();
+  });
+});
+
+
 describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('digest assembles from the real local ledgers; viewing zeroes unseen', async () => {
     const { rt, session } = setup('quiet');

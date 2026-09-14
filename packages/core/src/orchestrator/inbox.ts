@@ -68,6 +68,7 @@ import { metadataBroadcastEvent } from '../read-models/background-event';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
+import type { RawSqlExec } from '../types/primitives';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';
 
 // ── The user kind's vocabulary ─────────────────────────────────────
@@ -172,6 +173,42 @@ export function describeLandedSteers(
   }));
 }
 
+/**
+ * ONE pending-send ledger, one schema, both backends: the reservation every
+ * accepted send leaves — on cf, written before the queued broadcast; on the
+ * CLI, before `send()` resolves.
+ *
+ * `turn_id` is NULLABLE because the row carries two states the cf backend
+ * does not share: bound (a steer accepted into a live or queued turn) and
+ * idle-queued (NULL — the CLI's own send lane admits the message as the
+ * queue's record while no turn owns it; cf admits such a send as an
+ * `assistant_messages` row before it is ever read). cf simply never writes
+ * NULL. Same-named tables MUST share one declaration, or first-creation order
+ * would pick the shape.
+ *
+ * The files live in their own table because a shipped table's shape never
+ * moves: one row per part, in message order, retired with the steer row.
+ */
+export function initPendingSendTables(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS pending_steers (
+    seq      INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id TEXT NOT NULL,
+    id       TEXT NOT NULL,
+    turn_id  TEXT,
+    mode     TEXT NOT NULL CHECK (mode IN ('plan','build')),
+    text     TEXT NOT NULL,
+    UNIQUE (actor_id, id)
+  )`);
+  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_files (
+    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id   TEXT NOT NULL,
+    steer_id   TEXT NOT NULL,
+    filename   TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    url        TEXT NOT NULL
+  )`);
+}
+
 /** A user steer as a backend's durable reservation sees it: the words, the
  *  attachments, and the composer's mode that rides a rerun. */
 export type AcceptedSteer = UserSteer & { readonly id: string; readonly mode: WorkMode };
@@ -259,7 +296,7 @@ export class Inbox implements AgentInbox {
     /** Human-readable activity line for a wake that steered the live turn
      *  instead of queueing behind it. */
     private readonly logActivity?: (event: string, detail?: string) => void,
-    private readonly steers: UserSteerDeps = {},
+    private steers: UserSteerDeps = {},
   ) {}
 
   /** Whether a message sent now rides a turn that already exists — running,
@@ -304,6 +341,20 @@ export class Inbox implements AgentInbox {
     this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
 
     return Promise.resolve('mid-turn');
+  }
+
+  /** Bind the user-signal persistence half once, at the owning session's
+   *  construction — the inbox itself is created earlier (inside the
+   *  orchestrator), before a backend knows which store the accepted sends
+   *  commit to. Binding past the first accepted user signal is a lifecycle
+   *  bug: it would silently change which backend the buffer's pending rows
+   *  drain into. */
+  bindSteerDeps(steers: UserSteerDeps): void {
+    if ([...this.pending, ...this.landing, ...this.absorbed].some(isUserSignal)) {
+      throw new Error('cannot bind steer persistence once user signals have been accepted');
+    }
+
+    this.steers = steers;
   }
 
   /**

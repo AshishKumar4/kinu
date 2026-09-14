@@ -395,7 +395,9 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(await killAt(dbPath, 'inside-claim')).toBe('KILLED inside-claim');
 
     const { db, rt } = openTerminalWorkspace(dbPath);
-    // No published answer may survive without the effects it owes.
+    // No published answer may survive without the effects it owes. The send's
+    // own reservation DOES: the admission ledger committed before the turn
+    // began, which is what a restart reads to re-run it.
     expect(assistantRows(rt)).toBe(0);
     expect(terminalClaims(rt)).toBe(0);
     expect(rosterRows(rt)).toBe(0);
@@ -404,15 +406,21 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart(rt, db, model, events);
 
-    expect(completedTurns(rt)).toBe(0);
-    expect(queuedTrials(rt)).toBe(0);
-    expect(claimedTakes(rt)).toBe(0);
-    expect(state.titleCalls).toBe(0);
+    // The acknowledged send re-enters the pump — the at-least-once half of the
+    // same rule that keeps its row — and its turn commits whole this time:
+    // answer, claim, roster and owed effects in one transaction, then the
+    // replay settles every one of them exactly once.
+    expect(events.some((e) => e.type === 'turn-start')).toBe(true);
+    expect(completedTurns(rt)).toBe(1);
+    expect(queuedTrials(rt)).toBe(1);
+    expect(claimedTakes(rt)).toBe(1);
+    expect(state.titleCalls).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
-    expect(assistantRows(rt)).toBe(0);
+    expect(assistantRows(rt)).toBe(1);
     await next.end();
     db.close();
   });
+
 
   test('a death INSIDE the title body leaves a named workspace and pays for no second call', async () => {
     const dbPath = scratchPath('terminal-death-inside-title', 'agent.db');
@@ -653,9 +661,12 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     expect(asked()).toBe(0);
 
-    // The replay queues the confirming turn and does NOT await it: the pump runs
-    // it beside the rest of the sweep, exactly as it does in production, and the
-    // sequence is released while that turn is still going.
+    // The failed commit rolled its retirement back, so the admission ledger
+    // still owes session one's acknowledged send. Retiring it here is the
+    // fixture's bookkeeping — this test's subject is the gate's dedup, not the
+    // send ledger, and letting it re-queue would spend the gate row early.
+    void gated.storage.sql`DELETE FROM pending_steers WHERE actor_id = ${rt.actor.actorId}`;
+
     const next = new ProbeSession({
       rt: gated, db, model, oneShot: true, onEvent: (e) => events.push(e),
     });
@@ -664,10 +675,6 @@ describe('a recovery reads the record, not the session that finds it', () => {
     const replay = next.recoverBackgroundJobs();
     await inGateTurn.promise;
     await replay;
-    expect(asked()).toBe(1);
-
-    // THE RETRY, genuinely DUE: the attempt that queued the turn armed its own
-    // next one off this session's skewed clock, so the sweep is stood one
     // generation further on — the same thing five real seconds do to a process
     // that stayed open.
     //

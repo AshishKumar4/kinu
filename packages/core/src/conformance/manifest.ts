@@ -665,23 +665,20 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       cli: { absent: NO_USER_PLANE('the workspace capability token') },
     },
 
-    // ── the cf turn-lifecycle plane (created in the ActorAgent constructor) ──
-    // Created before any read on BOTH cf roots, because the SDK does not
-    // guarantee `onStart` precedes an RPC.
-    pending_steers: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
-    },
-    // The file parts of a pending steer (a mid-turn send awaiting its step
-    // drain), one row per part in message order — in their own table because
-    // a shipped table's shape never moves. Same owner and lifecycle as the
-    // steer row above: created in the ActorAgent constructor, retired with it.
-    pending_steer_files: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
-    },
+    // ── the turn-lifecycle admission ledger ──
+    // On cf, created in the ActorAgent constructor — before any read on BOTH
+    // cf roots, because the SDK does not guarantee `onStart` precedes an RPC.
+    // On the CLI the same reservation lives on the workspace's own database,
+    // created by the session's own genesis beside the terminal ledger; its
+    // `turn_id` is nullable because a send accepted while the actor is idle is
+    // held BY the queue — a state cf does not have (its send is admitted as an
+    // `assistant_messages` row before it is ever read).
+    pending_steers: EVERYWHERE,
+    // The file parts of a pending send (a mid-turn steer awaiting its step
+    // drain, or an idle-queued send awaiting its turn), one row per part in
+    // message order — in their own table because a shipped table's shape never
+    // moves. Same owner and lifecycle as the row above, on both backends.
+    pending_steer_files: EVERYWHERE,
     // The durable admission ledger that REPLACED the single `active_durable_turn`
     // row: one row keyed `id = 1` could hold one turn id for a whole database, so
     // it could name neither which issued actor owned the turn nor tell an evicted
