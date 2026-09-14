@@ -2,9 +2,8 @@
 // about search must hold in the numbers before any renderer draws them.
 import { describe, expect, test } from 'bun:test';
 
-import {
-  NODE_STRIDE, PULSE_STRIDE, SearchTree, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER, type KeepOut, type SearchTreeFrame,
-} from '@kinu.run/core/web/hero-art';
+import { type KeepOut, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER } from '@kinu.run/core/web/art';
+import { SearchTree, type SearchTreeFrame } from '@kinu.run/core/web/hero-art';
 
 const ASPECT = 700 / 1280;
 

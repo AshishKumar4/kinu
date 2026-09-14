@@ -7,7 +7,7 @@ import { resolve } from 'node:path';
 import {
   createDustRenderer, DustField, type DustFrame, type DustSurface,
 } from '@kinu.run/core/web/hero-canvas';
-import type { HeroPalette } from '@kinu.run/core/web/hero-art';
+import type { ArtPalette } from '@kinu.run/core/web/art';
 
 const LANDING_DIR = resolve(import.meta.dir, '../src/components/landing');
 
@@ -15,9 +15,9 @@ const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, '../../../../core/src/web/
 
 const STAGE_SOURCE = readFileSync(resolve(LANDING_DIR, 'search-tree/stage.ts'), 'utf8');
 
-const DARK: HeroPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
+const DARK: ArtPalette = { mode: 'dark', accent: [224, 164, 88], bright: [227, 210, 174], ash: [156, 145, 132], ground: [15, 13, 11] };
 
-const LIGHT: HeroPalette = { mode: 'light', accent: [216, 154, 68], bright: [122, 85, 20], ash: [94, 83, 68], ground: [233, 226, 211] };
+const LIGHT: ArtPalette = { mode: 'light', accent: [216, 154, 68], bright: [122, 85, 20], ash: [94, 83, 68], ground: [233, 226, 211] };
 
 function fieldAfter(seconds: number, seed = 91, count = 56, aspect = 1): DustField {
   const field = new DustField({ seed, count });
@@ -143,7 +143,7 @@ describe('the dust drifts deterministically', () => {
 });
 
 describe('the dust renderer paints gold, twice per mote', () => {
-  const paint = (palette: HeroPalette, frame: DustFrame): Recording => {
+  const paint = (palette: ArtPalette, frame: DustFrame): Recording => {
     const surface = recordingSurface();
     const renderer = createDustRenderer(surface, palette);
     renderer.resize(390, 700, 2);
