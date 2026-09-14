@@ -51,7 +51,7 @@ export interface BroadcastEvent {
 }
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —
- *  the queued half of signal delivery (orchestrator/signals.ts).
+ *  the turn half of the inbox (orchestrator/inbox.ts).
  *  `metadata.kinuEvent` makes the chat render it as an event card rather
  *  than a user bubble. */
 export interface ProgrammaticTurn {
@@ -100,10 +100,8 @@ export interface BackendHost {
 
   /** Inject a programmatic turn, serialized behind any live turn. CF:
    *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue.
-   *  The core SignalDelivery seam (orchestrator/signals.ts) is its only caller
-   *  — producers deliver a signal and never pick the mechanism. An explicit
-   *  owner decision may also enqueue a new mode-boundary turn directly when
-   *  splicing into the live turn would preserve the wrong tool surface. */
+   *  The core Inbox (orchestrator/inbox.ts) is its only caller — producers
+   *  send a message and never pick the mechanism. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
   /** Is a turn running right now — i.e. will there BE a next agentic step for

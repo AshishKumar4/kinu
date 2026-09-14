@@ -392,7 +392,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
           const parent = await acquire(actorReferenceOf(deps.directory.open(parentId)));
 
-          return parent.session.orchestrator.signals.deliver(signal);
+          return parent.session.orchestrator.inbox.send(signal);
         },
       },
     });

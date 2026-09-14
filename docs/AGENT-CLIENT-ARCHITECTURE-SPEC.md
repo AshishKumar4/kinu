@@ -60,7 +60,7 @@ is the canonical cloud client via `useAgent`/`useAgentChat`
 Definition: `packages/cli/src/agent-client.ts`. Method groups:
 
 - Lifecycle. `connect()`, `subscribe()`, `close()`.
-- Turns. `send()`, `steer()`, `branch()`, `stop()`, `settleBackgroundWork?()`.
+- Turns. `send()`, `branch()`, `stop()`, `settleBackgroundWork?()`.
 - Walk-back. `fork(point)`, with `findForkPivot` and `forkCandidates` beside it.
 - History. `history()`.
 - Reads. `status()`, `describeTools()`, `changelog()`,

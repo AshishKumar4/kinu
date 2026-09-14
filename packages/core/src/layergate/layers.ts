@@ -141,8 +141,8 @@ function shortHistory(): ModelMessage[] {
   ];
 }
 
-/** A BackendHost whose only interesting answers are the two SignalDelivery
- *  reads: is a turn running, and what did it start. */
+/** A BackendHost whose only interesting answers are the two Inbox reads: is
+ *  a turn running, and what did it start. */
 function fakeSignalHost(queued: string[], turnInFlight: boolean): BackendHost {
   return {
     broadcast: () => {},
@@ -911,7 +911,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'mid-turn-injection',
     owns: 'delivering an async signal: one delivery time, entry-index coordinates across steps, settlement, burst debounce',
-    subjects: ['StepInjections', 'SignalDelivery', 'DrainScheduler'],
+    subjects: ['StepInjections', 'Inbox', 'DrainScheduler'],
     probes: [
       {
         id: 'mid-turn-injection/index-is-stable',
@@ -964,13 +964,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const run = async (turnInFlight: boolean) => {
             const queued: string[] = [];
 
-            const signals = new s.SignalDelivery(
+            const inbox = new s.Inbox(
               fakeSignalHost(queued, turnInFlight),
             );
 
             const outcomes = [
-              await signals.deliver({ kind: 'event_drain', text: 'wake' }),
-              await signals.deliver({ kind: 'background_job', text: 'later' }),
+              await inbox.send({ kind: 'event_drain', text: 'wake' }),
+              await inbox.send({ kind: 'background_job', text: 'later' }),
             ];
 
             return { outcomes, queued };
@@ -984,17 +984,17 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'signals that reached a step boundary settle as absorbed; the rest re-deliver as turns of their own, and the step\'s own steering is dropped',
         observe: async (s) => {
           const queued: string[] = [];
-          const signals = new s.SignalDelivery(fakeSignalHost(queued, true));
-          signals.beginTurn(false);
-          await signals.deliver({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
+          const inbox = new s.Inbox(fakeSignalHost(queued, true));
+          inbox.beginTurn(false);
+          await inbox.send({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
 
-          const spliced = await signals.prepareStep(
+          const spliced = await inbox.prepareStep(
             { stepNumber: 0, messages: shortHistory() },
             [{ kind: 'turn_steering', text: 'nudge' }],
           );
 
-          await signals.deliver({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
-          const settled = signals.settle({ completed: true });
+          await inbox.send({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
+          const settled = inbox.settle({ completed: true });
           await Promise.resolve();
 
           return {
@@ -1013,7 +1013,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             const cards: Array<{ card: number; state: string; text?: string }> = [];
             let carried: string | undefined;
 
-            const signals = new s.SignalDelivery({
+            const inbox = new s.Inbox({
               // Card ids are minted per delivery, so the observation records
               // IDENTITY (first-appearance index) rather than the id itself.
               broadcast: (event) => {
@@ -1036,11 +1036,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               setTimer: () => {},
             });
 
-            await signals.deliver({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
+            await inbox.send({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
             // The agent takes it in: a step boundary for the splice, and for
             // the queue the turn it started — which names its own card back.
-            await signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
-            signals.beginTurn(false, carried);
+            await inbox.prepareStep({ stepNumber: 0, messages: shortHistory() });
+            inbox.beginTurn(false, carried);
 
             return { cards, queuedTurnNamesItsCard: carried !== undefined && carried === ids[0] };
           };

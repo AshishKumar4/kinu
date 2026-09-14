@@ -723,7 +723,7 @@ async function runNodeLoop(
   };
 
   // The node's wake path: the in-process counterpart of the actor's durable
-  // message queue, behind the SAME `SignalDeliverer` seam, so the runner neither
+  // message queue, behind the SAME `AgentInbox` seam, so the runner neither
   // knows nor can tell which kind of agent it is settling a job for.
   const wakes = new AgentWakeQueue();
   // The table is reconciled here rather than assumed: a node is its own logical
@@ -734,7 +734,7 @@ async function runNodeLoop(
   const runnerDeps: BackgroundJobRunnerDeps = {
     store: deps.actor.stores.jobs,
     fiber: deps.actor.runtime.schedule.fiber,
-    signals: wakes,
+    inbox: wakes,
     logActivity: (event, detail) => {
       deps.logger.event('swarm.node_job', {
         nodeId: spec.headInput.id, job: event, detail: detail ?? '',

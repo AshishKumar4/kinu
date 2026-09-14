@@ -6,9 +6,9 @@ import type { WorkMode } from '../types/turn';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain, diagnostics, toKinuError } from '../obs/index';
+import { KinuError, renderThrownChain } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
-import { describeLandedSteers, type LandedSteerRow, type UserSteer } from './user-steer';
+import { describeLandedSteers, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
@@ -18,7 +18,7 @@ import {
 import { createActorContextPlane, type ActorContextPlane, type ContextEventRecorder } from './context-plane';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
-import type { AgentSignal, SignalOutcome } from '../types/signals';
+import type { AgentSignal, SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
@@ -32,7 +32,7 @@ import { contextWindowForModel } from '../context-window';
 export interface ActorAdvisorContext {
   readonly config: AgentConfigStore;
   readonly workspace: () => Promise<VFS>;
-  readonly parent: (signal: AgentSignal) => Promise<SignalOutcome>;
+  readonly parent: (signal: AgentSignal) => Promise<SendOutcome>;
 }
 
 export interface ActorSessionOptions {
@@ -178,7 +178,7 @@ export class ActorSession {
   async reviewTurn(
     snapshot: AdvisorRecoverySnapshot,
     gateOpen = false,
-    deliver: (signal: AgentSignal) => Promise<SignalOutcome> = (signal) => this.orchestrator.signals.deliver(signal),
+    send: (signal: AgentSignal) => Promise<SendOutcome> = (signal) => this.orchestrator.inbox.send(signal),
   ): Promise<AdvisorDisposition | null> {
     const { engine, budget } = this.options.orchestration;
     const turnId = snapshot.turn.turnId;
@@ -200,7 +200,7 @@ export class ActorSession {
         vfs: workspace,
         limits: async () => ({ contextWindow, modelOutputLimit: contextWindow }),
       }),
-      deliver,
+      send,
       parent: this.options.advisor?.parent,
       record: (note, id) => { engine.recordAdvisorNote(note, id); },
     });
@@ -321,9 +321,10 @@ export class ActorSession {
     this.orchestrator.restrictTurnWorkMode(this.mode);
   }
 
-  steer(steer: UserSteer & { readonly id: string }): boolean {
-    if (!this.inFlight) return false;
-    void this.orchestrator.signals.deliver({
+  /** The user's message, through the inbox: it rides the running turn's next
+   *  step, or, when nothing is running, becomes the next user turn. */
+  send(steer: UserSteer & { readonly id: string }): Promise<SendOutcome> {
+    return this.orchestrator.inbox.send({
       kind: USER_MESSAGE_SIGNAL_KIND,
       text: steer.text,
       user: {
@@ -331,13 +332,11 @@ export class ActorSession {
         mode: this.mode,
         ...(steer.files !== undefined && { files: steer.files }),
       },
-    }).catch(reportSteerFailure);
-
-    return true;
+    });
   }
 
   interrupt(): readonly UserSteer[] {
-    const dropped = this.orchestrator.signals.interrupt();
+    const dropped = this.orchestrator.inbox.interrupt();
 
     if (this.active?.phase !== 'settling') this.active?.abort.abort();
 
@@ -484,7 +483,7 @@ export class ActorSession {
           }
 
           case 'done':
-            this.messages.push(...this.orchestrator.signals.replayInto(event.responseMessages));
+            this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
 
             if (!text.trim() && event.text.trim()) text = event.text;
             completed = true;
@@ -494,7 +493,7 @@ export class ActorSession {
         emit(event);
       }
     } catch (cause) {
-      if (!completed) this.messages.push(...this.orchestrator.signals.recordedMessages());
+      if (!completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
       failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
       if (failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
@@ -544,13 +543,4 @@ export class ActorSession {
 
     return this.active;
   }
-}
-
-/** A detached steer delivery that failed — the caller got `true` already, so
- *  the failure is the diagnostics record, not a throw nobody is awaiting. */
-function reportSteerFailure<Failure>(cause: Failure): void {
-  diagnostics.failure(
-    'steer.deliver_failed',
-    toKinuError({ doing: 'deliver a user steer', cause, otherwise: 'io' }),
-  );
 }

@@ -39,7 +39,7 @@ import { describe, test, expect } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { SignalDelivery } from '../src/orchestrator/signals';
+import { Inbox } from '../src/orchestrator/inbox';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, uiMessageText } from '../src/utils/ui-message';
@@ -106,7 +106,7 @@ function activation(db: Database) {
   const runner = new BackgroundJobRunner({
     store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
     fiber,
-    signals: new SignalDelivery(host),
+    inbox: new Inbox(host),
     // The same actor the job store is bound to: the job and the notice it
     // publishes are one actor's, over the one workspace database.
     eventLog: new EventLog(makeSqlExec(db), openWorkspaceMainActor(sql)),
@@ -229,10 +229,10 @@ describe('a settled background job announces itself once, and not as the owner',
   test('NEGATIVE CONTROL: the same delivery without an announcement identity duplicates', async () => {
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
-    const signals = new SignalDelivery(host);
+    const inbox = new Inbox(host);
 
     for (let start = 0; start < 6; start++) {
-      await signals.deliver({ kind: 'background_job', text: `Background agents job ${JOB} completed.` });
+      await inbox.send({ kind: 'background_job', text: `Background agents job ${JOB} completed.` });
     }
 
     // Six rows, byte-identical content, distinct ids — the shape measured on
@@ -254,7 +254,7 @@ describe('a settled background job announces itself once, and not as the owner',
     // covered by the same rule the keyed one is.
     const ws = evictedWorkspace();
     const { host } = chatStore(ws.db);
-    await new SignalDelivery(host).deliver({
+    await new Inbox(host).send({
       kind: 'fork_interrupted',
       text: '23 head(s) across 6 fork run(s) were still marked running…',
     });
@@ -283,7 +283,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const runner = new BackgroundJobRunner({
       store: new BackgroundJobStore(sql, openWorkspaceMainActor(sql)),
       fiber,
-      signals: new SignalDelivery(preempting),
+      inbox: new Inbox(preempting),
       eventLog: new EventLog(makeSqlExec(ws.db), openWorkspaceMainActor(sql)),
       scheduleDrain: () => {},
     });

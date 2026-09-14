@@ -19,8 +19,8 @@
  *     returns the same answer) is a standing fact about the tool surface and
  *     belongs in the system prompt ONCE, not in every parked result;
  *   • the owner decides later, in bulk, from the needs-you queue;
- *   • the decision wakes the agent through the ONE signal seam every other
- *     asynchronous producer uses (orchestrator/signals.ts) — the same
+ *   • the decision wakes the agent through the ONE inbox every other
+ *     asynchronous producer uses (orchestrator/inbox.ts) — the same
  *     wake-on-settle path a background job takes.
  *
  * THE HONESTY INVARIANT, structurally:
@@ -48,7 +48,7 @@
 import type { DynamicApproval } from '../types/dynamic-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { SignalDeliverer } from '../types/signals';
+import type { AgentInbox } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';
 import {
@@ -62,7 +62,7 @@ import { diagnostics, toKinuError } from '../obs/index';
 /** The `kinuEvent` kind a decision wakes the agent under — its own name,
  *  not `background_job`'s: the card the owner sees, and the provenance stamped
  *  on the woken turn, must say what actually happened. The MECHANISM is the
- *  background-job wake verbatim (SignalDelivery.deliver → next step, or a turn
+ *  background-job wake verbatim (Inbox.send → next step, or a turn
  *  of its own when the agent is idle). */
 export const DEFERRED_APPROVAL_SIGNAL = 'deferred_approval';
 
@@ -435,7 +435,7 @@ export interface DeferredApprovalQueueDeps {
   /** The ONE way anything asynchronous reaches the agent. A decision is
    *  delivered exactly as a settled background job is: spliced into the live
    *  turn's next step, or started as its own turn when the agent is idle. */
-  readonly signals: SignalDeliverer;
+  readonly inbox: AgentInbox;
   /** Record a standing grant the owner just gave by answering 'always'. The
    *  host owns where that lives (actor_config, alongside the approval mode),
    *  so the queue only says WHAT was granted. Required, not optional: an
@@ -614,7 +614,7 @@ export class DeferredApprovalQueue {
     }
 
     this.notify({ kind: 'decided', actions: decided });
-    await this.deps.signals.deliver({
+    await this.deps.inbox.send({
       kind: DEFERRED_APPROVAL_SIGNAL,
       text: decisionWakeMessage(decided),
       metadata: { decision: answer, count: decided.length, ids: decided.map((a) => a.id) },

@@ -1,7 +1,7 @@
 /**
- * The user kind of signal — a message the user typed while a turn runs —
- * delivered through the ONE seam (SignalDelivery) like everything else
- * asynchronous, but kept under its own three load-bearing semantics: it
+ * The user kind of signal — the user's own message — sent through the ONE
+ * inbox like everything else, but kept under its own three load-bearing
+ * semantics: it
  * persists as a verbatim user row (so the walk-back fork can cut at it), an
  * interrupt HANDS IT BACK rather than eating it, and a leftover reruns as a
  * user-origin turn. Those were properties of `LocalAgentSession.pendingSteers`
@@ -13,8 +13,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { SignalDelivery } from '../src/orchestrator/signals';
-import type { UserSteer } from '../src/orchestrator/user-steer';
+import { Inbox } from '../src/orchestrator/inbox';
+import type { UserSteer } from '../src/orchestrator/inbox';
 import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, PromptFile,
 } from '../src/types/backend-host';
@@ -93,8 +93,6 @@ const event = (text: string, over: Partial<AgentSignal> = {}): AgentSignal => {
 
 function setup(opts: {
   turnInFlight?: boolean;
-  activeMode?: WorkMode;
-  activeMissions?: readonly string[];
   onDrain?: (steers: readonly UserSteer[], atStep: number) => void | Promise<void>;
   turnId?: string | null;
   enqueue?: 'queued' | 'skipped' | 'throw';
@@ -122,28 +120,26 @@ function setup(opts: {
     setTimer: () => {},
   };
 
-  const signals = new SignalDelivery(
-    host,
-    undefined,
-    () => ({ mode: opts.activeMode ?? 'build', missions: opts.activeMissions ?? [] }),
-    {
-      onDrain: (steers, atStep) => {
-        drained.push({ steers: [...steers], atStep });
+  const accepted: string[] = [];
 
-        return opts.onDrain?.(steers, atStep);
-      },
-      turnId: () => opts.turnId ?? null,
+  const inbox = new Inbox(host, undefined, {
+    onAccept: (steer) => { accepted.push(steer.id); },
+    onDrain: (steers, atStep) => {
+      drained.push({ steers: [...steers], atStep });
+
+      return opts.onDrain?.(steers, atStep);
     },
-  );
+    turnId: () => opts.turnId ?? null,
+  });
 
-  return { signals, queued, broadcasts, raw, drained };
+  return { inbox, queued, broadcasts, raw, drained, accepted };
 }
 
-describe('SignalDelivery — the user kind, accepted', () => {
+describe('Inbox — the user kind, accepted', () => {
   test('a steer refused when no turn is running is enqueued as its own user-origin turn', async () => {
-    const { signals, queued, broadcasts } = setup({ turnInFlight: false });
+    const { inbox, queued, broadcasts } = setup({ turnInFlight: false });
 
-    expect(await signals.deliver(steer('s1', 'nothing is running'))).toBe('queued');
+    expect(await inbox.send(steer('s1', 'nothing is running'))).toBe('queued');
     expect(queued).toEqual([{
       text: 'nothing is running',
       origin: 'user',
@@ -157,9 +153,9 @@ describe('SignalDelivery — the user kind, accepted', () => {
   });
 
   test('a steer is accepted mid-turn and reported as mid-turn, with a queued steer_status', async () => {
-    const { signals, queued, broadcasts, raw } = setup({ turnInFlight: true });
+    const { inbox, queued, broadcasts, raw } = setup({ turnInFlight: true });
 
-    expect(await signals.deliver(steer('s1', 'also check staging'))).toBe('mid-turn');
+    expect(await inbox.send(steer('s1', 'also check staging'))).toBe('mid-turn');
     expect(queued).toEqual([]);
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'queued', steerId: 's1', text: 'also check staging' },
@@ -170,17 +166,17 @@ describe('SignalDelivery — the user kind, accepted', () => {
   });
 
   test('durable reset state replaces the process-local user queue in its stored order', async () => {
-    const { signals, drained } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
+    const { inbox, drained } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
     // An event still pending keeps its place rather than being dropped by the
     // restore — the restored users land AHEAD of it.
-    await signals.deliver(event('still pending'));
-    signals.restorePending([
+    await inbox.send(event('still pending'));
+    inbox.restorePending([
       { id: 's1', text: 'first' },
       { id: 's2', text: 'second' },
     ]);
 
-    const rewritten = await signals.prepareStep(step(0, HISTORY));
+    const rewritten = await inbox.prepareStep(step(0, HISTORY));
 
     expect(drained).toEqual([{
       steers: [{ id: 's1', text: 'first' }, { id: 's2', text: 'second' }],
@@ -194,24 +190,24 @@ describe('SignalDelivery — the user kind, accepted', () => {
   });
 
   test('restorePending throws once this turn started draining — two authorities would duplicate', async () => {
-    const { signals } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'first'));
-    await signals.prepareStep(step(0, HISTORY));
+    const { inbox } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'first'));
+    await inbox.prepareStep(step(0, HISTORY));
 
-    expect(() => signals.restorePending([{ id: 's2', text: 'late restore' }]))
+    expect(() => inbox.restorePending([{ id: 's2', text: 'late restore' }]))
       .toThrow('cannot restore pending steers after this turn started draining');
   });
 });
 
-describe('SignalDelivery — the user kind, landing in the step', () => {
+describe('Inbox — the user kind, landing in the step', () => {
   test('everything pending lands as ONE user message at the step tail', async () => {
-    const { signals, drained, broadcasts } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'also check staging'));
-    await signals.deliver(steer('s2', 'and the logs'));
+    const { inbox, drained, broadcasts } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'also check staging'));
+    await inbox.send(steer('s2', 'and the logs'));
 
-    const rewritten = await signals.prepareStep(step(0, HISTORY));
+    const rewritten = await inbox.prepareStep(step(0, HISTORY));
 
     // At the TAIL: after the latest tool results, which is what keeps role
     // alternation provider-safe.
@@ -236,11 +232,11 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
     // A turn is one assistant message, so "it landed" places a steer before or
     // after the whole turn and nowhere else. The step index is the only thing
     // that can put the operator's words where the model actually read them.
-    const { signals, broadcasts, drained } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.prepareStep(step(0, HISTORY));
-    await signals.deliver(steer('s1', 'use the swarm for this'));
-    await signals.prepareStep(step(7, HISTORY));
+    const { inbox, broadcasts, drained } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.prepareStep(step(0, HISTORY));
+    await inbox.send(steer('s1', 'use the swarm for this'));
+    await inbox.prepareStep(step(7, HISTORY));
 
     expect(drained).toEqual([{
       steers: [{ id: 's1', text: 'use the swarm for this' }], atStep: 7,
@@ -251,15 +247,15 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
   });
 
   test('a step with nothing pending re-applies earlier steers at the index the model first saw them', async () => {
-    const { signals } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'also check staging'));
-    await signals.prepareStep(step(0, HISTORY));
+    const { inbox } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'also check staging'));
+    await inbox.prepareStep(step(0, HISTORY));
 
     // streamText rebuilds each step's messages from scratch, so a steer that is
     // not re-applied simply vanishes from the conversation after one step.
     const laterStep = [...HISTORY, { role: 'assistant' as const, content: 'ran a tool' }];
-    expect(await signals.prepareStep(step(1, laterStep))).toEqual([
+    expect(await inbox.prepareStep(step(1, laterStep))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'also check staging' },
       { role: 'assistant', content: 'ran a tool' },
@@ -267,18 +263,18 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
   });
 
   test('a fresh turn resets splice coordinates but KEEPS a steer typed for it', async () => {
-    const { signals } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'first turn steer'));
-    await signals.prepareStep(step(0, HISTORY));
-    expect(signals.recordedMessages()).toEqual([{ role: 'user', content: 'first turn steer' }]);
+    const { inbox } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'first turn steer'));
+    await inbox.prepareStep(step(0, HISTORY));
+    expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'first turn steer' }]);
 
     // Typed while the previous turn was finishing: it belongs to the turn that
     // is about to run, not to the one that just ended.
-    await signals.deliver(steer('s2', 'typed as the turn ended'));
-    signals.beginTurn(false);
-    expect(signals.recordedMessages()).toEqual([]);
-    expect(await signals.prepareStep(step(0, HISTORY))).toEqual([
+    await inbox.send(steer('s2', 'typed as the turn ended'));
+    inbox.beginTurn(false);
+    expect(inbox.recordedMessages()).toEqual([]);
+    expect(await inbox.prepareStep(step(0, HISTORY))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'typed as the turn ended' },
     ]);
@@ -287,17 +283,17 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
   test('the durable landing is awaited before provider-visible words return', async () => {
     const landing = Promise.withResolvers<void>();
 
-    const { signals } = setup({
+    const { inbox } = setup({
       turnInFlight: true,
       onDrain: () => landing.promise,
     });
 
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'wait for storage'));
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'wait for storage'));
 
     let returned = false;
 
-    const preparing = signals.prepareStep(step(0, HISTORY)).then((messages) => {
+    const preparing = inbox.prepareStep(step(0, HISTORY)).then((messages) => {
       returned = true;
 
       return messages;
@@ -306,7 +302,7 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
     await Promise.resolve();
 
     expect(returned).toBe(false);
-    expect(signals.recordedMessages()).toEqual([]);
+    expect(inbox.recordedMessages()).toEqual([]);
 
     landing.resolve();
     expect(await preparing).toEqual([
@@ -318,7 +314,7 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
   test('a failed durable landing restores the exact prefix before newer steers', async () => {
     let attempt = 0;
 
-    const { signals } = setup({
+    const { inbox } = setup({
       turnInFlight: true,
       onDrain: async () => {
         attempt += 1;
@@ -327,14 +323,14 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
       },
     });
 
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'first'));
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'first'));
 
-    await expect(signals.prepareStep(step(0, HISTORY))).rejects.toThrow('storage unavailable');
-    await signals.deliver(steer('s2', 'second'));
-    expect(signals.recordedMessages()).toEqual([]);
+    await expect(inbox.prepareStep(step(0, HISTORY))).rejects.toThrow('storage unavailable');
+    await inbox.send(steer('s2', 'second'));
+    expect(inbox.recordedMessages()).toEqual([]);
 
-    expect(await signals.prepareStep(step(0, HISTORY))).toEqual([
+    expect(await inbox.prepareStep(step(0, HISTORY))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'first\n\nsecond' },
     ]);
@@ -342,11 +338,11 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
 
   test('attachments ride as file parts rather than being dropped from the text', async () => {
     const files = [{ filename: 'trace.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }];
-    const { signals, drained } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'look at this', { files }));
+    const { inbox, drained } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'look at this', { files }));
 
-    expect(await signals.prepareStep(step(0, HISTORY))).toEqual([
+    expect(await inbox.prepareStep(step(0, HISTORY))).toEqual([
       ...HISTORY,
       {
         role: 'user',
@@ -360,14 +356,14 @@ describe('SignalDelivery — the user kind, landing in the step', () => {
   });
 });
 
-describe('SignalDelivery — the user kind, the three load-bearing semantics', () => {
+describe('Inbox — the user kind, the three load-bearing semantics', () => {
   test('drained steers are available VERBATIM for persistence, one row per steer', async () => {
-    const { signals, drained } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'also check staging'));
-    await signals.prepareStep(step(0, HISTORY));
-    await signals.deliver(steer('s2', 'and the logs'));
-    await signals.prepareStep(step(1, HISTORY));
+    const { inbox, drained } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'also check staging'));
+    await inbox.prepareStep(step(0, HISTORY));
+    await inbox.send(steer('s2', 'and the logs'));
+    await inbox.prepareStep(step(1, HISTORY));
 
     // Per STEER, not per drain: the walk-back fork pivot matches an individual
     // user message, so a merged "staging\n\nlogs" row would make one of them
@@ -376,49 +372,49 @@ describe('SignalDelivery — the user kind, the three load-bearing semantics', (
       { steers: [{ id: 's1', text: 'also check staging' }], atStep: 0 },
       { steers: [{ id: 's2', text: 'and the logs' }], atStep: 1 },
     ]);
-    expect(signals.recordedMessages()).toEqual([
+    expect(inbox.recordedMessages()).toEqual([
       { role: 'user', content: 'also check staging' },
       { role: 'user', content: 'and the logs' },
     ]);
   });
 
   test('an interrupt returns what the model never saw, and drops it from the turn', async () => {
-    const { signals, broadcasts } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'change of plans'));
+    const { inbox, broadcasts } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'change of plans'));
 
     // Returned, not swallowed: the surface already rendered it as sent, so it
     // goes back to the composer rather than vanishing.
-    expect(signals.interrupt()).toEqual([{ id: 's1', text: 'change of plans' }]);
+    expect(inbox.interrupt()).toEqual([{ id: 's1', text: 'change of plans' }]);
     expect(steerStatuses(broadcasts).at(-1)).toEqual({
       type: 'steer_status', status: 'returned', steerId: 's1', text: 'change of plans',
     });
     // And it must NOT then reappear in the next step.
-    expect(await signals.prepareStep(step(1, HISTORY))).toBeUndefined();
+    expect(await inbox.prepareStep(step(1, HISTORY))).toBeUndefined();
   });
 
   test('an interrupt leaves a steer the model already read in the durable record', async () => {
-    const { signals } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'also check staging'));
-    await signals.prepareStep(step(0, HISTORY));
+    const { inbox } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'also check staging'));
+    await inbox.prepareStep(step(0, HISTORY));
 
     // Interrupting after the drain cannot un-send it: the model acted on it, so
     // it stays in the history the next turn inherits.
-    expect(signals.interrupt()).toEqual([]);
-    expect(signals.recordedMessages()).toEqual([{ role: 'user', content: 'also check staging' }]);
+    expect(inbox.interrupt()).toEqual([]);
+    expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'also check staging' }]);
   });
 
   test('leftover users rerun as ONE user-origin turn, stamped operator under their mode', async () => {
-    const { signals, queued } = setup({ turnInFlight: true, turnId: 'turn-9' });
-    signals.beginTurn(false);
-    await signals.prepareStep(step(0, HISTORY));
+    const { inbox, queued } = setup({ turnInFlight: true, turnId: 'turn-9' });
+    inbox.beginTurn(false);
+    await inbox.prepareStep(step(0, HISTORY));
     // Typed while the model was writing its final answer — there is no further
     // step for them to land on.
-    await signals.deliver(steer('s1', 'one more thing'));
-    await signals.deliver(steer('s2', 'and this'));
+    await inbox.send(steer('s1', 'one more thing'));
+    await inbox.send(steer('s2', 'and this'));
 
-    signals.settle({ completed: true });
+    inbox.settle({ completed: true });
     await Promise.resolve();
 
     expect(queued).toEqual([{
@@ -431,10 +427,10 @@ describe('SignalDelivery — the user kind, the three load-bearing semantics', (
   });
 
   test('the spliced conversation replays into the turn response at the position the model saw it', async () => {
-    const { signals } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'also check staging'));
-    await signals.prepareStep(step(0, HISTORY));
+    const { inbox } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'also check staging'));
+    await inbox.prepareStep(step(0, HISTORY));
 
     // The durable-history merge: base coordinates are the step-0 count, so the
     // steer lands ahead of the assistant work that followed it.
@@ -442,21 +438,21 @@ describe('SignalDelivery — the user kind, the three load-bearing semantics', (
       { role: 'assistant', content: 'checked staging' },
     ];
 
-    expect(signals.replayInto(response)).toEqual([
+    expect(inbox.replayInto(response)).toEqual([
       { role: 'user', content: 'also check staging' },
       { role: 'assistant', content: 'checked staging' },
     ]);
   });
 });
 
-describe('SignalDelivery — the user kind beside the event kind', () => {
+describe('Inbox — the user kind beside the event kind', () => {
   test('a mixed step splices the user message then the event, and only the user message is durable', async () => {
-    const { signals, broadcasts } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'the user said this'));
-    await signals.deliver(event('an event arrived'));
+    const { inbox, broadcasts } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'the user said this'));
+    await inbox.send(event('an event arrived'));
 
-    const rewritten = await signals.prepareStep(step(0, HISTORY));
+    const rewritten = await inbox.prepareStep(step(0, HISTORY));
 
     expect(rewritten).toEqual([
       ...HISTORY,
@@ -466,11 +462,11 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
     // The user message is durable history; the event is model-visible for the
     // turn and gone at replay, exactly like the dynamic-context block it
     // rides beside.
-    expect(signals.replayInto([{ role: 'assistant', content: 'a1' }])).toEqual([
+    expect(inbox.replayInto([{ role: 'assistant', content: 'a1' }])).toEqual([
       { role: 'user', content: 'the user said this' },
       { role: 'assistant', content: 'a1' },
     ]);
-    expect(signals.recordedMessages()).toEqual([{ role: 'user', content: 'the user said this' }]);
+    expect(inbox.recordedMessages()).toEqual([{ role: 'user', content: 'the user said this' }]);
     expect(broadcasts).toEqual([
       { type: 'steer_status', status: 'queued', steerId: 's1', text: 'the user said this' },
       {
@@ -483,45 +479,52 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
     ]);
   });
 
-  test("a user steer's composer mode is never a reason to refuse the splice; an event's is", async () => {
-    const { signals, queued } = setup({ turnInFlight: true, activeMode: 'build' });
+  test("neither a user steer's composer mode nor an event's is a reason to refuse the splice", async () => {
+    const { inbox, queued } = setup({ turnInFlight: true });
 
-    // The user typed it in plan mode — metadata.kinuMode and all — and it still
-    // lands in the running build turn, because the user's words are not a
-    // governing document. The mode rides the USER identity, not the signal's.
-    expect(await signals.deliver(steer('s1', 'typed in plan mode', {
+    // The user typed it in plan mode — metadata.kinuMode and all — and it
+    // lands in the running turn: the mode rides the USER identity, as a fact.
+    expect(await inbox.send(steer('s1', 'typed in plan mode', {
       mode: 'plan', metadata: { kinuMode: 'plan' },
     }))).toBe('mid-turn');
 
-    // The SAME kinuMode on an event is governing metadata: it gets its own turn.
-    expect(await signals.deliver(event('plan result', { metadata: { kinuMode: 'plan' } }))).toBe('queued');
-    expect(queued[0]?.metadata?.kinuMode).toBe('plan');
+    // The SAME kinuMode on an event is a fact too: where the result came from,
+    // not a reason to open a second turn behind the one the user is watching.
+    expect(await inbox.send(event('plan result', { metadata: { kinuMode: 'plan' } }))).toBe('mid-turn');
+    expect(await inbox.send(event('other mission', { metadata: { missionLabels: ['gamma'] } }))).toBe('mid-turn');
+    expect(queued).toEqual([]);
   });
 
-  test("an event's mission labels govern the splice; matching labels still ride the live turn", async () => {
-    const { signals, queued } = setup({ turnInFlight: true, activeMissions: ['alpha', 'beta'] });
+  test('a user message is reserved with the backend before it is announced as queued', async () => {
+    // The durable row exists before the client hears 'queued': the accept
+    // hook runs in the same synchronous slice as the routing read, ahead of
+    // the broadcast, and a hook that refuses buffers nothing.
+    const { inbox, accepted, broadcasts } = setup({ turnInFlight: true });
+    expect(await inbox.send(steer('s1', 'reserve me', { mode: 'plan' }))).toBe('mid-turn');
+    expect(accepted).toEqual(['s1']);
+    expect(broadcasts).toEqual([{ type: 'steer_status', status: 'queued', steerId: 's1', text: 'reserve me' }]);
 
-    expect(await signals.deliver(event('other mission', {
-      metadata: { missionLabels: ['gamma'] },
-    }))).toBe('queued');
-    expect(queued[0]?.metadata?.missionLabels).toEqual(['gamma']);
+    const refusing = new Inbox({
+      broadcast: () => { throw new Error('nothing to announce'); },
+      enqueueTurn: async () => { throw new Error('nothing to start'); },
+      turnInFlight: () => true,
+      setTimer: () => {},
+    }, undefined, { onAccept: () => { throw new Error('storage refused the row'); } });
 
-    // Same labels, different order — the comparison is the sorted set.
-    expect(await signals.deliver(event('same mission', {
-      metadata: { missionLabels: ['beta', 'alpha'] },
-    }))).toBe('mid-turn');
+    expect(() => refusing.send(steer('s2', 'refused'))).toThrow('storage refused the row');
+    expect(await refusing.prepareStep(step(0, HISTORY))).toBeUndefined();
   });
 
   test('an aborted turn requeues pending users and absorbed events — never absorbed users', async () => {
-    const { signals, queued } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'the model saw me'));
-    await signals.deliver(event('absorbed event'));
-    await signals.prepareStep(step(0, HISTORY));
-    await signals.deliver(steer('s2', 'typed too late'));
-    await signals.deliver(event('leftover event'));
+    const { inbox, queued } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'the model saw me'));
+    await inbox.send(event('absorbed event'));
+    await inbox.prepareStep(step(0, HISTORY));
+    await inbox.send(steer('s2', 'typed too late'));
+    await inbox.send(event('leftover event'));
 
-    signals.settle({ completed: false });
+    inbox.settle({ completed: false });
     await Promise.resolve();
 
     // Users first: the pending steer reruns as a user-origin turn. The absorbed
@@ -537,17 +540,17 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
   });
 
   test('an interrupt returns users only and leaves a pending event to requeue at settle', async () => {
-    const { signals, queued, broadcasts } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'give it back'));
-    await signals.deliver(event('still owed'));
+    const { inbox, queued, broadcasts } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'give it back'));
+    await inbox.send(event('still owed'));
 
-    expect(signals.interrupt()).toEqual([{ id: 's1', text: 'give it back' }]);
+    expect(inbox.interrupt()).toEqual([{ id: 's1', text: 'give it back' }]);
     expect(broadcasts.map((b) => b.type === 'steer_status' ? b.status : b.state))
       .toEqual(['queued', 'pending', 'returned']);
 
     // The event was never returned — it settles as its own turn instead.
-    signals.settle({ completed: false });
+    inbox.settle({ completed: false });
     await Promise.resolve();
     expect(queued.map((turn) => turn.text)).toEqual(['still owed']);
     expect(queued[0]!.origin).toBeUndefined();
@@ -557,7 +560,7 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
     const landing = Promise.withResolvers<void>();
     let calls = 0;
 
-    const { signals, broadcasts } = setup({
+    const { inbox, broadcasts } = setup({
       turnInFlight: true,
       onDrain: () => {
         calls += 1;
@@ -566,15 +569,15 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
       },
     });
 
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'first'));
-    await signals.deliver(event('one event'));
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'first'));
+    await inbox.send(event('one event'));
 
-    const preparing = signals.prepareStep(step(0, HISTORY));
+    const preparing = inbox.prepareStep(step(0, HISTORY));
     await Promise.resolve();
     // Delivered while the drain is in flight — it queues BEHIND the restored
     // prefix, not beside it.
-    await signals.deliver(steer('s2', 'second'));
+    await inbox.send(steer('s2', 'second'));
 
     landing.reject(new Error('storage unavailable'));
     await expect(preparing).rejects.toThrow('storage unavailable');
@@ -583,25 +586,26 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
     expect(broadcasts.filter((b) => b.type === 'signal_card').map((card) => card.state)).toEqual(['pending']);
     expect(steerStatuses(broadcasts).map((status) => status.status)).toEqual(['queued', 'queued']);
 
-    expect(await signals.prepareStep(step(0, HISTORY))).toEqual([
+    expect(await inbox.prepareStep(step(0, HISTORY))).toEqual([
       ...HISTORY,
       { role: 'user', content: 'first\n\nsecond' },
       { role: 'user', content: 'one event' },
     ]);
   });
 
-  test('pending users rerun as one turn per contiguous mode run, in arrival order', async () => {
-    const { signals, queued } = setup({ turnInFlight: true });
-    signals.beginTurn(false);
-    await signals.deliver(steer('s1', 'build this', { mode: 'build' }));
-    await signals.deliver(steer('s2', 'plan that', { mode: 'plan' }));
-    await signals.deliver(steer('s3', 'build the other', { mode: 'build' }));
+  test('pending users rerun as ONE turn in arrival order, under plan if any of them was plan', async () => {
+    const { inbox, queued } = setup({ turnInFlight: true });
+    inbox.beginTurn(false);
+    await inbox.send(steer('s1', 'build this', { mode: 'build' }));
+    await inbox.send(steer('s2', 'plan that', { mode: 'plan' }));
+    await inbox.send(steer('s3', 'build the other', { mode: 'build' }));
 
-    signals.settle({ completed: true });
+    inbox.settle({ completed: true });
     await Promise.resolve();
 
-    // build → plan → build is three runs: a group break anywhere splits the
-    // turn, so each run keeps the mode its words were typed under.
+    // One turn, the words in the order they were typed. Plan is the narrower
+    // grant, so a plan-mode message anywhere in the group makes the turn plan:
+    // merging never widens what a message was typed under.
     expect(queued.map((turn) => ({
       text: turn.text,
       kinuMode: turn.metadata?.kinuMode,
@@ -610,17 +614,48 @@ describe('SignalDelivery — the user kind beside the event kind', () => {
       origin: turn.origin,
     }))).toEqual([
       {
-        text: 'build this', kinuMode: 'build', steerIds: ['s1'],
-        idempotencyKey: 'steer-rerun:live:build:s1', origin: 'user',
-      },
-      {
-        text: 'plan that', kinuMode: 'plan', steerIds: ['s2'],
-        idempotencyKey: 'steer-rerun:live:plan:s2', origin: 'user',
-      },
-      {
-        text: 'build the other', kinuMode: 'build', steerIds: ['s3'],
-        idempotencyKey: 'steer-rerun:live:build:s3', origin: 'user',
+        text: 'build this\n\nplan that\n\nbuild the other', kinuMode: 'plan', steerIds: ['s1', 's2', 's3'],
+        idempotencyKey: 'steer-rerun:live:plan:s1', origin: 'user',
       },
     ]);
+  });
+
+  test('three user messages at an idle agent are one turn whose first step sees all three', async () => {
+    // The host's enqueue is held open — the window between a turn's
+    // admission and its opening. The first message starts the turn; the other
+    // two are buffered for its first step, never queued as turns behind it.
+    let open: (() => void) | null = null;
+    const queued: ProgrammaticTurn[] = [];
+    let inFlight = false;
+
+    const inbox = new Inbox({
+      broadcast: () => {},
+      enqueueTurn: async (turn) => {
+        queued.push(turn);
+        await new Promise<void>((resolve) => { open = resolve; });
+
+        return { status: 'queued' };
+      },
+      turnInFlight: () => inFlight,
+      setTimer: () => {},
+    });
+
+    const first = inbox.send(steer('s1', 'first'));
+    expect(await inbox.send(steer('s2', 'second'))).toBe('mid-turn');
+    expect(await inbox.send(steer('s3', 'third'))).toBe('mid-turn');
+    expect(queued.map((turn) => ({ text: turn.text, steerIds: turn.steerIds, origin: turn.origin })))
+      .toEqual([{ text: 'first', steerIds: ['s1'], origin: 'user' }]);
+
+    // The turn opens on the first message; its first step carries the rest.
+    inFlight = true;
+    inbox.beginTurn(false);
+    expect(await inbox.prepareStep(step(0, [...HISTORY, { role: 'user', content: 'first' }]))).toEqual([
+      ...HISTORY,
+      { role: 'user', content: 'first' },
+      { role: 'user', content: 'second\n\nthird' },
+    ]);
+    open!();
+    expect(await first).toBe('queued');
+    expect(queued).toHaveLength(1);
   });
 });

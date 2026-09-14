@@ -388,7 +388,7 @@ Core owns these six turn parts. Check it before writing one in a backend.
 |---|---|---|
 | The `model_call` event | `buildModelCallEvent(report, opts)` (`core/src/events/model-call-event.ts:43`) over a `ModelCallReport` (`core/src/events/model-call.ts:110`) | the sink that writes the row |
 | Turn settle | `declareTerminalRoster` (`core/src/orchestrator/terminal-roster.ts`) declares WHICH effects a settled response owes, in order; `TerminalTransitions.settle` (`core/src/orchestrator/terminal-transition.ts`) runs them once; `AgentOrchestrator.recordedTurn` / `.improvementLanesOpen` / `.drainPendingEvents` are what those rows ask | the driver's verdict, the effect BODIES, and the wake |
-| Steer provenance | `STEER_METADATA_KEY` and `STEER_STEP_METADATA_KEY` (`core/src/orchestrator/user-steer.ts:221-226`) | nothing; both backends stamp the same two keys |
+| Steer provenance | `STEER_METADATA_KEY` and `STEER_STEP_METADATA_KEY` (`core/src/orchestrator/inbox.ts:113`, `:118`) | nothing; both backends stamp the same two keys |
 | Auto-title | `planWorkspaceTitle` and `applyWorkspaceTitle` (`core/src/identity/naming.ts:226`, `:245`) | `ownMission()` and `persistAutoTitle()`; the CLI wraps them in `autoTitleLocalWorkspace` (`cli/src/local-agent-client.ts:168`) |
 | Provider snapshot cache | `ProviderListingCache` and `buildProviderCatalogSnapshot` (`core/src/profiles/provider-catalog.ts:106`, `:53`) | the sweep that lists providers |
 | The default role | `DEFAULT_ROLE_ID`, which is `general` (`core/src/profiles/catalog.ts:43`) | nothing; a backend compares against it rather than spelling the string |
