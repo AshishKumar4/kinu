@@ -1,4 +1,5 @@
 [
+  "movable packages/cf-backend/src/components/landing/hero-dust/dust.ts",
   "movable packages/cf-backend/src/components/landing/search-tree/renderer-canvas.ts",
   "movable packages/cf-backend/src/components/landing/search-tree/renderer.ts",
   "movable packages/cf-backend/src/components/landing/search-tree/simulation.ts"
