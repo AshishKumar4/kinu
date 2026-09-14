@@ -5,27 +5,32 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateFiles, SlateShareStore, SqliteSlateContentStore, SqliteSlateStateStore, SqliteSlateStore, WorkspaceBlueprints, WorkspaceSlates, slateDirectory,
-  type BlueprintReading, type ShareUser,
+  type BlueprintReading, type DurableAppIdentity, type DurableApps, type ShareUser,
 } from '@kinu.run/core/slates';
 import {
   parseSlateProject, routeSlateStorageCall, SLATE_STORAGE_BINDING,
   SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type BlueprintBundle, type BlueprintFork, type JsonValue, type SlateAnswer, type SlateProject, type SlateShareRecord,
-  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
+  type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem, type WorkspacePreviewUrl,
 } from '@kinu.run/core';
 import { ERROR_CODES, KinuError, refusalOf, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
-import { slateCallerKey, slateCredentialKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
+import { ROOT_SLATE_CALLER, slateCallerKey, slateCredentialKey, type SlateBinding, type SlateBindingProps, type SlateCaller } from './bindings';
 import { codemodeEgress } from '../codemode-egress';
 
 /** A binding route the calling actor answers with its own capability set. */
 export type SlateCapabilityRoute = Exclude<SlateBindingRoute, { kind: 'app' }>;
 
+/** The durable-application seam a slate host reaches Nimbus through, plus the URL this deployment fronts a reservation at. */
+export interface SlateApps extends DurableApps {
+  url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
+}
+
 export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
   /** Run a capability route as the caller: its own providers, its own role reach, its own read models, its own gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
-  expose(port: number): Promise<{ url?: string }>;
+  readonly apps: SlateApps;
 }
 
 /**
@@ -47,19 +52,25 @@ interface RunningSlate {
   readonly caller: SlateCaller;
   readonly id: string;
   readonly process: ResidentSlateProcess;
+  /** The slate's durable identity when this process is the one serving it; null for a caller's private process. */
+  readonly app: DurableAppIdentity | null;
 }
 
 /**
- * One isolate-lifetime process per authored tree PER CALLER. No running state is durable.
+ * One process per authored tree PER CALLER, and one DURABLE APPLICATION per
+ * slate.
  *
- * Measured on Nimbus fabric 0.2.0: a resident facet is named by a REUSED SLOT
- * — `workerd-facet-host.js:114-116` mints `proc-slot-${slot}` from a per-DO
- * free list (`:142-165`) — and `release` is `facets.abort` then
- * `facets.delete` (`:240-256`), which `facet-pool.js:5-13` documents as
- * eviction-with-storage-kept then terminal-with-storage-wiped. So the facet's
- * own SQLite — the `this.sql` an authored slate sees — is per-process until
- * Nimbus retains facets on its side; `this.storage` is the durable half, and
- * it lives in this object's `slate_state` table now.
+ * The application is Nimbus's: the slate id is its owner, and
+ * `apps.ensure` reserves — or answers again — the port and the capability its
+ * URL is built on, before the process that serves it is spawned. That record
+ * lives in this object's storage, so the URL outlives the process, the
+ * isolate and every redeploy; a request for it re-drives the process
+ * (`ensureDurable`). The process behind the URL runs as the workspace root —
+ * a preview is the owner's own view, whoever asked for it — and keeps its
+ * facet, so the `this.sql` an authored slate sees is the same SQLite on every
+ * launch until `remove`. Every other caller's process is private to that
+ * caller: its bindings carry the caller's reach, it is reached by RPC alone
+ * and it binds no port.
  */
 export class SlateHost {
   private readonly content: SqliteSlateContentStore;
@@ -68,10 +79,8 @@ export class SlateHost {
   private readonly state: SqliteSlateStateStore;
   private readonly sourceRuntimes = new Map<string, WorkspaceSlates>();
   private readonly running = new Map<string, RunningSlate>();
-  private readonly starting = new Map<string, Promise<ResidentSlateProcess>>();
-  private readonly ports = new Map<string, number>();
+  private readonly starting = new Map<string, Promise<RunningSlate>>();
   private readonly revisions = new Map<string, number>();
-  private nextPort = 20000;
 
   constructor(private readonly deps: SlateHostDeps) {
     this.content = new SqliteSlateContentStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
@@ -169,6 +178,7 @@ export class SlateHost {
 
         case 'preview': return await this.preview(caller, operation.id);
         case 'call': return await this.call(caller, operation.id, operation.method, operation.args ?? []);
+        case 'remove': return await this.remove(caller, operation.id);
         case 'history': {
           await this.deps.session();
           const id = new SlateId(operation.id);
@@ -229,7 +239,7 @@ export class SlateHost {
           id: entry.name,
           title: project.slate.title ?? project.name ?? entry.name,
           bindings: Object.keys(project.slate.bindings),
-          port: live && running !== undefined ? running.process.port : undefined,
+          port: live && running !== undefined ? running.app?.port : undefined,
         };
 
         slates.push(summary);
@@ -241,28 +251,77 @@ export class SlateHost {
     return { slates, problems };
   }
 
+  /**
+   * The slate's URL, with its durable application running behind it. The
+   * caller's mode gates the act; the application itself is the root's, so the
+   * URL is the same whoever asks and stays the same across every launch.
+   */
   async preview(caller: SlateCaller, id: string): Promise<SlateCallResult> {
     try {
       requireWorkModePermission(caller.workMode, false, 'Starting or exposing a slate preview');
       const project = await this.project(caller.cred, id);
-      const process = await this.ensure(caller, id);
-      const preview = await this.deps.expose(process.port);
+      const app = await this.serve(id);
+      const preview = await this.deps.apps.url(app.port, app.capability);
 
-      if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL');
+      if (preview.url === undefined) throw new KinuError('unavailable', 'This deployment cannot mint a slate preview URL: ' + preview.unavailable);
 
-      return { ok: true, value: { url: preview.url, port: process.port, inline: { height: project.slate.inline.height } } };
+      return { ok: true, value: { url: preview.url, port: app.port, inline: { height: project.slate.inline.height } } };
     } catch (cause) {
       return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' preview', cause, otherwise: 'io' })) };
     }
   }
 
-  async refreshPreview(port: number): Promise<void> {
-    for (const running of this.running.values()) {
-      if (running.process.port === port) {
-        await this.ensure(running.caller, running.id);
+  /**
+   * Bring the durable application `owner` names to life for a request on its
+   * URL: the process a reset took is re-driven, one whose source changed is
+   * replaced, a live one is left alone. Answers the refusal instead of
+   * throwing, so the route can say `missing` from `bad_input` apart.
+   */
+  async ensureDurable(owner: string): Promise<Refusal | null> {
+    try {
+      await this.serve(owner);
 
-        return;
+      return null;
+    } catch (cause) {
+      return refusalOf(toKinuError({ doing: 'slate ' + owner + ' durable app', cause, otherwise: 'io' }));
+    }
+  }
+
+  /** The process serving the slate's durable application, and the identity it serves. */
+  private async serve(id: string): Promise<DurableAppIdentity> {
+    const running = await this.booted(ROOT_SLATE_CALLER, id);
+
+    if (running.app === null) throw new KinuError('io', `Slate ${id} is running without its durable application`);
+
+    return running.app;
+  }
+
+  /**
+   * End a slate: every process it has, its durable application (the port,
+   * the capability, the retained facet storage) and its authored tree. Its
+   * committed versions stay in the store; `fork` brings one back as a new
+   * slate. The root's act: the application it ends is the root's own.
+   */
+  async remove(caller: SlateCaller, id: string): Promise<SlateCallResult> {
+    try {
+      if (caller.path.length > 0) throw new KinuError('denied', 'Only the workspace root removes a slate');
+      const session = await this.deps.session();
+      const root = slateDirectory(new SlateId(id));
+
+      for (const [held, running] of this.running) {
+        if (running.id !== id) continue;
+        this.running.delete(held);
+        await running.process.stop();
       }
+
+      const removed = await this.deps.apps.remove(id);
+      const vfs = session.vfs.as(caller.cred);
+
+      if (vfs.exists(root)) session.vfs.withTransaction(() => { vfs.removeRecursive(root); });
+
+      return { ok: true, value: { id, removed: removed.removed, port: removed.port } };
+    } catch (cause) {
+      return { ok: false, ...refusalOf(toKinuError({ doing: 'slate ' + id + ' remove', cause, otherwise: 'io' })) };
     }
   }
 
@@ -288,7 +347,7 @@ export class SlateHost {
    */
   previewInvocation(port: number): { readonly value: string; release: () => void } | null {
     for (const running of this.running.values()) {
-      if (running.process.port !== port) continue;
+      if (running.app?.port !== port) continue;
       const value = crypto.randomUUID();
       this.invocations.set(value, { id: running.id, chain: [] });
 
@@ -415,7 +474,11 @@ export class SlateHost {
     }
   }
 
-  ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
+  async ensure(caller: SlateCaller, id: string): Promise<ResidentSlateProcess> {
+    return (await this.booted(caller, id)).process;
+  }
+
+  private booted(caller: SlateCaller, id: string): Promise<RunningSlate> {
     const held = `${slateCallerKey(caller)}#${id}`;
     const starting = this.starting.get(held);
 
@@ -426,7 +489,7 @@ export class SlateHost {
     return boot;
   }
 
-  private async boot(caller: SlateCaller, id: string, held: string): Promise<ResidentSlateProcess> {
+  private async boot(caller: SlateCaller, id: string, held: string): Promise<RunningSlate> {
     const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress();
 
     if (caller.workMode === 'build' && globalOutbound === null) {
@@ -448,9 +511,10 @@ export class SlateHost {
       const running = this.running.get(held);
 
       if (running?.key === key && await running.process.isRunning()) {
-        this.running.set(held, { ...running, revision });
+        const refreshed = { ...running, revision };
+        this.running.set(held, refreshed);
 
-        return running.process;
+        return refreshed;
       }
 
       if (running !== undefined) {
@@ -471,16 +535,28 @@ export class SlateHost {
         props: { workspace: this.deps.workspace, id, name: SLATE_STORAGE_BINDING, caller },
       });
 
-      const port = project.slate.port ?? this.ports.get(held) ?? this.nextPort++;
-      this.ports.set(held, port);
-      const owner = JSON.stringify([this.deps.workspace, id, slateCallerKey(caller)]);
-      const process = await this.resident.start({ key, owner, root, project, port, cred: caller.cred, bindings, globalOutbound });
+      // Reserve first, launch after: the root's BUILD process is the slate's
+      // durable application, so its port and capability are Nimbus's
+      // reservation for this slate — the same ones on every launch — and the
+      // facet it boots into is the one pinned for this owner. Any other
+      // caller's process is private: reached by RPC, no port, its own facet.
+      // A Plan root is another caller: its process runs without egress and
+      // must never attach to the build application's live facet.
+      const app = caller.path.length === 0 && caller.workMode === 'build'
+        ? await this.deps.apps.ensure({ owner: id, preferredPort: project.slate.port })
+        : null;
+
+      const process = await this.resident.start({
+        key, owner: id, root, project, cred: caller.cred, bindings, globalOutbound,
+        app: app === null ? null : { port: app.port },
+      });
 
       if ((this.revisions.get(id) ?? 0) !== revision) { await process.stop(); continue; }
 
-      this.running.set(held, { key, revision, caller, id, process });
+      const started = { key, revision, caller, id, process, app };
+      this.running.set(held, started);
 
-      return process;
+      return started;
     }
   }
 

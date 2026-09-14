@@ -62,7 +62,7 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
     this._session ??= (async () => {
       const workspace = await NimbusWorkspace.create({
         sql: this.ctx.storage.sql,
-        transactions: this.ctx,
+        transactions: { storage: this.ctx.storage },
       });
 
       return workspace.vfs.as(CRED_SESSION_USER);

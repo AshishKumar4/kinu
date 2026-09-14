@@ -308,6 +308,21 @@ declared in the strict `slate` field of `package.json`, not a second manifest:
   optional browser entry named by `browser`. A resident Fabric process runs
   the default export's fetch handler and serves the compiled client bytes.
   This home does not provide Node `listen()`, native dependencies or Vite HMR.
+  The slate is a durable Nimbus application whose owner is the slate id:
+  before the process is spawned, `ensureDurableApp` reserves its port
+  (`slate.port` when declared, else the lowest free one from 20000) and mints
+  the capability its URL carries, in the workspace object's storage
+  (`workspace-host.ts` `apps.ensure`, `@nimbus-sh/worker@0.6.0`
+  `dist/session/port-capability.js` `reservePort`). Port and capability are
+  the same on every launch; a code change replaces the process, never the
+  URL. A request for the URL after eviction or redeploy re-drives the process
+  (`routePreview` → `ensureSlate`) and Nimbus validates the full capability
+  against the live registration before routing. `this.sql` is the facet's
+  SQLite, and the facet is pinned per owner (`app-slot-<n>`,
+  `dist/facets/durable-slots.js`): a released durable facet is aborted, not
+  deleted, so `this.sql` persists across restarts and eviction. Only the
+  `remove` operation ends the application: it stops the process, releases
+  the reservation, deletes the facet's SQLite and the authored tree.
 - `slate.runtime: "node"` selects the `sandbox` provider. Standard npm scripts
   run a real server on `slate.port`; dependencies and required native tools
   must be installed in that project.

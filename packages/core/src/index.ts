@@ -2293,7 +2293,7 @@ export {
 } from './execution/terminal-lane';
 
 export {
-  type WorkspacePreviewHost, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
+  type WorkspacePreviewHost, type WorkspacePreviewUrl, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
 } from './preview/nimbus-preview-host';
 
 export {

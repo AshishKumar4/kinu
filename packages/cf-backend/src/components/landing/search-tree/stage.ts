@@ -1,5 +1,5 @@
 import { useMediaQuery } from '@/hooks/use-media-query';
-import type { HeroPalette, Rgb } from '@kinu.run/core/web/hero-art';
+import type { HeroPalette, KeepOut, Rgb } from '@kinu.run/core/web/hero-art';
 
 function cssRgb(name: string): Rgb {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -25,6 +25,30 @@ export function readPalette(): HeroPalette {
     accent: cssRgb('--c-accent'),
     bright: cssRgb('--c-accent-fg'),
     ash: cssRgb('--c-text-3'),
+    ground: cssRgb('--c-bg'),
+  };
+}
+
+/** The edges of a box in page pixels: what `getBoundingClientRect` answers. */
+export interface Rect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The headline's box in the host's view units, or null when the headline
+ *  is missing or the host has no size: what the tree keeps its growth out of. */
+export function keepOutOf(host: Rect, headline: Rect | null): KeepOut | null {
+  if (headline === null || host.width <= 0 || host.height <= 0) return null;
+
+  return {
+    left: (headline.left - host.left) / host.width,
+    top: (headline.top - host.top) / host.height,
+    right: (headline.right - host.left) / host.width,
+    bottom: (headline.bottom - host.top) / host.height,
   };
 }
 

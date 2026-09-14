@@ -23,10 +23,6 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import {
-  _rpcReadFile,
-  _rpcWriteFile,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
 
 const databases: Database[] = [];
 
@@ -84,14 +80,29 @@ async function openFixture(): Promise<Fixture> {
     },
   };
 
+  const processes = new SessionProcessSupervisor();
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
+    processes,
   });
 
   const durable = new Map<string, unknown>();
-  const processes = new SessionProcessSupervisor();
+
+  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
+    const entries = new Map<string, unknown>();
+
+    for (const [key, value] of durable) {
+      if (key.startsWith(options.prefix)) entries.set(key, value);
+    }
+
+    // SAFETY: the storage list contract types each row by the caller's T,
+    // which the untyped stand-in rows cannot name; `never` keeps the Map
+    // assignable to every T.
+    return entries as Map<string, never>;
+  };
 
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
@@ -103,6 +114,13 @@ async function openFixture(): Promise<Fixture> {
         delete: async (key) => { durable.delete(key); },
         deleteAll: async () => { durable.clear(); },
         deleteAlarm: async () => undefined,
+        list: listDurable,
+        transaction: async (body) => body({
+          get: async (key) => durable.get(key),
+          put: async (key, value) => { durable.set(key, value); },
+          delete: async (key) => { durable.delete(key); },
+          list: listDurable,
+        }),
       },
     },
     shell: workspace.shell,
@@ -149,8 +167,8 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const pidB = f.pidFor(AGENT_B);
 
     // One write per plane per agent, all naming the identical logical path.
-    await _rpcWriteFile(f.host, '/tmp/note.txt', 'A via file plane', pidA);
-    await _rpcWriteFile(f.host, '/tmp/note.txt', 'B via file plane', pidB);
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/note.txt', 'A via file plane'], pid: pidA });
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/note.txt', 'B via file plane'], pid: pidB });
     await rpcExec(f.host, 'echo A-shell > /tmp/shell.txt', { cred: AGENT_A });
     await rpcExec(f.host, 'echo B-shell > /tmp/shell.txt', { cred: AGENT_B });
 
@@ -166,8 +184,12 @@ describe('per-credential /tmp holds on both surfaces', () => {
     ]);
 
     // The file plane reads its own.
-    expect(await _rpcReadFile(f.host, '/tmp/note.txt', pidA)).toBe('A via file plane');
-    expect(await _rpcReadFile(f.host, '/tmp/note.txt', pidB)).toBe('B via file plane');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/note.txt'], pid: pidA,
+    }))).toBe('A via file plane');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/note.txt'], pid: pidB,
+    }))).toBe('B via file plane');
 
     // The shell plane reads THE SAME bytes as the file plane, per agent. This
     // is the assertion the whole design exists to satisfy.
@@ -177,18 +199,24 @@ describe('per-credential /tmp holds on both surfaces', () => {
       .toMatchObject({ stdout: 'B via file plane', exitCode: 0 });
 
     // ...and the file plane reads what the shell wrote.
-    expect(await _rpcReadFile(f.host, '/tmp/shell.txt', pidA)).toBe('A-shell\n');
-    expect(await _rpcReadFile(f.host, '/tmp/shell.txt', pidB)).toBe('B-shell\n');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/shell.txt'], pid: pidA,
+    }))).toBe('A-shell\n');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/shell.txt'], pid: pidB,
+    }))).toBe('B-shell\n');
   });
 
   test('an agent cannot see another agent through /tmp, on either plane', async () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
     f.confine(AGENT_B, 'agent-b');
-    await _rpcWriteFile(f.host, '/tmp/secret.txt', 'A only', f.pidFor(AGENT_A));
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/secret.txt', 'A only'], pid: f.pidFor(AGENT_A) });
 
     // B naming the same path gets its own absence, not A's file.
-    expect(await _rpcReadFile(f.host, '/tmp/secret.txt', f.pidFor(AGENT_B))).toBeNull();
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/secret.txt'], pid: f.pidFor(AGENT_B),
+    }))).toBeNull();
     expect(await rpcExec(f.host, 'cat /tmp/secret.txt', { cred: AGENT_B }))
       .toMatchObject({ exitCode: 1 });
 
@@ -203,8 +231,8 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
     f.confine(AGENT_B, 'agent-b');
-    await _rpcWriteFile(f.host, '/tmp/mine.txt', 'a', f.pidFor(AGENT_A));
-    await _rpcWriteFile(f.host, '/tmp/theirs.txt', 'b', f.pidFor(AGENT_B));
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/mine.txt', 'a'], pid: f.pidFor(AGENT_A) });
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/theirs.txt', 'b'], pid: f.pidFor(AGENT_B) });
 
     expect(await rpcExec(f.host, 'ls /tmp', { cred: AGENT_A }))
       .toMatchObject({ stdout: 'mine.txt\n', exitCode: 0 });
@@ -243,7 +271,7 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
     await rpcExec(f.host, 'echo shared > /tmp/keep.txt');
-    await _rpcWriteFile(f.host, '/tmp/keep.txt', 'a private one', f.pidFor(AGENT_A));
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/keep.txt', 'a private one'], pid: f.pidFor(AGENT_A) });
 
     expect(await rpcExec(f.host, 'rm /tmp/keep.txt', { cred: AGENT_A }))
       .toMatchObject({ exitCode: 0 });
@@ -257,27 +285,33 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
     const pidA = f.pidFor(AGENT_A);
-    await _rpcWriteFile(f.host, '/tmp/draft.txt', 'first', pidA);
-    await _rpcWriteFile(f.host, '/tmp/final.txt', 'old', pidA);
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/draft.txt', 'first'], pid: pidA });
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/final.txt', 'old'], pid: pidA });
 
     // The file plane replaces atomically: write beside, rename over.
     f.workspace.vfs.as(AGENT_A).rename('/tmp/draft.txt', '/tmp/final.txt');
-    expect(await _rpcReadFile(f.host, '/tmp/final.txt', pidA)).toBe('first');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/final.txt'], pid: pidA,
+    }))).toBe('first');
     expect(f.storageKeys()).toEqual(['tmp', 'tmp/agent-a', 'tmp/agent-a/final.txt']);
 
     // The shell resolves the same rewrite.
     expect(await rpcExec(f.host, 'mv /tmp/final.txt /tmp/moved.txt', { cred: AGENT_A }))
       .toMatchObject({ exitCode: 0 });
-    expect(await _rpcReadFile(f.host, '/tmp/moved.txt', pidA)).toBe('first');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/moved.txt'], pid: pidA,
+    }))).toBe('first');
     expect(f.storageKeys()).toEqual(['tmp', 'tmp/agent-a', 'tmp/agent-a/moved.txt']);
   });
 
   test('releasing a principal detaches its scratch — /tmp dies with the node', async () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
-    await _rpcWriteFile(f.host, '/tmp/scratch.txt', 'private', f.pidFor(AGENT_A));
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/scratch.txt', 'private'], pid: f.pidFor(AGENT_A) });
     expect(f.storageKeys()).toContain('tmp/agent-a/scratch.txt');
-    expect(await _rpcReadFile(f.host, '/tmp/scratch.txt', f.pidFor(AGENT_A))).toBe('private');
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/scratch.txt'], pid: f.pidFor(AGENT_A),
+    }))).toBe('private');
 
     f.workspace.vfs.releasePrincipal(AGENT_A.uid);
 
@@ -286,7 +320,9 @@ describe('per-credential /tmp holds on both surfaces', () => {
     // which is what lets a node's /tmp be discarded at node death while its
     // home survives to be graded at settle. The bytes are still there for the
     // host to remove, and only for the host.
-    expect(await _rpcReadFile(f.host, '/tmp/scratch.txt', f.pidFor(AGENT_A))).toBeNull();
+    expect(v.parse(v.nullable(v.string()), await f.workspace.supervisorOp({
+      op: 'readFile', args: ['/tmp/scratch.txt'], pid: f.pidFor(AGENT_A),
+    }))).toBeNull();
     expect(f.workspace.vfs.as(ROOT).readFileString('tmp/agent-a/scratch.txt')).toBe('private');
 
     f.workspace.vfs.as(ROOT).removeRecursive('tmp/agent-a');
@@ -297,8 +333,8 @@ describe('per-credential /tmp holds on both surfaces', () => {
     const f = await openFixture();
     f.confine(AGENT_A, 'agent-a');
     f.confine(AGENT_B, 'agent-b');
-    await _rpcWriteFile(f.host, '/tmp/mine.txt', 'a', f.pidFor(AGENT_A));
-    await _rpcWriteFile(f.host, '/tmp/theirs.txt', 'b', f.pidFor(AGENT_B));
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/mine.txt', 'a'], pid: f.pidFor(AGENT_A) });
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/theirs.txt', 'b'], pid: f.pidFor(AGENT_B) });
 
     const seen = f.workspace.vfs.as(AGENT_A).list(null, 500).entries.map((e) => e.path)
       .filter((p) => p === 'tmp' || p.startsWith('tmp/'));
@@ -320,7 +356,7 @@ describe('per-credential /tmp holds on both surfaces', () => {
     await rpcExec(f.host, 'echo shared > /tmp/r.txt');
     const sharedRev = f.workspace.vfs.as(SESSION_USER).revision('tmp/r.txt');
 
-    await _rpcWriteFile(f.host, '/tmp/r.txt', 'private', f.pidFor(AGENT_A));
+    await f.workspace.supervisorOp({ op: 'writeFile', args: ['/tmp/r.txt', 'private'], pid: f.pidFor(AGENT_A) });
 
     // Same spelling, two files, so two counters. One clock for both would make
     // an agent's cache invalidate on a stranger's write.

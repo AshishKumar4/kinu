@@ -5,10 +5,12 @@ export struct Palette {
   accent: vec4f,
   bright: vec4f,
   ash: vec4f,
+  // The page behind the art; every tone recedes toward it by `recess`.
+  ground: vec4f,
   // 0 on the dark ground, 1 on paper: paper gets no HDR push, so the bloom
   // gilds instead of blowing out.
   mode: f32,
-  pad0: f32,
+  recess: f32,
   pad1: f32,
   pad2: f32,
 }
@@ -38,10 +40,16 @@ export fn tone_color(palette: Palette, tone: f32, glow: f32) -> vec3f {
   return mix(palette.ash.rgb, palette.accent.rgb, 0.35 + 0.65 * glow);
 }
 
+// Every tree colour sits behind the copy: it recedes toward the ground, the
+// same mix hero-canvas.ts applies on the CPU.
+export fn recede(palette: Palette, color: vec3f) -> vec3f {
+  return mix(color, palette.ground.rgb, palette.recess);
+}
+
 // Luminous strokes carry more than one unit of light on the dark ground; the
 // bright pass reads that headroom, and the composite brings the hue back.
 export fn glow_scale(palette: Palette, glow: f32) -> f32 {
-  return 1.0 + glow * 0.7 * (1.0 - palette.mode);
+  return 1.0 + glow * 0.35 * (1.0 - palette.mode);
 }
 
 export fn to_clip(view: View, pixel: vec2f) -> vec4f {

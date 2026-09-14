@@ -34,7 +34,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace } from '../src/workspace-host';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { CRED_SESSION_USER, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import type { SupervisorOpEnvelope, SupervisorOpName } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { SupervisorRPC } from '../../../node_modules/@nimbus-sh/worker/dist/session/supervisor-rpc.js';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -453,7 +453,13 @@ describe('hosted workspace facets', () => {
     expect(writeOp?.mutationOwner).toBeString();
 
     // An operation this host does not serve does not exist.
-    await expect(actor.hosted.supervisorOp({ op: 'somethingElse', args: [] }))
+    await expect(actor.hosted.supervisorOp({
+      // SAFETY: the supervisor RPC contract receives the envelope as untyped
+      // wire data, so the host must refuse a name outside the union at runtime
+      // — this call fabricates exactly that shape.
+      op: 'somethingElse' as SupervisorOpName,
+      args: [],
+    }))
       .rejects.toThrow('is not served by this host');
 
     // The bytes landed in the actor's OWN filesystem.

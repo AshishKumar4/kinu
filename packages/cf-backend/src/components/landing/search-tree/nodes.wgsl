@@ -2,7 +2,7 @@
 // embers a pruned branch throws off. A quad with a radial falloff, and a
 // wider halo for the ones that glow.
 
-import { Palette, View, glow_scale, to_clip, tone_color } from "./palette.wgsl";
+import { Palette, View, glow_scale, recede, to_clip, tone_color } from "./palette.wgsl";
 
 @group(0) @binding(0) var<uniform> view: View;
 @group(0) @binding(1) var<uniform> palette: Palette;
@@ -29,7 +29,7 @@ struct Varying {
   let reach = (point.z * view.ratio + 0.75) * (1.0 + 2.2 * glow);
   let centre = point.xy * view.resolution;
   // A tip's core runs hot: toward the bright end of the palette as it glows.
-  let rgb = mix(tone_color(palette, look.x, glow), palette.bright.rgb, glow * 0.6) * glow_scale(palette, glow);
+  let rgb = recede(palette, mix(tone_color(palette, look.x, glow), palette.bright.rgb, glow * 0.6)) * glow_scale(palette, glow);
 
   var out: Varying;
   out.position = to_clip(view, centre + corner * reach);

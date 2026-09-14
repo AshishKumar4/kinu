@@ -39,7 +39,11 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     registerPort: async (pid, port, target) => { this.ports.bindFacetStub(pid, target); this.ports.register(port, pid); },
     unregisterPorts: pid => { this.ports.unregisterByPid(pid); },
     dispatch: async () => { throw new Error('The fixture declares no capability bindings'); },
-    expose: async () => { throw new Error('The fixture does not publish preview URLs'); },
+    apps: {
+      ensure: async () => ({ port: 20000, capability: '0'.repeat(24) }),
+      remove: async () => ({ removed: false, port: null }),
+      url: async () => { throw new Error('The fixture does not publish preview URLs'); },
+    },
   });
 
   private prepare(): void {
