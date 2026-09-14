@@ -46,7 +46,7 @@ import type {
   JsonValue,
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { KinuError, tolerate, type Refusal } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, tolerate, type Refusal } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
@@ -410,12 +410,29 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       },
     },
     async routePreview(port, handle, request, pathname) {
+      // Every refusal below names its branch: a bare 404 on a durable URL is
+      // otherwise indistinguishable from the runner's own, and that silence
+      // hid a live regression on 2026-09-14.
+      const refused = (reason: string, owner: string | null, detail = ''): void => {
+        diagnostics.event('preview.route.refused', { port, handle, reason, owner: owner ?? '', detail });
+      };
+
       // The URL was minted from the durable record, so the record is what the
       // handle is checked against — a port nothing was ever handed a URL for
       // is a 404 whether or not something listens on it now.
       const exposure = await readPortExposure(deps.ctx, port);
 
-      if (exposure === null || exposure.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return previewNotFound();
+      if (exposure === null) {
+        refused('no-exposure', null);
+
+        return previewNotFound();
+      }
+
+      if (exposure.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) {
+        refused('handle-mismatch', exposure.owner);
+
+        return previewNotFound();
+      }
 
       // A durable application answers its URL whether or not its process
       // survived: the owner is brought to life (or replaced, when its source
@@ -424,7 +441,26 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (exposure.owner !== null) {
         const refusal = await deps.ensureSlate?.(exposure.owner) ?? null;
 
-        if (refusal !== null) return refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
+        if (refusal !== null) {
+          refused(refusal.reason === 'missing' ? 'ensure-missing' : 'ensure-unavailable', exposure.owner, refusal.error);
+
+          return refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
+        }
+      }
+
+      // What Nimbus's registry holds for the port at routing time: the listener
+      // it will consult, or nothing, which is the one reason its route answers
+      // a bare 404 (`routeCapabilityRequest` returns null without a live entry
+      // whose capability matches).
+      const listener = portRegistry.get(port);
+      const resident = listener === undefined ? undefined : residents.get(listener.pid);
+
+      if (listener === undefined) {
+        refused('no-listener', exposure.owner, `residents=${String(residents.size)}`);
+      } else if (listener.capability !== exposure.capability) {
+        const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
+
+        refused('capability-mismatch', exposure.owner, `pid=${String(listener.pid)} residentOwner=${resident?.owner ?? ''} state=${state}`);
       }
 
       const publicRequest = new Request(request);

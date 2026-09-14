@@ -80,3 +80,24 @@ it('the /__rpc surface answers over the durable URL after eviction', async () =>
 
   expect(await subject().rpcPreview(boot.url, 'ping')).toEqual({ ok: true, value: '{"rows":2}' });
 });
+
+it('a slate keeps answering its URL while a workspace process runs beside it', async () => {
+  const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('beside-a-process'));
+
+  const boot = await subject().serveSlate({
+    workspace: 'durability-beside', owner: 'durability-owner', id: 'keeper', body: 'keeper-body',
+  });
+
+  expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+
+  // The process outlives the drives below; the URL must answer throughout.
+  const running = subject().runInWorkspace('durability-beside', 'sleep 6');
+
+  await new Promise((resolve) => { setTimeout(resolve, 1500); });
+  expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+
+  const finished = await running;
+
+  expect(finished.exitCode).toBe(0);
+  expect(await subject().drivePreview(boot.url)).toEqual({ status: 200, body: 'keeper-body' });
+});
