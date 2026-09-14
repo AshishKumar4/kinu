@@ -45,6 +45,7 @@ export function skillIndexLine(skill: SkillHeader): string {
   return `- **${skill.name}**${origin} — ${skill.description}`;
 }
 
+
 /** One entry for a file discovery would not open (its size alone exceeds the
  *  turn's whole skills allocation). The name and the path are all we know
  *  without paying the read, and both are worth more to the model than silence. */
