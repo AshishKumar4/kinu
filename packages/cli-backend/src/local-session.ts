@@ -291,7 +291,21 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
       host: {
         broadcast: (event) => { input.session().broadcast(event); },
         enqueueTurn: (turn) => input.session().enqueueTurn(turn),
-        turnInFlight: () => input.session().turnInFlight(),
+        // 'is a turn in flight' is a FACT the seam reads, not a policy — so it
+        // answers `false` rather than throwing when the actor's seat is gone:
+        // `settled` and `busy` call it on a detached continuation that can
+        // outlive the host's teardown (an enqueue that resolves as the session
+        // ends leaves the inbox's settle handler running past byActor.clear()).
+        // The cf seam (`seams.turnInFlight`) already answers `false` for an
+        // unhosted actor for the same reason.
+        turnInFlight: () => {
+          try {
+            return input.session().turnInFlight();
+          } catch (cause) {
+            if (cause instanceof KinuError && cause.code === 'missing') return false;
+            throw cause;
+          }
+        },
         setTimer: (fn, ms) => { input.session().setTimer(fn, ms); },
         reconcileDurableWake: null,
         get headRuntime() { return input.session().headRuntime; },
