@@ -128,6 +128,7 @@ import { initAccessTokenTable } from '@kinu.run/core';
 import { isModelInferenceCredentialKey } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
 import { resolveWorkspaceTitle } from '@kinu.run/core';
+import { displayNameProblem } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { recordReleaseTransition } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
@@ -458,6 +459,10 @@ export interface UserProfile {
   displayName: string | null;
   createdAt: number;
   lastSeenAt: number;
+  /** First-run setup's completion stamp: `null` on an account the wizard has
+   *  never run to `finish()`. Lives in `user_onboarding`, a table of its own —
+   *  the genesis lock refuses a new column on the shipped `user_profile`. */
+  onboardedAt: number | null;
 }
 
 export interface WorkspaceEntry {
@@ -908,9 +913,18 @@ export class UserDO extends Agent<Env> {
 
   // ── Profile ────────────────────────────────────────────────────────
 
+  private onboardingCompletedAt(): number | null {
+    const row = this.sqlx<{ completed_at: number }>(
+      `SELECT completed_at FROM user_onboarding WHERE id = 1`,
+    )[0];
+
+    return row?.completed_at ?? null;
+  }
+
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     await this.requireTier(caller, 'profile');
     const now = Date.now();
+    const onboardedAt = this.onboardingCompletedAt();
 
     const existing = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
@@ -927,6 +941,7 @@ export class UserDO extends Agent<Env> {
         displayName: displayName ?? existing.display_name,
         createdAt: existing.created_at,
         lastSeenAt: now,
+        onboardedAt,
       };
     }
 
@@ -935,7 +950,7 @@ export class UserDO extends Agent<Env> {
       email, displayName ?? null, now, now,
     );
 
-    return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now };
+    return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now, onboardedAt };
   }
 
   async getProfile(caller: UserCaller): Promise<UserProfile | null> {
@@ -952,7 +967,49 @@ export class UserDO extends Agent<Env> {
       displayName: row.display_name,
       createdAt: row.created_at,
       lastSeenAt: row.last_seen_at,
+      onboardedAt: this.onboardingCompletedAt(),
     };
+  }
+
+  // ── Account ────────────────────────────────────────────────────────
+  // The account's own authorities — its 'account' capability is floored at
+  // owner_only, so no workspace token reaches either method here.
+
+  /** First-run setup's `finish()`. Idempotent: the FIRST completion wins, so
+   *  a retried call returns the timestamp the wizard already stamped rather
+   *  than moving it forward. */
+  async completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
+    await this.requireTier(caller, 'account');
+
+    this.sqlx(
+      `INSERT INTO user_onboarding (id, completed_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`,
+      Date.now(),
+    );
+
+    const stamped = this.onboardingCompletedAt();
+
+    if (stamped === null) throw new Error('user_onboarding has no row after the insert');
+
+    return { onboardedAt: stamped };
+  }
+
+  /** The name every surface addresses the owner by. The constraint lives in
+   *  the object, not the form, so every client that ever renames the owner
+   *  gets the same answer. */
+  async setDisplayName(caller: UserCaller, displayName: string): Promise<UserProfile> {
+    await this.requireTier(caller, 'account');
+    const name = displayName.trim();
+    const problem = displayNameProblem(name);
+
+    if (problem !== null) throw new Error(problem);
+
+    this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
+
+    const profile = await this.getProfile(caller);
+
+    if (!profile) throw new Error('No profile row to rename');
+
+    return profile;
   }
 
   // ── Workspace registry ─────────────────────────────────────────────

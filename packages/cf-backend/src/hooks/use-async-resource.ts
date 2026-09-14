@@ -66,6 +66,10 @@ export type Revalidate<T> = (value: T | null) => number | null;
 export interface AsyncResourceControl<T> {
   resource: AsyncResource<T>;
   reload: () => void;
+  /** Publish a value the caller already holds — a mutation whose response IS
+   *  the new state — so a dependent read never sees a stale copy while the
+   *  follow-up reload is still in flight. */
+  set(value: T): void;
 }
 
 /**
@@ -147,5 +151,10 @@ export function useAsyncResource<T>(
     return () => clearTimeout(timer);
   }, [resource, revalidate, run]);
 
-  return { resource, reload: run };
+  const set = useCallback((value: T): void => {
+    runId.current += 1;
+    setState({ identity, resource: loadSucceeded(value) });
+  }, [identity]);
+
+  return { resource, reload: run, set };
 }

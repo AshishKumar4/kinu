@@ -159,4 +159,72 @@ describe('account panels', () => {
       process.stdout.write(`account-ux: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
   }, 240_000);
+
+  test('the welcome wizard renders each step at both widths in both themes', async () => {
+    await withGallery(async (gallery) => {
+      const shots: string[] = [];
+
+      for (const theme of ['dark', 'light'] as const) {
+        for (const viewport of ['desktop', 'mobile'] as const) {
+          for (const step of [0, 1, 2, 3] as const) {
+            const page = await freshPage(gallery, `welcome&step=${String(step)}`, theme, viewport);
+
+            try {
+              // The slide is an inert track: every step's text is in the DOM,
+              // so the honest read of "this step is showing" is the panel that
+              // is neither hidden nor inert.
+              await page.waitForSelector('h1', { timeout: 10_000 });
+              // Step 1's providers read the account fixture: the sibling gate
+              // arms Codex failed and the gateway held, so heal and release
+              // them before the settled screenshot means anything.
+
+              if (step === 1) await settleAccountFixture(page);
+
+              const body = await page.evaluate(() => document.body.innerText);
+              expect(body).toContain("Let's set up your account");
+
+              const active = await page.evaluate(() => {
+                const panel = [...document.querySelectorAll('[data-welcome-step]')].find(
+                  (el) => el instanceof HTMLElement && !el.inert && el.getAttribute('aria-hidden') !== 'true',
+                );
+
+                return panel?.textContent ?? '';
+              });
+
+              if (step === 0) {
+                expect(await page.$('[aria-label="Your name"]')).not.toBeNull();
+                expect(active).toContain('Your name');
+              } else if (step === 1) {
+                expect(active).toContain('Model tiers');
+                expect(active).toContain('API keys');
+              } else if (step === 2) {
+                expect(active).toContain('Add MCP server');
+                expect(active).toContain('kinu setup');
+              } else {
+                // The three showcase cards fade in staggered; a capture taken
+                // mid-transition photographs the last one translucent.
+                await page.waitForFunction(
+                  () => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
+                    .every((el) => getComputedStyle(el).opacity === '1'),
+                  { timeout: 10_000 },
+                );
+
+                expect(active).toContain('Work that runs without you');
+                expect(active).toContain('Live apps, not just answers');
+                expect(active).toContain('Your machines, when you want them');
+                expect(body).toContain('Create your first workspace');
+              }
+
+              shots.push(await shoot(page, `welcome-step${String(step)}-${viewport}-${theme}`));
+            } finally {
+              await page.close();
+            }
+          }
+        }
+      }
+
+      expect(shots.length).toBe(16);
+      process.stdout.write(`account-ux welcome: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+    });
+  }, 240_000);
 });
