@@ -2299,8 +2299,8 @@ export {
 } from './preview/preview-exposures';
 
 export {
-  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, json, kinuUserAgent,
-  readBounded, readBoundedStream, reoriginateRequest, safeJson,
+  KINU_USER_AGENT, err, escapeHtml, fileResponseHeaders, firstResponse, json,
+  kinuUserAgent, readBounded, readBoundedStream, reoriginateRequest, safeJson,
 } from './http/http';
 
 export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './http/security-headers';
