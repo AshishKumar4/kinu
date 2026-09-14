@@ -6,12 +6,12 @@ import { resolve } from 'node:path';
 
 import {
   createDustRenderer, DustField, type DustFrame, type DustSurface,
-} from '../src/components/landing/hero-dust/dust';
-import type { HeroPalette } from '../src/components/landing/search-tree/renderer';
+} from '../src/components/landing/hero-dust/HeroDust';
+import type { HeroPalette } from '@kinu.run/core/web/hero-art';
 
 const LANDING_DIR = resolve(import.meta.dir, '../src/components/landing');
 
-const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, 'hero-dust/dust.ts'), 'utf8');
+const DUST_SOURCE = readFileSync(resolve(LANDING_DIR, 'hero-dust/HeroDust.tsx'), 'utf8');
 
 const STAGE_SOURCE = readFileSync(resolve(LANDING_DIR, 'search-tree/stage.ts'), 'utf8');
 
@@ -161,7 +161,6 @@ describe('the dust renderer paints gold, twice per mote', () => {
       .filter((index) => (frame.motes[index * stride + 3] ?? 0) > 0.004)
       .length;
 
-    expect(DUST_SOURCE).toContain('dark: 0.28, light: 0.28');
     expect(visible).toBeGreaterThan(0);
     expect(surface.fills).toBe(visible * 2);
     expect(surface.clears).toBe(1);
@@ -170,7 +169,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
     for (const style of surface.styles) {
       expect(style.startsWith('rgba(224,164,88,')).toBe(true);
       const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
-      expect(alpha).toBeLessThanOrEqual(0.28);
+      expect(alpha).toBeLessThanOrEqual(0.18);
     }
   });
 
@@ -191,7 +190,7 @@ describe('the dust renderer paints gold, twice per mote', () => {
     for (const style of surface.styles) {
       expect(style.startsWith('rgba(122,85,20,')).toBe(true);
       const alpha = Number(style.slice(style.lastIndexOf(',') + 1, -1));
-      expect(alpha).toBeLessThanOrEqual(0.28);
+      expect(alpha).toBeLessThanOrEqual(0.18);
     }
   });
 });
