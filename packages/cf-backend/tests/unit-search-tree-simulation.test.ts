@@ -70,6 +70,63 @@ describe('the search tree grows deterministically', () => {
   });
 });
 
+/** A branch's world endpoints never move after it spawns, and without a
+ *  pointer nothing shifts in y, so a stroke keeps one key across frames. */
+function keyedStrokes(frame: SearchTreeFrame): Map<string, number[]> {
+  const rows = new Map<string, number[]>();
+
+  for (const row of strokesOf(frame)) rows.set(`${String(row[11])}|${String(row[1])}|${String(row[5])}`, row);
+
+  return rows;
+}
+
+describe('the camera follows the frontier smoothly', () => {
+  test('no stroke moves more than the pan speed allows in one frame, through prunes and a restart', () => {
+    const tree = new SearchTree({ seed: 417, aspect: ASPECT });
+    let previous = keyedStrokes(tree.frame());
+    let widestShift = 0;
+    let widestAlphaJump = 0;
+    let widestWidthJump = 0;
+    let restarts = 0;
+
+    for (let index = 0; index < 60 * 40; index += 1) {
+      tree.step(DT);
+      const frame = tree.frame();
+      const current = keyedStrokes(frame);
+
+      for (const [key, row] of current) {
+        const before = previous.get(key);
+
+        if (before === undefined) continue;
+        const dx = (row[4] ?? 0) - (before[4] ?? 0);
+        const dy = ((row[5] ?? 0) - (before[5] ?? 0)) * ASPECT;
+        widestShift = Math.max(widestShift, Math.hypot(dx, dy));
+        widestAlphaJump = Math.max(widestAlphaJump, Math.abs((row[10] ?? 0) - (before[10] ?? 0)));
+        widestWidthJump = Math.max(widestWidthJump, Math.abs((row[7] ?? 0) - (before[7] ?? 0)));
+      }
+
+      restarts = Math.max(restarts, frame.generation);
+      previous = current;
+    }
+
+    // The run crossed a restart of every layer and pruned along the way.
+    expect(restarts).toBeGreaterThanOrEqual(1);
+    expect(tree.frame().pruned).toBeGreaterThan(3);
+    // The camera's speed is capped, so in one frame the picture moves at most that far.
+    expect(widestShift).toBeLessThanOrEqual(SearchTree.pan.maxSpeed * DT + 1e-6);
+    // A restart or a prune fades a branch; it never cuts it in one frame.
+    expect(widestAlphaJump).toBeLessThanOrEqual(0.05);
+    expect(widestWidthJump).toBeLessThanOrEqual(0.15);
+  });
+
+  test('the camera and the fades are deterministic', () => {
+    const first = run(417, 30).frame();
+    const second = run(417, 30).frame();
+
+    expect(strokesOf(first)).toEqual(strokesOf(second));
+  });
+});
+
 describe('the search prunes what scores below the frontier', () => {
   test('pruned branches leave the living set and are counted, descendants with them', () => {
     const tree = run(417, 8);
