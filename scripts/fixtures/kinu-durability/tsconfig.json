@@ -9,5 +9,5 @@
     "allowImportingTsExtensions": true,
     "moduleDetection": "force"
   },
-  "include": ["worker.ts", "../../../packages/cf-backend/env.d.ts"]
+  "include": ["worker.ts", "../../../packages/cf-backend/env.d.ts", "../../../packages/cf-backend/src/slate-vendor.d.ts"]
 }

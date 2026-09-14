@@ -12,7 +12,7 @@
  */
 import * as v from 'valibot';
 import type { SecretSighting } from '../safety/secret-patterns';
-import type { SlateBindingDeclaration } from './project';
+import { SLATE_BINDING_KINDS, type SlateBindingDeclaration } from './project';
 
 /** The share kinds the row discriminates on. Phase 1 ships blueprints only. */
 export const SHARE_KINDS = ['blueprint'] as const;
@@ -61,7 +61,7 @@ const SecretSightingSchema = v.object({
 
 const SlateBindingDeclarationSchema = v.object({
   name: v.string(),
-  kind: v.picklist(['namespace', 'rpc', 'mcp', 'app', 'tool', 'memory', 'tasks', 'web']),
+  kind: v.picklist(SLATE_BINDING_KINDS),
   target: v.string(),
   credentialed: v.boolean(),
 });

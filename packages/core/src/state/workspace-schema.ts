@@ -48,6 +48,7 @@ import { initFactsTable } from '../memory/facts';
 import { initShadowTables } from '../scaffold/shadow';
 import { initTaskListTable } from '../tasks/store';
 import { initPromptSectionTables } from '../prompting/section-store';
+import { initSlateStateTable } from '../slates/state';
 import { initExplorationRecordsTable } from '../strategy/records';
 import { initSwarmNodeRecords } from '../strategy/swarm-resume';
 import { initAgentDataTables } from '../tools/db-codemode';
@@ -158,6 +159,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
     attempt INTEGER NOT NULL, outcome TEXT NOT NULL, error TEXT, finished_at INTEGER NOT NULL,
     UNIQUE (invocation_id, attempt)
   )`);
+  initSlateStateTable(execRaw);
   initSlateShareTables(execRaw);
 }
 

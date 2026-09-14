@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { SlateBindingRequestSchema, resolveSlateChain, routeSlateBindingCall, type SlateInvocation } from '../src/slates/bindings';
 import { parseSlateProject } from '../src/slates/project';
+import type { JsonValue } from '../src/utils/json';
 import { isSlateMethodName } from '../src/slates/rpc';
 
 const project = parseSlateProject({
@@ -68,3 +69,64 @@ test('a lineage comes from the host record, never from the caller', () => {
   // An id the host issued, but to somebody else.
   expect(() => resolve('other-slate')).toThrow('was issued to slate shelf');
 });
+
+const routed = parseSlateProject({
+  main: 'server.js',
+  slate: {
+    bindings: {
+      INBOX: { kind: 'agent' },
+      MODEL: { kind: 'ai' },
+      TUNED: { kind: 'ai', tier: 'fast' },
+      FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/user/notes', '/home/user/shared/'] },
+    },
+  },
+});
+
+const route = (name: string, member: string, args: JsonValue[]) => routeSlateBindingCall({
+  id: 'notes', project: routed, name,
+  request: { member, args, invocation: null },
+  chain: [],
+});
+
+test('an agent binding routes one inbox message carrying its slate id', () => {
+  expect(route('INBOX', 'send', [{ text: 'hi' }])).toEqual({ kind: 'agent', slate: 'notes', text: 'hi' });
+  expect(route('INBOX', 'send', [{ text: 'hi', data: { n: 1 } }])).toEqual({ kind: 'agent', slate: 'notes', text: 'hi', data: { n: 1 } });
+
+  expect(() => route('INBOX', 'forward', [{ text: 'hi' }])).toThrow('offers send');
+  expect(() => route('INBOX', 'send', [])).toThrow('takes one { text, data? } object');
+  expect(() => route('INBOX', 'send', ['hi'])).toThrow('takes one { text, data? } object');
+  expect(() => route('INBOX', 'send', [{ text: '' }])).toThrow('takes one { text, data? } object');
+  expect(() => route('INBOX', 'send', [{ text: 'a' }, { text: 'b' }])).toThrow('takes one { text, data? } object');
+});
+
+test('an ai binding routes one model call, and a declared tier pins it', () => {
+  expect(route('MODEL', 'run', [{ prompt: 'sum this' }])).toEqual({ kind: 'ai', prompt: 'sum this' });
+  expect(route('MODEL', 'run', [{ prompt: 'p', system: 's', tier: 'deep' }])).toEqual({ kind: 'ai', prompt: 'p', system: 's', tier: 'deep' });
+  expect(route('TUNED', 'run', [{ prompt: 'p' }])).toEqual({ kind: 'ai', prompt: 'p', tier: 'fast' });
+  // A call naming the pinned tier asks for nothing different, so it routes.
+  expect(route('TUNED', 'run', [{ prompt: 'p', tier: 'fast' }])).toEqual({ kind: 'ai', prompt: 'p', tier: 'fast' });
+
+  expect(() => route('TUNED', 'run', [{ prompt: 'p', tier: 'deep' }])).toThrow('pins tier fast');
+  expect(() => route('MODEL', 'stream', [{ prompt: 'p' }])).toThrow('offers run');
+  expect(() => route('MODEL', 'run', [])).toThrow('takes one { prompt, system?, tier? } object');
+  expect(() => route('MODEL', 'run', [{ prompt: 4 }])).toThrow('takes one { prompt, system?, tier? } object');
+});
+
+test('a path-scoped workspace binding offers only file members inside its prefixes', () => {
+  expect(route('FILES', 'readFile', ['/home/user/notes/a.md'])).toEqual({
+    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/user/notes/a.md'],
+  });
+  // The prefix itself and a trailing-slash prefix both admit.
+  expect(route('FILES', 'readdir', ['/home/user/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
+  expect(route('FILES', 'exists', ['/home/user/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });
+
+  expect(() => route('FILES', 'exec', ['/home/user/notes/a.md'])).toThrow('a path-scoped workspace binding offers only file members');
+  expect(() => route('FILES', 'readFile', ['/etc/passwd'])).toThrow('outside its prefixes: /home/user/notes, /home/user/shared/');
+  // A sibling that SHARES the prefix string is not inside it.
+  expect(() => route('FILES', 'readFile', ['/home/user/notes2/x'])).toThrow('outside its prefixes');
+  expect(() => route('FILES', 'readFile', ['/home/user/notes/../other'])).toThrow('outside its prefixes');
+  expect(() => route('FILES', 'readFile', ['relative/path'])).toThrow('outside its prefixes');
+  expect(() => route('FILES', 'readFile', [42])).toThrow('outside its prefixes');
+  expect(() => route('FILES', 'readFile', [])).toThrow('outside its prefixes');
+});
+

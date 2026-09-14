@@ -1,0 +1,64 @@
+<!doctype html>
+<!--
+  Stands in for a COMPILED slate: the gallery asks `previewSlate` for this URL
+  and the screenshot harness answers it, so the card under review is the real
+  InlineSlate frame — theme tokens, host context and the size report — while
+  the page inside is a static fixture instead of a deployed dynamic worker.
+
+  It speaks the host contract verbatim: reads `?kinu=` for the first
+  SlateHostContext, applies `styles.variables` onto :root and `data-mode` onto
+  the root element, then posts `{ kinu: 'size-changed', height }` to
+  `context.origin` on load and on resize.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; padding: 16px; font-family: system-ui, sans-serif;
+    background: var(--c-bg, #fff); color: var(--c-text, #111); }
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 12px; }
+  .choices { display: grid; gap: 8px; }
+  button { all: unset; display: block; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--c-border, #ccc); background: var(--c-fill, #f5f5f5);
+    color: var(--c-text, #111); font-size: 13px; cursor: pointer; }
+  button:hover { background: var(--c-elevated, #eee); border-color: var(--c-accent, #997700); }
+  button.primary { background: var(--c-accent, #997700); color: var(--c-accent-fg, #fff); border-color: transparent; }
+  button.cancel { color: var(--c-text-3, #888); }
+</style>
+</head>
+<body>
+<h1>Release target</h1>
+<div class="choices">
+  <button class="primary" type="button">Staging</button>
+  <button type="button">Production</button>
+  <button class="cancel" type="button">Cancel</button>
+</div>
+<script>
+  const context = (() => {
+    try { return JSON.parse(new URLSearchParams(location.search).get("kinu") ?? "null"); }
+    catch { return null; }
+  })();
+
+  if (context !== null && typeof context === "object") {
+    const variables = context.styles?.variables ?? {};
+
+    for (const [name, value] of Object.entries(variables)) {
+      if (name.startsWith("--c-")) document.documentElement.style.setProperty(name, String(value));
+    }
+
+    if (context.theme === "dark" || context.theme === "light") {
+      document.documentElement.dataset.mode = context.theme;
+    }
+  }
+
+  const report = () => {
+    if (context === null || typeof context !== "object" || typeof context.origin !== "string") return;
+    window.parent.postMessage({ kinu: "size-changed", height: document.documentElement.scrollHeight }, context.origin);
+  };
+
+  report();
+  new ResizeObserver(report).observe(document.documentElement);
+</script>
+</body>
+</html>

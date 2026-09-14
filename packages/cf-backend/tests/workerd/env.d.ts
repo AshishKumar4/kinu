@@ -5,6 +5,7 @@
 // each other. `cloudflare:test` and `cloudflare:workers` both read
 // `Cloudflare.Env`, which is why the augmentation targets that namespace and
 // not the bare global `Env`.
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type {
   AlarmDO, GatedDO, NeighbourDO, RetentionDO, SocketDO, SteerProbeDO, StreamLifecycleDO, TransactionDO,
 } from './worker';
@@ -72,6 +73,19 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   runEventWakeFor(workspace: string, marker: string): Promise<void>;
 }
 
+interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
+  start(source?: string, bindChain?: boolean, cred?: VfsCred, browser?: string, project?: Record<string, JsonValue>): Promise<void>;
+  stop(): Promise<void>;
+  call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
+  socket(method: string, args?: JsonValue[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
+  route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;
+  artifacts(): Promise<{ application: string; client?: string; shell?: string }>;
+  paths(): Promise<{ kinuInSlateRoot: boolean; entries: string[] }>;
+  compileProbe(source: string, cred?: VfsCred): Promise<{ ok?: boolean; code?: string; detail?: string }>;
+  seedPrivateSource(): Promise<void>;
+  seedGroupSource(): Promise<void>;
+  readPrivateSourceAsAgent(): Promise<{ content?: string; error?: string }>;
+}
 
 declare global {
   namespace Cloudflare {
@@ -99,7 +113,7 @@ declare global {
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
-      SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
+      SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeRpc>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;

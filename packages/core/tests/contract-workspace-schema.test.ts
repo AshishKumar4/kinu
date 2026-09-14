@@ -130,7 +130,7 @@ const ROOT_ONLY_TABLES = [
   'slate_content', 'slate_content_chunks', 'slate_deployment_reservations',
   'slate_deployments', 'slate_invocations', 'slate_previews', 'slate_publications',
   'slate_receipts', 'slate_resource_reservations', 'slate_resources',
-  'slate_share_users', 'slate_shares', 'slate_versions',
+  'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
   'slates', 'workspace_actors', 'workspace_identity',
 ];
 

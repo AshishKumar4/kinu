@@ -6,6 +6,7 @@
 // runner — `bun:test`'s, which throws if called under any other.
 import { afterAll } from 'bun:test';
 
+import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
 
 afterAll(release);
@@ -76,5 +77,21 @@ Bun.plugin({
       },
       loader: 'object',
     }));
+  },
+});
+
+// The slate vendor bundle under bun test: the same `virtual:kinu-slate-vendor`
+// module the Vite plugin serves in dev/build/vitest, resolved here through
+// the package's own `buildSlateVendor` so bun tests measure the real bytes.
+Bun.plugin({
+  name: 'kinu-slate-vendor-for-bun-test',
+  setup(build) {
+    let vendor: ReturnType<typeof buildSlateVendor> | undefined;
+
+    build.module('virtual:kinu-slate-vendor', () => {
+      vendor ??= buildSlateVendor();
+
+      return { exports: { default: vendor }, loader: 'object' };
+    });
   },
 });

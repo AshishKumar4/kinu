@@ -30,9 +30,11 @@ export const BINDING_KIND_LABEL: Record<SlateBindingKind, string> = {
   memory: "Workspace memory",
   tasks: "Workspace tasks",
   web: "Web access",
+  agent: "Your agent",
+  ai: "Model inference",
 };
 
-const KIND_ORDER: readonly SlateBindingKind[] = ["mcp", "tool", "namespace", "app", "web", "memory", "tasks", "rpc"];
+const KIND_ORDER: readonly SlateBindingKind[] = ["mcp", "tool", "namespace", "app", "ai", "agent", "web", "memory", "tasks", "rpc"];
 
 /** Declared bindings grouped by kind, in a fixed order, empty kinds omitted. */
 function bindingsByKind(bindings: readonly SlateBindingDeclaration[]): Array<{ kind: SlateBindingKind; bindings: SlateBindingDeclaration[] }> {

@@ -464,6 +464,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     slate_content_chunks: EVERYWHERE,
     slate_invocations: EVERYWHERE,
     slate_receipts: EVERYWHERE,
+    // The authored slate's durable KV — the `this.storage` surface — lives in
+    // the workspace object's database beside the slate's own rows, so every
+    // root that can host a slate must declare it.
+    slate_state: EVERYWHERE,
     // Ownership grants on a published slate — the recipient roster a share
     // names and revokes. Shared schema like the publication tables above: every
     // root carries the row so a subordinate reading a share sees the same

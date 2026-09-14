@@ -13,7 +13,7 @@
  *   bun run scripts/screenshot-gallery.ts --desktop forks chat
  */
 
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Browser } from 'puppeteer';
 
@@ -95,6 +95,23 @@ async function shoot(
   const failures: string[] = [];
   page.on('pageerror', (err) => failures.push(String(err)));
   page.on('console', (msg) => { if (msg.type() === 'error') failures.push(msg.text()); });
+  // The gallery's preview URLs live on a suffix no server answers — they are
+  // where SlateFrame/InlineSlate point. Answer them with the static fixture
+  // standing in for a compiled slate, so what gets photographed is the real
+  // frame treatment (chrome, theme tokens, reported height), not an error page.
+  await page.setRequestInterception(true);
+  page.on('request', async (request) => {
+    if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) {
+      await request.continue();
+
+      return;
+    }
+
+    await request.respond({
+      status: 200, contentType: 'text/html',
+      body: readFileSync(join(REPO, 'scripts/fixtures/gallery-slate/choice-card.html'), 'utf8'),
+    });
+  });
 
   // A background tab is served no animation frames, so a page that reveals
   // itself over rAF would be photographed at beat zero. Front first, then let

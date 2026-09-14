@@ -3,8 +3,11 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity, subordinateAgentName, nativeToolFunctions,
+  createProviderRegistry, openWorkspaceMainActor, RunEventRecorder, WORKSPACE_RUN_ID,
   type JsonValue, type SlateCallResult,
 } from '@kinu.run/core';
+import { sqlOver } from '@kinu.run/test-utils';
+import { MockLanguageModelV3 } from 'ai/test';
 import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
@@ -365,8 +368,10 @@ test('a slate cannot bind the agent, delegate through a tool alias, or widen a p
   }));
 
   const call = (member: string, args: JsonValue[] = []) => actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'limited', 'CAP', { member, args, invocation: null });
+  // The agent binding is the inbox, not a delegation surface: `hire` is not
+  // a member it offers.
   await bind({ kind: 'agent' });
-  expect(await call('hire')).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(await call('hire')).toMatchObject({ ok: false, reason: 'denied' });
   await bind({ kind: 'tool', name: 'agents' });
   expect(await call('call', [{ action: 'hire', role: 'task', mission: 'should not run' }])).toMatchObject({ ok: true, value: { success: false, reason: 'denied' } });
 
@@ -502,4 +507,136 @@ test('a command the approval ladder stops answers every surface with its class, 
   const failed = await binding('printf ran > ' + marker + '; exit 1');
   expect(failed).toMatchObject({ ok: false, reason: 'io' });
   expect(await files.readFile(marker, { encoding: 'utf8' })).toBe('ran');
+});
+
+test('the reserved __storage binding answers the slate\'s own durable KV, per slate and within bounds', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/self-store', { recursive: true });
+  await files.writeFile('/home/user/slates/self-store/package.json', JSON.stringify({ main: 'server.ts' }));
+  await files.mkdir('/home/user/slates/peer-store', { recursive: true });
+  await files.writeFile('/home/user/slates/peer-store/package.json', JSON.stringify({ main: 'server.ts' }));
+
+  const storage = (id: string, member: string, args: JsonValue[] = []) =>
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, id, '__storage', { member, args, invocation: null });
+
+  expect(await storage('self-store', 'get', ['k'])).toEqual({ ok: true, value: null });
+  expect(await storage('self-store', 'put', ['k', { n: 1 }])).toEqual({ ok: true, value: null });
+  expect(await storage('self-store', 'get', ['k'])).toEqual({ ok: true, value: { value: { n: 1 } } });
+  expect(await storage('peer-store', 'get', ['k'])).toEqual({ ok: true, value: null });
+  expect(await storage('self-store', 'list', [{ prefix: 'k' }])).toEqual({ ok: true, value: [['k', { n: 1 }]] });
+  expect(await storage('self-store', 'delete', ['k'])).toEqual({ ok: true, value: true });
+  expect(await storage('self-store', 'delete', ['k'])).toEqual({ ok: true, value: false });
+  expect(await storage('self-store', 'list')).toEqual({ ok: true, value: [] });
+
+  expect(await storage('self-store', 'get', [])).toMatchObject({ ok: false, reason: 'bad_input' });
+  expect(await storage('self-store', 'nope', [])).toMatchObject({ ok: false, reason: 'denied' });
+
+  const planning: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
+
+  expect(await actor.agent.slateBindingCallAs(planning, 'self-store', '__storage', { member: 'get', args: ['k'], invocation: null }))
+    .toMatchObject({ ok: true });
+  expect(await actor.agent.slateBindingCallAs(planning, 'self-store', '__storage', { member: 'put', args: ['k', 1], invocation: null }))
+    .toMatchObject({ ok: false, reason: 'denied' });
+});
+
+test('a slate agent binding delivers one inbox signal naming the slate', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/pager', { recursive: true });
+  await files.writeFile('/home/user/slates/pager/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { AGENT: { kind: 'agent' } } },
+  }));
+
+  const delivered: Array<{ kind: string; text: string; metadata?: unknown }> = [];
+
+  actor.agent.harnessSetSignalDeliverer(async (signal) => {
+    delivered.push(signal);
+
+    return 'queued';
+  });
+
+  const call = (args: JsonValue[]) =>
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'pager', 'AGENT', { member: 'send', args, invocation: null });
+
+  expect(await call([{ text: 'done', data: { count: 2 } }])).toEqual({ ok: true, value: { outcome: 'queued' } });
+  expect(delivered).toEqual([{ kind: 'slate', text: 'Slate pager: done', metadata: { slate: 'pager', data: { count: 2 } } }]);
+
+  // A hosted caller holds no inbox of its own: the refusal says where the
+  // route belongs rather than failing on a mechanism.
+  const child = await hostedSubordinateHarness(actor, {
+    name: 'pager-1', displayName: 'Pager', nameOrigin: 'user', roleId: 'task', mission: 'Page',
+  });
+
+  const asChild = await childCaller(actor.db, subordinateAgentName(child.actor.handle.storageKey), 'pager-1');
+
+  expect(await actor.agent.slateBindingCallAs(asChild, 'pager', 'AGENT', { member: 'send', args: [{ text: 'x' }], invocation: null }))
+    .toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('no inbox of its own') });
+});
+
+test('a slate ai binding runs one model call under the caller authority, as a slate spend row', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/thinker', { recursive: true });
+  await files.writeFile('/home/user/slates/thinker/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { MODEL: { kind: 'ai' } } },
+  }));
+
+  const seen: string[] = [];
+
+  actor.agent.overrideProviderRegistry({
+    registry: createProviderRegistry(),
+    deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
+    resolveModel: (spec) => {
+      seen.push(spec);
+
+      return new MockLanguageModelV3({
+        doGenerate: async () => ({
+          content: [{ type: 'text' as const, text: 'model answer' }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
+          usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 4, text: 4, reasoning: undefined } },
+          warnings: [],
+        }),
+      });
+    },
+    normalizeSpecSync: (spec) => spec ?? 'test/model',
+  });
+
+  const call = (args: JsonValue[]) =>
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'thinker', 'MODEL', { member: 'run', args, invocation: null });
+
+  const answer = await call([{ prompt: 'summarize', system: 'be brief' }]);
+
+  expect(answer).toEqual({ ok: true, value: { text: 'model answer', model: DEFAULT_WORKERS_AI_MODEL_SPEC, tier: 'default', usage: { input: 9, output: 4 } } });
+
+  expect(seen).toEqual([DEFAULT_WORKERS_AI_MODEL_SPEC]);
+
+  const operations = new RunEventRecorder(sqlOver(actor.db), openWorkspaceMainActor(sqlOver(actor.db)))
+    .read(WORKSPACE_RUN_ID)
+    .flatMap((event) => (event.type === 'model_operation' ? [event] : []));
+
+  expect(operations.map((row) => row.source)).toEqual(['slate', 'slate']);
+  expect(operations.map((row) => row.phase)).toEqual(['start', 'end']);
+
+  // A tier the catalog never published is bad input, not an io failure.
+  expect(await call([{ prompt: 'p', tier: 'imaginary' }])).toMatchObject({ ok: false, reason: 'bad_input' });
+});
+
+test('a path-scoped workspace binding reaches inside its prefixes and nowhere else', async () => {
+  const actor = orchestratorHarness();
+  const files = actor.agent.observeRuntime().storage.vfs;
+  await files.mkdir('/home/user/slates/warden', { recursive: true });
+  await files.writeFile('/home/user/slates/warden/package.json', JSON.stringify({
+    main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/user/allowed'] } } },
+  }));
+  await files.mkdir('/home/user/allowed', { recursive: true });
+  await files.writeFile('/home/user/allowed/ok.md', 'in');
+  await files.writeFile('/home/user/secret.md', 'out');
+
+  const call = (member: string, args: JsonValue[]) =>
+    actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'warden', 'FILES', { member, args, invocation: null });
+
+  expect(await call('readFile', ['/home/user/allowed/ok.md'])).toEqual({ ok: true, value: 'in' });
+  expect(await call('readFile', ['/home/user/secret.md'])).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('/home/user/allowed') });
+  expect(await call('exec', ['ls'])).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('only file members') });
 });

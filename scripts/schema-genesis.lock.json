@@ -983,6 +983,12 @@
     "created_at",
     "revoked_at"
   ],
+  "slate_state@packages/core/src/slates/state.ts": [
+    "slate_id",
+    "key",
+    "value",
+    "updated_at"
+  ],
   "slate_versions@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",

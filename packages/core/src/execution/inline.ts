@@ -29,7 +29,6 @@ import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episod
 import { admitCraftedSource } from '../craft/source';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution';
 import { SlateOperationSchema, requireSlateWorkMode, type SlateOperation, type SlateCallResult } from '../slates/rpc';
-import { SLATE_READ_MODELS } from '../slates/read-models';
 import { currentWorkMode } from './work-mode';
 import { TOOL_REACH } from '../tools/registry';
 import { createFileDispatcher } from '../tools/file-tool';
@@ -546,30 +545,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: string, description: string, code: string
   ): Promise<{ ok: true; name: string; action: 'created' | 'updated' } | Refusal>;
   ${slate === undefined ? '' : `/**
-   * Prefer a slate for dashboards, live-data views and workspace UI; use a full app
-   * toolchain when the user asks for a standalone, ship-ready web application.
-   * A slate is /home/user/slates/<id>/package.json and an authored JS/TS tree.
-   * package.json main names a Worker module exporting default { fetch(request, env) }.
-   * The strict slate field declares {title?,port?,runtime?:'worker',bindings?:Record<NAME,Binding>}.
-   * Binding = {kind:'namespace',namespace:string,members?:string[]}
-   *         | {kind:'rpc',methods:string[]} // read models: ${SLATE_READ_MODELS.join(', ')}
-   *         | {kind:'mcp',server:string,tools?:string[]}
-   *         | {kind:'app',id:string}
-   *         | {kind:'tool',name:string} // native or crafted: env.NAME.call(input)
-   *         | {kind:'memory'|'tasks'|'web',members?:string[]} // the codemode projections.
-   * A binding passes YOUR capability into env.NAME.member(...args), gated exactly as your own call.
-   * Tool and projection failures resolve to {success:false,reason,error}; successes are unchanged.
-   * A slate cannot bind agent or agents: live apps do not delegate or steer their caller.
-   * Serve UI from fetch; app calls POST a JSON argument array to /<method> and receive JSON.
-   * Call workspace.slate({op:"preview",id}) directly to compile and boot the Worker.
-   * This does not use workspace node; no node import precheck or commit is needed.
-   * On success read value.url. On refusal inspect reason/error and fix that cause.
-   * Keep durable application data in admitted bindings, not process memory.
-   * A preview boots on demand and its running process is never durable. Commit freezes source;
-   * fork copies a committed version; restore changes source, not deployment history.
+   * A slate is an authored class with a React client, previewed and called through this operation. Read the built-in skill \`slates\` before authoring one. Commit freezes source; fork copies a committed version; restore changes source, not history.
    */
   type SlateValue = null | boolean | number | string | SlateValue[] | { [key: string]: SlateValue };
-  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number } } | Refusal>;
+  function slate(input: { op: 'preview'; id: string }): Promise<{ ok: true; value: { url: string; port: number; inline: { height: number } } } | Refusal>;
   function slate(input:
     | { op: 'list' }
     | { op: 'commit' | 'history'; id: string }
