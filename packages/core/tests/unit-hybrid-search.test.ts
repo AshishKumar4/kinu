@@ -3,6 +3,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { createTestFactsStore } from '@kinu.run/test-utils';
 import {
   hybridSearch,
   memorySnippetRehydrator,
@@ -196,5 +197,69 @@ describe('hybridSearch', () => {
     await expect(rehydrate(hit)).rejects.toThrow('transient read');
     await expect(rehydrate(hit)).resolves.toBe('line1');
     expect(calls).toBe(2);
+  });
+
+  test('a remembered fact surfaces as a fact-source hit, labelled by its key', async () => {
+    const { facts } = createTestFactsStore();
+    facts.upsert('deploy.target', 'staging');
+
+    const out = await hybridSearch('deploy target', lexicalFn, vectorStore(semanticCorpus), { facts });
+
+    const hit = out.find((h) => h.id === 'fact:deploy.target');
+
+    expect(hit).toBeDefined();
+    expect(hit!.sources).toEqual(['fact']);
+    expect(hit!.label).toBe('fact: deploy.target');
+    expect(hit!.snippet).toBe('staging');
+  });
+
+  test('a fact hit never reaches the rehydrator — it carries its own text', async () => {
+    const { facts } = createTestFactsStore();
+    facts.upsert('user.tz', 'UTC');
+
+    let reads = 0;
+
+    const rehydrate = async () => {
+      reads++;
+
+      return 'should not run';
+    };
+
+    const out = await hybridSearch('user tz', async () => [], createNoopVectorStore(), { facts, rehydrate });
+
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe('fact:user.tz');
+    expect(out[0].snippet).toBe('UTC');
+    expect(reads).toBe(0);
+  });
+
+  test('the fact arm degrades like the lexical one when the store throws', async () => {
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
+
+    try {
+      const brokenFacts = {
+        upsert: () => 'created' as const,
+        recall: () => null,
+        forget: () => {},
+        recentTopK: () => [],
+        all: () => { throw new Error('facts table gone'); },
+      };
+
+      const out = await hybridSearch('q', lexicalFn, createNoopVectorStore(), { facts: brokenFacts });
+
+      expect(out.length).toBe(lexicalCorpus.length);
+      expect(out.every((h) => h.sources.includes('lexical'))).toBe(true);
+      expect(log.emitted.some((line) => line.event === 'memory.fact_search_failed')).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test('with no FactsStore wired nothing about the merge changes', async () => {
+    const out = await hybridSearch('whatever', lexicalFn, vectorStore(semanticCorpus));
+    expect(out[0].id).toBe('shared');
+    expect(out.every((h) => !h.sources.includes('fact'))).toBe(true);
+    expect(out.every((h) => h.label === undefined)).toBe(true);
   });
 });
