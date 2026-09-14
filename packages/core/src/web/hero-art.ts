@@ -20,6 +20,9 @@ export const STROKE_STRIDE = 12;
 /** Seven fields and one pad, so a node is two vec4 attributes on the GPU. */
 export const NODE_STRIDE = 8;
 
+/** A pulse is four vec4 attributes: the curve it rides, its span on it, its look, and its identity. */
+export const PULSE_STRIDE = 16;
+
 /** How far the pointer may displace a tip, in view width units. */
 const MAX_BEND = 0.028;
 
@@ -77,6 +80,22 @@ interface Branch {
   outCy: number;
   outX1: number;
   outY1: number;
+}
+
+/** Information moving along the tree: a bright head with a soft tail,
+ *  travelling one edge at a time. Forward from the seed toward the tips,
+ *  the way attempts are made; back from a scored tip toward the seed,
+ *  the way a score returns, rarer and dimmer. */
+interface Pulse {
+  readonly id: number;
+  readonly layer: number;
+  /** The branch whose curve the pulse is on. */
+  edge: number;
+  /** Where the head is along the edge, 0 at the parent's tip, 1 at this one. */
+  head: number;
+  /** +1 toward the tip, -1 toward the seed. */
+  readonly direction: 1 | -1;
+  readonly strength: number;
 }
 
 interface Spark {
@@ -167,6 +186,35 @@ const LOOK_RATE = 4;
 
 const BEND_RATE = 7;
 
+/** A pulse moves this far along the tree per second, in view width units. */
+const PULSE_SPEED = 0.24;
+
+/** The tail behind a pulse's head, in view width units. */
+const PULSE_TAIL = 0.05;
+
+/** Seconds between pulses leaving the foreground seed; the far layers scale it by their growth. */
+const PULSE_SECONDS = 1.3;
+
+/** At a branch point a pulse takes one live child; this often it also sends a second down another. */
+const PULSE_FORK = 0.3;
+
+/** How often a tip that has just been scored sends its result back to the seed. */
+const PULSE_RETURN = 0.04;
+
+/** Pulses alive at once in one layer, so a busy generation stays a hum. */
+const PULSE_CAP = 22;
+
+/** A pulse is brighter than the branch it rides: that branch's drawn alpha
+ *  lifted by PULSE_LIFT, never under PULSE_FLOOR of the layer's alpha, never
+ *  over PULSE_CEILING. A returning score is PULSE_RETURN_DIM of that. */
+const PULSE_LIFT = 1.6;
+
+const PULSE_FLOOR = 0.35;
+
+const PULSE_CEILING = 0.85;
+
+const PULSE_RETURN_DIM = 0.6;
+
 const Y_MIN = 0.07;
 
 const Y_MAX = 0.93;
@@ -188,6 +236,8 @@ interface LayerState {
   offsetTarget: number;
   /** The camera's speed, view widths per second. */
   velocity: number;
+  /** When the seed next sends a pulse. */
+  pulseAt: number;
   generationStart: number;
   regrowAt: number;
   bestId: number;
@@ -202,6 +252,11 @@ export interface SearchTreeFrame {
   /** `nodeCount` points of NODE_STRIDE floats: x y radius glow tone alpha layer pad. */
   readonly nodes: Float32Array<ArrayBuffer>;
   readonly nodeCount: number;
+  /** `pulseCount` pulses of PULSE_STRIDE floats: x0 y0 cx cy | x1 y1 tail head | width glow tone alpha | id layer direction pad.
+   *  The curve is the edge's whole quadratic in view units; the pulse occupies
+   *  it from `tail` to `head` (either may be the larger), bright at the head. */
+  readonly pulses: Float32Array<ArrayBuffer>;
+  readonly pulseCount: number;
   readonly time: number;
   readonly generation: number;
   /** Cumulative branches the search pruned, foreground layer. */
@@ -280,6 +335,10 @@ export class SearchTree {
 
   private readonly sparks: Spark[] = [];
 
+  private readonly pulses: Pulse[] = [];
+
+  private nextPulseId = 1;
+
   private aspect: number;
 
   private nextId = 1;
@@ -303,6 +362,8 @@ export class SearchTree {
   private strokes = new Float32Array(new ArrayBuffer(4 * STROKE_STRIDE * 512));
 
   private nodes = new Float32Array(new ArrayBuffer(4 * NODE_STRIDE * 256));
+
+  private pulseData = new Float32Array(new ArrayBuffer(4 * PULSE_STRIDE * 128));
 
   constructor(options: SearchTreeOptions) {
     this.aspect = options.aspect;
@@ -361,7 +422,8 @@ export class SearchTree {
     return [...layer.branches.values()].map((branch) => ({ id: branch.id, phase: branch.phase, value: branch.value, age: branch.phaseAge }));
   }
 
-  /** Plant a new attempt at the frontier tip nearest the given view point. */
+  /** Plant a new attempt at the live tip nearest the given view point; a
+   *  tip with nothing growing from it yet is preferred over a branch point. */
   plant(x: number, y: number): void {
     const layer = this.layers[0];
 
@@ -370,8 +432,8 @@ export class SearchTree {
     let nearestDistance = Number.POSITIVE_INFINITY;
 
     for (const branch of layer.branches.values()) {
-      if (branch.phase !== 'alive' || branch.liveChildren > 0) continue;
-      const distance = this.distance(branch.x1 - layer.offset, branch.y1, x, y);
+      if (branch.phase !== 'alive') continue;
+      const distance = this.distance(branch.x1 - layer.offset, branch.y1, x, y) + (branch.liveChildren > 0 ? 0.25 : 0);
 
       if (distance < nearestDistance) {
         nearestDistance = distance;
@@ -397,6 +459,7 @@ export class SearchTree {
 
     for (const layer of this.layers) this.stepLayer(layer, dt);
     this.stepSparks(dt);
+    this.stepPulses(dt);
   }
 
   frame(): SearchTreeFrame {
@@ -457,6 +520,8 @@ export class SearchTree {
       count,
       nodes: this.nodes,
       nodeCount,
+      pulses: this.pulseData,
+      pulseCount: this.framePulses(),
       time: this.elapsed,
       generation: this.generation,
       pruned: foreground?.pruned ?? 0,
@@ -572,6 +637,7 @@ export class SearchTree {
       offset: 0,
       offsetTarget: 0,
       velocity: 0,
+      pulseAt: 0.9 * (index + 1),
       generationStart: 0,
       regrowAt: -1,
       bestId: id,
@@ -594,6 +660,7 @@ export class SearchTree {
           branch.phase = 'alive';
           branch.phaseAge = 0;
           branch.spawnAt = this.elapsed + 0.2 + 0.45 * layer.random();
+          this.scored(layer, branch);
         }
       }
 
@@ -976,6 +1043,157 @@ export class SearchTree {
       const pick = ancestors.splice(Math.floor(layer.random() * ancestors.length), 1)[0];
 
       if (pick !== undefined) this.spawn(layer, pick, (layer.random() - 0.5) * 1.6, 1);
+    }
+  }
+
+  /** Write every pulse after the strokes have their view coordinates. */
+  private framePulses(): number {
+    let count = 0;
+
+    for (const pulse of this.pulses) {
+      const layer = this.layers[pulse.layer];
+      const edge = layer?.branches.get(pulse.edge);
+
+      if (layer === undefined || edge === undefined) continue;
+      const span = PULSE_TAIL / Math.max(1e-6, this.distance(edge.x0, edge.y0, edge.x1, edge.y1));
+      const tail = clamp(pulse.head - pulse.direction * span, 0, 1);
+      const grown = easeGrowth(edge.progress);
+      const recede = clamp((edge.outX1 + 0.04) / HISTORY_X, 0, 1);
+      const ride = clamp(edge.alpha + edge.boost * 0.3, 0, 1) * layer.rules.alpha * recede;
+      const lifted = clamp(ride * PULSE_LIFT, PULSE_FLOOR * layer.rules.alpha * recede, PULSE_CEILING);
+      const alpha = lifted * pulse.strength * (pulse.direction > 0 ? 1 : PULSE_RETURN_DIM);
+
+      if (alpha <= 0.004 || Math.max(tail, pulse.head) > grown + 1e-6) continue;
+
+      if ((count + 1) * PULSE_STRIDE > this.pulseData.length) {
+        const wider = new Float32Array(new ArrayBuffer(this.pulseData.byteLength * 2));
+        wider.set(this.pulseData);
+        this.pulseData = wider;
+      }
+
+      const at = count * PULSE_STRIDE;
+      const data = this.pulseData;
+      data[at] = edge.outX0;
+      data[at + 1] = edge.outY0;
+      data[at + 2] = edge.outCx;
+      data[at + 3] = edge.outCy;
+      data[at + 4] = edge.outX1;
+      data[at + 5] = edge.outY1;
+      data[at + 6] = tail;
+      data[at + 7] = pulse.head;
+      data[at + 8] = edge.width * 1.15;
+      data[at + 9] = pulse.direction > 0 ? 0.9 : 0.6;
+      data[at + 10] = pulse.direction > 0 ? TONE_BRIGHT : TONE_ACCENT;
+      data[at + 11] = alpha;
+      data[at + 12] = pulse.id;
+      data[at + 13] = pulse.layer;
+      data[at + 14] = pulse.direction;
+      data[at + 15] = 0;
+      count += 1;
+    }
+
+    return count;
+  }
+
+  private livePulses(layerIndex: number): number {
+    let count = 0;
+
+    for (const pulse of this.pulses) if (pulse.layer === layerIndex) count += 1;
+
+    return count;
+  }
+
+  private sendPulse(edge: Branch, direction: 1 | -1, head: number, strength: number): void {
+    if (this.livePulses(edge.layer) >= PULSE_CAP) return;
+    this.pulses.push({ id: this.nextPulseId++, layer: edge.layer, edge: edge.id, head, direction, strength });
+  }
+
+  /** A tip has just been scored: sometimes its result travels back to the seed. */
+  private scored(layer: LayerState, branch: Branch): void {
+    if (layer.random() < PULSE_RETURN) this.sendPulse(branch, -1, 1, 0.8 + 0.2 * layer.random());
+  }
+
+  /** The live children of a branch a pulse may continue into, the kept one first. */
+  private waysOn(layer: LayerState, branch: Branch): Branch[] {
+    const ways: Branch[] = [];
+
+    for (const child of layer.branches.values()) {
+      if (child.parent !== branch.id || (child.phase !== 'growing' && child.phase !== 'alive')) continue;
+
+      if (child.onPath) ways.unshift(child);
+      else ways.push(child);
+    }
+
+    return ways;
+  }
+
+  /** A forward pulse at a tip: on into a live child, forking now and then, or out at a leaf. */
+  private advance(layer: LayerState, pulse: Pulse, overshoot: number): boolean {
+    const edge = layer.branches.get(pulse.edge);
+
+    if (edge === undefined) return false;
+    const ways = this.waysOn(layer, edge);
+    const next = ways[Math.floor(layer.random() * ways.length)];
+
+    if (next === undefined) return false;
+
+    if (ways.length > 1 && layer.random() < PULSE_FORK) {
+      const other = ways.find((way) => way.id !== next.id);
+
+      if (other !== undefined) this.sendPulse(other, 1, 0, 0.85);
+    }
+
+    pulse.edge = next.id;
+    pulse.head = overshoot / Math.max(1e-6, this.distance(next.x0, next.y0, next.x1, next.y1));
+
+    return true;
+  }
+
+  /** A returning pulse at a parent's tip: on into the parent, or out at the seed. */
+  private retreat(layer: LayerState, pulse: Pulse, overshoot: number): boolean {
+    const edge = layer.branches.get(pulse.edge);
+    const parent = edge === undefined ? undefined : layer.branches.get(edge.parent);
+
+    if (parent === undefined || parent.parent < 0) return false;
+    pulse.edge = parent.id;
+    pulse.head = 1 - overshoot / Math.max(1e-6, this.distance(parent.x0, parent.y0, parent.x1, parent.y1));
+
+    return true;
+  }
+
+  private stepPulses(dt: number): void {
+    for (const layer of this.layers) {
+      if (this.elapsed < layer.pulseAt) continue;
+      layer.pulseAt = this.elapsed + PULSE_SECONDS * (layer.rules.growthSeconds / 1.15) * (0.7 + 0.6 * layer.random());
+      const root = [...layer.branches.values()].find((branch) => branch.parent < 0);
+      const ways = root === undefined ? [] : this.waysOn(layer, root);
+      const first = ways[Math.floor(layer.random() * ways.length)];
+
+      if (first !== undefined) this.sendPulse(first, 1, 0, 1);
+    }
+
+    for (let index = this.pulses.length - 1; index >= 0; index -= 1) {
+      const pulse = this.pulses[index];
+      const layer = pulse === undefined ? undefined : this.layers[pulse.layer];
+      const edge = layer?.branches.get(pulse?.edge ?? -1);
+
+      if (pulse === undefined || layer === undefined || edge === undefined || (edge.phase !== 'growing' && edge.phase !== 'alive')) {
+        this.pulses.splice(index, 1);
+        continue;
+      }
+
+      const length = Math.max(1e-6, this.distance(edge.x0, edge.y0, edge.x1, edge.y1));
+      const speed = PULSE_SPEED * layer.rules.stepLength / 0.062;
+      pulse.head += pulse.direction * speed * dt / length;
+      let alive = true;
+
+      if (pulse.direction > 0 && pulse.head >= easeGrowth(edge.progress)) {
+        alive = edge.phase === 'alive' && this.advance(layer, pulse, (pulse.head - 1) * length);
+      } else if (pulse.direction < 0 && pulse.head <= 0) {
+        alive = this.retreat(layer, pulse, -pulse.head * length);
+      }
+
+      if (!alive) this.pulses.splice(index, 1);
     }
   }
 

@@ -7,8 +7,8 @@
  */
 
 import {
-  cssRgba, NODE_STRIDE, RECESS, seededRandom, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
-  type HeroPalette, type Rgb, type SearchTreeRenderer,
+  cssRgba, NODE_STRIDE, PULSE_STRIDE, RECESS, seededRandom, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT,
+  TONE_EMBER, type HeroPalette, type Rgb, type SearchTreeRenderer,
 } from './hero-art';
 
 /**
@@ -30,6 +30,7 @@ export interface StrokeSurface {
   arc(x: number, y: number, radius: number, startAngle: number, endAngle: number): void;
   stroke(): void;
   fill(): void;
+  createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient;
 }
 
 function mix(from: Rgb, to: Rgb, amount: number): Rgb {
@@ -89,6 +90,34 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Her
     context.quadraticCurveTo(qx, qy, qx + (rx - qx) * t, qy + (ry - qy) * t);
   };
 
+  // The stretch of an edge's curve a pulse lights, tail to head: B(t) read at
+  // either end, the control point from the quadratic's blossom. The t values
+  // may run either way — a returning pulse has tail past head.
+  const span = (pulses: Float32Array, at: number): readonly [number, number, number, number, number, number] => {
+    const x0 = (pulses[at] ?? 0) * width;
+    const y0 = (pulses[at + 1] ?? 0) * height;
+    const cx = (pulses[at + 2] ?? 0) * width;
+    const cy = (pulses[at + 3] ?? 0) * height;
+    const x1 = (pulses[at + 4] ?? 0) * width;
+    const y1 = (pulses[at + 5] ?? 0) * height;
+    const tail = pulses[at + 6] ?? 0;
+    const head = pulses[at + 7] ?? 1;
+
+    const point = (t: number): readonly [number, number] => {
+      const u = 1 - t;
+
+      return [u * u * x0 + 2 * u * t * cx + t * t * x1, u * u * y0 + 2 * u * t * cy + t * t * y1];
+    };
+
+    const [qx, qy] = point(tail);
+    const [rx, ry] = point(head);
+    const ux = (1 - tail) * (1 - head);
+    const vx = (1 - tail) * head + tail * (1 - head);
+    const wx = tail * head;
+
+    return [qx, qy, ux * x0 + vx * cx + wx * x1, ux * y0 + vx * cy + wx * y1, rx, ry];
+  };
+
   return {
     kind: 'canvas',
     resize(nextWidth, nextHeight, nextRatio) {
@@ -104,7 +133,7 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Her
       context.clearRect(0, 0, width, height);
       context.lineCap = 'round';
       context.globalAlpha = 1;
-      const { strokes, nodes } = frame;
+      const { strokes, nodes, pulses } = frame;
 
       for (let index = 0; index < frame.count; index += 1) {
         const at = index * STROKE_STRIDE;
@@ -126,6 +155,40 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Her
         curve(strokes, at);
         context.lineWidth = lineWidth;
         context.strokeStyle = cssRgba(color, alpha * (0.6 + 0.4 * glow));
+        context.stroke();
+      }
+
+      for (let index = 0; index < frame.pulseCount; index += 1) {
+        const at = index * PULSE_STRIDE;
+        const lineWidth = pulses[at + 8] ?? 1;
+        const glow = pulses[at + 9] ?? 0;
+        const tone = pulses[at + 10] ?? 0;
+        const alpha = pulses[at + 11] ?? 0;
+
+        if (alpha <= 0.004 || (pulses[at + 6] ?? 0) === (pulses[at + 7] ?? 0)) continue;
+        const color = recede(palette, mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6));
+        const [x0, y0, cx, cy, x1, y1] = span(pulses, at);
+
+        if (glow > 0.55) {
+          const halo = context.createLinearGradient(x0, y0, x1, y1);
+          halo.addColorStop(0, cssRgba(color, 0));
+          halo.addColorStop(1, cssRgba(color, alpha * 0.14 * glow));
+          context.beginPath();
+          context.moveTo(x0, y0);
+          context.quadraticCurveTo(cx, cy, x1, y1);
+          context.lineWidth = lineWidth * 3.2;
+          context.strokeStyle = halo;
+          context.stroke();
+        }
+
+        const beam = context.createLinearGradient(x0, y0, x1, y1);
+        beam.addColorStop(0, cssRgba(color, 0));
+        beam.addColorStop(1, cssRgba(color, alpha));
+        context.beginPath();
+        context.moveTo(x0, y0);
+        context.quadraticCurveTo(cx, cy, x1, y1);
+        context.lineWidth = lineWidth;
+        context.strokeStyle = beam;
         context.stroke();
       }
 
