@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-13",
-  "files": 2217,
-  "functions": 55264,
+  "measuredAt": "2026-09-14",
+  "files": 2232,
+  "functions": 55554,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -216,10 +216,6 @@
     {
       "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 37
-    },
-    {
-      "key": "packages/cf-backend/src/actor-agent.ts#ActorAgent.beforeTurn>runOperationProfile",
-      "complexity": 36
     },
     {
       "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
