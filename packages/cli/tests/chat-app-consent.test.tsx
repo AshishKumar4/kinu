@@ -21,7 +21,7 @@ describe('inline shell approval', () => {
       const agent = fakeClient({ name: 'shell', send: async (input) => {
         sent.push(input);
 
-        return { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+        return { landed: 'turn' as const, text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
       } });
 
       const screen = await mountChat(agent.client);

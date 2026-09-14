@@ -350,7 +350,7 @@ export const AGENT_RPC_ACCESS = {
   setShellApprovalMode: 'interactive',
   setSoul: 'interactive',
   setTurnFeedback: 'interactive',
-  steerTurn: 'interactive',
+  send: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',

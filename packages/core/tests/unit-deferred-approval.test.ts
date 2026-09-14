@@ -79,7 +79,7 @@ function setup(opts: {
 
   const queue = new DeferredApprovalQueue({
     store,
-    signals: { deliver: async (signal) => {
+    inbox: { send: async (signal) => {
       delivered.push(signal);
 
       return 'queued';
@@ -132,7 +132,7 @@ describe('a gated action nobody is there to approve', () => {
 
     const queue = new DeferredApprovalQueue({
       store: new DeferredApprovalStore(sql, actor),
-      signals: { deliver: async () => 'queued' }, remember: () => {},
+      inbox: { send: async () => 'queued' }, remember: () => {},
       audit: () => { throw new Error('audit unavailable'); },
     });
 
@@ -591,7 +591,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
 
     const queue = new DeferredApprovalQueue({
       store,
-      signals: { deliver: () => Promise.reject(new Error('no host')) },
+      inbox: { send: () => Promise.reject(new Error('no host')) },
       remember: () => { throw new Error('not an always answer'); },
     });
 
@@ -628,7 +628,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     const queue = new DeferredApprovalQueue({
       store,
-      signals: { deliver: async () => 'queued' },
+      inbox: { send: async () => 'queued' },
       remember: () => { throw new Error('not an always answer'); },
       newId: () => `defer-${++seq}`,
       now: () => 1_000 + seq,

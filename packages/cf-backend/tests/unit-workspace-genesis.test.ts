@@ -7,7 +7,7 @@
 //
 // So creation delivers ONE signal through the existing seam, and that signal
 // becomes a programmatic turn. These tests drive the real path — real
-// workspaceGenesisSignal, real SignalDelivery, real BackendHost.enqueueTurn —
+// workspaceGenesisSignal, real Inbox, real BackendHost.enqueueTurn —
 // and stub only Think's saveMessages, the platform boundary where a turn starts.
 import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';

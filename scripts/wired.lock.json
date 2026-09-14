@@ -271,7 +271,6 @@
   "packages/core/src/orchestrator/turn-steering.ts#IDENTICAL_CALLS_BEFORE_STEER (unreached-export)",
   "packages/core/src/orchestrator/turn-steering.ts#STEPS_WITHOUT_PROGRESS_BEFORE_STEER (unreached-export)",
   "packages/core/src/orchestrator/turn-steering.ts#TURN_STEERING_HEADER (unreached-export)",
-  "packages/core/src/orchestrator/user-steer.ts#steerUserMessage (unreached-export)",
   "packages/core/src/plans/review.ts#MAX_PLAN_ANNOTATIONS_BYTES (unreached-export)",
   "packages/core/src/plans/review.ts#MAX_PLAN_CONTENT_BYTES (unreached-export)",
   "packages/core/src/plans/review.ts#applyPlanEdits (unreached-export)",

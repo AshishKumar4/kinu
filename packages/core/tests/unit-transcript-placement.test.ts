@@ -12,7 +12,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage } from 'ai';
-import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/user-steer';
+import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '../src/orchestrator/inbox';
 import {
   EMPTY_TRANSCRIPT_FOLD, buildTranscript, extendTranscript, sealTranscript, segmentBySteers,
   type InlineSteer, type PlacedSteer, type TranscriptPart,

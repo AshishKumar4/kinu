@@ -507,7 +507,7 @@ function ChatScene({
     syncComposerRows();
   }, [draftEditing.replace, syncComposerRows]);
 
-  /** Send (or steer) one user prompt. @path mentions (plus quoted/~ path
+  /** Send one user prompt, wherever the agent is. @path mentions (plus quoted/~ path
    *  tokens) become attachments: images and PDFs inline as file parts, other
    *  files stay path references. */
   const sendPrompt = useCallback(async (input: string) => {
@@ -535,12 +535,6 @@ function ChatScene({
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd() };
 
       if (nextTier) sendOptions.tier = nextTier;
-
-      if (steering && client.steer(payload, sendOptions)) {
-        setNextTier(null);
-
-        return;
-      }
 
       setNextTier(null);
       await client.send(payload, sendOptions);

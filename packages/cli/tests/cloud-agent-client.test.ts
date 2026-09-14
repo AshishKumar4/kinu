@@ -353,9 +353,11 @@ describe('CloudAgentClient protocol', () => {
     mock.reply(responseChunk(request.id, {}, true));
 
     const result = await turn;
-    expect(result.text).toBe('Hi there');
-    expect(result.steps).toBe(1);
-    expect(result.toolCalls).toEqual([{ name: 'memory', args: { q: 'x' }, result: 'found it', outcome: { success: true } }]);
+
+    if (result.landed !== 'turn') throw new Error('an idle workspace runs the message as its own turn');
+    expect(result.landed === 'turn' ? result.text : undefined).toBe('Hi there');
+    expect(result.landed === 'turn' ? result.steps : undefined).toBe(1);
+    expect(result.landed === 'turn' ? result.toolCalls : undefined).toEqual([{ name: 'memory', args: { q: 'x' }, result: 'found it', outcome: { success: true } }]);
     expect(events.map((event) => event.type)).toEqual([
       'turn-start', 'text-delta', 'tool-call', 'tool-result', 'step-finish', 'text-delta', 'turn-end',
     ]);
@@ -408,7 +410,7 @@ describe('CloudAgentClient protocol', () => {
     mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: 'model exploded', done: true, error: true });
 
     const result = await turn;
-    expect(result.hadError).toBe(true);
+    expect(result.landed === 'turn' ? result.hadError : undefined).toBe(true);
     expect(events.map((event) => event.type)).toEqual(['turn-start', 'error', 'turn-end']);
     expect(events.find((event) => event.type === 'error')).toMatchObject({ message: 'model exploded' });
     await client.close();
@@ -430,7 +432,7 @@ describe('CloudAgentClient protocol', () => {
     mock.reply(responseChunk(request.id, {}, true));
 
     const result = await turn;
-    expect(result.toolCalls).toEqual([{ name: 'shell', args: {}, result: 'command not found', outcome: { success: false, reason: null } }]);
+    expect(result.landed === 'turn' ? result.toolCalls : undefined).toEqual([{ name: 'shell', args: {}, result: 'command not found', outcome: { success: false, reason: null } }]);
     await client.close();
   });
 
@@ -485,7 +487,7 @@ describe('CloudAgentClient protocol', () => {
       ok: true, abortedTools: 1, deviceCommands: [{ outcome: 'terminated' }], returnedSteers: [],
     } });
     const result = await turn;
-    expect(result.text).toBe('partial ');
+    expect(result.landed === 'turn' ? result.text : undefined).toBe('partial ');
     expect(events.some((event) => event.type === 'error')).toBe(false);
     await client.close();
   });
@@ -517,7 +519,7 @@ describe('CloudAgentClient protocol', () => {
     await client.close();
   });
 
-  test('steer mid-turn submits a second chat request immediately; both turns settle in order', async () => {
+  test('a send mid-turn submits a second chat request immediately; the server answers where it landed', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
     const events: AgentClientEvent[] = [];
@@ -530,7 +532,7 @@ describe('CloudAgentClient protocol', () => {
       'first chat request',
     );
 
-    expect(client.steer('use the staging cluster instead')).toBe(true);
+    const steered = client.send('use the staging cluster instead');
 
     const second = await waitFor(() => {
       const requests = mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
@@ -541,28 +543,41 @@ describe('CloudAgentClient protocol', () => {
       return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
     }, 'steered chat request');
 
-    // The steer rides the same protocol as send: one fresh user message,
-    // delivered while the first turn is still streaming (the DO persists it
-    // immediately and serializes it on its TurnQueue).
+    // The mid-turn message rides the same protocol as any send: one fresh user
+    // message, delivered while the first turn is still streaming. The server
+    // takes it into that turn under this client's message id and answers the
+    // request with where it landed — no stream, no turn of its own.
     const messages = v.parse(ChatMessagesSchema, second.body.messages);
     expect(messages[0]!.parts).toEqual([{ type: 'text', text: 'use the staging cluster instead' }]);
     expect(second.id).not.toBe(first.id);
+    mock.reply({ ...responseChunk(second.id, {}, true), landed: 'mid-turn' });
+    await expect(steered).resolves.toEqual({ landed: 'mid-turn' });
 
-    // DO finishes turn 1, then streams the steered turn.
+    // The running turn finishes: one turn-start, one turn-end, for the turn
+    // that actually ran.
     mock.reply(responseChunk(first.id, { type: 'text-delta', delta: 'deploying' }, true));
-    mock.reply(responseChunk(second.id, { type: 'text-delta', delta: 'switched to staging' }, true));
-
-    await expect(turn).resolves.toMatchObject({ text: 'deploying' });
-    await waitFor(() => events.filter((event) => event.type === 'turn-end').length === 2 ? true : undefined, 'both turn-ends');
-    expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(2);
+    await expect(turn).resolves.toMatchObject({ landed: 'turn', text: 'deploying' });
+    expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
     await client.close();
   });
 
-  test('steer with no active turn returns false and sends nothing', async () => {
+  test('a send with no active turn is an ordinary chat request, announced as a turn', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
-    expect(client.steer('nothing running')).toBe(false);
-    expect(mock.frames).toHaveLength(0);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('nothing running');
+
+    const request = await waitFor(
+      () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
+      'chat request',
+    );
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'ran' }, true));
+    await expect(turn).resolves.toMatchObject({ landed: 'turn', text: 'ran' });
+    expect(events.filter((event) => event.type === 'turn-start')).toHaveLength(1);
     await client.close();
   });
 
@@ -681,7 +696,7 @@ describe('CloudAgentClient protocol', () => {
     await mock.close();
 
     const result = await turn;
-    expect(result.hadError).toBe(true);
+    expect(result.landed === 'turn' ? result.hadError : undefined).toBe(true);
     expect(events.find((event) => event.type === 'error')?.message)
       .toContain('Could not reconnect to resume this cloud turn');
     expect(events.filter((event) => event.type === 'turn-end')).toHaveLength(1);
@@ -908,11 +923,11 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     mock.reply({ ...responseChunk(request.id, { type: 'text-delta', delta: '' }, true), replay: true });
 
     const result = await turn;
-    expect(result.hadError).toBe(true);
+    expect(result.landed === 'turn' ? result.hadError : undefined).toBe(true);
     expect(events.some((e) => e.type === 'error' && e.message.includes('no stream to resume'))).toBe(true);
     // The partial output is kept — it is what this process really saw — but the
     // turn is NOT reported as a completed one.
-    expect(result.text).toBe('starting');
+    expect(result.landed === 'turn' ? result.text : undefined).toBe('starting');
     expect(chatRequests(mock)).toHaveLength(1);
     await client.close();
   });
@@ -934,7 +949,7 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     mock.socket().close();
 
     const result = await turn;
-    expect(result.hadError).toBe(true);
+    expect(result.landed === 'turn' ? result.hadError : undefined).toBe(true);
     expect(events.some((e) => e.type === 'error' && e.message.includes('dropped again'))).toBe(true);
     expect(chatRequests(mock)).toHaveLength(1);
     expect(request.id).toBeTruthy();

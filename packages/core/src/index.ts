@@ -1035,15 +1035,18 @@ export {
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
 
-// The user steer-drain — a message typed while a turn runs, spliced into its
-// next step. Not a signal: it persists verbatim, comes back on interrupt, and
-// reruns as a user-origin turn (see user-steer.ts).
+// The inbox — the one way anything reaches an agent, and the user kind's
+// vocabulary: a message spliced into the running turn's next step as a
+// durable user row that persists verbatim, comes back on interrupt, and reruns
+// as a user-origin turn.
 export {
-  UserSteerDrain, steerUserMessage, STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
+  Inbox, readSignalId, PromptFileSchema,
+  STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   describeLandedSteers,
-  type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
+  type UserSteerDeps, type AcceptedSteer,
+  type UserSteer, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow,
-} from './orchestrator/user-steer';
+} from './orchestrator/inbox';
 
 // Where a steer sits in the transcript — the read side of the same drain, and
 // pure, so both backends place it identically.
@@ -1783,7 +1786,7 @@ export {
 
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
 
-export { SignalDelivery } from './orchestrator/signals';
+export { USER_MESSAGE_SIGNAL_KIND } from './types/signals';
 
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
@@ -2169,7 +2172,7 @@ export type {
 } from './read-models/config-plane';
 
 // The advisor — one severity-tagged note per turn, the rules that keep it quiet,
-// and the turn-end lane both backends call. Delivery itself is SignalDelivery's.
+// and the turn-end lane both backends call. Delivery itself is the Inbox's.
 export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,

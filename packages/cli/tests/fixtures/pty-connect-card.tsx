@@ -21,7 +21,7 @@ import { fakeClient, soloHub } from '../helpers/chat-app-fixture';
 /** Prose the agent "writes", so a submitted turn is visible on the surface. */
 const REPLY = 'agent prose reply';
 
-const TURN = { text: REPLY, toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+const TURN = { landed: 'turn' as const, text: REPLY, toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
 const CONNECT_MS = 800;
 

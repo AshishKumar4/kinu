@@ -673,6 +673,15 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
     },
+    // The file parts of a pending steer (a mid-turn send awaiting its step
+    // drain), one row per part in message order — in their own table because
+    // a shipped table's shape never moves. Same owner and lifecycle as the
+    // steer row above: created in the ActorAgent constructor, retired with it.
+    pending_steer_files: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': WIRED,
+      cli: { absent: 'a local session holds its steer queue in the driver that owns the turn; an eviction cannot separate the two' },
+    },
     // The durable admission ledger that REPLACED the single `active_durable_turn`
     // row: one row keyed `id = 1` could hold one turn id for a whole database, so
     // it could name neither which issued actor owned the turn nor tell an evicted

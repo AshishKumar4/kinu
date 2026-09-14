@@ -126,7 +126,7 @@ async function absorb(orch: AgentOrchestrator): Promise<readonly AgentSignal[]> 
   if (!prepareStep) throw new Error('Expected orchestrator prepareStep extension');
   await prepareStep({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
 
-  return orch.signals.settle({ completed: true }).absorbed;
+  return orch.inbox.settle({ completed: true }).absorbed;
 }
 
 const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({

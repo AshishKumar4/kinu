@@ -33,8 +33,9 @@ const logger: KinuExtension = {
   throw and name both extensions.
 - `prepareStep(ctx): ModelMessage[] | undefined` replaces one step's messages,
   or returns `undefined` unchanged. Extensions chain in registration order. The
-  CLI steer drain uses it. `composePrepareStep`
-  (`core/src/prompting/prepare-step.ts`) runs extensions before cache tails.
+  `kinu.inbox` drain splices a mid-turn send at the step boundary through it.
+  `composePrepareStep` (`core/src/prompting/prepare-step.ts`) runs extensions
+  before cache tails.
 - `transformContext(ctx): Promise<ModelMessage[] | undefined>` runs once before
   streaming. `ctx` carries `sessionKey`, durable `messages`, `system`,
   `contextWindow`, optional `providerReportedTokens`, and
@@ -84,19 +85,18 @@ Both backends register these in order.
    `.kinu/compaction/<sessionKey>/<rangeHash>.md`. Its plan and token trigger
    share `compaction_state`. `onOutcome` resets dynamic context for `planned`
    and `invalidated`, never for a byte-stable replay.
-2. The user steer drain is `kinu.steering` in
-   `cli-backend/src/local-session.ts` and `kinu.user-steer` in
-   `cf-backend/src/actor-agent.ts`. The shared `UserSteerDrain`
-   `prepareStep` hook appends pending steers after tool results. Core marks rows
-   with `STEER_METADATA_KEY` (`kinuSteer`) and `STEER_STEP_METADATA_KEY`
-   (`kinuSteerAtStep`) in `core/src/orchestrator/user-steer.ts`.
-3. `kinu.signals` (`AgentOrchestrator.turnExtension` in
-   `core/src/orchestrator/agent-orchestrator.ts`; cloud registration in
+2. `kinu.inbox` (`AgentOrchestrator.turnExtension` in
+   `core/src/orchestrator/agent-orchestrator.ts`; registered per turn in
+   `core/src/orchestrator/actor-session.ts` on the CLI, forwarded on cloud in
    `cf-backend/src/actor-agent.ts`) observes calls for mechanical steering and
-   delivers live signals at the next step.
+   splices a mid-turn send into the running turn's next step
+   (`core/src/orchestrator/inbox.ts`): pending user messages drain as ONE
+   durable user message, before the event text in the same splice. Core marks
+   landed rows with `STEER_METADATA_KEY` (`kinuSteer`) and
+   `STEER_STEP_METADATA_KEY` (`kinuSteerAtStep`).
 
-The steer drain precedes signals so a signal splice cannot shift replayed
-history indices.
+User rows precede event text inside a splice so event indices cannot shift
+replayed history.
 
 ## The cloud bridge
 

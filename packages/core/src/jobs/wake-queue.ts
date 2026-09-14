@@ -2,9 +2,9 @@
  * The IN-PROCESS wake queue — what makes an agent with no durable message table
  * a place a background wake can ARRIVE.
  *
- * {@link BackgroundJobRunner} ends every settled job by handing a signal to a
- * `SignalDeliverer`, and there is exactly ONE delivery time: the agent's next
- * step. For an actor that seam is `SignalDelivery`, which either splices the
+ * {@link BackgroundJobRunner} ends every settled job by handing a signal to an
+ * `AgentInbox`, and there is exactly ONE delivery time: the agent's next
+ * step. For an actor that inbox is `Inbox`, which either splices the
  * signal into the turn in flight or enqueues a durable message row that becomes
  * the next turn. A swarm node has neither — no chat, no message table, no socket
  * a surface can watch — so it implements the SAME seam over an in-memory queue,
@@ -24,16 +24,16 @@
  */
 
 import type { ModelMessage } from 'ai';
-import type { AgentSignal, SignalDeliverer, SignalOutcome } from '../types/signals';
+import type { AgentSignal, AgentInbox, SendOutcome } from '../types/signals';
 
-export class AgentWakeQueue implements SignalDeliverer {
+export class AgentWakeQueue implements AgentInbox {
   /** Wakes that have arrived and not yet been handed to a turn. */
   private readonly arrived: AgentSignal[] = [];
   /** The turn currently blocked in {@link next}, if any. At most one: an agent
    *  takes one turn at a time, so there is never a second awaiter to fan out to. */
   private resume: (() => void) | null = null;
 
-  async deliver(signal: AgentSignal): Promise<SignalOutcome> {
+  async send(signal: AgentSignal): Promise<SendOutcome> {
     this.arrived.push(signal);
     const waiting = this.resume;
     this.resume = null;

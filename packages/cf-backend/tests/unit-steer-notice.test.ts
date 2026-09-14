@@ -33,16 +33,15 @@ const landed = (id: string, atStep = 3): InlineSteer =>
  *  every dependency the composer passes — and hands back what a reader would
  *  see. No effects run, and none are needed: the queued line is derived, which
  *  is the property under test. */
-function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): string | null | undefined {
+function noticeFor(steerRuns: readonly InlineSteer[]): string | null | undefined {
   let seen: string | null | undefined = null;
 
   function Probe() {
     const deps: SteerActionsDeps = {
-      steerChat: async () => 'mid-turn',
+      sendChat: () => ({ landed: 'mid-turn', settled: Promise.resolve('mid-turn') }),
       abortChat: async () => {},
       draft: '',
       setDraft: () => {},
-      hasAttachments,
       steerRuns,
     };
 
@@ -77,7 +76,9 @@ describe('the queued line, as the composer receives it', () => {
       .toBe("Queued — it lands at the agent's next step.");
   });
 
-  test('a draft carrying attachments says what a steer cannot take with it', () => {
-    expect(noticeFor([queued('s1')], true)).toContain('a steer carries text only');
+  test('a draft carrying attachments gets the same line: attachments ride the send', () => {
+    // The owner's rule: a message to a running turn carries its files as file
+    // parts, so there is no "text only" exception for the composer to explain.
+    expect(noticeFor([queued('s1')])).not.toContain('text only');
   });
 });

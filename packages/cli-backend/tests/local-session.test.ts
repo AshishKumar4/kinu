@@ -24,7 +24,7 @@ import { inWorkMode } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, createAgentsCodemodeProvider,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
-  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
+  initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox,
   backgroundJobNotice,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
@@ -589,11 +589,12 @@ describe('LocalAgentSession.send — a user turn', () => {
         SELECT RAISE(FAIL, 'forced persist failure');
       END`);
 
-    const first = session.send('first');
-    const second = session.send('second');
-
+    // Sent one after the other: a second send while the first turn runs
+    // rides that turn's next step, and the property under test is that the
+    // NEXT turn still runs after a persist failure.
+    await session.send('first');
+    await session.send('second');
     await waitFor(() => turnStarts(events).length === 2);
-    await Promise.all([first, second]);
 
     const errors = events.filter((event): event is Extract<SessionEvent, { type: 'error' }> => event.type === 'error');
     const turns = events.filter((event): event is Extract<SessionEvent, { type: 'turn-end' }> => event.type === 'turn-end');
@@ -1111,7 +1112,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
   test('a job wake through the real runner carries its authorship at rest', async () => {
     const JOB = 'bgjob-wake-at-rest';
     // The full production chain with only the model faked: BackgroundJobRunner
-    // settle → SignalDelivery.deliver → the session's own enqueueTurn →
+    // settle → Inbox.deliver → the session's own enqueueTurn →
     // processTurn → persist. The stored row must STATE who wrote it (the
     // authorship stamp and the event name), because the CLI transcript has no
     // rich twin to recover provenance from — a row that leans on its
@@ -1127,7 +1128,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     const runner = new BackgroundJobRunner({
       store,
       fiber: async (_name, fn) => fn({ stash: () => {}, snapshot: null }),
-      signals: new SignalDelivery(session),
+      inbox: new Inbox(session),
       scheduleDrain: () => {},
     });
 
@@ -3133,8 +3134,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
-    expect(session.steer('also check X')).toBe(true);
-    expect(session.steer('and Y')).toBe(true);
+    expect(await session.send('also check X')).toBe('mid-turn');
+    expect(await session.send('and Y')).toBe('mid-turn');
     release();
     await turn;
 
@@ -3175,7 +3176,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
     expect(session.turnInFlight()).toBe(true);
-    expect(session.steer('also check X')).toBe(true);
+    expect(await session.send('also check X')).toBe('mid-turn');
     await fireTimer(session, 'mail from bob');
     await session.flushPendingDrains();
     release();
@@ -3225,7 +3226,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const turn = session.send('first question');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(session.steer('follow up please')).toBe(true);
+    expect(await session.send('follow up please')).toBe('mid-turn');
     release();
     await turn;
     await waitFor(() => events.filter((e) => e.type === 'turn-end').length >= 2);
@@ -3242,9 +3243,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.end();
   });
 
-  test('steer with no active turn returns false', () => {
+  test('a send with no active turn runs as a turn of its own', async () => {
     const { session } = setup('idle');
-    expect(session.steer('nothing running')).toBe(false);
+    expect(await session.send('nothing running')).toBe('turn');
   });
 
   test('interrupt drops pending steers — no surprise follow-up turn — and returns them to the caller', async () => {
@@ -3253,7 +3254,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const turn = session.send('long task');
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(session.steer('change of plans')).toBe(true);
+    expect(await session.send('change of plans')).toBe('mid-turn');
     // Surfaces already rendered the steer as sent — the dropped text comes
     // back so they can restore it to the composer instead of losing it.
     expect(session.interrupt()).toEqual(['change of plans']);
@@ -3322,7 +3323,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
 
-    expect(session.steer('also check X')).toBe(true);
+    expect(await session.send('also check X')).toBe('mid-turn');
     // Accepted but not yet seen. The id is assigned at ACCEPTANCE, so the queued
     // event and the durable row it later becomes carry the same one.
     expect(steerStatuses(events).map((s) => [s.status, s.text]))
@@ -3344,7 +3345,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     // A second steer with no boundary left goes back to the composer.
     await waitFor(() => events.some((e) => e.type === 'text-delta'));
-    expect(session.steer('and Y')).toBe(true);
+    expect(await session.send('and Y')).toBe('mid-turn');
     expect(session.interrupt()).toEqual(['and Y']);
     await turn;
 
@@ -3526,7 +3527,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { session, events } = setup('unused', model);
     const turn = session.send('main question');
     await waitFor(() => events.some((e) => e.type === 'tool-call'));
-    expect(session.steer('do it differently')).toBe(true);
+    expect(await session.send('do it differently')).toBe('mid-turn');
     release();
     await turn;
     expect(events.some((e) => e.type === 'error')).toBe(true);
@@ -3537,6 +3538,60 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const last = prompts.at(-1)!;
     const texts = userTexts(last);
     expect(texts).toContain('do it differently');
+    await session.end();
+  });
+
+  test('a user-origin enqueueTurn lands at the queue FRONT, carrying its files', async () => {
+    // The seam's leftover rerun — the user's next turn — is admitted ahead of
+    // every programmatic inject still waiting, and it is the user's own turn:
+    // kind 'user' on the turn-start, the attachment as a file part on the
+    // prompt.
+    const { model, prompts, release } = toolThenAnswerModel('done');
+    const { session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+
+    // Both enqueued while the turn is mid-flight: the programmatic one first —
+    // the ordering claim is that it LOSES the slot anyway. The promises settle
+    // with their turns, so they are awaited at the end, where the answer is.
+    const programTurn = session.enqueueTurn({ text: 'background fact', metadata: { kinuEvent: 'event_drain' } });
+
+    const userTurn = session.enqueueTurn({
+      origin: 'user',
+      text: 'the operator said this',
+      files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }],
+    });
+
+    release();
+    await turn;
+    await waitFor(() => turnStarts(events).length >= 3);
+
+    expect(turnStarts(events).map((s) => [s.kind, s.text])).toEqual([
+      ['user', 'main question'],
+      ['user', 'the operator said this'],
+      ['programmatic', 'background fact'],
+    ]);
+
+    // The user's turn — the second turn's first request — carries the file
+    // part ahead of its text, exactly as a send() attachment does. (The tail
+    // user message is the workspace-instructions block, so match the steer's
+    // own words rather than position.)
+    const userTurnPrompt = prompts[2]!;
+
+    const steerMessage = userTurnPrompt.find((m) => m.role === 'user'
+      && JSON.stringify(m).includes('the operator said this'))!;
+
+    expect(steerMessage.content).toEqual(expect.arrayContaining([
+      // streamText hands the model the decoded part: `data` is the base64
+      // payload, not the data: URL the seam carried.
+      expect.objectContaining({
+        type: 'file', data: 'AA', mediaType: 'image/png', filename: 'shot.png',
+      }),
+    ]));
+
+    await expect(programTurn).resolves.toEqual({ status: 'queued' });
+    await expect(userTurn).resolves.toEqual({ status: 'queued' });
     await session.end();
   });
 });
@@ -5185,11 +5240,13 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   await session.setRole('planner');
   const plan = inWorkMode('plan', () => session.send('Inspect without changes.'));
   await entered.promise;
-  const build = session.send('Now implement the change.');
   await session.setRole('task');
   release.resolve();
   await plan;
-  await build;
+  // Sent once the Plan turn has ended: a message during it would ride that
+  // turn's next step under Plan's grant, and the property under test is the
+  // NEXT turn's own authority.
+  await session.send('Now implement the change.');
   expect(await rt.storage.vfs.readFile('/home/user/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
   const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
