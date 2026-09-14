@@ -28,6 +28,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { memberBody } from '@kinu.run/test-utils';
 import { orchestratorHarness } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -73,13 +74,18 @@ describe('no Durable Object awaits anything unadmitted inside its init gate', ()
 describe('the scaffold precondition moved to the turn, and is still reached', () => {
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
-  test('beforeTurn awaits it, so every turn path is covered', () => {
-    const beforeTurn = actor.slice(
-      actor.indexOf('async beforeTurn(ctx: TurnContext)'),
-      actor.indexOf('this.orch.beginTurn('),
+  test('the turn assembly awaits it before its first read, so every turn path is covered', () => {
+    // `assembleTurn` is the one assembly every turn path runs through
+    // (`beforeTurn` calls it), and the scaffold is awaited before the first
+    // thing that reads the workspace.
+    expect(memberBody(actor, 'async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>')).toContain('await this.assembleTurn(');
+
+    const assembly = actor.slice(
+      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
+      actor.indexOf('this.profileInputs(),'),
     );
 
-    expect(beforeTurn).toContain('await this.ensureOwnedScaffold()');
+    expect(assembly).toContain('await this.ensureOwnedScaffold()');
   });
 
   test('it is declared once on the shared actor base, not per root', () => {
