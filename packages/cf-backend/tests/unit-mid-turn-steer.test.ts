@@ -56,8 +56,11 @@ interface SteerHarness {
     origin?: 'user'; steerIds?: readonly string[]; files?: readonly { filename?: string; mediaType?: string; url?: string }[];
   }>;
   /** Prepare a real turn: beforeTurn sets the in-flight flag, the durable
-   *  turn identity and the step snapshot a steer must land on. */
-  startTurn(): Promise<void>;
+   *  turn identity and the step snapshot a steer must land on. `liveTurnId`
+   *  names the driving user message's id, which is what
+   *  `restoreTurnCheckpoint` derives the durable turn id from — passing it
+   *  makes the resumed turn re-bind under the same id. */
+  startTurn(liveTurnId?: string): Promise<void>;
 }
 
 function steerHarness(): SteerHarness {
@@ -97,7 +100,15 @@ function steerHarness(): SteerHarness {
 
   return {
     agent, db, frames, appended, enqueued,
-    startTurn: async () => {
+    startTurn: async (liveTurnId) => {
+      // `restoreTurnCheckpoint` reads the durable turn id off the driving user
+      // message in `agent.messages`, so a resume that re-opens under the same
+      // message id re-binds under it — the resumed-turn `beforeTurn` then
+      // sweeps the dead turn's rows through `sweepOrphanedSteers`.
+      if (liveTurnId !== undefined) {
+        agent.messages.push({ id: liveTurnId, role: 'user', parts: [{ type: 'text', text: 'live turn' }] });
+      }
+
       // Production opens a turn through beforeTurn; driving the same entry
       // point gives beforeStep the prepared snapshot it refuses without, and
       // writes the durable turn identity a mid-turn steer binds to.
@@ -300,29 +311,23 @@ describe('a message typed while the agent is working', () => {
 
   test('a pending steer with an attachment survives a reset intact — the rerun carries real file data', async () => {
     const h = steerHarness();
-    await h.startTurn();
-    const liveTurnId = h.agent.harnessDurableTurnId();
-
-    if (liveTurnId === null) throw new Error('expected the harness turn to be durable');
-    await h.agent.send('the live turn keeps me');
+    const actorId = h.agent.observeRuntime().actor.actorId;
 
     // A dead turn's steer + its attachment, written through SQL the way an
-    // eviction leaves them: the live activation's sweep is what reruns it.
-    const actorRow = h.db.query<{ actor_id: string }, [string]>(
-      'SELECT actor_id FROM pending_steers WHERE turn_id = ?',
-    ).get(liveTurnId);
-
-    if (!actorRow) throw new Error('the live steer left no pending_steers row');
+    // eviction leaves them — rows the activation that never reached a settle
+    // left behind. `beforeTurn` is the restore/sweep entry point, so seeding
+    // the rows ahead of it is the public drive: `restoreTurnCheckpoint` sweeps
+    // them, and the rerun lands through the seam's real `enqueueTurn`.
     h.db.query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
-    ).run(actorRow.actor_id);
+    ).run(actorId);
     h.db.query(
       `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
        VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', 'data:image/png;base64,AAAA')`,
-    ).run(actorRow.actor_id);
+    ).run(actorId);
 
-    h.agent.harnessRestorePendingSteers(liveTurnId);
+    await h.startTurn();
     await h.agent.harnessJoinDetachedFibers();
 
     // The orphan reruns as a user-origin turn — and its file rides with real
@@ -471,30 +476,33 @@ describe('a steer that never saw a step boundary', () => {
 describe('an eviction with acknowledged steers', () => {
   test('restores only the live turn\'s rows and sweeps a dead turn\'s as one user-origin turn', async () => {
     const h = steerHarness();
-    await h.startTurn();
-    const liveTurnId = h.agent.harnessDurableTurnId();
+    const actorId = h.agent.observeRuntime().actor.actorId;
 
-    if (liveTurnId === null) throw new Error('expected the harness turn to be durable');
+    // A real activation drives this turn under the id of its driving user
+    // message; naming that id is what makes the resume re-bind under it.
+    await h.startTurn('u-live');
     await h.agent.send('the live turn keeps me');
 
     // A second, DEAD turn's reservation: the activation that owned it never
     // reached its settle. Written through SQL, because the point is that SQL —
     // not RAM — is the authority an eviction tests.
-    const actorRow = h.db.query<{ actor_id: string }, [string]>(
-      'SELECT actor_id FROM pending_steers WHERE turn_id = ?',
-    ).get(liveTurnId);
-
-    if (!actorRow) throw new Error('the live steer left no pending_steers row');
     h.db.query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-1', 'turn-dead', 'plan', 'orphaned by an eviction')`,
-    ).run(actorRow.actor_id);
+    ).run(actorId);
     h.db.query(
       `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
        VALUES (?, 'steer-dead-2', 'turn-dead', 'plan', 'also orphaned')`,
-    ).run(actorRow.actor_id);
+    ).run(actorId);
 
-    h.agent.harnessRestorePendingSteers(liveTurnId);
+    // The reset: the in-memory inbox dies with the isolate; the SQL rows
+    // survive. Clearing `orch` is the same fixture write `steerHarness` does —
+    // the next `this.orch` rebuilds an empty inbox over the same database.
+    Reflect.set(h.agent, '_orch', null);
+
+    // The resume: the turn's own `beforeTurn` runs `restoreTurnCheckpoint`,
+    // which re-reads the live turn's rows from SQL AND sweeps the dead turn's.
+    await h.startTurn('u-live');
     await h.agent.harnessJoinDetachedFibers();
 
     // The live turn's next step splices ITS words only — the dead turn's stay
@@ -505,7 +513,6 @@ describe('an eviction with acknowledged steers', () => {
     ]);
 
     // The dead turn's rows rerun as ONE user-origin turn, mode-stamped by their
-    // own rows and keyed by the turn they belonged to.
     expect(h.enqueued).toEqual([{
       text: 'orphaned by an eviction\n\nalso orphaned',
       origin: 'user',
