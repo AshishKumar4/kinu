@@ -267,7 +267,10 @@ describe('exact turn admission', () => {
     expect(counter.seen.length).toBe(1);
   });
 
-  test('a provider with no count endpoint is assembled ungated, never on an estimate', async () => {
+  // KINU-048. No count endpoint is not a gap in the gate: the shared estimate
+  // measures the assembled request and the same one-compaction-then-refuse
+  // decision applies to that number.
+  test('a provider with no count endpoint is gated by the estimate: an over-window request compacts once, then is admitted or refused', async () => {
     const { extensions, triggers } = compactionProbe();
     let asked = 0;
 
@@ -285,10 +288,47 @@ describe('exact turn admission', () => {
       },
     });
 
+    // This history fits on the estimate too, so nothing is compacted — but the
+    // counter WAS consulted and the estimate, not an absence, is what admitted.
     expect(asked).toBe(1);
     expect(out).toEqual(HISTORY);
-    // No gate, and no compaction on the strength of a number nobody measured.
     expect(triggers).toEqual(['auto']);
+  });
+
+  test('with no count endpoint, an estimate over the window triggers the one forced compaction instead of submitting', async () => {
+    const { extensions, triggers } = compactionProbe();
+    // The assembled request serializes to 128 chars (est 32 tokens); the
+    // compacted one to 90 (est 23). A 28-token input allocation sits between
+    // them, so the estimate — not an absence — is what forces the compaction.
+    const tight = { contextWindow: 48, modelOutputLimit: 20 };
+
+    const out = await assembleTurnMessages({
+      ...base(),
+      extensions,
+      trigger: 'auto',
+      // No `count` at all: the provider publishes nothing to ask.
+      admission: { limits: tight },
+    });
+
+    expect(out).toEqual(COMPACTED);
+    expect(triggers).toEqual(['auto', 'force']);
+  });
+
+  test('with no count endpoint, an estimate that still overflows after compaction is refused, not submitted', async () => {
+    const { extensions } = compactionProbe();
+    // Even the compacted summary (est 23) overflows a 4-token allocation.
+    const tight = { contextWindow: 8, modelOutputLimit: 4 };
+
+    const failure = await refusalOf(assembleTurnMessages({
+      ...base(),
+      extensions,
+      trigger: 'force',
+      admission: { limits: tight },
+    }));
+
+    expect(failure).not.toBeNull();
+    // refusalOf returns Error|null; `in` narrows to the KinuError's `code`.
+    expect(failure !== null && 'code' in failure ? failure.code : undefined).toBe('bad_input');
   });
 
   test('what is counted is the assembled request: system, messages, and the tools that ride it', async () => {
@@ -308,6 +348,8 @@ describe('exact turn admission', () => {
     });
     const counted = counter.seen[0];
     expect(counted?.system).toBe('SYS');
+
+
     // The tail is part of the request, so it is part of what was counted.
     expect(counted?.messages.at(-1)).toEqual({ role: 'user', content: 'turn-local tail' });
     expect(Object.keys(counted?.tools ?? {})).toEqual(['look']);

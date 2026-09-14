@@ -14,12 +14,17 @@
  * The capability is a provider method rather than a table here: whether a count
  * can be obtained, how the request converts to the provider's wire shape, and
  * which requests it cannot represent are all facts about one provider's API, and
- * the provider module is where the rest of those facts already live. This module
- * owns the vocabulary and the one thing no provider can answer about itself:
- * what an ABSENT capability means.
- * THE MATRIX, as the vendors' own current documentation states it (researched
- * 2026-08-27; the runtime half is asserted in `unit-turn-admission.test.ts`):
+ * the provider module is where the rest of those facts already live.
  *
+ *   ┌──────────────────────────────┬───────────────────────────────┐
+ *   │ endpoint published & answers │ measured exactly; gate applies│
+ *   ├──────────────────────────────┼───────────────────────────────┤
+ *   │ endpoint absent/unsupported  │ estimateTokens measures; the  │
+ *   │                              │ gate applies anyway           │
+ *   ├──────────────────────────────┼───────────────────────────────┤
+ *   │ endpoint throws              │ reported unavailable →        │
+ *   │                              │ estimate measures             │
+ *   └──────────────────────────────┴───────────────────────────────┘
  *   anthropic   SUPPORTED. POST /v1/messages/count_tokens, the same structured
  *               input the Messages API takes, answering `{ input_tokens }`.
  *               Documented for the Claude API and for the Bedrock, Vertex and
@@ -80,8 +85,8 @@ export interface CountableRequest {
 /**
  * What asking cost. `counted` is the provider's own tokenizer over this
  * request; `unsupported` is the grounded reason no such number exists, which is
- * a classification and not a failure — the caller proceeds ungated rather than
- * gating on a number nobody measured.
+ * a classification and not a failure — the caller measures by `estimateTokens`
+ * and the gate applies on that number.
  */
 export type InputTokenCount =
   | { readonly kind: 'counted'; readonly tokens: number }

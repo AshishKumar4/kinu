@@ -131,9 +131,9 @@ export interface ChatOptions {
   /**
    * The resolved provider's own count of an assembled request
    * (providers/input-tokens.ts), for exact admission before anything is
-   * submitted. Omitted = the provider publishes no count endpoint, and the turn
-   * is assembled exactly as it was before admission existed. Never a character
-   * estimate: see the module comment there for why an estimate cannot admit.
+   * submitted. Omitted = the provider publishes no count endpoint, and the
+   * shared estimate gates instead — see the module comment there for the
+   *  exact-count-then-estimate contract.
    */
   countInputTokens?: (request: CountableRequest) => Promise<InputTokenCount>;
   signal?: AbortSignal;
@@ -334,18 +334,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     abortSignal: opts.signal,
   };
 
-  // Exact pre-submission admission, when the caller resolved a provider that
-  // can answer what a request costs. The assembly owns the decision (one
-  // forced compaction, then a re-count, then a refusal) so neither backend
-  // holds a second copy of the policy; the tools that ride every request are
-  // part of what is counted, which is why they are handed over here.
-  if (opts.countInputTokens) {
-    assembly.admission = {
-      count: opts.countInputTokens,
-      tools,
-      limits: { contextWindow, modelOutputLimit },
-    };
-  }
+  // Pre-submission admission. The provider's own counter is used when the
+  // caller resolved one; without it the assembled request is measured by the
+  // shared estimate and the same gate applies — one forced compaction, then a
+  // re-measure, then a refusal (turn-context.ts owns the policy, so neither
+  // backend holds a second copy). The tools that ride every request are part
+  // of what is measured, which is why they are handed over here.
+  assembly.admission = {
+    count: opts.countInputTokens,
+    tools,
+    limits: { contextWindow, modelOutputLimit },
+  };
 
   const turnMessages = await assembleTurnMessages(assembly);
 
