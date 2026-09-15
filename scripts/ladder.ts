@@ -917,7 +917,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts',
+    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
     tier: 'push',
     // 1.0 s declared 2026-08-24; the gallery-harness case adds 0.13 s, measured 2026-09-05.
     // Re-measured 2026-09-05 on the 24-thread box: 19.3/18.1s (42 tests). The slow file
@@ -1323,13 +1323,18 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts',
+    run: 'bun test scripts/*-ux.test.ts scripts/computed-style.test.ts',
     tier: 'ci',
     // Measured 2026-09-14 with both the app-background and the account-ux
     // self-tests in this row: 347.00s over one run on the 24-thread
     // workstation (293.62s with app-background alone, declared 315; 324.74s
     // with account-ux alone, declared 350; 265.76s before either joined).
-    seconds: 375,
+    // The row is the `*-ux` FAMILY since 2026-09-15 rather than a list: a
+    // fifteenth suite joined on 2026-09-14 by a hand edit in three files, and
+    // a suite outside every family is what the orphan test below catches. The
+    // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
+    // `workspace-name-ux` fold in; their declared seconds are added here.
+    seconds: 420,
     weight: 5,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
@@ -1394,7 +1399,14 @@ export const LADDER: readonly Gate[] = [
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
       + 'three variants of it, so the annotation ENGINE — selection, offsets, save, '
-      + 'export — is exercised only as far as one stored anchor painting.',
+      + 'export — is exercised only as far as one stored anchor painting.'
+      + ' Folded in from the former client-failure row: what the browser does when a '
+      + 'client-side failure has nowhere to go — the error boundary reports to the server, a '
+      + 'stalled report never leaves the page waiting, retry and navigation stay reachable, a '
+      + 'rejected lazy chunk offers the one-shot reload, and a reconnect refreshes Files and '
+      + 'memory after read faults. Those run over a local browser and a locally built bundle: '
+      + 'a stale edge asset, a real network stall and whether a report reaches a deployed '
+      + 'sink are outside it, and nothing compares pixels.',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -1420,26 +1432,6 @@ export const LADDER: readonly Gate[] = [
       + 'The old product name is not grepped here at all: that gate is '
       + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
       + 'documents rather than the rendered page.',
-    inputs: AMBIENT_BY_NAME,
-  },
-  {
-    run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts',
-    tier: 'ci',
-    // Measured 2026-09-06, these 48 browser tests pass in 13.84 seconds.
-    // The snapshot suite exercises Files and memory recovery after read faults.
-    seconds: 45,
-    weight: 5,
-    catches: 'what the browser does when a client-side failure has nowhere to go. The '
-      + 'error boundary reports to the server rather than only to a console nobody '
-      + 'reads, a stalled report never leaves the page waiting, retry and navigation '
-      + 'both stay reachable, and a rejected lazy chunk offers the one-shot reload '
-      + 'that recovers a stale build. Both classes shipped green under every '
-      + 'source-reading gate in this repository, because the defect is a state the '
-      + 'user is left in rather than a call that is absent. A workspace reconnect '
-      + 'must refresh the mounted Files pane and current memory after read failures.',
-    blind: 'a local browser over a locally built bundle. A stale asset served from the '
-      + 'edge, a real network stall that never delivers headers, and whether the '
-      + 'report reaches a deployed sink are all outside it. Nothing compares pixels.',
     inputs: AMBIENT_BY_NAME,
   },
   {

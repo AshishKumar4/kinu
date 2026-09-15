@@ -225,13 +225,12 @@ declare -A GATE_WEIGHT=(
   ['bun test --parallel=4 packages/cli-backend/']=11
   ['bun run test:core']=11
   ['bun run test:cli']=11
-  ['bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts']=5
+  ['bun test scripts/*-ux.test.ts scripts/computed-style.test.ts']=5
   ['bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts']=5
-  ['bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts']=5
   ['bun test scripts/react-runtime-identity.test.ts']=5
   ['bun test scripts/swarm-tree-geometry.test.ts']=5
   ['bun test scripts/chat-scroll.test.ts']=5
-  ['bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts']=5
+  ['bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts']=5
 )
 gate_threads() {
   echo "${KINU_DEPLOY_THREADS:-$(nproc 2>/dev/null || echo 4)}"
@@ -516,7 +515,7 @@ run_required_gate "CLI backend and conformance suite" bun test --parallel=4 pack
 run_required_gate "Full production CLI suite" bun run test:cli
 run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
-run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts
+run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
 run_required_gate "Schema drift" bun scripts/schema-drift.ts
 # Traces are a separate switch from logs and wrangler does not inherit
@@ -536,9 +535,8 @@ run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schem
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
 run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
-run_required_gate "UI gate self-tests" bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts
+run_required_gate "UI gate self-tests" bun test scripts/*-ux.test.ts scripts/computed-style.test.ts
 run_required_gate "Public pages render" bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts
-run_required_gate "Client failure recovery" bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts
 run_required_gate "React runtime identity" bun test scripts/react-runtime-identity.test.ts
 run_required_gate "Nested container resolution" bun test scripts/nested-container-resolution.test.ts
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  EXCLUSION_GROUPS, GATE_DEADLINES, LADDER, SERIAL_GATES, deployDeadlines, deployExclusions,
+  EXCLUSION_GROUPS, GATE_DEADLINES, LADDER, SERIAL_GATES, claims, deployDeadlines, deployExclusions,
   deployWaves, deployWeights, gateWeight,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
@@ -16,25 +16,22 @@ import * as v from "valibot";
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
 
-/** The bench gate's argv AS THE FIXTURE REPO EXPANDS IT: the first seven words
- *  are what bash resolves the two globs to inside `runDeploy`'s fixture, and the
- *  rest are literal path words. One list drives both the files written into that
- *  fixture and the command line REQUIRED_GATES expects, so the two cannot
- *  disagree. */
-const BENCH_GATE_FILES = [
-  "scripts/bench-inference-proxy.test.ts",
-  "scripts/bench-pi-worker.test.ts",
-  "scripts/bench.test.ts",
-  "scripts/sandbox-durability-probe.test.ts",
-  "scripts/storage-matrix-admission.test.ts",
-  "scripts/storage-matrix-cleanup.test.ts",
-  "scripts/storage-matrix-manifest.test.ts",
-  "scripts/storage-matrix-protocol.test.ts",
-  "scripts/deploy-substrate.test.ts",
-  "scripts/payload-transport.test.ts",
-  "scripts/devbox-e2e.test.ts",
-  "scripts/fixtures/r2-bench/security/cells.test.ts",
-] as const;
+/** Every gate spelled with a glob, resolved by the same `claims()` the ladder
+ *  is measured with: the fixture writes exactly these files so bash expands
+ *  each glob to the set the ladder credits it with, and the expected command
+ *  line is that expansion. Derived from the tree, never listed: a suite that
+ *  joins a family joins the fixture by existing. */
+const tracked = trackedFiles();
+
+function expandGlobs(run: string): string {
+  if (!run.includes("*")) return run;
+  const words = run.split(" ");
+  const files = claims(run, tracked);
+
+  return [...words.filter((word) => !word.includes("/")), ...files].join(" ");
+}
+
+const GLOB_EXPANDED_FILES = [...new Set(LADDER.filter((gate) => gate.run.includes("*")).flatMap((gate) => claims(gate.run, tracked)))];
 
 const REQUIRED_GATES = [
   "bun scripts/preflight.ts",
@@ -55,8 +52,8 @@ const REQUIRED_GATES = [
   "bun test --parallel=4 packages/cli-backend/",
   "bun run test:cli",
   "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts",
-  `bun test ${BENCH_GATE_FILES.join(" ")}`,
-  "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts",
+  expandGlobs("bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts"),
+  "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts",
   "bun scripts/secret-scan.ts",
   "bun scripts/schema-drift.ts",
   "bun scripts/tracing-gate.ts",
@@ -65,9 +62,8 @@ const REQUIRED_GATES = [
   "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts",
   "bun test scripts/gate-set-equality.test.ts",
   "bun test scripts/wired.test.ts",
-  "bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts",
+  expandGlobs("bun test scripts/*-ux.test.ts scripts/computed-style.test.ts"),
   "bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts",
-  "bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts",
   "bun test scripts/react-runtime-identity.test.ts",
   "bun test scripts/nested-container-resolution.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
@@ -229,7 +225,7 @@ function runDeploy({
   mkdirSync(join(fixture, "node_modules"));
   mkdirSync(join(fixture, "packages", "cf-backend"), { recursive: true });
 
-  for (const relativePath of BENCH_GATE_FILES) {
+  for (const relativePath of GLOB_EXPANDED_FILES) {
     const path = join(fixture, relativePath);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "");
@@ -474,7 +470,7 @@ describe("deploy gate", () => {
       // weight on a non-gate schedules nothing.
       expect(weight, `${run} declares a weight of ${String(weight)}`).toBeGreaterThan(1);
       const gates: string[] = [...REQUIRED_GATES];
-      expect(gates, `${run} has a weight and is not a gate`).toContain(run);
+      expect(gates, `${run} has a weight and is not a gate`).toContain(expandGlobs(run));
     }
 
     // Every browser suite and every multi-worker suite weighs more than one:
@@ -483,7 +479,7 @@ describe("deploy gate", () => {
     const browserSuites = trackedFiles().filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
       && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
 
-    const weighted = new Set(Object.keys(declared));
+    const weighted = new Set(Object.keys(declared).map(expandGlobs));
 
     for (const gate of REQUIRED_GATES) {
       const opensChrome = browserSuites.some((file) => gate.split(" ").includes(file));
