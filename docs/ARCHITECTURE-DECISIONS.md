@@ -182,10 +182,18 @@ Re-measured at d1aa2e0d6 on 2026-09-15, load 5.1 at start:
 | cold (store emptied) | 0 | 42 | 8 | 434.8 s |
 | warm (same tree) | 42 | 0 | 8 | 194.9 s |
 
-The 8 left: preflight and commit-message (live); `test:core`, whose graph
-reaches `test-utils/src/scratch.ts` and needs a `reads` declaration;
-`packages/devbox/`, whose miniflare settle helper reads by path; `typecheck`,
-whose `node --check` of the pc-agent daemon reaches a file that reads the
+Commit 8cd49f535 then let a row declare `corpus: true` after
+`--audit-closure` showed `test:core` and `packages/devbox/` scanning the tree
+by path (a `reads` list there would be an allowlist over the corpus).
+Re-measured at 8cd49f535 on 2026-09-15, load 5.3 at start:
+
+| run | hits | recorded | never cached | wall |
+| --- | --- | --- | --- | --- |
+| cold (store emptied) | 0 | 44 | 6 | 434.5 s |
+| warm (same tree) | 44 | 0 | 6 | 112.2 s |
+
+The 6 left: preflight and commit-message (live); `typecheck`, whose
+`node --check` of the pc-agent daemon reaches a file that reads the
 environment whole by design; the gate self-tests row through
 `commit-hygiene.ts`; `packages/test-utils/` through `ambient-env.test.ts`,
 which tests the strip itself; and the cf-backend suite through
@@ -203,7 +211,12 @@ unit measured in the same cheapest-of-N loop, never absolute CPU time. Decided
 2026-09-15, commit e965315d0. Measured quiet: canvas 0.75 units, mesh 5.2;
 under twelve busy threads the absolute mesh frame doubled (0.61 to 1.13 ms,
 the wave's red) while the ratio read 3.9 to 5.2. Proved red at ten steps per
-frame. A wall-clock pin is a latency contract and stays wall-clock.
+frame. A wall-clock pin is a latency contract and stays wall-clock. The red
+proof's own wall (bun's 5 s default) went red under the deploy wave on
+368b8d694 at 5.96 s: measured in three contention shapes the ten-step ratio
+reads 3.5 to 5.0 and 21.5 to 31 against floors of 1.5 and 12.5, so commit
+8a5b9eee5 runs a third of the batches (under a second quiet) with a stated
+20 s budget.
 
 ## Open
 

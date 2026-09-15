@@ -101,8 +101,10 @@ Push tier on the 24-thread workstation, 2026-09-15. At 8a151ec0d (load 0.6):
 cold 429.6 s, 0 hits, 32 recorded, 15 never cached; warm 301.3 s, 32 hits.
 At d1aa2e0d6 (load 5.1), after the computed-import, child-environment and
 check/test split commits: cold 434.8 s, 0 hits, 42 recorded, 8 never cached;
-warm 194.9 s, 42 hits. The never-cached rows and the one cause each names
-are in `docs/ARCHITECTURE-DECISIONS.md` L2.
+warm 194.9 s, 42 hits. At 8cd49f535 (load 5.3), after the two scanning
+suites declared the corpus: cold 434.5 s, 44 recorded, 6 never cached; warm
+112.2 s, 44 hits. The never-cached rows and the one cause each names are in
+`docs/ARCHITECTURE-DECISIONS.md` L2.
 
 ## Blind spots, printed on the green path
 
