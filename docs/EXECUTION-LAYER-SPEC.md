@@ -29,8 +29,8 @@ on no surface list, so `sealRpcSurface` shadows it and a stub-holder cannot
 call it. The Environment surface labels this `Parent workspace`
 (`cf-backend/src/lib/executors.ts:38`).
 
-The mount table (`core/src/vfs/mounts.ts`) exposes the user's live device at
-`/pc` and a bound container at `/sandbox`. Mount paths route to the target
+The mount table (`core/src/vfs/mounts.ts`) exposes each live device at
+`/pc/<name>` and a bound container at `/sandbox`. Mount paths route to the target
 `files` VFS with the prefix stripped, preserving its consent and path
 boundaries. An absent environment is explicit (`ENXIO`, `/pc`, `no device
 connected`), never an empty directory. There is no copy, sync, failover, or
@@ -125,7 +125,7 @@ Status separates `configured` (binding exists), `available` (callable now),
 failure). Prompt, tools, and discovery derive from that state, never a stale
 backend label.
 
-## Workspace, container, laptop, parent
+## Workspace, container, device, parent
 
 `createNimbusWorkspaceExecutor()` gives Cloudflare one Nimbus session for
 files, POSIX shell, code/runtime execution, processes, and ports. `shell`,
@@ -232,7 +232,7 @@ Hosted Node programs cannot: `workspaceNodeCommand` in
 `core/src/vfs/workspace-runtimes.ts` probes the shim at the first invocation,
 where workerd forbids its string compiler. Version and help commands do not
 compile a program. A runtime catalog entry is not proof that this host can run it.
-The CLI has no container: work needing a real machine goes to consented `laptop`.
+The CLI has no container: work needing a real machine goes to consented `device`.
 
 The inventories were probed. `scripts/nimbus-runtime-probe.ts` covers the
 workspace. `executeInExecutor` found `git` 2.34.1, `npm` 10.9.8, `node`
@@ -269,7 +269,7 @@ Escalate only for structural needs:
 
 An inbound port or a long-lived process alone does not select a container.
 The server runtime does. Hosted git already uses isomorphic-git. Local git
-work belongs on `laptop`. Docker and Python are absent from the probed
+work belongs on `device`. Docker and Python are absent from the probed
 container image; selecting that image does not install them. The container
 git path needs the outbound
 interception path (`cf-backend/src/egress/configure.ts`, `egress/outbound.ts`),
