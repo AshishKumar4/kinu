@@ -7,6 +7,7 @@ import {
   type JsonValue, type SlateCallResult,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { MockLanguageModelV3 } from 'ai/test';
 import { hostedSubordinateHarness, thinkTurns, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
@@ -549,34 +550,28 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
 
   // The agent binding is `send` on the actor's own inbox. The public effect a
   // slate producer sees is the turn the inbox admits: an idle actor has none
-  // in flight, so `send` starts one through the backend's enqueue seam — the
-  // one place the delivery lands that a test can observe without bridging the
-  // private adapter. Capturing that call is a host swap, the same fixture
-  // write the steer suite uses: the seam runs unharmed, the observation is
-  // the turn it tried to start.
-  const enqueued: Array<{ text: string; metadata?: Record<string, JsonValue> }> = [];
-  Reflect.set(actor.agent, '_host', {
-    broadcast: () => {},
-    enqueueTurn: async (turn: { text: string; metadata?: Record<string, JsonValue> }) => {
-      enqueued.push(turn);
-
-      return { status: 'queued' as const };
-    },
-    turnInFlight: () => false,
-    setTimer: () => {},
-    headRuntime: undefined,
-  });
-  Reflect.set(actor.agent, '_orch', null);
+  // in flight, so `send` queues one on the loop, which runs it. The
+  // observation is that turn's own durable trace — the user row it leaves,
+  // carrying the slate's words and its metadata — with the model scripted so
+  // the turn answers and commits.
+  actor.agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
+    content: [{ type: 'text', text: 'paged' }],
+    finishReason: { unified: 'stop', raw: undefined },
+    usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+  }) });
 
   const call = (args: JsonValue[]) =>
     actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'pager', 'AGENT', { member: 'send', args, invocation: null });
 
   expect(await call([{ text: 'done', data: { count: 2 } }])).toEqual({ ok: true, value: { outcome: 'queued' } });
+  await actor.agent.harnessChatLoop.pumpPromise;
   // The delivered turn carries the slate's words and names it — the same row
   // the binding wrote through `send`.
-  expect(enqueued).toHaveLength(1);
-  expect(enqueued[0]).toMatchObject({
-    text: 'Slate pager: done',
+  const admitted = actor.agent.harnessTranscript.history().filter((message) => message.role === 'user');
+  expect(admitted).toHaveLength(1);
+  expect(admitted[0]).toMatchObject({
+    parts: [{ type: 'text', text: 'Slate pager: done' }],
     metadata: expect.objectContaining({ slate: 'pager', data: { count: 2 }, kinuEvent: 'slate' }),
   });
 
