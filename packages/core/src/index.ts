@@ -605,7 +605,7 @@ export {
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
-  renderExecuteToolsDescription,
+  renderExecuteToolsDescription, EXECUTE_TOOLS_CODE_DESCRIPTION,
   // The reach axis — which surfaces each capability is projected onto, and the
   // codemode namespace it owns. Read by both surface builders and by the Tools
   // panel, so none of them has to guess it from ToolSet keys.
@@ -625,7 +625,7 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
+  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, executeToolsInputSchema,
   renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
