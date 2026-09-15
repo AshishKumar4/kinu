@@ -551,6 +551,103 @@ initial-admission refusal of D5's three post-fix attempts and D16 is
 closed.
 
 
+D18. Snapshot-chain is admitted as the full strategy (2026-09-15). Run
+`20260915065241`, clean `84a026c2f`, D5's exact flags (one `snapshot-chain`
+arm, `--decisive`, `--fault-cuts`, seed 20260824, loop budget 8,000 ms, two
+repetitions), Worker version `f793cbb1-c6e1-4dd0-9dbd-52f70bf6737a`, ran
+from 06:52:42 to 08:19:07 UTC and passed all ten gates;
+`admission.admitted` is true. It is the first admitted settlement. Four
+decisions, each measured before it, carried the three gates D17 left red:
+
+| Gate | Verdict | Deciding evidence |
+| --- | --- | --- |
+| G0 Provenance | Pass | Clean `84a026c2f`; Worker `f793cbb1-c6e1-4dd0-9dbd-52f70bf6737a`; pinned image digest `3b11f7bf…`; application provisioned 37,794 ms after deploy |
+| G1 Mount truth | Pass | Workspace mount, writable upper, named archives and durable bytes verified |
+| G2 Filesystem semantics | Pass | `mutable-delta` and `chunked-absorption` both observed |
+| G3 Publication safety | Pass | Cut verdict `all-old`: the record is identical to its pre-cut self and the cut marker never landed; absent references 0; barrier-ack loss 0; rollback or phantom root false; the served delta layer refused writes |
+| G4 Security | Pass | F7 stale writer, F10 hostile metadata, F11 capability escape/replay and F12 credential exposure all refused |
+| G5 Restore complexity | Pass | Counted store window and bounded-k archive-depth check passed |
+| G6 Complete cells | Pass | Cold attach 1,979 ms; warm 112 ms; stop 822 ms; wake 8,455 ms attached; C3 one object attempt (`puts: 1`, 69,632 bytes), cold restore 8,973 ms, correctness passed, zero payload bytes and index pages at attach |
+| G7 Reconciled accounting | Pass | Operation and byte accounting reconciled |
+| G8 Complete cleanup | Pass | All seven teardown entries done; Worker, container application, bucket and generated config absent; zero objects and zero multipart uploads |
+| G9 Statistical validity | Pass | 40 of 40 requested segment observations exist and are priced, five per workload per repetition |
+
+The four decisions, in landing order, each with its measurement:
+
+(a) Every operation route asks again while the box is starting
+(`fc9d4f010`). Run `20260914234711` recorded eight decisive segments as
+`unobserved execution` on the box's own `A startup is armed, so ask again`,
+read after the fixture's 6,000 ms admission window against a box that had
+just been quiesced, while `pollForAttach` beside them re-drove the same
+refusal. `askWhileStarting` in `scripts/bench-devbox-strategies.ts` is the
+one rule: `execInBox`, `writeFileInBox` and the readiness drive ask again
+every 250 ms while the reply is the re-askable refusal, until the startup
+observation ceiling, and return the box's own last words after it; a
+terminal refusal is the answer on the first ask, and a refused write throws
+instead of passing as written. `scripts/bench-devbox-ask-again.test.ts` is
+red on a tree where either route returns its first refusal. No budget,
+ceiling or window changed.
+
+(b) A stop never lands under a caller (`bb0195201`). Run `20260914234711`
+lost `sqlite/1/1` and `git/2/4` to `OperationInterruptedError` three
+seconds into each command, and quiesced under `git/1/1`'s successor. Two
+causes, both in the box. First, `quiesceStep` trusted a `quietSince` older
+than the last interaction: a beat cannot run while a scheduled checkpoint
+holds the object's one alarm, so a 72 s tick starved every beat inside it,
+and the first beat afterwards read a 73 s idle lease beside a 97 s old
+stretch and stopped. A stretch that began before the last interaction now
+ended with it (`packages/devbox/src/lifecycle.ts`); the timing matrix in
+`tests/decisions.test.ts` is red before and green after. Second, the
+decision behind a stop was made before a final checkpoint that runs for
+minutes, and a request admitted meanwhile ran on the container the stop
+then killed. `quiesce` now re-checks for an executing command, a claimed
+resource lane or a caller stamped since the decision after the checkpoint
+and refuses the stop, keeping the commit; `ensureReady` stamps the lease
+for every admitted operation, so file traffic counts as use.
+`tests/stop-under-caller.test.ts` is red before the fix (the stop landed
+under an admitted exec) and green after, with its no-caller control
+stopping; `tests/terminal-activity.test.ts` pins the write stamp.
+
+(c) A witness cell's setup replies are read (`665ed6a09`). Run
+`20260914234711`'s `chunked-absorption` cell wrote its marker through an
+exec that was answered "ask again", never read the reply, and judged a
+marker nobody wrote: G2's "expected red witness vanished". With (a) the
+exec is answered; `ranInBox` ends the cell with the box's own reason if a
+setup command did not run to exit 0.
+
+(d) A delta batch's `set -e` stays inside its own subshell (`84a026c2f`).
+The SDK runs every command of a box in one persistent `bash --norc`
+session (`@cloudflare/sandbox` 0.12.8 container server `initialize()`), and
+`runOpsBatched`'s top-level `set -e` outlived its batch: from the wake's
+delta-namespace batch on, the first failing command from any caller ended
+the session with that command's status. G3's read-only probe, a `touch`
+meant to fail with EROFS, answered `SessionTerminatedError: Session
+'sandbox-default' shell exited (exit code: 1)` in run `20260915012040`,
+and D5's G3 recorded the same death on 2026-09-13 as "the read-only probe's
+top-level `exit` terminated the persistent SDK shell" — the probe's
+subshell fix (`9ae255d17`) treated the symptom; the `set -e` was the
+cause. Measured 2026-09-15 on the pinned image's own container server run
+locally: a `set -e` batch then a failing top-level command ends the
+session; the same batch inside `( … )` and the session survives. The batch
+is now `header, (, set -e, ops, )`; `tests/support/session-shell.ts`
+refuses a command whose top-level `set -e` would outlive it as the third
+member of its session-death class, so the conformance and chain suites are
+red on the old batch text, and `tests/decisions.test.ts` measures both
+directions against a real bash fed the way the SDK feeds a session.
+
+The intermediate run `20260915012040` on clean `bb0195201` (with (a), (b)
+and (c), before (d)) passed nine gates and refused only G3, with 40 of 40
+segments priced and both witnesses observed; its artifacts are committed
+beside this run's. D13 and D14 are unchanged. No gate, ceiling, budget,
+workload, witness or lock changed in any of the four. Teardown of
+`20260915065241`: `bench-artifacts/teardown/20260915065241.json`, seven
+entries done, zero residue objects and zero multipart uploads; the account
+lists no Worker, application or bucket of this run. Artifacts:
+`bench-artifacts/devbox-strategies-20260915065241.json`,
+`bench-artifacts/20260915065241/snapshot-chain.json`; driver output
+`kinu-logs/devbox-settle/run-20260915065240.log`.
+
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
@@ -561,7 +658,11 @@ admitted only when every G gate passes; a refused run ranks nothing.
 
 ## Open
 
-O1. Full live acceptance remains refused by D5's dated settlement. Witness
+O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean
+`84a026c2f` passed all ten gates and `admission.admitted` is true. What
+follows is the history that led there, kept as written.
+
+Full live acceptance was refused by D5's dated settlement. Witness
 registration is complete in `fed2b9d779` and both witnesses passed on
 deployed Containers and R2. The two measured blockers are now closed: D14's
 alarm-starvation fix ran ten `--lifecycle` cycles with zero refusals
@@ -578,9 +679,9 @@ passed G6 with one C3 object attempt, but refused G2 (the
 `chunked-absorption` witness stopped failing), G3 (the cut cell's baseline
 witness bytes differed before judging) and G9 (24 of 40 segments priced:
 eight post-quiesce segments answered "ask again" at the 6 s window, two
-were interrupted by the idle stop, two lost their shell or socket). O1
-therefore remains open on those three gates; initial container admission
-is no longer among its blockers. Earlier controls follow.
+were interrupted by the idle stop, two lost their shell or socket). D18's
+four decisions closed those three gates and run `20260915065241` passed
+all ten. Earlier controls follow.
 
 The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
 `ad8a2346b`, image digest

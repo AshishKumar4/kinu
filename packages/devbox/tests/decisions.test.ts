@@ -61,7 +61,7 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
-import { requireSessionShellAccepts } from './support/session-shell';
+import { requireSessionShellAccepts, sessionShellRefusal } from './support/session-shell';
 import {
   baseObjectKey,
   chainStoreRoot,
@@ -144,6 +144,28 @@ describe('quiesce timing matrix — three gates and a confirmed quiet window', (
   test('a stopped container neither acts nor remembers quiet', () => {
     expect(quiesceStep({ ...base, containerRunning: false, quietSince: T - 9_999 }))
       .toEqual({ action: 'hold', quietSince: undefined });
+  });
+
+  // Run `20260914234711`, segment git/1/1: quietSince 1789430330189, a
+  // caller's stamp at 1789430354094, a 72 s checkpoint tick holding the alarm,
+  // and the first beat afterwards (1789430427189) read an idle lease and a
+  // confirmed stretch that had begun before the caller touched the box.
+  test('a quiet stretch older than the last interaction ended with it, however long ago it began', () => {
+    const step = quiesceStep({
+      ...base,
+      lastInteractionAt: T - DEFAULT_DEVBOX_POLICY.idleMs - 13_000,
+      quietSince: T - DEFAULT_DEVBOX_POLICY.idleMs - 13_000 - 24_000,
+    });
+
+    expect(step).toEqual({ action: 'hold', quietSince: T });
+  });
+
+  test('a quiet stretch that began after the last interaction still confirms', () => {
+    expect(quiesceStep({
+      ...base,
+      lastInteractionAt: T - DEFAULT_DEVBOX_POLICY.idleMs - DEFAULT_DEVBOX_POLICY.quietConfirmMs,
+      quietSince: T - DEFAULT_DEVBOX_POLICY.quietConfirmMs,
+    }).action).toBe('quiesce');
   });
 
   test('the heartbeat samples often enough for both windows to be observable', () => {
@@ -1095,6 +1117,36 @@ describe('a composed container command is one a POSIX shell will run', () => {
 
   test('the listener probe parses too', () => {
     requireSessionShellAccepts(healthProbeCommand(8080));
+  });
+
+  // The third way one command ends the session: a top-level `set -e` stays
+  // set in the persistent shell, and the next failing command from ANY caller
+  // ends it. Settlement `20260915012040` lost G3's read-only probe that way.
+  // Both directions of the model are measured against a real bash fed the
+  // way the SDK feeds a session, so the fake's verdict is the shell's.
+  test('a top-level set -e is refused as a session death; a subshell-scoped one is accepted', () => {
+    const unscoped = ['# devbox-namespace-v2', 'set -e', 'mkdir -p /tmp/x'].join('\n');
+    const scoped = ['# devbox-namespace-v2', '(', 'set -e', 'mkdir -p /tmp/x', ')'].join('\n');
+
+    const refusal = sessionShellRefusal(unscoped);
+
+    expect(refusal?.name).toBe('SessionTerminatedError');
+    expect(refusal?.message).toContain('exit code: 1');
+    expect(sessionShellRefusal(scoped)).toBeUndefined();
+    expect(sessionShellRefusal(['(', 'set -o errexit', 'true', ')'].join('\n'))).toBeUndefined();
+    expect(sessionShellRefusal('set -o errexit\ntrue')?.name).toBe('SessionTerminatedError');
+
+    const session = (batch: string) => spawnSync('bash', ['--norc'], {
+      input: `${batch}\nfalse\nprintf 'session=alive\\n'\n`, encoding: 'utf8',
+    });
+
+    const dead = session(unscoped);
+    const alive = session(scoped);
+
+    expect(dead.stdout).not.toContain('session=alive');
+    expect(dead.status).toBe(1);
+    expect(alive.stdout).toContain('session=alive');
+    expect(alive.status).toBe(0);
   });
 
   test('the scan\'s own answers are read back: names, and the word for none', () => {

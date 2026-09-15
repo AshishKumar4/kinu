@@ -2176,6 +2176,13 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const readiness = await this.resolveReadiness();
 
     if (readiness.kind === 'pending') throw new Error(readiness.reason);
+    // AN ADMITTED OPERATION IS A CALLER. Every operation route passes here and
+    // only callers do — maintenance runs through `#rawExec` and the scheduled
+    // callbacks, never through this gate — so the file, port and process
+    // routes stamp the same lease the command route stamps. Before this the
+    // fixture's witness write and read renewed nothing, and a box serving
+    // only file traffic read as idle.
+    this.stampInteraction();
 
     return readiness;
   }
@@ -2429,12 +2436,32 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       };
     }
 
+    const decidedAt = Date.now();
     const outcome = await this.#checkpoint('quiesce');
 
     if (outcome.kind === 'failed') {
       await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
 
       return outcome;
+    }
+
+    // A CALLER WHO ARRIVED DURING THE FINAL CHECKPOINT IS NOT IDLE. The
+    // decision behind this stop was made on the lease as it stood before a
+    // checkpoint that can run for minutes; a request admitted meanwhile is
+    // running on the container this stop is about to kill, and its writes
+    // landed after the snapshot. Run `20260914234711` lost sqlite/1/1 and
+    // git/2/4 that way (`OperationInterruptedError` three seconds into each
+    // command). The checkpoint stays committed; the stop is refused and the
+    // next heartbeat decides again on fresh evidence.
+    const caller = this.#callerSince(decidedAt);
+
+    if (caller !== undefined) {
+      return {
+        kind: 'failed',
+        reason: `the stop is refused: ${caller}`,
+        bytes: outcome.bytes,
+        movedBytes: outcome.movedBytes,
+      };
     }
 
     await this.#releaseWorkdirHolders();
@@ -2444,6 +2471,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     await this.#awaitContainerStopped();
 
     return outcome;
+  }
+
+  /** Why the box is not idle right now, if it is not: a command still
+   *  executing, a resource lane still claimed, or a caller stamped since
+   *  `since`. */
+  #callerSince(since: number): string | undefined {
+    if (this.#activeCallers !== 0) return `${String(this.#activeCallers)} command(s) are executing`;
+
+    if (this.#resources.busy()) return 'a resource lane is still claimed';
+    const stamped = this.#lastInteraction;
+
+    if (stamped !== undefined && stamped > since) return `a caller interacted ${String(Date.now() - stamped)} ms ago`;
+
+    return undefined;
   }
 
   /**
