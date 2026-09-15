@@ -227,6 +227,12 @@ class DeltaShell {
   #line(line: string): number {
     if (line === '' || line.startsWith('#')) return 0;
 
+    // The subshell `opsBatchCommand` wraps a batch in: `set -e` is scoped to
+    // it, so this shell reads the parens as the batch's boundary and nothing
+    // more. The real shell's subshell semantics are pinned by
+    // `tests/ops-batch-session.test.ts`.
+    if (line === '(' || line === ')') return 0;
+
     if (line === 'set -e') {
       this.#strict = true;
 

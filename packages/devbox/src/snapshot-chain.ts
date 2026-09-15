@@ -1082,6 +1082,26 @@ function chainShell(exec: ContainerExec, root: string) {
 
 // ── the strategy ────────────────────────────────────────────────────────────
 
+/**
+ * One batch of generated operations as the command the session shell runs.
+ *
+ * A shell's exit is its LAST command's, so without `set -e` a failed `cp` in
+ * the middle of a batch would be reported as success by the `chmod` after it.
+ * The flag is set INSIDE A SUBSHELL, because the SDK runs every command of a
+ * box in one persistent `bash --norc` session and a top-level `set -e`
+ * outlives the command that set it: from then on the first failing command
+ * from any caller ends the session with that command's status. Measured on
+ * the pinned image's container server 2026-09-15; in the settlement run
+ * `20260915012040` the fault-cut cell's read-only probe, a `touch` that is
+ * meant to fail with EROFS, answered `SessionTerminatedError: Session
+ * 'sandbox-default' shell exited (exit code: 1)` after the wake's
+ * delta-namespace batch, and D5's G3 recorded the same death on 2026-09-13.
+ * `tests/support/session-shell.ts` refuses the unscoped form in every fake.
+ */
+function opsBatchCommand(header: string, ops: readonly string[]): string {
+  return [header, '(', 'set -e', ...ops, ')'].join('\n');
+}
+
 export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const shell = chainShell(ports.exec, ports.storeRoot());
   /** This box's chain root: every key below it, one mount over it. */
@@ -1846,13 +1866,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   /** Run generated shell operations — a `# devbox-…` header line then one
    *  operation per line — in batches of {@link DELTA_OPS_PER_COMMAND}, so a
    *  many-file checkpoint costs round trips in the hundreds, not files. Every
-   *  batch carries the header and runs under `set -e`: a shell's exit is its
-   *  LAST command's, so without it a failed `cp` in the middle of a batch
-   *  would be reported as success by the `chmod` after it. A non-zero exit
-   *  names the batch; the container's own stderr carries the operation. */
+   *  batch carries the header and runs under {@link opsBatchCommand}'s scoped
+   *  `set -e`. A non-zero exit names the batch; the container's own stderr
+   *  carries the operation. */
   const runOpsBatched = async (doing: string, [header = '', ...ops]: readonly string[]): Promise<void> => {
     for (let at = 0; at < ops.length; at += DELTA_OPS_PER_COMMAND) {
-      const result = await ports.exec([header, 'set -e', ...ops.slice(at, at + DELTA_OPS_PER_COMMAND)].join('\n'));
+      const result = await ports.exec(opsBatchCommand(header, ops.slice(at, at + DELTA_OPS_PER_COMMAND)));
 
       if (result.exitCode !== 0) {
         throw new Error(`${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);

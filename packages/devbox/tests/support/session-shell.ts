@@ -15,6 +15,16 @@
 //      unexpected` and exited 2, so every stop in run `e2e20260901140445` died
 //      as `Session 'sandbox-default' shell exited (exit code: 2)`:
 //      two deployed boxes lost `stop-small` to it.
+//   3. A TOP-LEVEL `set -e`. The chain's delta batches began with `set -e`
+//      so a failed `cp` could not hide behind the `chmod` after it; the flag
+//      outlived the batch in the persistent shell, and the next failing
+//      command from ANY caller ended the session with that command's status.
+//      Settlement `20260915012040` lost G3's read-only probe — a `touch` that
+//      is meant to fail with EROFS — as `shell exited (exit code: 1)`, and
+//      D5's G3 died the same way on 2026-09-13. Measured on the pinned
+//      image's container server on 2026-09-15: `set -e` at the top level,
+//      then `false`, and the session is gone; the same inside `( … )` and
+//      the session survives.
 //
 // The second one is why this module runs a REAL PARSE rather than another
 // pattern. A fake that matches `startsWith('holders=""')` accepts a command no
@@ -38,6 +48,29 @@ import { spawnSync } from 'node:child_process';
  * command that said it with `SessionTerminatedError`.
  */
 const SHELL_EXIT = /(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/;
+
+/**
+ * A `set -e` (or `set -o errexit`) the persistent shell would keep after the
+ * command: one at the top level of the command, outside any `( … )` subshell.
+ * Bash keeps the flag for the life of the session, so the command that sets it
+ * ends the session at the next failing command from anyone.
+ */
+function leavesErrexitSet(command: string): boolean {
+  let depth = 0;
+
+  for (const rawLine of command.split('\n')) {
+    const line = rawLine.trim();
+
+    if (depth === 0 && /^set\s+(?:-[a-zA-Z]*e[a-zA-Z]*|-o\s+errexit)(?:\s|$)/.test(line)) return true;
+
+    for (const char of line) {
+      if (char === '(') depth += 1;
+      else if (char === ')') depth = Math.max(0, depth - 1);
+    }
+  }
+
+  return false;
+}
 
 /**
  * What the SDK throws when a command ends the shell it was running in. The
@@ -88,6 +121,13 @@ function syntaxRefusal(command: string): string | undefined {
  */
 export function sessionShellRefusal(command: string): Error | undefined {
   if (SHELL_EXIT.test(command)) return sessionTerminated(0);
+
+  // The status the session dies with is the NEXT failing command's, not this
+  // one's; 1 is what the deployed probe reported.
+  if (leavesErrexitSet(command)) {
+    return Object.assign(sessionTerminated(1), { shellRefusal: 'a top-level set -e outlives this command in the persistent session' });
+  }
+
   const refusal = syntaxRefusal(command);
 
   if (refusal === undefined) return undefined;
