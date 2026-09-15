@@ -670,8 +670,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
     // one live machine needs no name; several do, and the ask says so in the
     // same words the refusal uses.
     const doctrine = live.length > 1
-      ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. The runtime refuses a call that names none.'
-      : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
+      ? 'Several machines are connected: name the machine each `shell { runtime: "<nickname>" }` call is for. The runtime refuses a call that names none.'
+      : 'One machine is connected: `shell { runtime: "<nickname>" }` reaches it, and `shell { runtime: "laptop" }` reaches the sole machine.';
 
     add('devices', [
       DYNAMIC_SECTION_TITLES.devices,

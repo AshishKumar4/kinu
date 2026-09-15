@@ -235,7 +235,12 @@ function renderExecutorLine(
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
       case 'laptop':
-        return render(LAPTOP_EXECUTOR_LINE, { cliLocal });
+        // cliLocal has no device runtime: the machine IS the workspace, so
+        // the device row never renders there and the workspace row says so.
+
+        if (backend === 'cli-local') return '';
+
+        return render(LAPTOP_EXECUTOR_LINE, {});
       default:
         return render(GENERIC_EXECUTOR_LINE, { name: exec.name });
   }
@@ -252,7 +257,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
   const executors = surface.selectableExecutors;
-  const laptopOffline = offlineLaptop(surface.executors);
+  const laptopOffline = surface.backend === 'cli-local' ? undefined : offlineLaptop(surface.executors);
 
   if (executors.length === 0 && !laptopOffline) return '';
 
@@ -260,7 +265,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   const devices = executors.filter((exec) => exec.name !== 'workspace');
 
   const lines = [
-    ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)),
+    ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),
     ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, { deviceName: deviceDisplayName(laptopOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];

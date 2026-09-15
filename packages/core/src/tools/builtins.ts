@@ -91,6 +91,7 @@ import { attributeCraftedFailure } from '../craft/attribution';
 import { DEFAULT_CONFIG } from '../config';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
+import { connectedDevices, deviceByName } from '../execution/device-status';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
@@ -139,6 +140,8 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 export interface BuiltinToolDeps {
   /** Fixed authority of this constructed tool surface. */
   workMode?: WorkMode;
+  /** cliLocal mode offers no device runtime: the machine is the workspace. */
+  cliLocal?: boolean;
   rt: AgentRuntime;
   /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
   minEffectiveScore?: number;
@@ -374,6 +377,10 @@ const RUN_SHELL_ABSENT = 'shell.shell_absent';
 
 const RUN_ESCALATION_REFUSED = 'shell.escalation_refused';
 
+const RUN_NICKNAME_UNKNOWN = 'shell.nickname_unknown';
+
+const RUN_RUNTIME_NO_EXEC = 'shell.runtime_no_exec';
+
 const RUN_ESCALATION_FAILED = 'shell.escalation_failed';
 
 const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
@@ -384,10 +391,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const router = rt.executionRouter;
   const shell = rt.shell;
 
-  const shellRuntimes = [...new Set([
-    'workspace',
-    ...(router?.listExecutors().map(({ name }) => name) ?? []),
-  ])];
+  // cliLocal has no device runtime: the machine is the workspace, so
+  // the enum omits device nicknames there. The resolver below agrees: with
+  // no fleet and no device executor, a nickname is an unknown runtime.
+
+  const deviceExecutors = deps.cliLocal === true
+    ? []
+    : (router?.listExecutors().map(({ name }) => name) ?? []);
+
+  const shellRuntimes = [...new Set(['workspace', ...deviceExecutors])];
 
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
@@ -450,7 +462,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // somewhere else.
   tools.shell = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.shell,
-    inputSchema: jsonSchema<{ command: string; runtime?: string; device?: string; why?: string }>({
+    inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to run' },
@@ -458,14 +470,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: shellRuntimes,
           description:
-            'Execution runtime. Use one of the environments listed in the system prompt — that list is live for this turn; check it instead of assuming availability. ' +
-            'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
-            'Every other value names a registered environment; the live prompt states which files it addresses and any provisioning or consent semantics. Choose that runtime explicitly when the work lives there.',
-        },
-        device: {
-          type: 'string',
-          description:
-            'For runtime "laptop": the machine this command runs on, by the name the live system state lists. Required when more than one of the user\'s machines is connected; a command that names none is refused. With one machine connected it may be omitted.',
+            '`runtime` accepts `workspace`, `sandbox`, or a device by the nickname the live prompt lists; the resolver that today reads runtime laptop plus device resolves a nickname to the machine, refuses an unknown nickname naming the ones connected, and refuses an ambiguous omission the way the old field did.',
         },
         why: {
           type: 'string',
@@ -475,7 +480,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       },
       required: ['command'],
     }),
-    execute: async (args: { command: string; runtime?: string; device?: string; why?: string }, options?: ToolExecutionOptions) => {
+    execute: async (args: { command: string; runtime?: string; why?: string }, options?: ToolExecutionOptions) => {
       requireBuild('Native shell execution');
       const signal = options?.abortSignal;
       // No separate approval rule here — the approval ladder (reviewCommand / shellApprovalMode
@@ -528,9 +533,46 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // stated reason — a REFUSED escalation is as informative as a successful
       // one, since "the runtime was never there" and "the command failed" are
       // different findings that a single failure count would merge.
-      const provider = router?.getProvider(runtimeKey);
+      // One runtime field names the machine. `workspace` and `sandbox`
+      // are executor names; anything else is a device nickname off the fleet
+      // snapshot — the same lookup the executor's own per-call resolution
+      // performs, so the refusal vocabulary matches (unknown names the
+      // connected set, an ambiguous omission re-issues the classified ask).
+
+      let nickname: string | undefined;
+      const known = router?.getProvider(runtimeKey);
+
+      if (!known && runtimeKey !== 'workspace' && runtimeKey !== 'sandbox') {
+        const fleet = rt.deviceTransport?.status().devices;
+        const live = connectedDevices(fleet);
+
+        if (fleet !== undefined && deviceByName(fleet, runtimeKey) === null) {
+          const refusal = new KinuError('unavailable',
+            `no connected machine is named "${runtimeKey}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`);
+
+          escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
+          logger.failure(RUN_NICKNAME_UNKNOWN, refusal, { runtime: runtimeKey });
+          throw refusal;
+        }
+
+        // A live fleet entry means the name matched one machine: route below.
+        if (live.length > 0) nickname = runtimeKey;
+      }
+
+      const providerName = nickname !== undefined ? 'laptop' : runtimeKey;
+      const provider = router?.getProvider(providerName);
 
       if (!provider) {
+        // The fleet moved between the lookup and the route: same name, same outcome.
+        if (nickname !== undefined) {
+          const refusal = new KinuError('unavailable',
+            `no connected machine is named "${runtimeKey}" — the fleet changed since the listing`);
+
+          escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
+          logger.failure(RUN_NICKNAME_UNKNOWN, refusal, { runtime: runtimeKey });
+          throw refusal;
+        }
+
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
         // Caller asked for a runtime that hasn't been provisioned. Do NOT
         // silently fall back to workspace; that confuses the LLM into thinking
@@ -560,14 +602,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // not have a shell. Retrying cannot change that, and the two codes exist
         // to keep those apart.
         const refusal = new KinuError('unsupported', 'runtime_does_not_support_exec');
-        logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
+        logger.failure(RUN_RUNTIME_NO_EXEC, refusal, { runtime: runtimeKey });
         throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
 
       // The trailing context every executor's exec reads: the abort signal,
       // and — for a device runtime — which of the user's machines the command
       // is for. An executor with no fleet ignores the device.
-      const context = { signal, device: args.device };
+      const context = { signal, device: nickname };
       let result: CommandResult;
 
       try {

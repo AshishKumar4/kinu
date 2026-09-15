@@ -252,35 +252,38 @@ describe('the composite file plane', () => {
 
 describe('the shell tool names the machine', () => {
   /** `shell` over the real router and the real provider — the path a model's
-   *  `run { runtime: "laptop", device }` actually takes. */
+   *  `shell { runtime: "<nickname>" }` actually takes. */
   function runTool(fleet: readonly DeviceFleetEntry[]) {
     const t = fleetTransport(fleet);
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(createDeviceTunnelExecutor(t));
-    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
+    // The tool reads the fleet off the transport the backend hands it, so the
+    // harness hands the same transport through the runtime.
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: t } });
 
     return {
       t,
-      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.shell),
+      run: toolExecute<{ command: string; runtime: string; why?: string }, string>(tools.shell),
     };
   }
 
-  test('device rides the call to the named machine, and its absence on a fleet is the ask', async () => {
+  test('the nickname rides the call to the named machine, and its absence on a fleet is the ask', async () => {
     const { t, run } = runTool([STUDIO, RIG]);
 
-    expect(await run({ command: 'uname', runtime: 'laptop', device: 'mrwhite@rig', why: 'their GPU' })).toBe('ran on dev-rig');
+    expect(await run({ command: 'uname', runtime: 'mrwhite@rig', why: 'their GPU' })).toBe('ran on dev-rig');
     expect(t.sent.map((frame) => frame.deviceId)).toEqual(['dev-rig']);
 
-    const pending = run({ command: 'uname', runtime: 'laptop', why: 'their GPU' });
-    await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(pending).rejects.toThrow('name the machine this command runs on');
+    const unknown = run({ command: 'uname', runtime: 'toaster', why: 'their GPU' });
+    await expect(unknown).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(unknown).rejects.toThrow('no connected machine is named "toaster"');
+
     expect(t.sent).toHaveLength(1);
   });
 
-  test('the field exists on the schema the model reads, and only laptop needs it', async () => {
+  test('one machine needs no name; the class name still reaches the sole machine', async () => {
     const { run } = runTool([STUDIO]);
-    // One machine: no device needed, exactly as before the fleet.
+    expect(await run({ command: 'uname', runtime: 'ashish@studio', why: 'their files' })).toBe('ran on dev-studio');
     expect(await run({ command: 'uname', runtime: 'laptop', why: 'their files' })).toBe('ran on dev-studio');
   });
 });
