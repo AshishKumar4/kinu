@@ -2863,11 +2863,11 @@ function Shell(
   },
 ) {
   return (
-    <div className="p-workbench flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+    <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
           different surface than the app renders is worse than no harness. */}
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-      <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
+      <main className="p-workbench min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
           <GalleryWorkspaceBar providerWait={providerWait} />
           <div className="flex-1 flex min-h-0">
@@ -4476,17 +4476,19 @@ function ApprovalsFrame() {
  *  and this frame is about one card. */
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
+/** A settled-empty lane: no tasks, no journal entries. Both Work frames that
+ *  photograph absence share it, so the second is not a copy of the first. */
+const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") return rpcResult([]).json<T>();
+
+  if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
+
+  return stubRpc<T>(method, args);
+};
+
 /** The same column before anything has happened — the state a fresh workspace
  *  opens on, which is the one an empty-state has to earn its copy in. */
 function WorkEmptyFrame() {
-  const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "listAgentTasks") return rpcResult([]).json<T>();
-
-    if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
-
-    return stubRpc<T>(method, args);
-  };
-
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] h-screen border-x p-border">
@@ -4497,7 +4499,7 @@ function WorkEmptyFrame() {
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           tabPresence={{ releases: false, explorations: false }}
-          rpc={emptyRpc}
+          rpc={settledEmptyRpc}
         />
       </div>
     </div>
