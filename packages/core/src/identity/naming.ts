@@ -244,7 +244,7 @@ export interface WorkspaceTitlePlan {
 
 /** A title nobody chose: absent, or an echo of the raw slug — what a workspace
  *  created with no purpose shows until its first message titles it. */
-function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
+export function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slug: string): boolean {
   const shown = displayName?.trim() ?? '';
 
   return shown.length === 0 || shown === slug.trim();

@@ -121,3 +121,77 @@ describe('the workspace sidebar names a workspace and addresses it separately', 
     expect(titled?.text).not.toContain(UNTITLED);
   });
 });
+
+describe('the workspace frame names an untitled workspace the same way', () => {
+  // The sidebar gate above cannot see the workspace bar: it is rendered by
+  // WorkspacePage from the agent snapshot's displayName, not the roster row,
+  // and a fix that only patched the list would leave the defect standing the
+  // moment a person opened the workspace itself.
+  let headerText: string;
+  let headerLabels: string[];
+
+  beforeAll(async () => {
+    ({ headerText, headerLabels } = await withGallery(async ({ browser, origin }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&ws=${SLUG}`, { waitUntil: 'networkidle0' });
+
+      // The title is a button that opens the rename field; wait for the text.
+      await page.waitForFunction(
+        (untitled) => document.body.innerText.includes(untitled),
+        { timeout: 60_000 }, UNTITLED,
+      );
+
+      return page.evaluate(() => {
+        const labels: string[] = [];
+
+        for (const node of document.querySelectorAll('[title], [aria-label]')) {
+          for (const attribute of ['title', 'aria-label']) {
+            const value = node.getAttribute(attribute);
+
+            if (value) labels.push(value);
+          }
+        }
+
+        return { headerText: document.body.innerText.replace(/\s+/g, ' '), headerLabels: labels };
+      });
+    }));
+  }, 240_000);
+
+  test('the workspace frame says Untitled workspace, never the slug', () => {
+    expect(headerText).toContain(UNTITLED);
+    expect(headerText).not.toContain(SLUG);
+  });
+
+  test('no tooltip or reader label hides the slug either', () => {
+    for (const label of headerLabels) expect(label).not.toContain(SLUG);
+  });
+});
+
+describe('the Workspaces page roster names an untitled workspace the same way', () => {
+  // The sidebar and the workspace frame each have their pin above; the
+  // Workspaces page draws the row through a THIRD path — WorkspaceOverviewCard's
+  // line and tile — and a fix that reached only the first two leaves the
+  // defect standing on the page that lists every workspace the account owns.
+  let text: string;
+
+  beforeAll(async () => {
+    text = await withGallery(async ({ browser, origin }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspaces`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(`a[href="/workspace/${SLUG}"]`);
+
+      return page.evaluate((slug) => {
+        const row = document.querySelector(`a[href="/workspace/${slug}"]`);
+
+        return (row?.textContent ?? '').replace(/\s+/g, ' ').trim();
+      }, SLUG);
+    });
+  }, 240_000);
+
+  test('the roster row reads Untitled workspace, never the slug', () => {
+    expect(text).toContain(UNTITLED);
+    expect(text).not.toContain(SLUG);
+  });
+});

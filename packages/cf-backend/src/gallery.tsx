@@ -777,6 +777,12 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     if (overview !== null) return Promise.resolve(overview);
   }
 
+  // WorkspacePage records the visit on mount; a 404 here renders a "could not
+  // record this visit" notice that no real page ever shows.
+  if (method === "POST" && /^\/api\/user\/workspaces\/[^/]+\/touch$/.test(path)) {
+    return Promise.resolve(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }));
+  }
+
   // The two `/api/` prefixes a browser gate answers for itself. The feedback
   // POST is driven end to end — multipart body, the client's own size refusal,
   // the retry that reuses a capture held in memory — and the control plane's
@@ -972,6 +978,23 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
 });
 
 const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
+
+/** The workspace `&ws=` opens on the workspacepage frame: the untitled row's
+ *  page is the defect photograph — its own header naming a workspace with no
+ *  title — while the default stays the titled checkout-fixes rig. */
+const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "checkout-fixes";
+
+// `&ws=handwrought-walnut-4166c321` photographs the untitled workspace: the
+// roster row born with no title, so its snapshot answers a BLANK displayName
+// and the page renders the same first-run state the owner hit.
+if (WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321") {
+  const snapshot = v.parse(JsonObjectSchema, AGENT_RPC_DATA.getWorkspaceSnapshot);
+
+  AGENT_RPC.set("getWorkspaceSnapshot", {
+    ...snapshot,
+    status: { ...v.parse(JsonObjectSchema, snapshot.status), name: "handwrought-walnut-4166c321", displayName: "", soul: "" },
+  });
+}
 
 class GalleryAgentSocket extends EventTarget implements WebSocket {
   static readonly CONNECTING = 0;
@@ -6455,7 +6478,7 @@ async function mount() {
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
-    entries = ["/workspace/checkout-fixes"];
+    entries = [`/workspace/${WORKSPACE_PAGE_NAME}`];
     // Both app routes, exactly as App.tsx keys them: creating an agent
     // navigates to its conversation, and the frame must be able to land there.
     node = (
