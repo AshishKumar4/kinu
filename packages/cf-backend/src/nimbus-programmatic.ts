@@ -9,12 +9,16 @@
  * functions here run in the actor's own isolate, against the actor's own
  * `ctx.storage.sql`.
  *
- * WHY THE PATHS LOOK LIKE THIS. `@nimbus-sh/worker@0.6.0` publishes an
- * `exports` map that stops at `.`, `./router`, `./auth`, `./session-id`,
- * `./preview-host` and `./workspace`, so `@nimbus-sh/worker/session/programmatic`
- * does not resolve — a package-name import is a build error, not a subtlety.
- * The dist modules and their `.d.ts` files are real and shipped; reaching them
- * through the installed tree is the only way to hold them today.
+ * WHY ONE PATH STILL LOOKS LIKE THIS. `@nimbus-sh/worker@0.7.0` publishes
+ * `./workspace-host`, `./port-capability`, `./durable-slots` and `./git`
+ * beside the router, auth, session-id and preview-host entries, and every
+ * reach those cover goes through them. The programmatic RPC surface itself
+ * (`dist/session/programmatic.js`: `rpcExec`, `rpcStartProcess`, the runtime,
+ * process and port verbs, `ProgrammaticHost`) has no subpath yet, so that
+ * one module is reached through the installed tree; its `.d.ts` is real and
+ * shipped. The `./workspace` entry names `dist/workspace/nimbus-workspace.js`,
+ * a file the 0.7.0 tarball does not carry; the workspace is
+ * `@nimbus-sh/core/workspace`.
  *
  * WHY THE VALUES LOAD LAZILY. These modules' static graphs carry isomorphic-git,
  * tarball handling and the substrate's wasm-adjacent machinery. Every consumer
