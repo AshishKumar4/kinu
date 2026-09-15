@@ -2,13 +2,13 @@
  * Approval gating at the execution seam — the two places a command actually
  * reaches a shell: the `shell` tool's workspace shortcut (a raw `Shell`) and
  * every `ExecutorProvider`'s `exec`/`startProcess` tool (workspace, sandbox,
- * laptop — reached both by `shell`'s router dispatch AND by codemode's
+ * device — reached both by `shell`'s router dispatch AND by codemode's
  * `<name>.exec()` namespace calls inside `eval`).
  *
  * Before this, the gate lived inside the `shell` TOOL's own executor — one
  * call site out of the many that reach the same shells. `eval`
  * calling `workspace.exec()` / `sandbox.exec()` /
- * `laptop.exec()` skipped it entirely: same shell, same permissions, no
+ * `device.exec()` skipped it entirely: same shell, same permissions, no
  * review. Moving the gate here closes that hole with ONE implementation
  * (safety/approval-gate.ts's `gateExec`) applied at construction, not N
  * copies re-derived at each call site.
@@ -19,7 +19,7 @@
  * A hosted workspace's `startProcess` reaches the remote session directly,
  * however, and is gated here like every other background process surface.
  * Every other executor kind has no shared primitive underneath it (sandbox
- * talk to a remote SDK, laptop forwards over a device-tunnel RPC), so those
+ * talk to a remote SDK, device forwards over a device-tunnel RPC), so those
  * are gated at the ExecutorProvider boundary instead — the ExecutionRouter's
  * `register()` calls `gateProviderExec` for everything it accepts, so a
  * future executor kind is covered automatically, not by remembering to wrap
@@ -100,7 +100,7 @@ const SHELL_COMMAND_MEMBERS = ['exec', 'startProcess'] as const;
 
 /** Functions this module has already wrapped, keyed by the wrapped
  *  reference itself — not the provider object. A CLI head runtime reuses the
- *  parent's `laptop` ExecutorProvider verbatim (same real device, same
+ *  parent's `device` ExecutorProvider verbatim (same real device, same
  *  transport) across two ExecutionRouter instances; without this, the
  *  second router's `register()` would wrap an already-gated `execute` again,
  *  reviewing the command twice and consulting the approval channel twice.

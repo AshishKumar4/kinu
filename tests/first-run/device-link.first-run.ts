@@ -84,7 +84,7 @@ const WARMUP_RETRY_MS = 1_000;
 
 /**
  * The workspace's transport snapshot can trail the device list: the first
- * `executeInExecutor('laptop', …)` on a fresh workspace can answer "not
+ * `executeInExecutor('device', …)` on a fresh workspace can answer "not
  * available" while its status refresh is still in flight. A person sees it
  * once and their next click works; the case retries on the same words
  * `grantDeviceAccess` treats as warm-up, because a refusal still warm-up
@@ -199,7 +199,7 @@ interface DeviceCommandRun {
 }
 
 /**
- * One `executeInExecutor('laptop', command, machine)` driven the way the Env
+ * One `executeInExecutor('device', command, machine)` driven the way the Env
  * pane drives it — over the workspace's own socket — while the consent card
  * it raises is answered `once` through `resolveDeviceConsent`, the RPC the
  * card's button calls (use-kinu.ts).
@@ -222,7 +222,7 @@ async function runDeviceCommand(
     // socket actually did rather than what control flow can prove about a
     // `let` assigned inside a `.then` — TypeScript narrows that to never.
     const landed = { done: false };
-    const call = session.execute('laptop', command, machine.name);
+    const call = session.execute('device', command, machine.name);
     void call.then(() => { landed.done = true; }, () => { landed.done = true; });
 
     while (!landed.done && Date.now() < deadline) {
@@ -255,7 +255,7 @@ async function runDeviceCommand(
     ]);
 
     if (!finished) {
-      throw new Error(`the laptop call stayed parked past the consent window${cardId === null
+      throw new Error(`the device call stayed parked past the consent window${cardId === null
         ? ' and never raised its card' : ` past its answered card ${cardId}`}`);
     }
 

@@ -43,7 +43,7 @@ type Outcome = 'ok' | 'failed' | 'refused';
 
 const outcome: Outcome = 'refused';
 
-log.event('shell.escalated', { outcome, runtime: 'laptop' });
+log.event('shell.escalated', { outcome, runtime: 'device' });
 
 // A spread of a clean object, plus an extra field.
 log.event('shell.escalated', { ...fields, reused: false });

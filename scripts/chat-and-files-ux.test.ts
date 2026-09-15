@@ -545,7 +545,7 @@ async function run(): Promise<Observed> {
     // A disconnected device is a stated absence, not a missing row.
     const offline = await browser.newPage();
     await offline.setViewport({ width: 1280, height: 1100 });
-    await offline.goto(`${origin}/gallery.html?frame=files&offline=laptop`, { waitUntil: 'networkidle0' });
+    await offline.goto(`${origin}/gallery.html?frame=files&offline=device`, { waitUntil: 'networkidle0' });
     await offline.reload({ waitUntil: 'networkidle0' });
     await offline.waitForSelector('[data-files-offline-mount]', { timeout: 20_000 });
     const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
@@ -792,7 +792,7 @@ describe('the drive, browsing the one composite plane', () => {
   test('the root is the workspace tree beside the mounts, badges on the mounted folders', () => {
     expect(observed.filesRoot.crumbs).toBe('/');
     expect(observed.filesRoot.entries).toEqual(expect.arrayContaining(['home', 'pc', 'sandbox']));
-    // The origin badge names the machine, not the executor id — the laptop
+    // The origin badge names the machine, not the executor id — the device
     // wears the user's own device name, per the consent naming contract.
     expect(observed.filesRoot.badges).toEqual(expect.arrayContaining(["Ashish's MacBook", 'Sandbox']));
   });
@@ -1798,10 +1798,10 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
 
-      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.click('[data-env-card="device"] [data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');
       // In place: the Environment surface is still mounted behind the dialog,
       // and the URL never moved.
@@ -1845,9 +1845,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=environment&offline=laptop&connect=stall`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-env-card="laptop"] [data-env-connect]');
-      await page.click('[data-env-card="laptop"] [data-env-connect]');
+      await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
+      await page.click('[data-env-card="device"] [data-env-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-start]');
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-waiting]');
@@ -1873,7 +1873,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1100, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=files&offline=laptop&connect=1`, { waitUntil: 'networkidle0' });
+      await page.goto(`${origin}/gallery.html?frame=files&offline=device&connect=1`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-connect]');
       await page.click('[data-files-connect]');
       await page.waitForSelector('[role="dialog"] [data-connect-state="ready"]');

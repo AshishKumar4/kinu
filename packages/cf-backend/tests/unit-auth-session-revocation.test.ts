@@ -294,16 +294,16 @@ describe('logout ends one session everywhere at once', () => {
     const near = envWith(kv.near, authority.namespace);
     const far = envWith(kv.far, authority.namespace);
 
-    const laptop = await createSession(near, profile('person@example.com'));
+    const device = await createSession(near, profile('person@example.com'));
     const phone = await createSession(near, profile('person@example.com'));
-    expect(phone.identity.userId).toBe(laptop.identity.userId);
-    expect(liveSessions(authority.objectFor(laptop.identity.userId))).toHaveLength(2);
+    expect(phone.identity.userId).toBe(device.identity.userId);
+    expect(liveSessions(authority.objectFor(device.identity.userId))).toHaveLength(2);
 
-    await revokeSession(near, laptop.token);
+    await revokeSession(near, device.token);
 
     expect(await verifySession(near, phone.token)).not.toBeNull();
     expect(await verifySession(far, phone.token)).not.toBeNull();
-    expect(liveSessions(authority.objectFor(laptop.identity.userId))).toHaveLength(1);
+    expect(liveSessions(authority.objectFor(device.identity.userId))).toHaveLength(1);
   });
 
   test('a token routes to its own user, so one account\'s logout cannot reach another\'s', async () => {

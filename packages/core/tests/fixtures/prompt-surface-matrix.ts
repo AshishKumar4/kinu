@@ -11,7 +11,7 @@
  *
  * This list covers each conditional at least once in each direction: the two
  * plan-submission spellings, both model-family overlays, each built-in role,
- * an offline laptop, a preview-capable executor, the empty tool surface, the
+ * an offline device, a preview-capable executor, the empty tool surface, the
  * delegation rungs one at a time, and a workspace carrying instruction files
  * in both trust tiers. No resume case: provenance is turn-local and renders
  * no system section at all (prompting/volatile-context.ts).
@@ -40,15 +40,15 @@ const SANDBOX: PromptExecutorInfo = {
 };
 
 const LAPTOP: PromptExecutorInfo = {
-  name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+  name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active',
 };
 
-const LAPTOP_OFFLINE: PromptExecutorInfo = {
-  name: 'laptop', kind: 'laptop', available: false, configured: true, active: false, status: 'disconnected',
+const DEVICE_OFFLINE: PromptExecutorInfo = {
+  name: 'device', kind: 'device', available: false, configured: true, active: false, status: 'disconnected',
 };
 
 const CUSTOM: PromptExecutorInfo = {
-  name: 'gpu', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+  name: 'gpu', kind: 'device', available: true, configured: true, active: true, status: 'active',
 };
 
 const SKILL_HEADER: SkillHeader = {
@@ -206,8 +206,8 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: ['shell'], executors: [WORKSPACE], backend: 'cf' },
   },
   {
-    name: 'executors-offline-laptop',
-    opts: { availableTools: ['shell'], executors: [WORKSPACE, LAPTOP_OFFLINE], backend: 'cf' },
+    name: 'executors-offline-device',
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, DEVICE_OFFLINE], backend: 'cf' },
   },
   {
     name: 'executors-preview-capable',
@@ -218,7 +218,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     opts: { availableTools: ['shell'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
   },
   {
-    name: 'executors-cli-local-laptop',
+    name: 'executors-cli-local-device',
     opts: { availableTools: ['shell'], executors: [WORKSPACE, LAPTOP], backend: 'cli-local' },
   },
   {

@@ -1,4 +1,4 @@
-// createHubDeviceTransport — the laptop runtime's cached/authoritative status
+// createHubDeviceTransport — the device runtime's cached/authoritative status
 // over the user-level device hub. This is what beforeTurn refreshes so the
 import { describe, expect, test } from 'bun:test';
 import {

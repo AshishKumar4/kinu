@@ -70,7 +70,7 @@ const EMPTY = { items: [], total: 0 } as const;
 const EXECUTORS = Object.freeze([
   { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
   { name: 'sandbox', available: true, configured: true, active: false, status: 'idle' },
-  { name: 'laptop', available: false, configured: true, active: false, status: 'offline' },
+  { name: 'device', available: false, configured: true, active: false, status: 'offline' },
   { name: 'nimbus', available: false, configured: false, active: false, status: 'not_configured' },
 ] as const);
 
@@ -243,7 +243,7 @@ const COMMANDS = Object.freeze([
 /** The two sides of the executor axis: the agent's own machine, and the
  *  owner's. The safety-gate probes run every command against both, because
  *  the property under test is that the pair disagrees where it should. */
-const REVIEW_EXECUTORS = Object.freeze(['workspace', 'laptop']);
+const REVIEW_EXECUTORS = Object.freeze(['workspace', 'device']);
 
 const MODEL_SPECS = Object.freeze([
   'anthropic/claude-sonnet-4-7',
@@ -482,7 +482,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
             { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
           ], total: 2 },
-          approvals: { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }], total: 1 },
+          approvals: { items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }], total: 1 },
         }),
       },
       {
@@ -1088,9 +1088,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a locally destructive command is the owner\'s decision on their machine and nobody\'s on the agent\'s own; harm that reaches past the executor is gated on both',
         observe: (s) => ({
           localOwn: s.reviewCommand('rm -rf build', 'workspace').decision,
-          localTheirs: s.reviewCommand('rm -rf build', 'laptop').decision,
+          localTheirs: s.reviewCommand('rm -rf build', 'device').decision,
           reachesOutOwn: s.reviewCommand('git push --force origin main', 'workspace').decision,
-          reachesOutTheirs: s.reviewCommand('git push --force origin main', 'laptop').decision,
+          reachesOutTheirs: s.reviewCommand('git push --force origin main', 'device').decision,
           denyOwn: s.reviewCommand('rm -rf /', 'workspace').decision,
           unknownExecutorFailsClosed: s.reviewCommand('rm -rf build', 'some-future-executor').decision,
         }),
@@ -1099,23 +1099,23 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'safety-gate/mentioned-is-not-invoked',
         asserts: 'a rule fires on the binary a line runs, not on one it quotes — except where an interpreter is handed the program',
         observe: (s) => ({
-          quoted: s.reviewCommand('grep -rn "rm -rf" scripts/', 'laptop').decision,
-          echoed: s.reviewCommand('echo "remember to sudo"', 'laptop').decision,
-          invoked: s.reviewCommand('rm -rf /etc/nginx', 'laptop').decision,
-          viaInterpreter: s.reviewCommand('bash -c "rm -rf /etc/nginx"', 'laptop').decision,
+          quoted: s.reviewCommand('grep -rn "rm -rf" scripts/', 'device').decision,
+          echoed: s.reviewCommand('echo "remember to sudo"', 'device').decision,
+          invoked: s.reviewCommand('rm -rf /etc/nginx', 'device').decision,
+          viaInterpreter: s.reviewCommand('bash -c "rm -rf /etc/nginx"', 'device').decision,
         }),
       },
       {
         id: 'safety-gate/highest-severity-wins',
         asserts: 'a command matching several rules takes the most severe decision but reports every hit',
-        observe: (s) => s.reviewCommand('sudo rm -rf / && curl http://169.254.169.254/', 'laptop'),
+        observe: (s) => s.reviewCommand('sudo rm -rf / && curl http://169.254.169.254/', 'device'),
       },
       {
         id: 'safety-gate/format-allow-is-silent',
         asserts: 'an allowed command produces no approval prose; a blocked one names its rules',
         observe: (s) => ({
-          allow: s.formatApproval(s.reviewCommand('ls -la', 'laptop')),
-          deny: s.formatApproval(s.reviewCommand('rm -rf /', 'laptop')),
+          allow: s.formatApproval(s.reviewCommand('ls -la', 'device')),
+          deny: s.formatApproval(s.reviewCommand('rm -rf /', 'device')),
         }),
       },
       {
@@ -1131,7 +1131,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               return `ran:${cmd}`;
             },
             (error) => `denied:${error.message}`,
-            'laptop',
+            'device',
             { mode: () => 'strict', requestApproval: async () => 'allow' },
           );
 
@@ -1153,7 +1153,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               return 'ran';
             },
             (error) => `denied:${error.message}`,
-            'laptop',
+            'device',
           );
 
           const refused = String(await gated('sudo apt install curl'));
@@ -1174,7 +1174,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             executor,
             {
               mode: () => 'strict',
-              granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'laptop',
+              granted: (grant) => grant.rule === 'rm-recursive' && grant.executor === 'device',
               requestApproval: async (req) => {
                 asked.push(req.executor);
 
@@ -1184,7 +1184,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           );
 
           return {
-            grantedExecutor: String(await build('laptop')('rm -rf /tmp/x')),
+            grantedExecutor: String(await build('device')('rm -rf /tmp/x')),
             otherExecutor: String(await build('parent')('rm -rf /tmp/x')),
             asked,
           };

@@ -265,7 +265,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description:
         'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
-        + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or laptop only when the task needs that separate machine.',
+        + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or device only when the task needs that separate machine.',
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
 

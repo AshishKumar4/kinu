@@ -11,7 +11,7 @@
  *
  * Backend-neutral on purpose. The Durable Object and the CLI answer the same
  * question — "what did this response still owe when the process went away?" —
- * and one state machine over one table is what makes an interrupted laptop turn
+ * and one state machine over one table is what makes an interrupted device turn
  * and an evicted isolate the same problem with the same answer. Two
  * implementations of it drift: a claim-and-sweep on one side against a release
  * at persist time with no recovery at all on the other.

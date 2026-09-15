@@ -699,7 +699,7 @@ describe('durable device request ownership', () => {
        VALUES (?, ?, ?, ?)`,
     ).run(requestId, harness.deviceId, WORKSPACE, 'turn-1');
 
-    // The abort path the laptop exec tool takes: the cancellation frame goes
+    // The abort path the device exec tool takes: the cancellation frame goes
     // straight through this same forwarder rather than through a sweep.
     await harness.userDO.deviceRpc(harness.workspace, DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], {
       agentName: WORKSPACE,
@@ -1151,7 +1151,7 @@ describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask
  * says otherwise told him.
  */
 describe('the machine the agent asked for, as the owner reads it', () => {
-  test('no device: the offline notice, and no laptop row to render', async () => {
+  test('no device: the offline notice, and no device row to render', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 

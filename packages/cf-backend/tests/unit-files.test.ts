@@ -82,7 +82,7 @@ describe("writeExecutorFileOp", () => {
     expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", bin)).toEqual({ ok: true });
     expect(written.get("/home/user/a.bin")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "laptop", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "device", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
     expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
   });
 
@@ -451,7 +451,7 @@ describe("a bare mount point lands inside consent", () => {
     const home = opts.deviceHome === undefined ? root : opts.deviceHome;
 
     return {
-      getProvider: (name: string) => name === "laptop"
+      getProvider: (name: string) => name === "device"
         ? {
           files: device,
           homeDir: async () => {

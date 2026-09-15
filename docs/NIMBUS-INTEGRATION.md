@@ -105,7 +105,7 @@ Core interfaces:
 
 The Cloudflare backend registers the provider only as `workspace`, through
 `createNimbusWorkspaceExecutor`. There is no product `nimbus` row and no `nimbus.*`
-namespace. The optional `sandbox` and `laptop` providers stay different machines
+namespace. The optional `sandbox` and `device` providers stay different machines
 with their own filesystems.
 
 The hosted composition (`cf-backend/src/workspace-host.ts`) belongs to the

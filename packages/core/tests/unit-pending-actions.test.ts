@@ -22,7 +22,7 @@ const EMPTY: PendingActionInputs = {
 
 function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
   return {
-    id: 'defer-1', command: 'sudo systemctl restart nginx', executor: 'laptop',
+    id: 'defer-1', command: 'sudo systemctl restart nginx', executor: 'device',
     reason: 'Approval review: gate',
     status: 'queued', requestedAt: 2000, decidedAt: null, ...over,
   };
@@ -139,7 +139,7 @@ describe('buildPendingActions', () => {
     expect(action).toEqual({
       id: 'defer-1',
       kind: 'deferred_action',
-      title: 'Approve: a command the agent wants to run on laptop',
+      title: 'Approve: a command the agent wants to run on device',
       detail: 'sudo systemctl restart nginx',
       at: 2000,
     });

@@ -1,6 +1,6 @@
 // The local backend's environments, and the mount table that joins them into
 // one view. The workspace keeps its own durable filesystem; the machine the
-// CLI runs on is the `laptop` EXECUTOR, whose files ALSO appear in the
+// CLI runs on is the `device` EXECUTOR, whose files ALSO appear in the
 // workspace plane at `/pc` (vfs/mounts.ts). The property this suite has always
 // protected — that the agent can actually reach the host's files, and that
 // they are never silently confused with its own — survives as: host files
@@ -27,13 +27,13 @@ describe('the local backend file plane', () => {
   test('the workspace and the machine stay separate executors with different bytes', () => {
     const rt = freshRuntime();
     const names = rt.executionRouter!.listExecutors().map((e) => e.name).sort();
-    expect(names).toEqual(['laptop', 'workspace']);
+    expect(names).toEqual(['device', 'workspace']);
 
     const workspace = rt.executionRouter!.getProvider('workspace')!.files;
-    const laptop = rt.executionRouter!.getProvider('laptop')!.files;
+    const device = rt.executionRouter!.getProvider('device')!.files;
     expect(workspace).toBeDefined();
-    expect(laptop).toBeDefined();
-    expect(workspace).not.toBe(laptop);
+    expect(device).toBeDefined();
+    expect(workspace).not.toBe(device);
   });
 
   test('/pc serves the real host filesystem inside the agent own plane', async () => {

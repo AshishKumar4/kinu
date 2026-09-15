@@ -190,7 +190,7 @@ export interface CancelWorkDeps {
  *
  * It deliberately does NOT open with `jobRunner.cancelRunning()`: that kills
  * every job that had detached from any earlier turn — a two-hour search, a
- * running release, a laptop command another turn started — because one
+ * running release, a device command another turn started — because one
  * conversation pressed Stop. Detaching is what a job does when it outlives its
  * turn, so "the turn you can see is over" says nothing about it: the two
  * lifetimes share nothing but the button.
@@ -213,7 +213,7 @@ export async function cancelCurrentWork(deps: CancelWorkDeps): Promise<CancelWor
   }
 
   // ONE awaited sweep before ONE frame. A foreground Stop that said "done"
-  // while its turn-owned laptop commands were still running was a split-brain
+  // while its turn-owned device commands were still running was a split-brain
   // result; device unavailability is an honest empty/failed outcome, never a
   // reason to throw Stop or to sweep commands outside this turn.
   const deviceCommands = await deps.stopDeviceCommands?.() ?? [];

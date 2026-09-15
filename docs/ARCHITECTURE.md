@@ -30,7 +30,7 @@ graph TB
         subgraph Execs["ExecutionRouter, target-native exec, each its own filesystem"]
             W["workspace.*: the file plane above (default runtime)"]
             S["sandbox.*: Linux container, KinuSandbox (when configured)"]
-            P["laptop.*: the user's own machine (connect + consent)"]
+            P["device.*: the user's own machine (connect + consent)"]
         end
         State["Actor SQL: sessions · plans · task/evolution/search ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
     end
@@ -44,7 +44,7 @@ The environment list is the source of truth. `listMounts()` (an orchestrator RPC
 over `listEnvironments(executionRouter)`, `core/src/read-models/files.ts`)
 returns one row per executor with a filesystem: namespace prefix, whether it is
 live, and declared policy (`readOnly`, `rootPath`,
-`durable | ephemeral | live-shared`). `laptop` is served by the `pc-agent`
+`durable | ephemeral | live-shared`). `device` is served by the `pc-agent`
 reverse-WebSocket daemon (`packages/pc-agent`) on your machine. `sandbox` is a
 Cloudflare container, and containers are spot capacity, so
 `@kinu.run/devbox` (`packages/devbox`) presents one as a machine that stays.
@@ -483,7 +483,7 @@ graph TB
         Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · supervision · ports)"]
         CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
-        PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
+        PC["pc-agent/<br/>reverse-WS device daemon → device.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
     end
 

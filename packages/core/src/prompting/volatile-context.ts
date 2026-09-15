@@ -339,7 +339,7 @@ const BACKGROUND_RESUME_NOTICE =
  *  device connect/disconnect and sandbox activation), so it renders in the
  *  dynamic-context block — never in the cacheable system prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
-  if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
+  if (exec.name === 'device') return exec.active || exec.status === 'active' ? 'connected' : 'available';
 
   if (exec.active || exec.status === 'active') return 'active';
 
@@ -516,14 +516,13 @@ function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetE
     return `- ${device.name}${platform}: registered, offline. The user can reconnect it with \`kinu connect\``;
   }
 
-  const live = connectedDevices(fleet);
-  const mount = live.length > 1 ? `/pc/${deviceMountSegment(device, fleet)}` : '/pc';
+  const mount = `/pc/${deviceMountSegment(device, fleet)}`;
   const parts = [`- ${device.name}${platform}: connected, files at ${mount}`];
 
   if (device.granted === true) parts.push('this workspace holds its grant');
   else if (device.granted === false) parts.push('no grant yet for this workspace: the first call asks once');
 
-  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'laptop', sandbox: device.sandbox }).replace(/^, /, ''));
+  if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'device', sandbox: device.sandbox }).replace(/^, /, ''));
   // The hub re-asks a machine whose answer aged out, so what arrives here is
   // fresh or null by the hub's clock — no clock is consulted in a render.
   const present = device.toolchain?.present ?? [];
@@ -600,7 +599,7 @@ const DYNAMIC_SECTION_TITLES = {
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
   executors: '## Execution status',
-  devices: '## Your user\'s machines (the `laptop` runtime)',
+  devices: '## Your user\'s machines (the `device` runtime)',
   tasks: '## Your task list: what is still open (you keep this with the `tasks` tool)',
   jobs: '## Background work still running (collect it before you finish)',
   delegates: '## Delegates working for you',
@@ -671,7 +670,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, s
     // same words the refusal uses.
     const doctrine = live.length > 1
       ? 'Several machines are connected: name the machine each `shell { runtime: "<nickname>" }` call is for. The runtime refuses a call that names none.'
-      : 'One machine is connected: `shell { runtime: "<nickname>" }` reaches it, and `shell { runtime: "laptop" }` reaches the sole machine.';
+      : 'One machine is connected: `shell { runtime: "<nickname>" }` reaches it, and `shell { runtime: "device" }` reaches the sole machine.';
 
     add('devices', [
       DYNAMIC_SECTION_TITLES.devices,

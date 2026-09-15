@@ -24,13 +24,13 @@
  * When no tunnel is connected, all operations return a clear message
  * telling the user how to connect.
  *
- * Namespace: laptop.*
- *   laptop.exec("git status")
- *   laptop.exec("make", { device: "studio" })
- *   laptop.readFile("/Users/me/project/src/main.ts")
- *   laptop.writeFile("/tmp/output.json", data)
- *   laptop.readdir("/Users/me/project")
- *   laptop.exists("/Users/me/.config")
+ * Namespace: device.*
+ *   device.exec("git status")
+ *   device.exec("make", { device: "studio" })
+ *   device.readFile("/Users/me/project/src/main.ts")
+ *   device.writeFile("/tmp/output.json", data)
+ *   device.readdir("/Users/me/project")
+ *   device.exists("/Users/me/.config")
  */
 
 import * as v from 'valibot';
@@ -104,25 +104,25 @@ function deviceFailure(input: { doing: string; cause: unknown }): KinuError {
  * process to account for.
  */
 const EXEC_NOT_STARTED =
-  'laptop exec stopped before the command was sent — nothing ran on the device';
+  'device exec stopped before the command was sent — nothing ran on the device';
 
 /** The kernel confirmed the daemon's owned process group is gone. A command
  *  can deliberately create a separate session (`setsid`); the daemon cannot
  *  claim authority over that independently escaped process. */
 const EXEC_TERMINATED =
-  'laptop exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run';
+  'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run';
 
 /** The daemon holds no active command control entry. A terminal shell can have
  *  left backgrounded work in its group, and a command can escape into another
  *  session, so this is availability rather than a claim every process is gone. */
 const EXEC_NOTHING_RUNNING =
-  'laptop exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
+  'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run';
 
 /** The machine answers device calls but has no cancellation method at all, so
  *  the command outlives the turn. The user has to update the daemon on that
  *  machine before a stop can reach it. */
 const EXEC_CANCEL_UNSUPPORTED =
-  'laptop exec aborted — this machine runs an older Kinu daemon that cannot stop a command, '
+  'device exec aborted — this machine runs an older Kinu daemon that cannot stop a command, '
   + 'so the command may still be running. Ask the user to update the daemon on that machine.';
 
 /** The device left while the cancellation was in flight, so nothing confirmed
@@ -130,14 +130,14 @@ const EXEC_CANCEL_UNSUPPORTED =
  *  own socket closes, but this side did not see that happen and will not say it
  *  did. */
 const EXEC_CANCEL_UNCONFIRMED =
-  'laptop exec aborted — the device disconnected before it confirmed the command stopped';
+  'device exec aborted — the device disconnected before it confirmed the command stopped';
 
 /** Nothing about the command's fate came back: the kernel refused the kill, the
  *  device never answered inside the transport's deadline, or the answer that
  *  did come back was about some other command. Whatever the reason, this side
  *  cannot say the work ended, and it names why. */
 const execCancelFailed = (reason: string): string =>
-  `laptop exec aborted — the device could not stop the command, which may still be running: ${reason}`;
+  `device exec aborted — the device could not stop the command, which may still be running: ${reason}`;
 
 /**
  * Stop a command that is already running on the machine, and say what stopping
@@ -201,7 +201,7 @@ export interface DeviceExecOptions {
 }
 
 /**
- * Transport the laptop executor speaks through. The actual device sockets live
+ * Transport the device executor speaks through. The actual device sockets live
  * on the user-level hub (UserDO); the agent forwards each JSON-RPC call there,
  * so every connected device serves all of a user's agents. `status()` is a cheap
  * CACHED snapshot (the executor's isAvailable()/getStatus() are sync + hot)
@@ -259,7 +259,7 @@ const DeviceSelectionSchema = v.union([
 
 /** The machine the call names, or undefined when it names none — a plain
  *  string or an options object are both accepted, because codemode callers
- *  write `laptop.exec(cmd, 'studio')` and in-process callers write
+ *  write `device.exec(cmd, 'studio')` and in-process callers write
  *  `execute(cmd, { device: 'studio', signal })`. */
 function readDeviceSelection(input: { context: unknown }): string | undefined {
   const parsed = v.safeParse(DeviceSelectionSchema, input.context);
@@ -282,7 +282,7 @@ type CallView =
   | { readonly kind: 'refusal'; readonly refusal: Refusal };
 
 /**
- * Create the laptop (`laptop.*`) executor over a device transport. The transport
+ * Create the device (`device.*`) executor over a device transport. The transport
  * forwards to the user's device hub; this executor just shapes the tool surface.
  */
 export function createDeviceTunnelExecutor(
@@ -298,7 +298,7 @@ export function createDeviceTunnelExecutor(
   // Three-state lifecycle from the hub snapshot: connected, registered-but-
   // offline (the user can reconnect), or no registered device at all. The row
   // carries the machine's own NAME and whether this agent already holds its
-  // grant, because "laptop" is an API namespace and no user ever called their
+  // grant, because "device" is an API namespace and no user ever called their
   // computer that.
   const getStatus = (): ExecutorStatus => {
     const s = transport.status();
@@ -385,7 +385,7 @@ export function createDeviceTunnelExecutor(
         const command = parseInput(StringSchema, { value: args[0] });
 
         if (command === undefined) {
-          return refusalOf(new KinuError('bad_input', 'laptop exec: command must be a string'));
+          return refusalOf(new KinuError('bad_input', 'device exec: command must be a string'));
         }
 
         const signal = readExecSignal({ context: args[1] });
@@ -444,7 +444,7 @@ export function createDeviceTunnelExecutor(
             return refusalOf(new KinuError('denied', renderThrownChain({ cause: err })));
           }
 
-          return refusalOf(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
+          return refusalOf(deviceFailure({ doing: `device exec \`${command}\``, cause: err }));
         }
       },
     },
@@ -456,7 +456,7 @@ export function createDeviceTunnelExecutor(
         const path = parseInput(StringSchema, { value: args[0] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'laptop readFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'device readFile: path must be a string'));
         }
 
         try {
@@ -469,7 +469,7 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
 
-          return refusalText(deviceFailure({ doing: `laptop readFile ${path}`, cause: err }));
+          return refusalText(deviceFailure({ doing: `device readFile ${path}`, cause: err }));
         }
       },
     },
@@ -481,11 +481,11 @@ export function createDeviceTunnelExecutor(
         const content = parseInput(StringSchema, { value: args[1] });
 
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'laptop writeFile: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'device writeFile: path must be a string'));
         }
 
         if (content === undefined) {
-          return refusalText(new KinuError('bad_input', 'laptop writeFile: content must be a string'));
+          return refusalText(new KinuError('bad_input', 'device writeFile: content must be a string'));
         }
 
         try {
@@ -499,7 +499,7 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
 
-          return refusalText(deviceFailure({ doing: `laptop writeFile ${path}`, cause: err }));
+          return refusalText(deviceFailure({ doing: `device writeFile ${path}`, cause: err }));
         }
       },
     },
@@ -511,7 +511,7 @@ export function createDeviceTunnelExecutor(
         const path = parseInput(OptionalStringSchema, { value: args[0] });
 
         if (args[0] !== undefined && path === undefined) {
-          return refusalText(new KinuError('bad_input', 'laptop readdir: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'device readdir: path must be a string'));
         }
 
         try {
@@ -524,7 +524,7 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
 
-          return refusalText(deviceFailure({ doing: `laptop readdir ${path || '/'}`, cause: err }));
+          return refusalText(deviceFailure({ doing: `device readdir ${path || '/'}`, cause: err }));
         }
       },
     },
@@ -540,7 +540,7 @@ export function createDeviceTunnelExecutor(
         // reach the device establish nothing about the path, so each refuses
         // rather than swallowing its error into a verdict.
         if (path === undefined) {
-          return refusalText(new KinuError('bad_input', 'laptop exists: path must be a string'));
+          return refusalText(new KinuError('bad_input', 'device exists: path must be a string'));
         }
 
         try {
@@ -553,17 +553,17 @@ export function createDeviceTunnelExecutor(
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
 
-          return refusalText(deviceFailure({ doing: `laptop exists ${path}`, cause: err }));
+          return refusalText(deviceFailure({ doing: `device exists ${path}`, cause: err }));
         }
       },
     },
   };
 
   const provider: ExecutorProvider = {
-    name: 'laptop',
+    name: 'device',
     files,
-    homeDir: files.homeDir,
-    kind: 'laptop',
+    homeDir: async () => deviceFiles(transport, consent, connectedDevices(transport.status().devices)[0]?.id).homeDir(),
+    kind: 'device',
     // The set is rendered into the model's execution block ("— runs: …",
     // prompting/volatile-context.ts), which is where work is routed: a
     // declared-but-absent capability sends work to the user's hardware, behind
@@ -582,7 +582,7 @@ export function createDeviceTunnelExecutor(
     //
     // `net_inbound`, `process_long` and `process_signal` are refuted by this
     // file: `exposePort` below answers `supported: false` because the device is
-    // behind the user's NAT, and no tool in the `laptop` namespace can keep or
+    // behind the user's NAT, and no tool in the `device` namespace can keep or
     // signal a process — the surface is exec, readFile, writeFile, readdir,
     // exists. Refuted, so they are absent rather than unmeasured.
     //
@@ -621,7 +621,7 @@ export function createDeviceTunnelExecutor(
  * machines connected, a call that names none refuses asking for one: pass
  * \`{ device: "<name>" }\` — the names are in the execution-status block.
  */
-declare namespace laptop {
+declare namespace device {
   /** Execute a command on the user's local machine */
   function exec(command: string, opts?: { device?: string }): Promise<${COMMAND_RESULT_TYPE}>;
   /** Read a file from the user's local filesystem */
@@ -641,7 +641,7 @@ declare namespace laptop {
       return {
         supported: false,
         reason:
-          `laptop executor reverse-tunnels outbound from your PC; there's no inbound port to expose ` +
+          `device executor reverse-tunnels outbound from your PC; there's no inbound port to expose ` +
           `from this side. Point your local browser at the address your server uses (port ${port}), ` +
           `or use the 'sandbox' executor if you want a public URL.`,
       };
@@ -975,16 +975,6 @@ interface DeviceRoute {
  * that could read as "this machine has no files".
  */
 function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent): DeviceVFS {
-  /** The one view a path reaches WITHOUT a segment: the sole live machine, or
-   *  the unnamed view when the fleet is unknown or empty here (the hub then
-   *  answers for a one-machine account or refuses, exactly as before). Null
-   *  when several machines are live and a segment must choose. */
-  const single = (): DeviceVFS | null => {
-    const machines = connectedDevices(transport.status().devices);
-
-    return machines.length > 1 ? null : deviceFiles(transport, consent, machines[0]?.id);
-  };
-
   const routes = (): DeviceRoute[] => {
     const fleet = transport.status().devices;
 
@@ -1018,13 +1008,11 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
   };
 
-  /** One operation, dispatched: straight through on a one-machine plane, by
-   *  first segment on a fleet. The fleet's own root ("/") is the machine list,
+  /** One operation, dispatched by first segment: the mount is always
+   *  /pc/<name>, so a path that names no live machine refuses with the
+   *  connected names. The fleet's own root ("/") is the machine list,
    *  handled by the callers that can answer it (readdir, stat, exists). */
   const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Promise<T>): Promise<T> => {
-    const one = single();
-
-    if (one) return op(one, path);
     const route = routeOf(path);
 
     if (!route) throw noSuchDevice(path);
@@ -1033,17 +1021,14 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
   };
 
   const isFleetRoot = (path: string): boolean =>
-    single() === null && (path.replace(/\/+$/, '') === '' || path.replace(/\/+$/, '') === '/');
+    (path.replace(/\/+$/, '') === '' || path.replace(/\/+$/, '') === '/');
 
   return {
-    // Where the plane OPENS. A one-machine account opens on that machine's own
-    // consented root or home, as it always did; a fleet opens on the machine
-    // list at the mount point itself.
-    homeDir: async () => {
-      const one = single();
-
-      return one ? one.homeDir() : '/';
-    },
+    // Where the plane OPENS: the machine list at the mount point itself.
+    // The provider's own homeDir keeps answering the machine's opening dir
+    // (consented root or reported home) — the mount root is a roster, not a
+    // directory, so it cannot be a working directory.
+    homeDir: async () => '/',
     async readFile(path, opts) {
       return dispatch(path, (view, native) => view.readFile(native, opts));
     },
@@ -1060,9 +1045,6 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async stat(path): Promise<VfsEntryStat | null> {
       if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, isDir: true };
-      const one = single();
-
-      if (one) return one.stat(path);
       const route = routeOf(path);
 
       return route ? route.view.stat(route.rest) : null;
@@ -1075,9 +1057,6 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async exists(path) {
       if (isFleetRoot(path)) return true;
-      const one = single();
-
-      if (one) return one.exists(path);
       const route = routeOf(path);
 
       return route ? route.view.exists(route.rest) : false;

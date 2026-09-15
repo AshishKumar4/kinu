@@ -151,7 +151,7 @@ import {
   priceCall,
   // agent_facts world model
   type FactsStore,
-  // Per-turn device awareness (laptop runtime presence + change notice)
+  // Per-turn device awareness (device runtime presence + change notice)
   observeDevicePresence,
   // The stores every agent has, built once from its one SQL handle, and the
   // one binding of the live per-step planes to them.
@@ -4225,7 +4225,7 @@ export abstract class ActorAgent extends Think<Env> {
         logActivity: (event, detail) => this.logActivity(event, detail),
         // The device requests THIS tool call issued, handed to the job that now
         // owns them — by request id, never by turn. A turn can hold several
-        // parallel laptop commands and only the detaching call changes hands, so
+        // parallel device commands and only the detaching call changes hands, so
         // a turn-wide handover would move work that never left the foreground
         // and put it beyond the reach of Stop.
         onDetached: (jobId, requestIds) => this.transferDeviceRequests(jobId, requestIds),
@@ -5430,7 +5430,7 @@ export abstract class ActorAgent extends Think<Env> {
    * `record` is handed down so core emits the `profile_resolution` run event
    * from inside `loadProfileAuthorityInputs`. The event was declared in core and
    * emitted by the CLI only, so "why did this turn resolve this model, and what
-   * did resolution cost" was answerable on a laptop and unanswerable in
+   * did resolution cost" was answerable on a device and unanswerable in
    * production. Whether the row exists is not a per-backend choice, so this
    * backend does not make it — it only says WHERE the row goes, which is the
    * one genuinely per-backend part: the same recorder and the same

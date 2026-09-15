@@ -777,7 +777,7 @@ describe('buildSystemPromptSync', () => {
   test('every runtime is its own machine, on every backend, with mounts named', () => {
     // The workspace is its own durable filesystem on BOTH backends, so this is
     // unconditional — no per-backend exception for a cli-local host shell
-    // shared with the laptop executor, which is the one shape that would make
+    // shared with the device executor, which is the one shape that would make
     // "separate filesystems" false.
     // The mount doctrine rides beside it: a live machine's files also appear
     // in the agent's own plane at /pc (and /sandbox where a container binds),
@@ -786,7 +786,7 @@ describe('buildSystemPromptSync', () => {
 
     const executors: PromptExecutorInfo[] = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-      { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+      { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
     ];
 
     for (const backend of ['cli-local', 'cf'] as const) {
@@ -804,14 +804,14 @@ describe('buildSystemPromptSync', () => {
     const prompt = buildSystemPromptSync(rt, {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: false, configured: false, active: false, status: 'not_configured' },
+        { name: 'device', kind: 'device', available: false, configured: false, active: false, status: 'not_configured' },
         { name: 'sandbox', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
       ],
     });
 
     expect(prompt).not.toContain('nimbus.*');
     expect(prompt).toContain('workspace.*');
-    expect(prompt).not.toContain('laptop');
+    expect(prompt).not.toContain('device.*');
     expect(prompt).not.toContain('**sandbox.***');
     expect(prompt).not.toMatch(/Showing a running app/);
   });
@@ -842,25 +842,25 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         {
-          name: 'laptop', kind: 'laptop', available: false, configured: true, active: false,
+          name: 'device', kind: 'device', available: false, configured: true, active: false,
           status: 'disconnected', label: 'ashish@studio',
         },
       ],
     });
 
     expect(prompt).toContain('currently offline');
-    // The row names the machine its owner named. "laptop" is the namespace.
+    // The row names the machine its owner named. "device" is the namespace.
     expect(prompt).toContain('ashish@studio');
     // Calling an offline device is how the owner gets ASKED for it — the hub
     // raises a connect request on that call — so the row names the way back
     // rather than forbidding the call.
     expect(prompt).toContain('asks the user to bring it back');
     expect(prompt).toContain('kinu connect');
-    // Offline ≠ selectable: no laptop.* namespace advertised for calls.
-    expect(prompt).not.toContain('laptop.***');
+    // Offline ≠ selectable: no device.* namespace advertised for calls.
+    expect(prompt).not.toContain('device.***');
   });
 
-  test('the online laptop line names no machine and no grant: the fleet is volatile', () => {
+  test('the online device line names no machine and no grant: the fleet is volatile', () => {
     // The user may have several machines live at once, and which they are,
     // which are connected and whether THIS workspace holds each one's grant
     // change under a session. All of that renders in the dynamic-context
@@ -874,13 +874,13 @@ describe('buildSystemPromptSync', () => {
         backend: 'cf',
         executors: [
           {
-            name: 'laptop', kind: 'laptop', available: true, configured: true, active: true,
+            name: 'device', kind: 'device', available: true, configured: true, active: true,
             status: 'active', label: 'ashish@studio', granted,
           },
         ],
       });
 
-      expect(prompt).toContain('laptop.*');
+      expect(prompt).toContain('device.*');
       expect(prompt).not.toContain('ashish@studio');
       expect(prompt).not.toContain('NO grant yet');
       expect(prompt).not.toContain('holds its access grant already');
@@ -895,7 +895,7 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
-  test('the online laptop line renders the same bytes whatever the fleet looks like', () => {
+  test('the online device line renders the same bytes whatever the fleet looks like', () => {
     // The whole reason names left the prefix: two fleets, one prefix. A
     // connect or a rename must not re-prefill the conversation.
     const { rt } = createTestRuntime();
@@ -903,7 +903,7 @@ describe('buildSystemPromptSync', () => {
     const render = (identity: { label?: string; granted?: boolean }) => buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [{
-        name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
+        name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active',
         ...identity,
       }],
     });
@@ -918,12 +918,12 @@ describe('buildSystemPromptSync', () => {
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
-    expect(prompt).not.toContain('laptop.***');
+    expect(prompt).not.toContain('device.***');
     expect(prompt).toContain('the machine the CLI runs on');
     expect(prompt).toContain('rooted in the directory the session was started in');
   });
@@ -943,7 +943,7 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
@@ -955,7 +955,7 @@ describe('buildSystemPromptSync', () => {
     // Every other environment is a namespace, never a directory of this one.
     expect(prompt).toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
-    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).toContain('`device.*`');
     expect(prompt).not.toContain('Nimbus for quick cloud execution');
     expect(prompt).toMatch(/paths native to each machine/);
     // The mount doctrine is part of the naming: a live machine's files sit
@@ -973,11 +973,11 @@ describe('buildSystemPromptSync', () => {
       backend: 'cli-local',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
-    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).toContain('`device.*`');
     expect(prompt).not.toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
   });
@@ -1106,11 +1106,11 @@ describe('buildSystemPromptSync', () => {
     const surface = compilePromptSurface({
       executors: [
         { name: 'workspace', available: true, configured: true, active: true, status: 'active' },
-        { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' },
+        { name: 'device', available: false, configured: true, active: false, status: 'disconnected' },
       ],
     });
 
-    expect(surface.executors.map((exec) => exec.name)).toEqual(['laptop', 'workspace']);
+    expect(surface.executors.map((exec) => exec.name)).toEqual(['device', 'workspace']);
     expect(surface.selectableExecutors.map((exec) => exec.name)).toEqual(['workspace']);
   });
 
@@ -1428,11 +1428,11 @@ describe('buildSystemPromptSync', () => {
       //       therefore loses no surface (manyRuntimes implied it: with 2+
       //       executors at most one is `workspace`), so a lone sandbox now reads
       //       doctrine it used to miss. 3051 → 2928.
-      //     +73 (device identity) the laptop rows now name the machine the user
+      //     +73 (device identity) the device rows now name the machine the user
       //       named it and say whether this workspace already holds its access
       //       grant. 2928 → 3001.
       // 2026-09-03: RAISED 3050 → 3200 for the fleet, measured 3159.
-      //   +158 NET. The laptop line stopped naming ONE machine and one grant
+      //   +158 NET. The device line stopped naming ONE machine and one grant
       //     (−73: both left for the dynamic-context roster, where every machine
       //     renders by name each step — with two connected, the prefix's one
       //     name was whichever the hub happened to pick) and now states the
@@ -1563,7 +1563,7 @@ describe('buildSystemPromptSync', () => {
 
     const options = {
       backend: 'cf',
-      registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'laptop'],
+      registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'device'],
       currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
     } satisfies SystemPromptOptions;

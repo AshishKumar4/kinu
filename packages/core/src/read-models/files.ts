@@ -3,7 +3,7 @@
  *
  * Each executor carries its OWN file view over its OWN raw handle
  * (`ExecutorProvider.files`), in that environment's native paths: the workspace
- * is Nimbus, the sandbox is its container, `laptop` is the user's machine. The
+ * is Nimbus, the sandbox is its container, `device` is the user's machine. The
  * browser shows them one row at a time, never merged. (The AGENT-facing merge
  * is the workspace plane's mount table, `vfs/mounts.ts` — a different surface
  * with a different reader; nothing here rewrites one environment's paths into
@@ -56,7 +56,7 @@ interface RuntimeConsistency {
 }
 
 const CONSISTENCY: RuntimeConsistency = {
-  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', laptop: 'live-shared',
+  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', device: 'live-shared',
 };
 
 /** Enough of the router to list environments. Listing is a roster read and

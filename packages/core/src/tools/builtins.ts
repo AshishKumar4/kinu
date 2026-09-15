@@ -17,7 +17,7 @@
  *                       Absent → returns a 'NOT CONFIGURED' error. Core
  *                       itself does NO codegen.
  *   2. run            — shell via executionRouter; `runtime` param explicitly
- *                       chooses workspace / sandbox / laptop, with
+ *                       chooses workspace / sandbox / device, with
  *                       workspace (rt.shell) as the conservative default.
  *   3. file           — the ONE file plane: read / edit / write over the same
  *                       workspace filesystem every other surface addresses. The edit is
@@ -128,7 +128,7 @@ export interface CodemodeSurface {
    *  is what the tool's own description promises and what the in-episode loop
    *  is for. Cheap to call — compiled bodies are memoised by name and code. */
   readonly craftedTools: () => CraftedToolSet;
-  /** The live executor namespaces (`workspace`, `sandbox`, `laptop`, …). */
+  /** The live executor namespaces (`workspace`, `sandbox`, `device`, …). */
   readonly providers: ExecutorProviderSurface[];
 }
 
@@ -470,7 +470,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: shellRuntimes,
           description:
-            '`runtime` accepts `workspace`, `sandbox`, or a device by the nickname the live prompt lists; the resolver that today reads runtime laptop plus device resolves a nickname to the machine, refuses an unknown nickname naming the ones connected, and refuses an ambiguous omission the way the old field did.',
+            '`runtime` accepts `workspace`, `sandbox`, or a device by the nickname the live prompt lists; the resolver that today reads runtime device plus the old device field resolves a nickname to the machine, refuses an unknown nickname naming the ones connected, and refuses an ambiguous omission the way the old field did.',
         },
         why: {
           type: 'string',
@@ -489,7 +489,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // every ExecutionRouter provider's `exec` for everything else (see
       // execution/approval.ts). That is also where codemode's
       // `workspace.exec()` / `sandbox.exec()` /
-      // `laptop.exec()` land, so the same command answers to the identical
+      // `device.exec()` land, so the same command answers to the identical
       // decision whichever path reached it — not a check re-derived here.
 
       // Restorable result budget — full stdout/stderr is offloaded to the
@@ -559,7 +559,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         if (live.length > 0) nickname = runtimeKey;
       }
 
-      const providerName = nickname !== undefined ? 'laptop' : runtimeKey;
+      const providerName = nickname !== undefined ? 'device' : runtimeKey;
       const provider = router?.getProvider(providerName);
 
       if (!provider) {
@@ -579,15 +579,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // it has more access than it does.
         //
         // `unavailable`, never `unsupported`: a sandbox provisions on first use
-        // and a laptop comes back when its daemon does, so this is a retry, and
+        // and a device comes back when its daemon does, so this is a retry, and
         // a reader that filed it as a capability gap would report a cold start
         // as a missing feature. `error` keeps its literal token because the
         // install card matches on it (cf-backend WorkspacePage.tsx:76-80).
         const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         throw new KinuError(refusal.code, refusal.message + ': ' + (
-          runtimeKey === 'laptop'
-            ? 'The "laptop" runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
+          runtimeKey === 'device'
+            ? 'The "device" runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
             : runtimeKey === 'sandbox'
               ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
               : 'Runtime "' + runtimeKey + '" is not registered.'

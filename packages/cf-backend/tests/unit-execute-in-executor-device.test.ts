@@ -1,12 +1,12 @@
 // executeInExecutor carries the machine: with two live devices an unnamed
-// laptop call is refused with the fleet ask and raises no card, while a call
+// device call is refused with the fleet ask and raises no card, while a call
 // that names its machine raises that machine's card and runs there.
 //
 // The first-run two-machines case grants each machine through this RPC. Its
 // raise named no machine, so with two live the fleet refused it locally, the
 // refusal string parsed as a success, and the grant read as "no device consent
 // card was ever raised". The contract (docs/EXECUTION-LAYER-SPEC.md "The
-// user's account is a fleet", AGENTS.md § Execution Layer) says every laptop
+// user's account is a fleet", AGENTS.md § Execution Layer) says every device
 // call names its machine when several are live — so the RPC must carry the
 // name through to the tool context the tunnel executor reads.
 import { describe, expect, test } from 'bun:test';
@@ -70,7 +70,7 @@ async function twoDaemons(): Promise<Fleet> {
   });
 }
 
-/** A real orchestrator whose laptop executor rides the fleet above: the
+/** A real orchestrator whose device executor rides the fleet above: the
  *  production RPC, executor, transport and hub over fake sockets. */
 async function orchestratorOnFleet(fleet: Fleet) {
   const transport = createHubDeviceTransport({
@@ -103,7 +103,7 @@ describe('executeInExecutor names its machine', () => {
     fleet.consentDecision = 'always';
     const agent = await orchestratorOnFleet(fleet);
 
-    const answer = await agent.executeInExecutor('laptop', 'true');
+    const answer = await agent.executeInExecutor('device', 'true');
 
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     // The ask names both machines, and says a name is required.
@@ -122,7 +122,7 @@ describe('executeInExecutor names its machine', () => {
     fleet.consentDecision = 'always';
     const agent = await orchestratorOnFleet(fleet);
 
-    const answer = await agent.executeInExecutor('laptop', 'true', 'mrwhite@rig');
+    const answer = await agent.executeInExecutor('device', 'true', 'mrwhite@rig');
 
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     expect(answer.stdout).toContain(`ran on ${fleet.rigId}`);
@@ -143,8 +143,8 @@ describe('executeInExecutor names its machine', () => {
     fleet.consentDecision = 'always';
     const agent = await orchestratorOnFleet(fleet);
 
-    await agent.executeInExecutor('laptop', 'true', 'ashish@mac');
-    const answer = await agent.executeInExecutor('laptop', 'true', 'mrwhite@rig');
+    await agent.executeInExecutor('device', 'true', 'ashish@mac');
+    const answer = await agent.executeInExecutor('device', 'true', 'mrwhite@rig');
 
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     expect(answer.stdout).toContain(`ran on ${fleet.rigId}`);

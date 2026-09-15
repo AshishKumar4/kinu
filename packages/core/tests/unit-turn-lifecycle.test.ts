@@ -431,7 +431,7 @@ describe('the escalation row', () => {
     // would try to move; fabricating a reason would destroy it.
     const escalations = new TurnEscalationLedger();
     escalations.observe({ runtime: 'sandbox', reason: undefined, outcome: 'ok' });
-    escalations.observe({ runtime: 'laptop', reason: '   ', outcome: 'ok' });
+    escalations.observe({ runtime: 'device', reason: '   ', outcome: 'ok' });
     expect(escalations.snapshot().escalations.map((e) => e.reason)).toEqual([null, null]);
   });
 

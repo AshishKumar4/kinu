@@ -28,7 +28,7 @@
  *   CHECKED. That is the assertion the owner made by eye.
  *
  * THE GATED COMMAND IS REAL AND SAFE. `rm -r <this run's own scratch directory>`
- * trips `rm-recursive`, whose harm is `local` — and `laptop` is not one of the
+ * trips `rm-recursive`, whose harm is `local` — and `device` is not one of the
  * agent's own executors, so a local-harm rule gates there and nowhere else. The
  * directory belongs to this case, on the machine this case attached, and its
  * disappearance is how the run proves the approved command really ran.
@@ -111,7 +111,7 @@ describe(SUITE, () => {
           // boundary every other caller does: `gateProviderExec` wraps the
           // provider at registration, so there is no path to this machine that
           // skips the review.
-          const first = await session.execute('laptop', command);
+          const first = await session.execute('device', command);
           const firstText = `${first.stdout ?? ''}${first.stderr ?? ''}${first.error ?? ''}`;
           const queued = await session.parkedCommands();
           const row = queued.find((entry) => entry.command === command) ?? null;
@@ -129,7 +129,7 @@ describe(SUITE, () => {
           // spent at the gate and the command reaches the machine.
           const second = row === null
             ? null
-            : await session.execute('laptop', command);
+            : await session.execute('device', command);
 
           const gone = !existsSync(doomed);
 
@@ -140,7 +140,7 @@ describe(SUITE, () => {
           const alsoDoomed = join(machine.home, 'doomed-by-click');
           mkdirSync(alsoDoomed, { recursive: true });
           const clickCommand = `rm -r ${JSON.stringify(alsoDoomed)}`;
-          await session.execute('laptop', clickCommand);
+          await session.execute('device', clickCommand);
           const browser = await openBrowser();
           held.browser = browser;
           const clicked = await approveThroughTheButton(browser, PLAN, session.workspace, clickCommand);
@@ -153,7 +153,7 @@ describe(SUITE, () => {
           return [
             {
               what: 'parked',
-              reached: row !== null && row.executor === 'laptop',
+              reached: row !== null && row.executor === 'device',
               detail: row === null
                 ? `the gated command did not park: the queue holds ${String(queued.length)} row(s) `
                   + `and the exec answered ${JSON.stringify(firstText.slice(0, 240))}`

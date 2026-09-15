@@ -2,7 +2,7 @@
  * Regression coverage for the executor-seam approval gate. The bypass it
  * closes: `run { command: "rm -rf /x" }` gated while the identical command
  * reached through codemode (`nimbus.exec(...)`, `sandbox.exec(...)`,
- * `laptop.exec(...)`) went ungated — which is what a gate living inside the
+ * `device.exec(...)`) went ungated — which is what a gate living inside the
  * `shell` TOOL's own executor buys, instead of one at the boundary every path
  * actually shares.
  *
@@ -27,7 +27,7 @@ const GATE = 'sudo rm -rf /var/lib/important';
 
 const ALLOW = 'echo hi';
 
-/** A minimal ExecutorProvider shaped like nimbus/sandbox/laptop — a real
+/** A minimal ExecutorProvider shaped like nimbus/sandbox/device — a real
  *  shell reachable through codemode's `<name>.exec()` namespace. */
 function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus') {
   const executed: string[] = [];
@@ -83,9 +83,9 @@ describe('gateProviderExec — the executor-seam gate', () => {
   });
 
   test('a gate-tier command with no approver wired is refused, not silently allowed', async () => {
-    // On `laptop`: on the agent's own sandbox this same string is housekeeping
+    // On `device`: on the agent's own sandbox this same string is housekeeping
     // and there is nothing to refuse.
-    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    const { provider, executed } = fakeShellProvider('device', 'device');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
     const result = await gated.tools.exec!.execute(GATE);
     expect(result).toMatchObject({ error: expect.stringContaining('needs owner approval') });
@@ -93,7 +93,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
   });
 
   test('allow_all lets a gate-tier command through', async () => {
-    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    const { provider, executed } = fakeShellProvider('device', 'device');
     const gated = gateProviderExec(provider, { mode: () => 'allow_all' });
     const result = await gated.tools.exec!.execute(GATE);
     expect(String(result)).toBe(`ran: ${GATE}`);
@@ -138,7 +138,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
   });
 
   test('re-gating an already-gated provider is a no-op — idempotent against the same object crossing two routers', async () => {
-    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    const { provider, executed } = fakeShellProvider('device', 'device');
     const askedFirst: ShellApprovalRequest[] = [];
 
     const firstPolicy: ShellApprovalPolicy = {
@@ -152,7 +152,7 @@ describe('gateProviderExec — the executor-seam gate', () => {
 
     const gatedOnce = gateProviderExec(provider, firstPolicy);
 
-    // Simulate a second router (e.g. a CLI head reusing the parent's laptop
+    // Simulate a second router (e.g. a CLI head reusing the parent's device
     // provider verbatim — see cli-backend/runtime.ts buildCLIHeadRuntime)
     // gating the ALREADY-gated provider again with a DIFFERENT policy.
     const askedSecond: ShellApprovalRequest[] = [];
@@ -207,10 +207,10 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
 
   test('an allowed command still runs, through either accessor', async () => {
     const router = new DefaultExecutionRouter(strictNoChannelPolicy());
-    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    const { provider, executed } = fakeShellProvider('device', 'device');
     router.register(provider);
 
-    await router.getProvider('laptop')!.tools.exec!.execute(ALLOW);
+    await router.getProvider('device')!.tools.exec!.execute(ALLOW);
     await router.getProviders()[0]!.tools.exec!.execute(ALLOW);
     expect(executed).toEqual([ALLOW, ALLOW]);
   });
@@ -279,7 +279,7 @@ describe('the executor reaches the gate', () => {
     expect(asked).toEqual([]);
   });
 
-  test("the identical command against the owner's laptop is put to them", async () => {
+  test("the identical command against the owner's device is put to them", async () => {
     const asked: ShellApprovalRequest[] = [];
 
     const router = new DefaultExecutionRouter({
@@ -291,13 +291,13 @@ describe('the executor reaches the gate', () => {
       },
     });
 
-    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    const { provider, executed } = fakeShellProvider('device', 'device');
     router.register(provider);
 
-    const result = await router.getProvider('laptop')!.tools.exec!.execute(HOUSEKEEPING);
+    const result = await router.getProvider('device')!.tools.exec!.execute(HOUSEKEEPING);
     expect(result).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(executed).toEqual([]);
-    expect(asked.map((r) => r.executor)).toEqual(['laptop']);
+    expect(asked.map((r) => r.executor)).toEqual(['device']);
   });
 
   test('a standing grant for that rule on that machine stops the asking', async () => {
@@ -305,7 +305,7 @@ describe('the executor reaches the gate', () => {
 
     const router = new DefaultExecutionRouter({
       mode: () => 'strict',
-      granted: (g) => g.rule === 'rm-recursive' && g.executor === 'laptop',
+      granted: (g) => g.rule === 'rm-recursive' && g.executor === 'device',
       requestApproval: async (req) => {
         asked.push(req);
 
@@ -313,16 +313,16 @@ describe('the executor reaches the gate', () => {
       },
     });
 
-    const { provider, executed } = fakeShellProvider('laptop', 'laptop');
+    const { provider, executed } = fakeShellProvider('device', 'device');
     router.register(provider);
 
-    expect(String(await router.getProvider('laptop')!.tools.exec!.execute(HOUSEKEEPING)))
+    expect(String(await router.getProvider('device')!.tools.exec!.execute(HOUSEKEEPING)))
       .toBe(`ran: ${HOUSEKEEPING}`);
     expect(executed).toEqual([HOUSEKEEPING]);
     expect(asked).toEqual([]);
 
     // …and buys nothing for the rule it did not name.
-    expect(await router.getProvider('laptop')!.tools.exec!.execute('sudo reboot')).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
+    expect(await router.getProvider('device')!.tools.exec!.execute('sudo reboot')).toMatchObject({ error: expect.stringContaining('Denied by the owner') });
     expect(asked.map((r) => r.command)).toEqual(['sudo reboot']);
   });
 });

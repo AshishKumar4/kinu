@@ -524,7 +524,7 @@ describe('Live Smoke — one real turn per backend', () => {
       });
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
       // `hostRoot: null` for the reason tests/evals/harness.ts states at length:
-      // an episode reaches every registered executor and the default `laptop`
+      // an episode reaches every registered executor and the default `device`
       // plane is rooted at the repo this suite was launched from. Asserted
       // rather than trusted, immediately below.
       const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM_CONFIG, hostRoot: null });

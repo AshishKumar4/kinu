@@ -26,11 +26,11 @@ describe('clamped run output on the local backend', () => {
     const tools = buildBuiltinTools({ rt });
     const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
 
-    // A real HOST command whose output blows the clamp budget. `laptop` is
+    // A real HOST command whose output blows the clamp budget. `device` is
     // where the machine is now — the default `workspace` runtime is the
     // agent's own filesystem and its own shell.
     const clamped = await run({
-      runtime: 'laptop',
+      runtime: 'device',
       command: `awk 'BEGIN { for (i = 0; i < 9000; i++) print "padding log line", i; print "FINAL-ERROR-LINE" }'`,
     });
 
@@ -59,7 +59,7 @@ describe('clamped run output on the local backend', () => {
     expect(grepped).toContain('FINAL-ERROR-LINE');
     // The host shell cannot: it is a different machine with a different
     // filesystem, which is exactly why the marker names workspace.readFile.
-    const onHost = run({ runtime: 'laptop', command: `grep FINAL-ERROR-LINE ${path}` });
+    const onHost = run({ runtime: 'device', command: `grep FINAL-ERROR-LINE ${path}` });
     await expect(onHost).rejects.toMatchObject({ code: 'io', execution: { exitCode: 2 }, message: expect.stringContaining('No such file or directory') });
     await expect(onHost).rejects.toMatchObject({ message: expect.not.stringContaining('FINAL-ERROR-LINE') });
   });

@@ -14,7 +14,7 @@
  * describes ONE machine over ONE connection, and the socket attachment is the
  * only store with exactly that lifetime. Kept out of SQL deliberately — a
  * `user_devices` column would outlive the machine it described, so a different
- * laptop reconnecting under the same device row would inherit its predecessor's
+ * device reconnecting under the same device row would inherit its predecessor's
  * capabilities, and a stale answer would read as a fresh one.
  */
 import { KinuError, toKinuError } from '../obs/error';

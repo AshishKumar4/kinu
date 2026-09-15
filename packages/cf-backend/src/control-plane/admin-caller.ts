@@ -203,7 +203,7 @@ export function isControlPlaneOperator(env: AdminGateEnv, identity: AuthIdentity
  *
  * `mutating` is not a convenience: a read and a write are different
  * authorizations, and the step-up window is the only thing standing between a
- * borrowed unlocked laptop and a destructive control-plane action.
+ * borrowed unlocked device and a destructive control-plane action.
  */
 export function authorizeAdmin(
   env: AdminGateEnv,

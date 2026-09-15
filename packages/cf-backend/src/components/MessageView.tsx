@@ -215,7 +215,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
 
   // Surface the runtime the `shell` tool dispatched on so the user can see
   // at a glance whether the agent ran something in workspace / sandbox /
-  // laptop. Default = workspace.
+  // device. Default = workspace.
   const runtime = toolName === 'shell'
     ? (jsonString(input, "runtime") ?? 'workspace')
     : null;

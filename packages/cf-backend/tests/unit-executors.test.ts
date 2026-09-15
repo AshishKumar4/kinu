@@ -20,13 +20,13 @@ describe("pickDefaultExecutor", () => {
   });
 
   test("ignores lastActive when it is unavailable, falls back to active static priority", () => {
-    const execs = [{ name: "sandbox", available: true, active: true }, { name: "laptop", available: false }];
-    expect(pickDefaultExecutor(execs, "laptop")).toBe("sandbox");
+    const execs = [{ name: "sandbox", available: true, active: true }, { name: "device", available: false }];
+    expect(pickDefaultExecutor(execs, "device")).toBe("sandbox");
   });
 
-  test("static priority favors active user's desktop when connected (laptop > sandbox)", () => {
-    expect(pickDefaultExecutor([...active("sandbox", "laptop", "workspace")])).toBe("laptop");
-    expect(pickDefaultExecutor([...active("laptop", "workspace")])).toBe("laptop");
+  test("static priority favors active user's desktop when connected (device > sandbox)", () => {
+    expect(pickDefaultExecutor([...active("sandbox", "device", "workspace")])).toBe("device");
+    expect(pickDefaultExecutor([...active("device", "workspace")])).toBe("device");
     expect(pickDefaultExecutor([...active("sandbox", "workspace")])).toBe("sandbox");
   });
 
@@ -89,7 +89,7 @@ describe("executor labels name one environment each", () => {
   // The environments this build knows, as the Environment surface lists them.
   // A fifth environment added to the module needs a row here: nothing else
   // enumerates the whole set.
-  const NAMES = ["laptop", "sandbox", "workspace", "parent"];
+  const NAMES = ["device", "sandbox", "workspace", "parent"];
 
   test("no two environments share a name", () => {
     const labels = NAMES.map(executorLabel);

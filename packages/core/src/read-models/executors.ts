@@ -12,7 +12,7 @@ import type { ExecutorInfo } from '../execution/types';
 export type { ExecutorInfo };
 
 /**
- * The human name beside each namespace. Not a copy of the namespace — `laptop`
+ * The human name beside each namespace. Not a copy of the namespace — `device`
  * reads "Your PC" — because the namespace is the API and this is the executor
  * kind.
  *
@@ -20,7 +20,7 @@ export type { ExecutorInfo };
  * so "Agent state" would undersell it into looking like a debug pane.
  */
 const EXECUTOR_LABELS = {
-  laptop:    "Your PC",
+  device:    "Your PC",
   sandbox:   "Sandbox",
   workspace: "Workspace",
   // Forks only: the workspace this one branched from, reached over DO RPC.
@@ -31,7 +31,7 @@ export function executorLabel(name: string): string {
   return Object.entries(EXECUTOR_LABELS).find(([key]) => key === name)?.[1] ?? name;
 }
 
-const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];
+const EXECUTOR_ORDER = ["device", "sandbox", "workspace", "parent"];
 
 export function executorSortKey(name: string): number {
   const idx = EXECUTOR_ORDER.indexOf(name);
@@ -50,7 +50,7 @@ export function isExecutorActive(exec: ExecutorInfo): boolean {
 export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
   if (exec.name === "workspace" || !exec.available) return false;
 
-  if (exec.name === "laptop") return true;
+  if (exec.name === "device") return true;
 
   return isExecutorActive(exec);
 }
@@ -94,7 +94,7 @@ export function releaseSubstrate(executors: ExecutorInfo[]): ReleaseSubstrate {
   return { state: "ready", note: sandbox.reason ?? null };
 }
 
-const STATIC_PRIORITY = ["laptop", "sandbox"];
+const STATIC_PRIORITY = ["device", "sandbox"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
   const isActive = (name: string) => executors.some((e) =>

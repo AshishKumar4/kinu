@@ -30,7 +30,7 @@ const WS_OPEN = 1;
  * wall clock on it is a real signal.
  *
  * It is deliberately NOT the bound on `exec`. One 30s bound over every call
- * welds liveness onto the work budget: any laptop command outliving half a
+ * welds liveness onto the work budget: any device command outliving half a
  * minute — a build, a test suite, an install — fails as `device RPC timeout`, a
  * message indistinguishable from a dead device. A call with no deadline of its
  * own rides {@link LIVENESS_PROBE_MS} instead: it fails when the DEVICE stops

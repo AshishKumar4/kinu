@@ -12,7 +12,7 @@
  *
  * 1. A decision is a function of (rule, EXECUTOR). `rm -rf node_modules` in
  *    the agent's own workspace is housekeeping; the identical string against
- *    the owner's laptop is their real machine. A table matched on the command
+ *    the owner's device is their real machine. A table matched on the command
  *    string alone cannot tell those apart, so it gated both — which is why
  *    ordinary agent work spent the owner's attention on nothing. Each rule
  *    declares where its harm LANDS ({@link ApprovalHarm}); each executor is
@@ -53,7 +53,7 @@ export type ApprovalDecision = 'allow' | 'warn' | 'gate' | 'deny';
  *
  *   'local'       — the damage is confined to the machine the command runs on.
  *                   Whether that matters depends entirely on whose machine it
- *                   is: a wiped scratch workspace is a re-clone, a wiped laptop
+ *                   is: a wiped scratch workspace is a re-clone, a wiped device
  *                   is the owner's life.
  *   'reaches_out' — the effect leaves the executor. A force-push rewrites a
  *                   remote, `npm publish` is public, an env dump lands in the
@@ -69,7 +69,7 @@ export type ApprovalHarm = 'local' | 'reaches_out';
  * owner's decision on these.
  *
  * Everything else is somebody else's machine and is NOT listed: the owner's
- * `laptop`, a fork's `parent` workspace, and any executor kind added later.
+ * `device`, a fork's `parent` workspace, and any executor kind added later.
  * Membership is opt-in precisely so a new executor fails closed.
  */
 const AGENT_OWN_EXECUTORS: ReadonlySet<string> = new Set(['workspace', 'sandbox']);
@@ -92,7 +92,7 @@ export interface ApprovalResult {
 export interface ShellApprovalRequest {
   readonly command: string;
   /** The executor the command is bound for — `workspace`, `sandbox`,
-   *  `laptop`, `parent`. Part of the question, not decoration: the same
+   *  `device`, `parent`. Part of the question, not decoration: the same
    *  string is a different request on a different machine. */
   readonly executor: string;
   readonly review: ApprovalResult;
@@ -133,7 +133,7 @@ export function formatApprovalGrant(grant: ApprovalGrant): string {
 /**
  * Whether a standing grant covers this rule on this executor. The one equality
  * every `granted()` reads: a policy that compared one field and not the other
- * would honour a `sudo` grant on the laptop for the sandbox too, and three
+ * would honour a `sudo` grant on the device for the sandbox too, and three
  * hand-written comparisons are three places that can.
  */
 export function holdsGrant(grants: readonly ApprovalGrant[], grant: ApprovalGrant): boolean {

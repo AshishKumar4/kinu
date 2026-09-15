@@ -2,7 +2,7 @@
 // the parent runtime: the parent's real host executor + files, a private durable
 // scratch. These tests drive a full HeadController split → run → merge cycle with
 // a prompt-aware fake model, assert the head's real tool surface, and prove the
-// runtime-level fork capability (real /parent files + real `run laptop` exec)
+// runtime-level fork capability (real /parent files + real `run device` exec)
 // that the caffe fork lacked — all without a network LLM.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -558,9 +558,9 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     expect(String(await parentExec.tools.exec.execute('cat hello.txt')))
       .toContain('from the parent workspace');
 
-    // Real commands run through the parent's shared laptop executor.
-    const laptop = rt.executionRouter!.getProvider('laptop')!;
-    const out = await laptop.tools.exec!.execute(`cat ${join(dir, 'hello.txt')}`);
+    // Real commands run through the parent's shared device executor.
+    const device = rt.executionRouter!.getProvider('device')!;
+    const out = await device.tools.exec!.execute(`cat ${join(dir, 'hello.txt')}`);
     expect(String(out)).toContain('from the real machine');
 
     // Its own filesystem is PRIVATE scratch — not the host, not the parent.
@@ -576,7 +576,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
   // on a finite run, stated with its measurement, not a detector.
   }, 15_000);
 
-  test('the head run tool reaches the real host with runtime=laptop', async () => {
+  test('the head run tool reaches the real host with runtime=device', async () => {
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'note.txt'), 'real file content');
     const rt = await createHeadRuntime(makeParent(), 'h2');
@@ -590,7 +590,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     });
 
     const run = toolExecute<{ command: string; runtime: string }, string>(tools.shell);
-    const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' });
+    const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'device' });
     expect(String(out)).toContain('real file content');
   });
 

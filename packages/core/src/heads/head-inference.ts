@@ -245,12 +245,12 @@ function renderHeadToolConventions(
     const executionDoctrine = workspaceLayout === 'shared-workspace'
       ? '- eval runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
         + '`workspace.*` is the canonical workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
-        + '`sandbox.*` is its container, and `laptop.*` is the user\'s machine. '
+        + '`sandbox.*` is its container, and `device.*` is the user\'s machine. '
         + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
         + '`web.*` is also in scope.'
       : '- eval runs JavaScript across the environments exposed to this local head: '
         + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
-        + 'and `laptop.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
+        + 'and `device.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
         + '`web.*` is also in scope.';
 
     lines.push(
@@ -263,10 +263,10 @@ function renderHeadToolConventions(
 
   if (hasHeadTool(tools, 'shell')) {
     const runDoctrine = workspaceLayout === 'shared-workspace'
-      ? '- run executes one shell command. Name the runtime: `sandbox` / `laptop` are the parent agent\'s separate environments, '
+      ? '- run executes one shell command. Name the runtime: `sandbox` / `device` are the parent agent\'s separate environments, '
         + 'and the default `workspace` runtime is the canonical workspace you were forked from.'
       : '- run executes one shell command. The runtime `parent` is the canonical parent workspace, the default `workspace` runtime is private scratch, '
-        + 'and runtime `laptop` is the user\'s machine.';
+        + 'and runtime `device` is the user\'s machine.';
 
     lines.push(
       runDoctrine,

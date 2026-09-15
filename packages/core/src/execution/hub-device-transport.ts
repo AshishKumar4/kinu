@@ -1,5 +1,5 @@
 /**
- * The laptop runtime's DeviceTransport over the user-level device hub (UserDO).
+ * The device runtime's DeviceTransport over the user-level device hub (UserDO).
  *
  * `status()` is sync + hot (it gates per-turn tool exposure), so it serves a
  * cached snapshot refreshed from the hub in the background once it goes stale —
@@ -82,7 +82,7 @@ export interface HubDeviceTransportOpts {
   caller(): Promise<UserCaller>;
   /** Passed with every RPC so the hub can enforce per-agent consent. */
   agentName: string;
-  /** CLI-forwarded working directory for laptop exec calls, when present. */
+  /** CLI-forwarded working directory for device exec calls, when present. */
   cliCwd(): string | null;
   /** Current turn identity for the daemon's pre-mutation shadow-git snapshot
    *  (deduped daemon-side per turn). Null outside turns / when unwired. */

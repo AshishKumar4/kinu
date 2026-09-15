@@ -1105,7 +1105,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // issued from that moment on is registered under the job at its own INSERT.
     // A handover that is only a snapshot taken at the crossing leaves a request
     // the tool issues afterwards — an `eval` script still launching
-    // laptop commands minutes later — belonging to nobody: the turn is over and
+    // device commands minutes later — belonging to nobody: the turn is over and
     // the transfer has already named its set.
     const ownership = new DeviceRequestOwnership();
     ownership.report('req-1');
@@ -1116,7 +1116,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const { runner } = setup({
       onDetached: async (_jobId, requestIds) => {
         received.push([...requestIds]);
-        // A laptop exec that starts while the handover is still in flight.
+        // A device exec that starts while the handover is still in flight.
         ownersDuringTransfer.push(ownership.owningJobId);
         ownership.report('req-late');
       },

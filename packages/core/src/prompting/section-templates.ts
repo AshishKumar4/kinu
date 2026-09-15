@@ -29,8 +29,8 @@ import roleSection from "../prompts/role-section.md" with { type: 'text' };
 import toolsSection from "../prompts/tools-section.md" with { type: 'text' };
 import workspaceExecutorLine from "../prompts/workspace-executor-line.md" with { type: 'text' };
 import sandboxExecutorLine from "../prompts/sandbox-executor-line.md" with { type: 'text' };
-import laptopExecutorLine from "../prompts/laptop-executor-line.md" with { type: 'text' };
-import offlineLaptopLine from "../prompts/offline-laptop-line.md" with { type: 'text' };
+import deviceExecutorLine from "../prompts/device-executor-line.md" with { type: 'text' };
+import offlineDeviceLine from "../prompts/offline-device-line.md" with { type: 'text' };
 import genericExecutorLine from "../prompts/generic-executor-line.md" with { type: 'text' };
 import executorsSection from "../prompts/executors-section.md" with { type: 'text' };
 import persistenceSection from "../prompts/persistence-section.md" with { type: 'text' };
@@ -193,18 +193,18 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
  * name, every step. This line carries only what never changes — what the
  * namespace is and how a call names its machine.
  */
-export const LAPTOP_EXECUTOR_LINE = definePromptSection(
-  "executors/laptop",
+export const DEVICE_EXECUTOR_LINE = definePromptSection(
+  "executors/device",
   "",
-  laptopExecutorLine.trimEnd(),
+  deviceExecutorLine.trimEnd(),
 );
 
 /** A registered-but-offline device is still listed (the user can bring it
  *  back), unlike other unavailable executors, which are omitted entirely. */
-export const OFFLINE_LAPTOP_LINE = definePromptSection(
-  "executors/laptop-offline",
+export const OFFLINE_DEVICE_LINE = definePromptSection(
+  "executors/device-offline",
   "{{deviceName}}",
-  offlineLaptopLine.trimEnd(),
+  offlineDeviceLine.trimEnd(),
 );
 
 export const GENERIC_EXECUTOR_LINE = definePromptSection(

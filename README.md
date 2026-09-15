@@ -66,7 +66,7 @@ You can use it for:
   shell approval or a release approval, appears under "Needs you". Plans open
   for review in the same Work tab; settled work stays in its journal.
 - Cloud or your own devices. A cloud workspace lives in a Durable Object on
-  Cloudflare and keeps running when your laptop is closed. A local workspace
+  Cloudflare and keeps running when your device is closed. A local workspace
   runs on your machine over `bun:sqlite`. It is the same agent either way.
 - Reach it from anywhere. The web app, the `kinu` CLI, a full-screen terminal
   UI, and editors over the Agent Client Protocol can open a cloud workspace.
@@ -121,8 +121,8 @@ device serves every workspace you grant. It works like this:
 - A grant is per workspace and per machine. A workspace you have not granted
   is refused before anything reaches the device. Revoking a grant takes
   effect on the next call.
-- Your machine mounts at `/pc` in the workspace file plane, or `/pc/<name>`
-  when you connect more than one. Mounts extend the view and never copy it.
+- Each machine mounts at `/pc/<name>` in the workspace file plane.
+  Mounts extend the view and never copy it.
 - The agent sees its own home plus the folders you named at connect time. The
   rest of your home is invisible by construction. On Linux the shell runs
   under bubblewrap, on macOS under sandbox-exec, and the file methods enforce

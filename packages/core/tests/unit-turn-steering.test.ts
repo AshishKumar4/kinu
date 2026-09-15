@@ -243,9 +243,9 @@ describe('repeated-call trigger', () => {
 
   test('argument order is not an approach: {a,b} and {b,a} are one call', async () => {
     const orch = newTurn();
-    await repeat(orch, 'shell', { command: 'make', runtime: 'laptop' });
-    await repeat(orch, 'shell', { runtime: 'laptop', command: 'make' });
-    await repeat(orch, 'shell', { command: 'make', runtime: 'laptop' });
+    await repeat(orch, 'shell', { command: 'make', runtime: 'device' });
+    await repeat(orch, 'shell', { runtime: 'device', command: 'make' });
+    await repeat(orch, 'shell', { command: 'make', runtime: 'device' });
     expect(injected(await step(orch, 1, [user('q')]))).toHaveLength(1);
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });

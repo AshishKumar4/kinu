@@ -264,7 +264,7 @@ TRAJECTORY_EVAL=tests/evals/trajectory.eval.ts
 # The other CLOUD-ONLY arm: ONE MACHINE, linked to the deployment and driven
 # from a workspace — `connectDevice` (the CLI's own connect implementation),
 # `GET /api/cli/devices`, the consent and revoke routes Account settings uses,
-# and `executeInExecutor('laptop', …)`, the RPC the Env tab's terminal is bound
+# and `executeInExecutor('device', …)`, the RPC the Env tab's terminal is bound
 # to. Cloud only for the reason the trajectory arm is: a device links to a
 # deployment, and an in-process runtime is not one.
 #

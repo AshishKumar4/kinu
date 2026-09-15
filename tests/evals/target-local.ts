@@ -19,7 +19,7 @@
  *     episode: degraded gave no `craft_cycle` row and `craft_reuse` eligible 0;
  *     opened gave `crafted:["doubleIt"]`, `reused:["doubleIt"]`, eligible 1.
  *     Three flash runs blamed that zero on the corpus.
- *   `hostRoot: null`       — the default `laptop` provider is rooted at
+ *   `hostRoot: null`       — the default `device` provider is rooted at
  *     `process.cwd()`, and an episode reaches every registered provider through
  *     `eval`. A live run left `scratch-add/{add.js,add.test.js}` in a
  *     worktree root and `report.txt` in the repo root.

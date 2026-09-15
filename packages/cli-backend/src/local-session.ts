@@ -1216,7 +1216,7 @@ export class LocalAgentSession implements BackendHost {
    * were asked about (safety/approval-gate.ts's ApprovalGrant), which is what
    * the button says it does. NEVER a whole-agent `allow_all`: one click on one
    * `sudo` prompt would then run every gated command everywhere, on the owner's
-   * laptop included, unasked for the rest of the session. Revocable from the
+   * device included, unasked for the rest of the session. Revocable from the
    * same config plane that reads it.
    */
   private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
@@ -1863,7 +1863,7 @@ export class LocalAgentSession implements BackendHost {
    * so a backlog is not this session's first turn's latency.
    *
    * LAST, the terminal suffix a previous turn was interrupted inside. This is
-   * the whole of the CLI's terminal recovery — a laptop has no alarm, so the
+   * the whole of the CLI's terminal recovery — a device has no alarm, so the
    * next start IS the wake — and it runs last because replaying an owed suffix
    * can enqueue turns and drain events, and both read state the two sweeps
    * above have just corrected. It runs UNDER THE DRIVER LEASE, for the reason
@@ -2488,7 +2488,7 @@ export class LocalAgentSession implements BackendHost {
   // moment: the alternate-takes claim, the branch settlements, the completion
   // gate, the evolution recording, the reactor drain, the advisor lane, the
   // shadow trial and the auto title. Run as straight-line code with the turn
-  // claims released as soon as the transcript is on disk, a laptop killed
+  // claims released as soon as the transcript is on disk, a device killed
   // anywhere inside that sequence loses the whole suffix with nothing to say
   // what had already happened.
   //
@@ -2877,7 +2877,7 @@ export class LocalAgentSession implements BackendHost {
   /**
    * The wake for an owed effect: the next start, AND a timer inside this process.
    *
-   * The next start is the durable half, and it is the only half a laptop can
+   * The next start is the durable half, and it is the only half a device can
    * promise — `recoverTerminalTransitions()` sweeps every owed sequence before
    * this workspace takes new work, and the local scheduler daemon opens the
    * workspace unattended, so an idle machine converges.

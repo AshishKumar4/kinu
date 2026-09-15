@@ -16,7 +16,7 @@ import type { JsonObject } from '../utils/json';
 export type SlateMemberEffect = 'read' | 'mutate';
 
 /** The members every executor namespace admits (`workspace`, `sandbox`, `pc`,
- *  a laptop mount — the plane names differ, the member vocabulary is the
+ *  a device mount — the plane names differ, the member vocabulary is the
  *  executor's own). */
 const EXECUTOR_MEMBER_EFFECTS = {
   readFile: 'read', readdir: 'read', exists: 'read', stat: 'read', searchMemory: 'read', listTools: 'read',

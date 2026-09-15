@@ -1,5 +1,5 @@
 // Device presence + mid-session change notice — the per-turn awareness the
-// laptop runtime feeds into the agent's context.
+// device runtime feeds into the agent's context.
 import { describe, expect, test } from 'bun:test';
 import {
   deviceChangeNotice,
@@ -41,7 +41,7 @@ describe('deviceChangeNotice', () => {
       const notice = deviceChangeNotice(prev, 'connected');
       expect(notice).toContain('## Context update');
       expect(notice).toContain('just connected');
-      expect(notice).toContain('`laptop`');
+      expect(notice).toContain('`device`');
       expect(notice).toContain('Consent will be requested');
     }
   });

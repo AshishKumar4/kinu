@@ -712,7 +712,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // The terminal ledger is EVERYWHERE now. It was cf-only while the CLI
     // released its claims at transcript persist and had no recovery at all —
     // KINU-021 hoisted the lifecycle into core and the CLI drives the same
-    // class, so an interrupted laptop turn replays its suffix exactly as an
+    // class, so an interrupted device turn replays its suffix exactly as an
     // evicted isolate does. Created per root rather than by a shared
     // initializer — `cf-backend/src/actor-agent.ts` in the shared `ActorAgent`
     // body (so both Durable Object roots) and `cli-backend/src/local-session.ts`

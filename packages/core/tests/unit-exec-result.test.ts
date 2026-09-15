@@ -147,13 +147,13 @@ describe('the surfaces the model reads', () => {
   });
 
   test('the device tunnel reports failures the same way', async () => {
-    const laptop = createDeviceTunnelExecutor({
+    const device = createDeviceTunnelExecutor({
       rpc: async () => PYTEST,
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     });
 
-    const out = await laptop.tools.exec?.execute('pytest');
+    const out = await device.tools.exec?.execute('pytest');
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
   });
   test('nimbus readFile on a missing path refuses with reason missing, not an empty string', async () => {

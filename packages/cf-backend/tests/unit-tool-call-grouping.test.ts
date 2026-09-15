@@ -119,7 +119,7 @@ describe('grouping a turn into blocks', () => {
       tool('2', 'file', 'output-available'),
       tool('3', 'file', 'output-available'),
       tool('4', 'shell', 'input-available'),
-    ])).toEqual(['run(3)', 'tool-run']);
+    ])).toEqual(['run(3)', 'tool-shell']);
   });
 
   test('a failed read groups in its original position', () => {

@@ -172,7 +172,7 @@ describe('the device fleet at the executor surface', () => {
 });
 
 describe('the composite file plane', () => {
-  test('one live machine keeps /pc as its own root, byte for byte', async () => {
+  test('one live machine still serves under /pc/<name>, so a second machine never moves paths', async () => {
     const t = fleetTransport([STUDIO, SPARE]);
 
     const provider = createDeviceTunnelExecutor(t, {
@@ -185,8 +185,11 @@ describe('the composite file plane', () => {
 
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
-    expect(await plane.readFile('/home/dev/notes.md', { encoding: 'utf8' })).toBe('bytes of dev-studio');
-    expect(await plane.readdir('/home/dev')).toEqual(['entry-of-dev-studio']);
+    expect(await plane.readFile('/ashish@studio/home/dev/notes.md', { encoding: 'utf8' })).toBe('bytes of dev-studio');
+    expect(await plane.readdir('/ashish@studio/home/dev')).toEqual(['entry-of-dev-studio']);
+    expect(await plane.readdir('/')).toEqual(['ashish@studio']);
+    // The provider's own homeDir still opens on the machine (a roster is not
+    // a working directory); the fleet root lives on the plane, not the home.
     expect(await provider.homeDir()).toBe('/home/dev');
     expect(t.sent.map((frame) => [frame.params[0], frame.deviceId])).toEqual([
       ['/home/dev/notes.md', 'dev-studio'], ['/home/dev', 'dev-studio'],
@@ -240,7 +243,7 @@ describe('the composite file plane', () => {
 
   test('a shared or unusable name falls back to the id, so two machines never collide', () => {
     const twin: DeviceFleetEntry = { ...RIG, id: 'dev-twin', name: 'ashish@studio' };
-    const slashed: DeviceFleetEntry = { ...RIG, id: 'dev-slashed', name: 'work/laptop' };
+    const slashed: DeviceFleetEntry = { ...RIG, id: 'dev-slashed', name: 'work/device' };
     const fleet = [STUDIO, twin, slashed];
 
     expect(deviceMountSegment(STUDIO, fleet)).toBe('dev-studio');
@@ -284,6 +287,6 @@ describe('the shell tool names the machine', () => {
   test('one machine needs no name; the class name still reaches the sole machine', async () => {
     const { run } = runTool([STUDIO]);
     expect(await run({ command: 'uname', runtime: 'ashish@studio', why: 'their files' })).toBe('ran on dev-studio');
-    expect(await run({ command: 'uname', runtime: 'laptop', why: 'their files' })).toBe('ran on dev-studio');
+    expect(await run({ command: 'uname', runtime: 'device', why: 'their files' })).toBe('ran on dev-studio');
   });
 });

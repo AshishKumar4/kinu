@@ -564,7 +564,7 @@ describe('executor file plane', () => {
   test('an environment with no file plane is an error value, not a throw', async () => {
     const { rt, db } = createTestRuntime();
     // Unknown id, and a known executor that has no filesystem to browse (the
-    // laptop before a device connects) read the same way: a rendered reason.
+    // device before a device connects) read the same way: a rendered reason.
     expect(await getExecutorFiles(router(rt.storage.vfs), 'ghost', ''))
       .toEqual({ error: 'Executor "ghost" has no file plane' });
     expect(await getExecutorFiles(router(), 'workspace', ''))

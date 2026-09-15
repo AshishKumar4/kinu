@@ -1,7 +1,7 @@
 /**
  * The one word the Env view puts beside a machine, as the owner reads it.
  *
- * The defect this file pins: a connected laptop the workspace holds no grant
+ * The defect this file pins: a connected device the workspace holds no grant
  * on rendered as "active", so the row promised exactly what the agent could
  * not do. The row's own claim — is the machine THERE — is not in question;
  * the question is which single word tells the owner why an agent that sees
@@ -16,16 +16,16 @@ import type { MountInfo } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
 const LIVE: MountInfo = {
-  name: 'laptop', prefix: 'laptop.*', live: true,
+  name: 'device', prefix: 'device.*', live: true,
   policy: { readOnly: false, consistency: 'live-shared' }, reason: null,
 };
 
 const OFFLINE: MountInfo = { ...LIVE, live: false, reason: 'Device registered but offline.' };
 
-/** The laptop row as the polled executor surface reports it. */
+/** The device row as the polled executor surface reports it. */
 function exec(row: Partial<ExecutorInfo>): ExecutorInfo {
   return {
-    name: 'laptop', kind: 'laptop', capabilities: [], available: true,
+    name: 'device', kind: 'device', capabilities: [], available: true,
     configured: true, active: true, status: 'active', ...row,
   };
 }
@@ -50,7 +50,7 @@ describe('the environment row says needs approval only where approval is the que
 
   test('no grant answer to read: every executor keeps its own word', () => {
     // `granted` absent is every environment that has no consent gate — the
-    // sandbox, the workspace, and a laptop row whose snapshot predates the
+    // sandbox, the workspace, and a device row whose snapshot predates the
     // field. None of them may read as needing approval.
     expect(statusOf(LIVE, exec({}))).toMatchObject({ word: 'active' });
     expect(statusOf(LIVE, exec({ status: 'idle', active: false }))).toMatchObject({ word: 'idle' });

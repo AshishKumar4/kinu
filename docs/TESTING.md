@@ -233,7 +233,7 @@ Each runs `kinu create <name> --mode local`, then `kinu exec --workspace
 `bench/harbor/kinu_agent.py` the precedent.
 
 The child CWD is scratch. `createCLIRuntime` uses `cwd ?? process.cwd()` for
-the `laptop` executor unless `hostRoot: null`. Spawned CLI has no flag, so the
+the `device` executor unless `hostRoot: null`. Spawned CLI has no flag, so the
 driver CWD is its filesystem. On 2026-08-24 evals left `reference.mjs`,
 `solution.mjs`, `test-eval.mjs`, `.kinu/tool-output/`, and `attachments/` in
 this repository. Children now use `<home>/project`.

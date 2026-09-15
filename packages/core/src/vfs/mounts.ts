@@ -37,7 +37,7 @@ export interface VfsMount {
 /** The mount point each executor namespace's files are served under. One
  *  table so prompt text and documentation cannot drift from routing. */
 export const EXECUTOR_MOUNTS = {
-	laptop: '/pc',
+	device: '/pc',
 	sandbox: '/sandbox',
 } as const satisfies Record<string, string>;
 
@@ -69,11 +69,11 @@ export interface MountableProvider {
 export function standardMounts(provider: (name: string) => MountableProvider | undefined): VfsMount[] {
 	return [
 		{
-			name: EXECUTOR_MOUNTS.laptop.slice(1),
+			name: EXECUTOR_MOUNTS.device.slice(1),
 			files: () => {
-				const laptop = provider('laptop');
+				const device = provider('device');
 
-				return laptop && laptop.isAvailable() ? laptop.files ?? null : null;
+				return device && device.isAvailable() ? device.files ?? null : null;
 			},
 			absentReason: () => 'no device connected',
 		},

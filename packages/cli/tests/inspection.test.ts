@@ -175,7 +175,7 @@ describe("CLI inspection commands", () => {
 
     const executors = runCli(home, ["executors", "localtest"]);
     expect(executors.exitCode).toBe(0);
-    expect(executors.stdout.toString()).toContain("laptop");
+    expect(executors.stdout.toString()).toContain("device");
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu model normalizes specs through the provider resolver", async () => {
