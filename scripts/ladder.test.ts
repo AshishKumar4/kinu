@@ -198,41 +198,19 @@ describe('the ladder measures something', () => {
     // the four files above had to be credited somewhere they could not run.
     expect(claims('bun run test:eval', tracked).sort())
       .toEqual([...bunSuitesUnderTests, ...vitestUnderTests].sort());
-    // Enumerated, not counted: a bare length drifted from 3 to 4 the moment
-    // `bench-inference-proxy.test.ts` landed, and a count cannot say WHICH file
-    // the glob gained or lost. Naming the set makes a new bench suite a
-    // deliberate edit here rather than a silently absorbed number.
-    expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
-      'scripts/bench-c3-overwrite-cell.test.ts',
-      'scripts/bench-corpus-gate.test.ts',
-      'scripts/bench-devbox-ask-again.test.ts',
-      'scripts/bench-devbox-block-attach.test.ts',
-      'scripts/bench-devbox-decision.test.ts',
-      'scripts/bench-devbox-workerd.test.ts',
-      'scripts/bench-external.test.ts',
-      'scripts/bench-fuse-probe.test.ts',
-      'scripts/bench-inference-proxy.test.ts',
-      'scripts/bench-pi-worker.test.ts',
-      'scripts/bench-r2-workspace.test.ts',
-      'scripts/bench-restore-probe.test.ts',
-      'scripts/bench.test.ts',
-    ]);
+    // The glob and named-file forms are proved over a FIXTURE tree below
+    // (`claims() resolves a glob against whatever tree it is given`), never by
+    // naming the live repo's files: this held a thirteen-entry list of bench
+    // suites that a new suite had to be added to by hand (f6d08d72d), which is
+    // the defect the family rule exists to remove. The live tree's one property
+    // worth asserting is that the glob resolves to SOMETHING, so an empty
+    // expansion cannot read as a gate that ran nothing.
+    expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBeGreaterThan(0);
 
     const durabilityProbeGate = LADDER.find(gate =>
       gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
 
     expect(durabilityProbeGate?.tier).toBe('ci');
-    // Spelled out, like the glob above and for the same reason: the seven rig
-    // suites after the probe are named files, so an eighth is a deliberate edit
-    // here rather than a suite that silently joined a measured row.
-    expect(durabilityProbeGate?.run).toBe(
-      'bun test scripts/bench*.test.ts'
-      + ' scripts/sandbox-durability-probe.test.ts'
-      + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
-      + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'
-      + ' scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts'
-      + ' scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
-    );
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
     // The workerd layer resolves from its own command text, so it is
@@ -245,6 +223,46 @@ describe('the ladder measures something', () => {
     // everything — an optimistic resolver would recreate the defect this file
     // exists to prevent.
     expect(claims('wrangler deploy', tracked)).toEqual([]);
+  });
+});
+
+describe('claims() resolves a glob against whatever tree it is given', () => {
+  // The MECHANISM, over a tree this test owns. A live-tree assertion that
+  // names files is a list somebody maintains; this proves the resolver's
+  // three forms — glob, directory, named file — on known inputs, and that a
+  // file added to the tree is claimed with no edit anywhere.
+  const tree = [
+    'scripts/bench-a.test.ts', 'scripts/bench-b.test.ts', 'scripts/bench.test.ts',
+    'scripts/benchmark-notes.md', 'scripts/other.test.ts', 'scripts/deep/bench-c.test.ts',
+    'scripts/x-ux.test.ts', 'scripts/y-ux.test.ts', 'scripts/ux.test.ts', 'scripts/z-ux.helper.ts',
+    'packages/p/tests/one.test.ts', 'packages/p/tests/two.spec.ts', 'packages/p/src/lib.ts',
+  ];
+
+  test('a glob claims exactly the discoverable suites it matches, one path segment deep', () => {
+    expect(claims('bun test scripts/bench*.test.ts', tree)).toEqual([
+      'scripts/bench-a.test.ts', 'scripts/bench-b.test.ts', 'scripts/bench.test.ts',
+    ]);
+    expect(claims('bun test scripts/*-ux.test.ts', tree)).toEqual(['scripts/x-ux.test.ts', 'scripts/y-ux.test.ts']);
+  });
+
+  test('a file added to the tree joins its family with no edit', () => {
+    const grown = [...tree, 'scripts/bench-new.test.ts', 'scripts/w-ux.test.ts'];
+    expect(claims('bun test scripts/bench*.test.ts', grown)).toContain('scripts/bench-new.test.ts');
+    expect(claims('bun test scripts/*-ux.test.ts', grown)).toContain('scripts/w-ux.test.ts');
+  });
+
+  test('a glob beside named files claims the union once, in resolution order', () => {
+    expect(claims('bun test scripts/bench*.test.ts scripts/other.test.ts scripts/bench.test.ts', tree)).toEqual([
+      'scripts/bench-a.test.ts', 'scripts/bench-b.test.ts', 'scripts/bench.test.ts', 'scripts/other.test.ts',
+    ]);
+  });
+
+  test('a directory claims every discoverable suite beneath it and nothing else', () => {
+    expect(claims('bun test packages/p/', tree)).toEqual(['packages/p/tests/one.test.ts', 'packages/p/tests/two.spec.ts']);
+  });
+
+  test('a named file not in the tree claims nothing rather than itself', () => {
+    expect(claims('bun test scripts/absent.test.ts', tree)).toEqual([]);
   });
 });
 
