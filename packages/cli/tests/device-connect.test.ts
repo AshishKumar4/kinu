@@ -29,6 +29,8 @@ import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
+import UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
+import { daemonArchive, startUpdateHub, until, type UpdateHub } from './helpers/update-hub';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -38,7 +40,7 @@ const repoRoot = resolve(__dirname, '../../..');
  *  the defect this suite exists to catch — the pty module shipped nowhere
  *  for one release while the daemon required it, and every clean install
  *  died on its first require. */
-const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE } as const;
+const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE } as const;
 
 /** Mirrors the installer's private reader of the daemon's `require('./x')`
  *  lines; drift between the two fails these tests, which is the point. */
@@ -58,12 +60,15 @@ const deviceDaemonPids: number[] = [];
 
 const stubs: Server<unknown>[] = [];
 
+const updateHubs: UpdateHub[] = [];
+
 afterEach(async () => {
   for (const pid of deviceDaemonPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
 
   for (const proc of sleepers.splice(0)) proc.kill();
 
   await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
+  await Promise.all(updateHubs.splice(0).map((hub) => hub.close()));
 });
 
 interface StubCloud {
@@ -982,6 +987,40 @@ describe('device daemon single-instance lock', () => {
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(owner.proc.pid);
     expect(owner.proc.killed).toBe(false);
   }, 30_000);
+
+  test('a self-update hands the machine to exactly one successor; a third daemon still exits', async () => {
+    // A hub serving a newer build than the installed stamp: the daemon's own
+    // update lands the archive's files and starts its successor, which takes
+    // the pidfile over; the hub replaces the old socket and the old daemon
+    // exits. Two daemons run only for that handover, and only one of them
+    // ever holds the pidfile.
+    const newDaemon = `${DAEMON_SOURCE}\n// build 2.0.0+new\n`;
+    const hub = startUpdateHub({ served: '2.0.0+new', archive: daemonArchive({ ...DAEMON_SIBLINGS, 'pc-agent.js': newDaemon }, '2.0.0+new') });
+    updateHubs.push(hub);
+    const home = installedMachine(hub.origin);
+    writeFileSync(join(home, 'pc-agent.version'), '1.0.0+old\n', { mode: 0o600 });
+
+    const old = startDaemon(home);
+    await old.waitFor('Connected');
+    const oldPid = await waitForDaemonPid(home);
+    await until(() => hub.sockets[1], 'the successor to connect', old.output);
+    expect(await old.proc.exited).toBe(0);
+
+    const successorPid = await waitForDaemonPid(home);
+    expect(successorPid).not.toBe(oldPid);
+    deviceDaemonPids.push(successorPid);
+    expect(await waitForPidExit(oldPid)).toBe(true);
+    // One live daemon on this home, and it is the one the pidfile names.
+    expect(liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
+    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(newDaemon);
+
+    // The lock holds for the successor exactly as it held for its predecessor.
+    const third = startDaemon(home);
+    expect(await Promise.race([third.proc.exited, Bun.sleep(5_000).then(() => 'still running' as const)])).toBe(3);
+    await Promise.race([third.drained, Bun.sleep(100)]);
+    expect(third.output()).toContain('already running');
+    expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(successorPid);
+  }, 45_000);
 });
 
 describe('classic cloud chat connect prompt', () => {

@@ -932,20 +932,42 @@ fetch_verified() {
 # install: there is no dependency graph to resolve on this machine, so no
 # package manager, no registry and no postinstall script runs here.
 #
-# Both unpack over one staging tree and move into place once, so an interrupted
-# download leaves the installed CLI as it was rather than half replaced.
+# Both unpack over one staging tree beside the installed one, that tree answers
+# --version before anything moves, and then two renames swap it in: an
+# interrupted download or a build that cannot launch leaves the installed CLI
+# as it was. The tree it replaced stays as prev for one launch (see below).
 refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  next="$CLI_ROOT/next-$$"
+  trap 'rm -rf "$tmp" "$next"' RETURN
   fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz"
   fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz"
   mkdir -p "$tmp/extract"
   tar -xzf "$tmp/cli.tar.gz" -C "$tmp/extract"
   tar -xzf "$tmp/runtime.tar.gz" -C "$tmp/extract"
   [ -f "$tmp/extract/kinu/cli.js" ] || die "The Kinu build archive carries no cli.js."
-  rm -rf "$CLI_DIR"
-  mv "$tmp/extract/kinu" "$CLI_DIR"
+  rm -rf "$next"
+  mv "$tmp/extract/kinu" "$next"
+  "$KINU_BUN" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
+  rm -rf "$CLI_ROOT/prev"
+  [ -d "$CLI_DIR" ] && mv "$CLI_DIR" "$CLI_ROOT/prev"
+  mv "$next" "$CLI_DIR"
+}
+
+# The launch check. A prev tree means the last launch, or a background refresh
+# since, swapped current in without running it here. Run it once: a current
+# that answers --version is kept and prev is dropped; one that does not is the
+# build that just landed, and prev comes back. Nothing here downloads.
+check_launch() {
+  [ -d "$CLI_ROOT/prev" ] || return 0
+  if "$KINU_BUN" run "$CLI_DIR/cli.js" --version >/dev/null 2>&1; then
+    rm -rf "$CLI_ROOT/prev"
+  else
+    echo "Kinu: the installed build does not launch; restoring the previous one." >&2
+    rm -rf "$CLI_DIR"
+    mv "$CLI_ROOT/prev" "$CLI_DIR"
+  fi
 }
 
 kinu_resolve_bun || {
@@ -958,12 +980,13 @@ kinu_resolve_bun || {
 PATH="\${KINU_BUN%/*}:$PATH"
 export PATH
 
-case "\${1:-}" in
-  update|upgrade) KINU_REFRESH_CLI=1 ;;
-esac
-
+# 'kinu update' is the CLI's own command: it stages, verifies and swaps its
+# tree the same way, then rewrites this script. The launcher downloads only
+# when asked (the installer) or when there is nothing to run.
 if [ "\${KINU_REFRESH_CLI:-0}" = "1" ] || [ ! -f "$CLI_DIR/cli.js" ]; then
   refresh_cli
+else
+  check_launch
 fi
 
 cd "$CLI_DIR"

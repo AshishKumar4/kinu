@@ -449,9 +449,14 @@ describe('the CLI installs as a prebuilt artifact', () => {
     expect(launcher).not.toContain('bun install');
     expect(launcher).not.toContain('--frozen-lockfile');
     expect(launcher).not.toContain('node_modules');
-    // Both downloads land in one staging tree and move once, so an interrupted
-    // update cannot leave half an install behind.
-    expect(launcher).toContain('mv "$tmp/extract/kinu" "$CLI_DIR"');
+    // Both downloads land in one staging tree beside the install, that tree
+    // answers --version, and two renames swap it in: an interrupted update or
+    // a build that cannot launch leaves the installed CLI as it was.
+    expect(launcher).toContain('mv "$tmp/extract/kinu" "$next"');
+    expect(launcher).toContain('"$KINU_BUN" run "$next/cli.js" --version');
+    expect(launcher).toContain('mv "$CLI_DIR" "$CLI_ROOT/prev"');
+    expect(launcher).toContain('mv "$next" "$CLI_DIR"');
+    // The installed tree is removed only by the launch check restoring prev.
     expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(1);
   });
 
