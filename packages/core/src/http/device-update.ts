@@ -48,12 +48,14 @@ export function cliArtifactPath(os: string | undefined, arch: string | undefined
  * What the Devices card says about a machine's software, and what the hub
  * decides on HELLO. `off` is the owner's `updateCheck: false`, reported by the
  * daemon; it wins over `behind` because the owner asked not to be touched.
- * `unreported` is a daemon too old to name its build at all. `current` also
- * covers a hub that has no served stamp to compare against.
+ * `unreported` is a daemon too old to name its build at all. `unstamped` is a
+ * version carrying no build metadata (`0.2.0`, not `0.2.0+<sha>`) — a source
+ * install, never a build the deploy published, so the hub pushes nothing over
+ * it. `current` also covers a hub that has no served stamp to compare against.
  */
-export type DeviceUpdateState = 'current' | 'behind' | 'off' | 'unreported';
+export type DeviceUpdateState = 'current' | 'behind' | 'off' | 'unreported' | 'unstamped';
 
-export const DEVICE_UPDATE_STATES = ['current', 'behind', 'off', 'unreported'] as const;
+export const DEVICE_UPDATE_STATES = ['current', 'behind', 'off', 'unreported', 'unstamped'] as const;
 
 export function deviceUpdateState(
   reported: { version: string | null; updateCheck: boolean },
@@ -62,6 +64,8 @@ export function deviceUpdateState(
   if (reported.version === null) return 'unreported';
 
   if (!reported.updateCheck) return 'off';
+
+  if (!reported.version.includes('+')) return 'unstamped';
 
   if (served === null || isSameBuild(reported.version, served)) return 'current';
 
