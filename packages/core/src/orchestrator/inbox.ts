@@ -289,6 +289,14 @@ export class PendingSendStore {
     }
   }
 
+  /** Whether this actor still owes a send under this id — the reservation an
+   *  accepted send holds until its row lands or it is retired. A transport
+   *  that is handed the same message twice asks this before the loop does. */
+  has(id: string): boolean {
+    return this.sql<{ id: string }>`
+      SELECT id FROM pending_steers WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
+  }
+
   /** The attachments a reservation carried, in the order the steer was sent —
    *  restored with it so a restart does not lose the files a dead process
    *  acknowledged. */

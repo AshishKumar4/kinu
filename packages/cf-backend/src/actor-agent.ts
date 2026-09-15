@@ -2490,7 +2490,9 @@ export abstract class ActorAgent extends Think<Env> {
         broadcast: (message, exclude) => { this.broadcast(message, exclude); },
         getConnection: (id) => this.getConnection(id),
         history: () => this.chatTranscript.history(),
-        admitMessage: (message) => { this.chatTranscript.admitClientMessage(message); },
+        // Held by the loop: as a row once it landed, as a reservation from
+        // the moment the send was accepted until then.
+        admitted: (id) => this.chatTranscript.has(id) || this.pendingSends.has(id),
         send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
         interrupt: () => { this.chatLoop.interrupt(); },
         clear: () => this.clearConversation(),

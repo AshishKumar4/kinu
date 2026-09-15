@@ -3,15 +3,24 @@
  * Agents SDK's chat protocol, composed from the SDK's own exports.
  *
  * Inbound, it is the `cf_agent_*` protocol the React hook speaks
- * (`parseProtocolMessage`): a chat request becomes the transcript's user row
- * and one `ChatSession.send`; a cancel is an interrupt; a resume request or
- * ack runs the SDK's {@link ResumeHandshake} over the SDK's
+ * (`parseProtocolMessage`): a chat request is one `ChatSession.send` per
+ * message the client has not sent before; a cancel is an interrupt; a resume
+ * request or ack runs the SDK's {@link ResumeHandshake} over the SDK's
  * {@link ResumableStream} store. Outbound, it is the loop's events and the
  * model stream: each UIMessage chunk of a turn's answer is stored for resume
  * and broadcast as a `cf_agent_use_chat_response` frame under the request that
  * started the turn, accumulated into the assistant row the transcript store
  * persists ({@link StreamAccumulator}), and closed with the `done` frame the
  * hook waits on.
+ *
+ * THE TRANSPORT WRITES NO ROW. The loop is the one writer of a user row, and
+ * it decides where a message lands before anything is durable: a message
+ * that opens a turn is that turn's opening row, written by the loop at the
+ * turn's start; a message spliced into a running turn is written by the drain
+ * that lands it, with the stamps that say which step it landed in; a message
+ * the loop refuses leaves nothing behind. A row this transport wrote ahead of
+ * that decision was a second writer of the same fact, and the two disagreed —
+ * about the stamps, about a rerun, about a refusal.
  *
  * What it deliberately does not carry from Think: the stall watchdog (no
  * elapsed deadline ends a turn here), the client-tool continuation lanes (no
@@ -29,10 +38,10 @@ import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  PARTIAL_FLUSH_EVERY, isWorkMode, JsonObjectSchema, TURN_AUTHOR_METADATA_KEY,
-  type ChatTransport, type JsonObject, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
+  PARTIAL_FLUSH_EVERY, isWorkMode,
+  type ChatTransport, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** What the transport asks of the actor: the connection set, and the loop.
  *  A connection is the SDK's: its resume handshake takes the full type. */
@@ -43,9 +52,14 @@ export interface ChatWire {
   /** The transcript as the client should see it, oldest first — the SDK
    *  session's own rows, which the SDK's clients render as UI messages. */
   history(): SessionMessage[];
-  /** Persist one incoming user message where the loop will find it. */
-  admitMessage(message: UIMessage): void;
-  /** The driver API the request maps onto. */
+  /** Whether the loop already holds a message under this id — a durable row,
+   *  or the reservation an accepted send keeps until its row lands. The hook
+   *  sends its whole message list with every request, so a message sent
+   *  while an earlier one is still landing arrives beside it, and only the
+   *  loop knows the earlier one was taken. */
+  admitted(id: string): boolean;
+  /** The driver API the request maps onto. Rejects when the loop refuses the
+   *  message — nothing was written and no turn ran. */
   send(input: { readonly text: string; readonly files: readonly PromptFile[]; readonly id: string; readonly mode: WorkMode }): Promise<SendLanding>;
   interrupt(): void;
   clear(): Promise<void>;
@@ -187,7 +201,7 @@ export class ChatWireTransport implements ChatTransport {
         return;
 
       case 'chat-request': {
-        if (event.init.method === 'POST') await this.admitChatRequest(connection, event.id, event.init.body);
+        if (event.init.method === 'POST') await this.admitChatRequest(event.id, event.init.body);
 
         return;
       }
@@ -216,11 +230,13 @@ export class ChatWireTransport implements ChatTransport {
 
   /**
    * The chat request: the hook's messages reconciled against what is stored
-   * (`reconcileMessages`, the SDK's own rule for what is new), each new user
-   * message persisted before the loop hears of it, then ONE send per fresh
-   * message. A regenerate carries nothing new and is answered as done.
+   * (`reconcileMessages`, the SDK's own rule for what is new), then ONE send
+   * per message the loop does not already hold, each under the id the client
+   * renders it by. The loop decides the landing and writes the row; this
+   * answers the request accordingly. A regenerate carries nothing new and is
+   * answered as done.
    */
-  private async admitChatRequest(connection: Connection, requestId: string, body: string | undefined): Promise<void> {
+  private async admitChatRequest(requestId: string, body: string | undefined): Promise<void> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
     if (parsed === null || !parsed.success || parsed.output.trigger === 'regenerate-message') {
@@ -237,7 +253,7 @@ export class ChatWireTransport implements ChatTransport {
     const storedMessages = stored as UIMessage[];
 
     const fresh = reconcileMessages(parsed.output.messages, storedMessages, sanitizeMessage)
-      .filter((message) => message.role === 'user' && !stored.some((row) => row.id === message.id));
+      .filter((message) => message.role === 'user' && !this.wire.admitted(message.id));
 
     if (fresh.length === 0) {
       this.done(requestId);
@@ -248,27 +264,31 @@ export class ChatWireTransport implements ChatTransport {
     let landed: SendLanding = 'mid-turn';
 
     for (const message of fresh) {
-      const input = chatInput(message);
       this.requests.set(message.id, requestId);
 
-      // The row the client's message becomes carries the same facts a message
-      // sent any other way does — the operator's authorship and its mode —
-      // so a reader finds one shape whichever transport carried it.
-      const carried: JsonObject = v.safeParse(JsonObjectSchema, message.metadata).success
-        ? v.parse(JsonObjectSchema, message.metadata)
-        : {};
+      try {
+        landed = await this.wire.send({ ...chatInput(message), id: message.id });
+      } catch (cause) {
+        // The loop refused the message — nothing to say, another driver holds
+        // the conversation — and wrote nothing. The request is closed with the
+        // refusal: the hook's send rejects with it instead of waiting on a
+        // turn-end that will never come.
+        this.requests.delete(message.id);
+        this.done(requestId, { error: renderThrownChain({ cause }) });
 
-      this.wire.admitMessage({
-        ...message,
-        metadata: { ...carried, kinuMode: input.mode, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
-      });
-      this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }), [connection.id]);
-      landed = await this.wire.send({ ...input, id: message.id });
+        return;
+      }
     }
 
-    // A splice answers at once, with where it landed; a turn answers when its
-    // own `turn-end` closes the request it was admitted under.
-    if (landed === 'mid-turn') this.done(requestId, { landed });
+    // A splice answers at once, with where it landed, and the request is
+    // spent: a message the splice could not place reruns as a turn of its
+    // own, and that turn answers under an id of its own like any harness turn.
+    // A message that opened a turn answers when that turn's own `turn-end`
+    // closes the request it was admitted under.
+    if (landed === 'mid-turn') {
+      for (const message of fresh) this.requests.delete(message.id);
+      this.done(requestId, { landed });
+    }
   }
 
   private done(requestId: string, extra: { landed?: SendLanding; error?: string } = {}): void {
@@ -285,6 +305,10 @@ export class ChatWireTransport implements ChatTransport {
       case 'turn-start': {
         // A user turn answers under the request that admitted it; a harness
         // turn (a wake, a rerun) under an id of its own, as Think minted one.
+        // The entry is DELETED either way: a steer's own id is the turn id
+        // of its rerun, so a turn whose admission names a different id fails
+        // through to a minted id — and that entry is the leak finding 10
+        // names.
         const requestId = this.requests.get(event.turnId) ?? crypto.randomUUID();
         this.requests.delete(event.turnId);
 
@@ -292,10 +316,19 @@ export class ChatWireTransport implements ChatTransport {
 
         this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: event.messageId }), chunksSinceFlush: 0, hasFlushedContent: false, taken: false };
 
+        // The turn's opening row is on disk before this event: every tab
+        // reads the transcript with the operator's message in it, under the id
+        // the sender's own hook already renders it by.
+        if (event.kind === 'user') this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
+
         return;
       }
 
       case 'turn-end': {
+        // The turn's answer row is durable BEFORE this event — the commit
+        // lands inside `runTurn`, and the roster settle only follows it — so
+        // the client's done frame and transcript broadcast read the finished
+        // turn's rows, whatever the detached terminal tail still owes.
         const live = this.live;
 
         if (live === null) return;

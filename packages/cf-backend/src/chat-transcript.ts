@@ -78,13 +78,6 @@ export class AssistantMessagesTranscript implements TranscriptStore {
     return this.provider.getHistory();
   }
 
-  /** A message the client sent, persisted where the loop will find it — the
-   *  reconciler already decided it is new. The loop's own admission of the
-   *  same id is then the `OR IGNORE` the provider's id rule gives it. */
-  admitClientMessage(message: SessionMessage): void {
-    this.provider.appendMessage(message);
-  }
-
   /** Every row of this conversation, gone — the clear the client asked for. */
   clear(): void {
     this.provider.clearMessages();

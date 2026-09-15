@@ -48,7 +48,7 @@ describe('the activation refuses a hosted workspace whose SDK transcript store i
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
-    agent.harnessTranscript.admitClientMessage({ id: 'u-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    agent.harnessTranscript.appendUser({ id: 'u-1', text: 'hello' });
 
     expect(db.query(`SELECT id FROM assistant_messages`).all()).toEqual([{ id: 'u-1' }]);
   });
