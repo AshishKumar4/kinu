@@ -214,7 +214,7 @@ export const touchWorkspace     = (name: string) =>
 export const removeWorkspace    = (name: string) =>
   api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
-// ── Devices (user-level laptop/PC tunnel) ──────────────────────────
+// ── Devices (user-level device/PC tunnel) ──────────────────────────
 export interface UserDevice {
   id: string;
   label: string;

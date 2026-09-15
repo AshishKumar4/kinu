@@ -45,7 +45,7 @@ const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
  * The spawned agent's own project root, and it is NOT this repository.
  *
  * MEASURED. Both calls below used `cwd: REPO_ROOT`, and
- * `createCLIRuntime` roots the `laptop` executor at `cwd ?? process.cwd()`
+ * `createCLIRuntime` roots the `device` executor at `cwd ?? process.cwd()`
  * unless told otherwise (`cli-backend/src/runtime.ts:545`) — so the child's host
  * plane WAS the repository, and an episode reaches every registered provider
  * through `eval`. The eval runs of 2026-08-24 left `reference.mjs`,

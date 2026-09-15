@@ -40,7 +40,7 @@ const OWNER_USER_ID = '0123456789abcdef0123456789abcdef';
 
 const WORKSPACE = 'jarvis';
 
-const TURN = 'u-turn-with-a-laptop-command';
+const TURN = 'u-turn-with-a-device-command';
 
 /** The `work_cancelled` frame, parsed rather than cast: `deviceCommands` is the
  *  part of Stop's answer that says what happened on the user's machine, so the
@@ -93,7 +93,7 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
 
   actor.agent.harnessHoldsCapability(token);
   // The turn-start refresh production detaches, awaited: it is what makes the
-  // connected device visible to this actor's laptop runtime.
+  // connected device visible to this actor's device runtime.
   await actor.agent.harnessRefreshDeviceStatus();
   // The turn the command belongs to, opened through the same seam production
   // opens it with, so the durable row carries a turn a Stop can name.
@@ -161,7 +161,7 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
     rail.user.consentDecision = 'always';
 
     // A command the model started, still running: the daemon holds its result.
-    const running = rail.actor.agent.executeInExecutor('laptop', 'bun run build');
+    const running = rail.actor.agent.executeInExecutor('device', 'bun run build');
     await asked(rail, 'exec');
     const requestId = rail.inflightRows()[0]?.request_id;
 
@@ -219,7 +219,7 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
 
     rail.user.consentDecision = 'always';
 
-    const running = rail.actor.agent.executeInExecutor('laptop', 'bun run build');
+    const running = rail.actor.agent.executeInExecutor('device', 'bun run build');
     await asked(rail, 'exec');
     const requestId = rail.inflightRows()[0]?.request_id;
 

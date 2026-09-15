@@ -129,9 +129,9 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
 
   try {
     await session.connect();
-    expect(await session.execute('laptop', 'work')).toEqual(response);
+    expect(await session.execute('device', 'work')).toEqual(response);
     response = { stdout: '{"reason":"denied","error":"historical incident"}', stderr: '', exitCode: 0 };
-    expect(await session.execute('laptop', 'read')).toEqual(response);
+    expect(await session.execute('device', 'read')).toEqual(response);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

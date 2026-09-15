@@ -772,10 +772,10 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(block).not.toContain('OLD-STALE-MARKER');
   });
 
-  test('the system prompt advertises the laptop as the direct CLI host machine', async () => {
-    // Local agents run ON the user's machine — the laptop executor is always
-    // available and direct, so the prompt must not borrow the cloud wording
-    // (device tunnel, consent prompt, offline/reconnect states).
+  test('cli-local has no device row: the machine is the workspace', async () => {
+    // cliLocal offers no device runtime: the machine IS the workspace, so the
+    // prompt carries no device row, no tunnel wording, no consent prompt, and
+    // no offline/reconnect states — and the workspace row says where it runs.
     let observed: PromptMessage[] = [];
     const { session } = setup('ok', historyCapturingModel('ok', (messages) => { observed = messages; }));
     await session.send('hi');
@@ -783,8 +783,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     const system = observed.find((m) => m.role === 'system');
     expect(system).toBeDefined();
     const text = String(system!.content);
-    expect(text).toContain('laptop.*');
-    expect(text).toContain('the local machine the Kinu CLI is running on');
+    expect(text).not.toContain('device.*');
+    expect(text).toContain('the machine the CLI runs on');
+    expect(text).toContain('rooted in the directory the session was started in');
     expect(text).not.toContain('device tunnel');
     expect(text).not.toContain('asks the user for consent');
     expect(text).not.toContain('OFFLINE');
@@ -4432,7 +4433,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       const { db, session, events } = setupWithResolver(resolver);
       expect(session.getEffectiveModelSpec()).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
 
-      await session.send('hi from the laptop');
+      await session.send('hi from the device');
 
       const streamed = events
         .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')

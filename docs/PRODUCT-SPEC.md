@@ -366,7 +366,7 @@ The current hosted code program receives capability namespaces, not the trusted 
 |---|---|
 | `tools.*` | Admitted native and eligible crafted tools. MCP tools enter through the admitted tool surface, not a blanket account client. |
 | `workspace.*` | Canonical workspace files, shell/process and supported workspace operations. |
-| `sandbox.*`, `laptop.*`, `parent.*` | Actor-available execution adapters. Missing environments are not simulated. |
+| `sandbox.*`, `device.*`, `parent.*` | Actor-available execution adapters. Missing environments are not simulated. |
 | `agents.*`, `memory.*`, `tasks.*`, `web.*` | Their existing dependency-gated dispatch paths. |
 | Root/assignment control namespaces | Planning/release/report operations only where the actor's composition supplies them. A namespace named in a comment is not proof of availability. |
 | `state.*` / `env.state` | Durable actor-private JSON key/value state: get, set, delete and list. These research-state operations are explicitly Plan-allowed. |

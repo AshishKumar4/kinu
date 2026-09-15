@@ -1225,7 +1225,7 @@ export class ChatSession {
       // bodies below and the fiber that keeps the process alive for the
       // detached tail. Until this existed the CLI released its claims the
       // moment the transcript was persisted and had no recovery at all, so a
-      // laptop killed here lost the whole suffix.
+      // device killed here lost the whole suffix.
       //
       // The core ledger already holds the roster committed with the answer.
       this.settlingDepth += 1;

@@ -107,7 +107,7 @@ describe('a machine that cannot sandbox carries the badge, never an explanation'
 
 describe('the bind card asks one question and offers one binding', () => {
   const consent: PendingConsent = {
-    consentId: 'c1', deviceLabel: 'ashish-laptop', method: 'exec',
+    consentId: 'c1', deviceLabel: 'ashish-device', method: 'exec',
     command: 'bun test packages/core', createdAt: AT, workspaceName: 'checkout-fixes',
   };
 
@@ -116,12 +116,12 @@ describe('the bind card asks one question and offers one binding', () => {
   }
 
   test('the question names the machine and the workspace', () => {
-    expect(card().replace(/<[^>]+>/g, '')).toContain('Use ashish-laptop for “checkout-fixes”?');
+    expect(card().replace(/<[^>]+>/g, '')).toContain('Use ashish-device for “checkout-fixes”?');
   });
 
   test('exactly one binding button, named for the machine, beside "Not now"', () => {
     const buttons = [...card().matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
-    expect(buttons).toEqual(['Not now', 'Use ashish-laptop']);
+    expect(buttons).toEqual(['Not now', 'Use ashish-device']);
   });
 
   test('no tier wording and no one-off allowance survive on the card', () => {
@@ -131,7 +131,7 @@ describe('the bind card asks one question and offers one binding', () => {
       expect(html).not.toContain(gone);
     }
 
-    expect(html).toContain("Commands use ashish-laptop's Sandbox setting");
+    expect(html).toContain("Commands use ashish-device's Sandbox setting");
     expect(html).toContain('Account settings → Devices');
   });
 });

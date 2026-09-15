@@ -135,7 +135,7 @@
       // existing @callable on the DO that already owns that state.
       { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" }
       //
-      // SSH/laptop (user's local machine via WebSocket tunnel):
+      // SSH/device (user's local machine via WebSocket tunnel):
       //   No binding needed — users run a local daemon. The executor becomes
       //   available when a tunnel WebSocket attaches at runtime.
     ]

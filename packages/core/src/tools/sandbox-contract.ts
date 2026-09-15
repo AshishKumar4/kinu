@@ -11,7 +11,7 @@
  *                         agent saved with `workspace.createTool`, called with
  *                         whatever arguments its own source declares.
  *   <executor>.*          one namespace per live execution environment
- *                         (`workspace`, `sandbox`, `laptop`, `parent`).
+ *                         (`workspace`, `sandbox`, `device`, `parent`).
  *   state.*               a key/value store that survives between programs.
  *   <projection>.*        the codemode projections (`memory`, `tasks`, `web`,
  *                         `agents`, `agent`, `release`, `report`).

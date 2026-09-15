@@ -642,14 +642,14 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
  * A live run left `scratch-add/{add.js,add.test.js}` in a worktree ROOT and two
  * committed stray files (`report.txt`, `todos.txt`) in the repo root, and
  * `gate:typecheck-coverage` refused the commit that swept them up. The cause is
- * not the corpus: `createCLIRuntime` registers a `laptop` ExecutorProvider
+ * not the corpus: `createCLIRuntime` registers a `device` ExecutorProvider
  * rooted at `process.cwd()` unless told otherwise (cli-backend/src/runtime.ts),
  * so every episode opened without `hostRoot: null` can write anywhere the
  * developer can.
  *
- * WHY THE PLANE HAS TO BE ABSENT RATHER THAN RE-ROOTED. `laptop.writeFile`
+ * WHY THE PLANE HAS TO BE ABSENT RATHER THAN RE-ROOTED. `device.writeFile`
  * resolves its argument with `resolve(cwd, path)`, which passes an ABSOLUTE path
- * straight through, and `laptop.exec` runs a real shell that can `cd` anywhere.
+ * straight through, and `device.exec` runs a real shell that can `cd` anywhere.
  * Rooting that provider at the episode's temp directory would contain neither.
  * Containment on the host plane needs a sandbox the CLI does not have, so an
  * eval episode gets no host plane at all and works in the workspace filesystem
@@ -664,9 +664,9 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
 
     await run('wiring-isolation', [
       { tool: 'eval', input: { code:
-        `await laptop.writeFile(${JSON.stringify(join(probe, 'add.js'))}, "escaped"); return "wrote";` } },
+        `await device.writeFile(${JSON.stringify(join(probe, 'add.js'))}, "escaped"); return "wrote";` } },
       { tool: 'eval', input: { code:
-        `return await laptop.exec(${JSON.stringify(`mkdir -p ${probe} && echo escaped > ${join(probe, 'add.test.js')}`)});` } },
+        `return await device.exec(${JSON.stringify(`mkdir -p ${probe} && echo escaped > ${join(probe, 'add.test.js')}`)});` } },
     ]);
 
     // The assertion the stray files would have failed.
@@ -684,7 +684,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
       // Refusal comes from the SDK invocation outcome, not from matching
       // an error-shaped string returned as ordinary tool data.
       expect(row.outcome?.success).toBe(false);
-      expect(JSON.stringify(row.result)).toContain('laptop');
+      expect(JSON.stringify(row.result)).toContain('device');
     }
   }, 0);
 
@@ -699,7 +699,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     // `hostRoot` gives. `listExecutors` is the read that carries
     // `kind`; the codemode surface drops it (execution/router.ts:38-52).
     const hosted = await openWorkspaceCLI(db, dbPath, { llm: LLM });
-    expect(hosted.rt.executionRouter?.listExecutors().map((e) => e.kind)).toContain('laptop');
+    expect(hosted.rt.executionRouter?.listExecutors().map((e) => e.kind)).toContain('device');
     expect(() => requireSandboxedExecutors('probe', hosted.rt)).toThrow(UnsandboxedRuntimeError);
 
     // What the harness asks for, and what the cases above prove still executes:
@@ -710,7 +710,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     expect(() => requireSandboxedExecutors('probe', sandboxed.rt)).not.toThrow();
 
     // A misconfigured harness is not an inert agent (behaviour.eval.ts:347).
-    expect(new UnsandboxedRuntimeError('t', 'laptop')).not.toBeInstanceOf(DegenerateRunError);
+    expect(new UnsandboxedRuntimeError('t', 'device')).not.toBeInstanceOf(DegenerateRunError);
   }, 0);
 });
 
@@ -1425,7 +1425,7 @@ describe('infra-vs-behavioural — a provider failure is not the agent doing not
 /**
  * THE SPAWNED CLI DOES NOT GET THIS REPOSITORY AS ITS WORKSPACE.
  *
- * `createCLIRuntime` roots the host `laptop` executor at `cwd ?? process.cwd()`
+ * `createCLIRuntime` roots the host `device` executor at `cwd ?? process.cwd()`
  * unless a caller passes `hostRoot: null` (`cli-backend/src/runtime.ts:545`), and
  * a spawned CLI has no flag for that — so the driver's `cwd` IS the child
  * agent's own filesystem. Both spawns used `cwd: REPO_ROOT`, and the eval runs of

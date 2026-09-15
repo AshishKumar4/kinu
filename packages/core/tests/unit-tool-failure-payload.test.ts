@@ -18,7 +18,7 @@
  * Three implementations of one contract, so all three are pinned here:
  *   - the `shell` builtin over the workspace shell (core/tools/builtins.ts)
  *   - the inline executor's `exec` (core/execution/inline.ts)
- *   - the local `laptop` executor's `exec` (cli-backend, covered in its own suite)
+ *   - the local `device` executor's `exec` (cli-backend, covered in its own suite)
  */
 
 import { describe, test, expect } from 'bun:test';

@@ -450,7 +450,7 @@ describe('the classification the `shell` tool actually produced reaches the read
   });
 
   test('the refusal is counted as a runtime gap, not as a broken tool', async () => {
-    const { record } = await refuseEscalation('laptop');
+    const { record } = await refuseEscalation('device');
     const census = censusToolFailures([record]);
     expect({
       refused: census.refused, workFailed: census.workFailed,
@@ -702,7 +702,7 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
   });
 
-  test('laptop: no device attached is a platform gap, not a successful call', async () => {
+  test('device: no device attached is a platform gap, not a successful call', async () => {
     const payload = await escalate(createDeviceTunnelExecutor({
       rpc: async () => { throw new Error('no device connected'); },
       status: () => ({ connected: false, registered: true, toolchain: null }),

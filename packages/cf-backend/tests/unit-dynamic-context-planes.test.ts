@@ -57,7 +57,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
     // promise afterward so this fixture does not leave work detached.
     const consent = agent.awaitDeviceConsent({
       deviceId: 'dev-1',
-      deviceLabel: 'laptop',
+      deviceLabel: 'device',
       method: 'shell',
       command: 'git push origin main',
     });

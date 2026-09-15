@@ -649,7 +649,7 @@ export function createCLIRuntime(
   // Held, because a node's router registers this SAME provider: the host
   // filesystem is the host filesystem whoever asks, and a second construction
   // would be a second set of checkpoints over one directory.
-  const laptop = hostRoot === null
+  const device = hostRoot === null
     ? null
     : createLocalLaptopExecutor(
       hostRoot,
@@ -658,7 +658,7 @@ export function createCLIRuntime(
       limits,
     );
 
-  if (laptop) executionRouter.register(laptop);
+  if (device) executionRouter.register(device);
 
   const runtime: CLIRuntime = Object.assign(buildRuntime({
     transactionSync: write => db.transaction(write)(),
@@ -709,7 +709,7 @@ export function createCLIRuntime(
   }
 
   runtime.nodeRuntime = localNodeRuntime({
-    workspace, origin: runtime, approvalPolicy, inline: inlineOptions, laptop,
+    workspace, origin: runtime, approvalPolicy, inline: inlineOptions, device,
   });
 
   return runtime;
@@ -988,9 +988,9 @@ async function buildCLIHeadRuntime(
 
   // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
   // reach the machine at the parent's cwd. This is the fork's real execution.
-  const laptop = parent.executionRouter?.getProvider('laptop');
+  const device = parent.executionRouter?.getProvider('device');
 
-  if (laptop) executionRouter.register(laptop);
+  if (device) executionRouter.register(device);
 
   // The head's plane carries the same mount table as its parent's — the
   // inherited `laptop` provider is what /pc resolves to here, and `/context`
@@ -1152,8 +1152,8 @@ function createLocalLaptopExecutor(
   const toHostPath = (path: string) => resolvePath(cwd, path || '.');
 
   const provider: ExecutorProvider = {
-    name: 'laptop',
-    kind: 'laptop',
+    name: 'device',
+    kind: 'device',
     // The machine's own files, in the machine's own absolute paths. Writes
     // snapshot into the same shadow-git checkpoints the bound shell uses, so
     // /undo covers file-plane mutations too.

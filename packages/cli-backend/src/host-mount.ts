@@ -4,12 +4,12 @@
  * The cloud backend mounts the user's machine at /pc over the device tunnel
  * (createDeviceMountVFS). Locally the agent IS on that machine, so the same
  * plane is node:fs directly — no tunnel, no consent round-trip, the same
- * addresses. Without it the local `laptop` executor's files are unreachable by
+ * addresses. Without it the local `device` executor's files are unreachable by
  * composite path, so every /pc address the cloud agent can use routes silently
  * into /local instead.
  *
  * Writes snapshot into the same shadow-git checkpoints the bound shell and
- * `laptop.writeFile` use, so /undo covers file-plane mutations too.
+ * `device.writeFile` use, so /undo covers file-plane mutations too.
  */
 
 import * as fs from 'node:fs/promises';
@@ -119,7 +119,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
  *   real absolute  `/home/me/proj/src/x.ts`  what the host shell itself prints
  *
  * Anything else absolute is refused with EACCES naming the path. That refusal
- * guards against path confusion; it is not a sandbox. `/pc` and the `laptop`
+ * guards against path confusion; it is not a sandbox. `/pc` and the `device`
  * executor serve the whole machine on purpose (see createHostMountVFS), and
  * the check is lexical, so a symlink inside the tree still points where it
  * points.

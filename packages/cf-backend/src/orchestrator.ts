@@ -3180,7 +3180,7 @@ export class OrchestratorAgent extends ActorAgent {
   // ── DO initialization ──────────────────────────────────────────
 
   // Device connection is user-level: UserDO owns the tunnel socket and the
-  // tokens, and the laptop executor forwards to it. Nothing per-agent verifies,
+  // tokens, and the device executor forwards to it. Nothing per-agent verifies,
   // attaches, issues or lists a device token.
 
   /**
@@ -5617,7 +5617,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // The fleet names its machine per call (docs/EXECUTION-LAYER-SPEC.md
     // "The user's account is a fleet"): device rides as the tool context
-    // the laptop executor reads (readDeviceSelection), and a call that
+    // the device executor reads (readDeviceSelection), and a call that
     // carries none keeps today's unnamed answer. Tools that read no context
     // never see one.
     try {
@@ -5817,8 +5817,8 @@ export class OrchestratorAgent extends ActorAgent {
     // there is a machine that is actually attached, and each answer below is
     // one a person can act on: a machine that was linked and is now offline
     // needs one command, and an account with none linked needs a different
-    // one. "laptop has no terminal" was true until its agent grew one.
-    if (executorId === 'laptop') {
+    // one. "device has no terminal" was true until its agent grew one.
+    if (executorId === 'device') {
       const device = this.rt.deviceTransport.status();
 
       if (device.connected) return { ok: true };

@@ -13,7 +13,7 @@ Kinu has one workspace file plane. Nimbus holds it as a library over the owning 
 |---|---|---|
 | `workspace` | both backends. Cloudflare registers `createNimbusWorkspaceExecutor`; the CLI registers `createInlineExecutor` | the canonical workspace |
 | `sandbox` | Cloudflare only. `createSandboxExecutor` is registered once with a live handle and twice as a not-configured stub | a separate Linux container |
-| `laptop` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI over its own host process (`createLocalLaptopExecutor`) | a separate user machine |
+| `device` | Cloudflare over the device tunnel (`createDeviceTunnelExecutor`); the CLI over its own host process (`createLocalDeviceExecutor`) | a separate user machine |
 | `parent` | CLI head runtimes only (`createParentExecutor`) | another workspace authority |
 
 Every registration lives in backend `runtime.ts`. `ExecutorKind` has five
@@ -38,14 +38,15 @@ second Cloudflare `nimbus.*` provider. Name a runtime for commands; cross a
 mount for files.
 
 The user's account is a fleet: several machines can be linked and several live
-at once. One live machine keeps `/pc` as its own root, byte for byte. Two or
-more mount each machine under `/pc/<name>`. The segment is the machine's
-user-chosen name, or its id when the name is shared or is not a usable path
-segment (`deviceMountSegment`, `core/src/execution/device-tunnel-executor.ts`).
-`/pc` itself then lists the machines. A path under no live machine is
-`ENXIO` naming the fleet. Commands name their machine the same way: every
-`laptop` tool and `run { runtime: "laptop" }` take `device: "<name>"`. With one
-machine live it may be omitted. With several, a call that names none is refused
+at once. The mount is always `/pc/<name>`: every machine — one or many — is
+addressed by its segment, so a path stays valid when a second machine joins.
+The segment is the machine's user-chosen name, or its id when the name is
+shared or is not a usable path segment (`deviceMountSegment`,
+`core/src/execution/device-tunnel-executor.ts`). `/pc` itself lists the
+machines. A path under no live machine is `ENXIO` naming the fleet. Commands
+name their machine the same way: `shell { runtime: "<nickname>" }` names the
+machine by the nickname the live prompt lists. With one machine live the
+class name still reaches it; with several, a call that names none is refused
 with the classified ask (`deviceFleetAsk`, `core/src/execution/device-status.ts`).
 The hub routes on the device id, which rides every frame it sends. It never
 picks a machine for an unnamed call (`DeviceSocketHub.connectedDeviceId`,
@@ -204,7 +205,7 @@ deduplicates delivery (`cf-backend/src/sandbox-lifecycle.ts`). Deletion opens
 load-bearing: after object storage disappears, no one can name its R2 objects.
 A later same-name workspace inherits no container state.
 
-The laptop crosses device consent. `UserDO` scopes each action to the
+The device crosses device consent. `UserDO` scopes each action to the
 consented root unless full-filesystem access is granted; disconnected or
 unapproved devices never fall back to availability. `shell`, `native_binary`,
 `fs_owned`, `net_outbound`, `process_spawn` are structural. The hub probes

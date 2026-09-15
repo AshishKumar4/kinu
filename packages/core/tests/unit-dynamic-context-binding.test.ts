@@ -255,13 +255,13 @@ describe('the backend-only planes ride the typed source callbacks', () => {
       approvals: () => {
         parked += 1;
 
-        return { items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }], total: 1 };
+        return { items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push' }], total: 1 };
       },
       missingCapabilities: [{ source: 'inbox', reason: 'no transport bound' }],
     });
 
     expect(ctx.approvals).toEqual({
-      items: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push' }],
+      items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push' }],
       total: 1,
     });
     expect(ctx.missingCapabilities).toContainEqual({ source: 'inbox', reason: 'no transport bound' });

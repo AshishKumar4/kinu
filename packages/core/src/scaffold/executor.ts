@@ -13,7 +13,7 @@
  *   • host.*     — emit events back to the chat client (text deltas, tool calls)
  *   • workspace.* — existing inline executor (file/memory)
  *
- * Plus any external environments registered on the parent (sandbox.*, laptop.*).
+ * Plus any external environments registered on the parent (sandbox.*, device.*).
  *
  * Scaffold contract (v1) — enforced by safety-patterns.ts:
  *

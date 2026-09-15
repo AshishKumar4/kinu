@@ -518,7 +518,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `kinu daemon logs` reads across the roll.
 
 - Every executor tool now names the CLASS of its own failure. `sandbox`,
-  `nimbus`, `laptop`, `parent` and `workspace` used to answer a descriptive
+  `nimbus`, `device`, `parent` and `workspace` used to answer a descriptive
   string (`exec error: …`, `No device connected.`, `Sandbox executor not
   configured.`) which carried no cause chain and no discriminator, so a caller
   could not tell a timeout from a denial from an OOM. They answer
@@ -536,7 +536,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `isFailingResultText`.
 
 - Four platform conditions stop being counted as tool defects. An unconfigured
-  sandbox binding and an unattached laptop were the worst of them: their prose
+  sandbox binding and an unattached device were the worst of them: their prose
   was not a failure to any reader, so `run { runtime: … }` recorded outcome
   `ok`, the tool-failure census counted a clean call, and the Executors terminal
   drew exit 0, a platform gap read as success, which nobody goes looking for.
@@ -549,8 +549,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - Four reads stop claiming absence they never established. `nimbus.listPorts`
   answered `'[]'` when the session handle had no port API at all;
-  `sandbox.exists` and `laptop.exists` answered false for a call that was never
-  made, and `laptop.exists` swallowed its error to do it; `workspace.readdir`
+  `sandbox.exists` and `device.exists` answered false for a call that was never
+  made, and `device.exists` swallowed its error to do it; `workspace.readdir`
   answered `[]`. Each refuses with a class instead.
 
 - `parent.exec` honours the abort signal it was already parsing and dropping. It
@@ -1020,7 +1020,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   permission denial still fails, and both engines, the CLI's and the device
   daemon's, record it identically.
 - An eval episode can no longer write into the developer's own repository. The
-  local runtime registers a `laptop` executor rooted at `process.cwd()`, and
+  local runtime registers a `device` executor rooted at `process.cwd()`, and
   the measurement harness inherited it, so an episode reached the filesystem of
   whatever checkout the suite was launched from: one live run left
   `scratch-add/{add.js,add.test.js}` in a worktree root, and `grep -rl 'TODO' /`
@@ -1138,7 +1138,7 @@ bottom of this file) starts here.
 - **Agent Client Protocol (ACP)** support, so external editors can drive a
   workspace.
 - **Device tunnel.** User-level (not per-agent) tunnel to the owner's machine
-  with an ask-once-then-remember consent gate, exposing a `laptop` runtime.
+  with an ask-once-then-remember consent gate, exposing a `device` runtime.
 - **Budgets.** Label-scoped transitive USD/token caps on delegated work, with a
   judge-spend short-circuit.
 - **Measurement.** A machine-scored evolution benchmark, held-out GEPA splits

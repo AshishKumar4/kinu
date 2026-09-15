@@ -79,7 +79,7 @@ function modelThatRuns(command: string) {
   const toolCall = {
     id: "call_1",
     type: "function",
-    function: { name: "shell", arguments: JSON.stringify({ command, runtime: "laptop" }) },
+    function: { name: "shell", arguments: JSON.stringify({ command, runtime: "device" }) },
   };
 
   const server = Bun.serve({

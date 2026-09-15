@@ -36,7 +36,7 @@ and slate; every visitor to the preview shares it (`host.ts:39`).
   (`core/src/safety/egress-vault.ts` header). A resident slate's own `fetch`
   is destination-judged and injects nothing (`cf-backend/src/codemode-egress.ts`).
 - The executors a `namespace` binding can name: `workspace`, `sandbox`, and
-  `laptop`, which is the owner's own machine.
+  `device`, which is the owner's own machine.
 
 So `mcp`, `tool`, `web` and `namespace` bindings act with the owner's
 credentials; `memory`, `tasks` and `rpc` read the owner's workspace. No `ai`

@@ -59,7 +59,7 @@
  *   /gallery.html?frame=files    → the Files tab: the composite drive (the
  *                                  workspace tree with /pc and /sandbox as
  *                                  mounted folders), stateful, so rename and
- *                                  delete are provable; `&offline=laptop`
+ *                                  delete are provable; `&offline=device`
  *                                  photographs the disconnected-device row,
  *                                  and `&connect=1` drives the connect panel
  *                                  that row opens: register, the server's
@@ -709,7 +709,7 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
 
 /* The connect flow, end to end.
 
-   `?frame=environment&offline=laptop&connect=1` — the account has no machines
+   `?frame=environment&offline=device&connect=1` — the account has no machines
    until the panel registers one; the roster read after that POST carries the
    machine, CONNECTED, which is the arrival the panel closes itself on.
 
@@ -3026,12 +3026,12 @@ function ChatMessages() {
       ))}
       <DeviceConsentCard
         consent={{
-          consentId: "c1", deviceLabel: "ashish-laptop", method: "exec",
+          consentId: "c1", deviceLabel: "ashish-device", method: "exec",
           command: "git push origin fix/coupon-kind", createdAt: NOW,
         }}
         onResolve={() => {}}
       />
-      <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-laptop", lastSeenAt: NOW }]} />
+      <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-device", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
       {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
           answers a resume ACK with exactly this body today, from a turn that
@@ -3135,14 +3135,14 @@ function Controls() {
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-neutral">workspace</span>
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-success">sandbox</span>
-        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-warning">laptop</span>
+        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-warning">device</span>
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] p-badge-danger">failed</span>
         <span className="size-1.5 rounded-full p-dot-success animate-pulse" title="working" />
         <span className="size-1.5 rounded-full p-dot-accent" title="unseen" />
       </div>
       <div className="space-y-2">
         <div className="p-notice-success text-xs rounded-md px-3 py-2">Deployed to staging — 14 tests green.</div>
-        <div className="p-notice-warning text-xs rounded-md px-3 py-2">The laptop runtime is not provisioned yet.</div>
+        <div className="p-notice-warning text-xs rounded-md px-3 py-2">The device runtime is not provisioned yet.</div>
         <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: workspace has a live turn.</div>
         <div className="p-notice-info text-xs rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
       </div>
@@ -3156,7 +3156,7 @@ function Controls() {
 }
 
 /* The chat column at the width Column A actually gets — 42% of the shell, so
-   roughly 540px on a laptop. Rendering it full-bleed would flatter every
+   roughly 540px on a device. Rendering it full-bleed would flatter every
    truncation and every line length the real column does not have. */
 function ChatFrame() {
   return (
@@ -4490,12 +4490,12 @@ const PENDING_ACTIONS: PendingAction[] = [
   // sitting is the whole point of the card.
   {
     id: "defer-9y2n8ixor8", kind: "deferred_action", at: NOW - 40 * 60e3,
-    title: "Approve: a command the agent wants to run on laptop",
+    title: "Approve: a command the agent wants to run on device",
     detail: "cd ~/Kinu && rm -rf node_modules && bun install",
   },
   {
     id: "defer-4k1m2pqw7z", kind: "deferred_action", at: NOW - 36 * 60e3,
-    title: "Approve: a command the agent wants to run on laptop",
+    title: "Approve: a command the agent wants to run on device",
     detail: "sudo launchctl kickstart -k system/com.docker.dockerd",
   },
   {
@@ -4711,8 +4711,8 @@ function WorkFrame() {
  * all is exactly the kind of gap a photograph closes.
  */
 const SHELL_GRANTS = [
-  { rule: "rm-recursive", executor: "laptop" },
-  { rule: "sudo", executor: "laptop" },
+  { rule: "rm-recursive", executor: "device" },
+  { rule: "sudo", executor: "device" },
   { rule: "docker-destructive", executor: "sandbox" },
 ];
 
@@ -4787,9 +4787,9 @@ function WorkEmptyFrame() {
  */
 const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   {
-    name: "laptop", kind: "laptop", available: true, configured: true, active: true, status: "active",
+    name: "device", kind: "device", available: true, configured: true, active: true, status: "active",
     // The user's own name for the device, exactly as the consent contract
-    // carries it — the card renders THIS, never "laptop".
+    // carries it — the card renders THIS, never "device".
     label: "Ashish's MacBook",
     capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
   },
@@ -4812,11 +4812,11 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
  * prove rename and delete against the real components. Contents feed the
  * text preview; `binary-weights.bin` exercises the honest binary refusal.
  */
-function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
+function seedCompositeTree(offlineDevice: boolean): Map<string, DirEntry[]> {
   const tree = new Map<string, DirEntry[]>([
     ["/", [
       { name: "home", type: "dir", mtimeMs: NOW - 4 * 36e5 },
-      ...(offlineLaptop ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
+      ...(offlineDevice ? [] : [{ name: "pc", type: "dir" as const, mtimeMs: NOW - 60e3 }]),
       { name: "sandbox", type: "dir", mtimeMs: NOW - 30 * 60e3 },
     ]],
     ["/home", [{ name: "user", type: "dir", mtimeMs: NOW - 4 * 36e5 }]],
@@ -4838,7 +4838,7 @@ function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
     ["/sandbox/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
   ]);
 
-  if (!offlineLaptop) {
+  if (!offlineDevice) {
     // The device tree BELOW its consented root. `/pc` and `/pc/home` are
     // deliberately absent: the machine's own path guard refuses everything
     // outside `PC_CONSENTED_ROOT`, and a fixture that listed them could not
@@ -4881,9 +4881,9 @@ interface PreviewDeferred {
  * proves. `frame=environment` and `frame=files` differ only in where they
  * start and how wide they photograph.
  */
-function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false }: {
+function DriveFrame({ initialSurface, offlineDevice, width, deferPreview = false }: {
   initialSurface: SurfaceKind;
-  offlineLaptop: boolean;
+  offlineDevice: boolean;
   width: string;
   /** Fixture control for the real FilesSurface stale-preview proof. The held
    *  value is transport input only; FilesSurface/FileViewer decide whether it
@@ -4892,15 +4892,15 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
 }) {
   const [surface, setSurface] = useState<SurfaceKind>(initialSurface);
 
-  const executors = useMemo<ExecutorInfo[]>(() => offlineLaptop
-    ? ENVIRONMENT_EXECUTORS.map((exec) => exec.name === "laptop"
+  const executors = useMemo<ExecutorInfo[]>(() => offlineDevice
+    ? ENVIRONMENT_EXECUTORS.map((exec) => exec.name === "device"
       ? { ...exec, available: false, active: false, status: "disconnected" as const, reason: "no device connected" }
       : exec)
-    : ENVIRONMENT_EXECUTORS, [offlineLaptop]);
+    : ENVIRONMENT_EXECUTORS, [offlineDevice]);
 
   const tree = useRef<Map<string, DirEntry[]> | null>(null);
 
-  if (tree.current === null) tree.current = seedCompositeTree(offlineLaptop);
+  if (tree.current === null) tree.current = seedCompositeTree(offlineDevice);
   const text = useRef<Map<string, string> | null>(null);
 
   if (text.current === null) text.current = new Map(Object.entries(FILES_TEXT));
@@ -4910,9 +4910,9 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
 
   const mounts: MountInfo[] = [
     { name: "workspace", prefix: "workspace.*", live: true, policy: { readOnly: false, consistency: "durable" }, reason: null },
-    offlineLaptop
-      ? { name: "laptop", prefix: "laptop.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
-      : { name: "laptop", prefix: "laptop.*", live: true, policy: { readOnly: false, consistency: "live-shared" }, reason: null },
+    offlineDevice
+      ? { name: "device", prefix: "device.*", live: false, policy: { readOnly: false, consistency: "live-shared" }, reason: "no device connected" }
+      : { name: "device", prefix: "device.*", live: true, policy: { readOnly: false, consistency: "live-shared" }, reason: null },
     { name: "sandbox", prefix: "sandbox.*", live: true, policy: { readOnly: false, consistency: "ephemeral" }, reason: null },
   ];
 
@@ -6398,7 +6398,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
 const SANDBOX_DEVICES: readonly UserDevice[] = [
   galleryDevice("dev-sandboxed", "workstation", { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0", "/dev/nvidiactl"] }),
   galleryDevice("dev-raw", "build-box", { tier: "raw", capability: "sandboxed", reason: null, detail: null, gpu: [] }),
-  galleryDevice("dev-cannot", "old-laptop", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", detail: null, gpu: [] }),
+  galleryDevice("dev-cannot", "old-device", { tier: "sandboxed", capability: "files_only", reason: "no_bwrap", detail: null, gpu: [] }),
 ];
 
 function DeviceSandboxFrame() {
@@ -6703,7 +6703,7 @@ async function mount() {
   // The Environment tab and the composite drive share one stateful frame, so
   // an Environment card's Files action genuinely lands the drive. Routed: the
   // Files surface reads `agentId` off the route to address the raw-bytes HTTP
-  // route. `&offline=laptop` photographs the stated-absence row for a
+  // route. `&offline=device` photographs the stated-absence row for a
   // disconnected device; `&wide=1` the ≥64rem side-panel preview.
   else if (frame === "environment" || frame === "files") {
     const params = new URLSearchParams(location.search);
@@ -6713,7 +6713,7 @@ async function mount() {
         <Route path="/workspace/:agentId"
           element={<DriveFrame
             initialSurface={frame === "files" ? "Files" : "Environment"}
-            offlineLaptop={params.get("offline") === "laptop"}
+            offlineDevice={params.get("offline") === "device"}
             width={params.get("wide") === null ? (frame === "files" ? "w-[860px]" : "w-[720px]") : "w-[1240px]"}
             deferPreview={params.get("deferpreview") === "1"}
           />} />

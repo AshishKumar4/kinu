@@ -40,8 +40,8 @@ import {
   EXECUTORS_SECTION,
   EXTERNAL_TOOL_LINE,
   GENERIC_EXECUTOR_LINE,
-  LAPTOP_EXECUTOR_LINE,
-  OFFLINE_LAPTOP_LINE,
+  DEVICE_EXECUTOR_LINE,
+  OFFLINE_DEVICE_LINE,
   OPERATING_GUIDANCE,
   ROLE_SECTION,
   OUTPUT_FORMAT_SECTION,
@@ -213,7 +213,7 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
 /** How the device row names the machine. The user's own name for it when they
- *  gave one; otherwise the neutral phrase, because a row that says "laptop"
+ *  gave one; otherwise the neutral phrase, because a row that says "device"
  *  names an API namespace and not a computer anyone owns. */
 function deviceDisplayName(exec: PromptExecutorInfo): string {
   return exec.label?.trim() || "your user's PC";
@@ -234,21 +234,21 @@ function renderExecutorLine(
         return render(WORKSPACE_EXECUTOR_LINE, { cliLocal, memoryMb: String(WORKSPACE_MEMORY_MB) });
       case 'sandbox':
         return render(SANDBOX_EXECUTOR_LINE, {});
-      case 'laptop':
+      case 'device':
         // cliLocal has no device runtime: the machine IS the workspace, so
         // the device row never renders there and the workspace row says so.
 
         if (backend === 'cli-local') return '';
 
-        return render(LAPTOP_EXECUTOR_LINE, {});
+        return render(DEVICE_EXECUTOR_LINE, {});
       default:
         return render(GENERIC_EXECUTOR_LINE, { name: exec.name });
   }
 }
 
-function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
+function offlineDevice(executors: readonly PromptExecutorInfo[]): PromptExecutorInfo | undefined {
   return executors.find((exec) =>
-    exec.name === 'laptop' && exec.configured === true && !executorIsSelectable(exec));
+    exec.name === 'device' && exec.configured === true && !executorIsSelectable(exec));
 }
 
 function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
@@ -257,16 +257,16 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
   const executors = surface.selectableExecutors;
-  const laptopOffline = surface.backend === 'cli-local' ? undefined : offlineLaptop(surface.executors);
+  const deviceOffline = surface.backend === 'cli-local' ? undefined : offlineDevice(surface.executors);
 
-  if (executors.length === 0 && !laptopOffline) return '';
+  if (executors.length === 0 && !deviceOffline) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
   const devices = executors.filter((exec) => exec.name !== 'workspace');
 
   const lines = [
     ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),
-    ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, { deviceName: deviceDisplayName(laptopOffline) })] : []),
+    ...(deviceOffline ? [render(OFFLINE_DEVICE_LINE, { deviceName: deviceDisplayName(deviceOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
 

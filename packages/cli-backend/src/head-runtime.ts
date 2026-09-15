@@ -1,8 +1,8 @@
 // createCLIHeadRuntime — the local HeadRuntime backing the `agents` tool's fork
 // action. The cf backend runs heads as SubordinateAgent facets in head mode; locally each
 // head runs IN-PROCESS as a LOGICAL ACTOR of the workspace it forks
-// (buildCLIHeadRuntime): the parent's real host executor (`run laptop` /
-// codemode `laptop.*`), the parent's canonical workspace through `parent.*`,
+// (buildCLIHeadRuntime): the parent's real host executor (`run device` /
+// codemode `device.*`), the parent's canonical workspace through `parent.*`,
 // and its own home in the one file plane so siblings can't corrupt each other.
 // Heads are LLM-bound, so the HeadController's Promise.all gives real
 // concurrency without subprocesses; the merge LLM runs in this process.
@@ -209,7 +209,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
     const rt = seat.actor.runtime;
 
     // eval over the head's OWN router providers (its own home in the
-    // one file plane + the parent's real `laptop.*`) plus the web/llm codemode
+    // one file plane + the parent's real `device.*`) plus the web/llm codemode
     // namespaces, `state.*` over the head's own program state and `db.*` over
     // the head's own app data — the shared description promises both to every
     // program, and the hosted head binds the same providers over its own

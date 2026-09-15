@@ -37,7 +37,7 @@ const TunnelFrameSchema = v.object({
 
 type TunnelFrame = v.InferOutput<typeof TunnelFrameSchema>;
 
-/** The laptop transport over a real tunnel — the seam the cloud actually has,
+/** The device transport over a real tunnel — the seam the cloud actually has,
  *  where a device's silence is bounded by the transport rather than by a double
  *  that answers on command. */
 function tunnelTransport(tunnel: DeviceTunnel): DeviceTransport {
@@ -214,7 +214,7 @@ describe('remote executor exec abort', () => {
     return { transport, calls };
   }
 
-  test('aborting a laptop exec cancels the command on the device by its own request id', async () => {
+  test('aborting a device exec cancels the command on the device by its own request id', async () => {
     const { transport, calls } = cancellableTransport(async (requestId) => ({
       requestId, cancelled: 'terminated',
     }));
@@ -226,7 +226,7 @@ describe('remote executor exec abort', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'laptop exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
+      message: 'device exec stopped — the device confirmed its owned command process group terminated; separately sessioned processes may still run',
     });
 
     // ONE identity for both frames: the cancellation names the command by the
@@ -254,7 +254,7 @@ describe('remote executor exec abort', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'laptop exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
+      message: 'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
   });
 
@@ -395,7 +395,7 @@ describe('remote executor exec abort', () => {
     controller.abort();
     await expect(pending).rejects.toMatchObject({
       name: 'AbortError',
-      message: 'laptop exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
+      message: 'device exec stopped — no active command control entry remained on the device; backgrounded or separately sessioned processes may still run',
     });
 
     // The command's own result lands now. Awaiting the very promise the
@@ -450,7 +450,7 @@ describe('remote executor exec abort', () => {
     await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
       .rejects.toMatchObject({
         name: 'AbortError',
-        message: 'laptop exec stopped before the command was sent — nothing ran on the device',
+        message: 'device exec stopped before the command was sent — nothing ran on the device',
       });
     expect(calls).toEqual([]);
   });

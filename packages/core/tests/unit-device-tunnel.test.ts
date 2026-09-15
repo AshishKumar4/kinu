@@ -119,7 +119,7 @@ describe('DeviceTunnel', () => {
   });
 
   // Liveness and the work budget are separate deadlines, and these pin them
-  // apart. ONE 30s deadline on every call fails a laptop build or test suite as
+  // apart. ONE 30s deadline on every call fails a device build or test suite as
   // "device RPC timeout" — a message indistinguishable from a dead device.
   describe('work budget vs liveness', () => {
     test('a call with no deadline outlives the control timeout', async () => {

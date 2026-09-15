@@ -18,7 +18,7 @@ The day-one decision is where it runs.
 | | `--mode cloud` | `--mode local` |
 | --- | --- | --- |
 | Lives in | a Durable Object on `kinu.run` | `~/.kinu/<name>/agent.db` on this machine |
-| Keeps running when you close the laptop | yes | no |
+| Keeps running when you close the device | yes | no |
 | Web UI, webhooks | yes | no |
 | Email inbox | code-complete; live only on a domain whose Email Routing setup is done, which `kinu.run` has not yet had ([EMAIL-INGRESS.md](EMAIL-INGRESS.md)) | no |
 | Timers | yes | yes, while `kinu daemon` runs |

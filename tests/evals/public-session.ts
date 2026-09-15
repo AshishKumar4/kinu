@@ -1111,7 +1111,7 @@ export class KinuPublicSession {
    * rather than reduced to stdout: a refusal arrives as `{error}` or as a
    * classified payload on the stdout channel, and which one it is is the finding
    * a device case reads. `device` is the fleet member the call names — the
-   * same third argument the RPC carries for the laptop executor, left absent
+   * same third argument the RPC carries for the device executor, left absent
    * rather than defaulted so an unnamed call keeps its own answer.
    */
   async execute(executor: string, command: string, device?: string): Promise<PublicExecutorResult> {

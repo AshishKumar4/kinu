@@ -752,7 +752,7 @@ export function requireExecutorSurface(taskId: string, rt: AgentRuntime): void {
 }
 
 /** Executor kinds an episode may be measured on: planes whose filesystem is
- *  not the developer's. An allowlist rather than a `laptop` denylist, so a
+ *  not the developer's. An allowlist rather than a `device` denylist, so a
  *  plane added later is refused until someone decides it is isolated. */
 const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
 
@@ -767,7 +767,7 @@ const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
  * The escape it catches was measured, not imagined. A live run left
  * `scratch-add/{add.js,add.test.js}` in a worktree ROOT and `report.txt` /
  * `todos.txt` in the repo root, and the commit that swept them up was refused by
- * `gate:typecheck-coverage`. `createCLIRuntime` registers a `laptop`
+ * `gate:typecheck-coverage`. `createCLIRuntime` registers a `device`
  * ExecutorProvider rooted at `process.cwd()` unless told not to, and an episode
  * reaches every registered provider through `eval` — so the harness
  * that omitted `hostRoot: null` handed each episode the developer's filesystem.
@@ -779,8 +779,8 @@ export class UnsandboxedRuntimeError extends Error {
       + 'registered provider through `eval`, and a corpus task that writes '
       + 'files then writes them into the repo the harness was launched from. Open the '
       + 'workspace with `hostRoot: null` (cli-backend/src/open.ts) — re-rooting the '
-      + 'provider is not enough, because `laptop.writeFile` passes an absolute path '
-      + 'through and `laptop.exec` can `cd` anywhere.');
+      + 'provider is not enough, because `device.writeFile` passes an absolute path '
+      + 'through and `device.exec` can `cd` anywhere.');
     this.name = 'UnsandboxedRuntimeError';
   }
 }
@@ -972,7 +972,7 @@ export async function runBehaviourTask(
     llm: opts.llm,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  // `hostRoot: null`: no `laptop` executor, so the episode's only filesystem is
+  // `hostRoot: null`: no `device` executor, so the episode's only filesystem is
   // the workspace one this runtime owns. The default plane is rooted at
   // `process.cwd()` — the repo the suite was launched from.
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: opts.llm, hostRoot: null });

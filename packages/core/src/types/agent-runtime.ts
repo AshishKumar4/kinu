@@ -163,7 +163,7 @@ export interface AgentRuntime {
   abortBranch: AbortBranch;
   /**
    * Multi-executor routing. Manages named executor providers (workspace,
-   * nimbus, sandbox, laptop) for the codemode sandbox. Optional — core
+   * nimbus, sandbox, device) for the codemode sandbox. Optional — core
    * code that doesn't need multi-executor support ignores this field.
    */
   executionRouter?: ExecutionRouter;

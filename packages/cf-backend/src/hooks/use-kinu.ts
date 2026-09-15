@@ -1690,7 +1690,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
 
-    const results = await Promise.all(["workspace", "sandbox", "laptop"].map(async (executor) => {
+    const results = await Promise.all(["workspace", "sandbox", "device"].map(async (executor) => {
       try {
         const result = await rpc<{
           ports: Array<{ port: number; url: string; name?: string }>;

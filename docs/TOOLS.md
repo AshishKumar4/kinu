@@ -98,7 +98,7 @@ Plan adds no second approval queue and no new persisted format.
 `FILE_TOOL_ACTIONS` names `read`, `write`, `edit`, `list`, `stat`, and `search`. `file`, workspace
 `shell`, and `workspace.*` address `rt.storage.vfs`: on hosted, the actor DO own
 Nimbus workspace; on CLI, the working directory when set, otherwise its in-SQLite tree. Containers
-and devices keep separate files under `sandbox.*` and `laptop.*`.
+and devices keep separate files under `sandbox.*` and `device.*`.
 
 ### Why it exists
 
@@ -408,7 +408,7 @@ refused. `""` deletes. `file-edit.ts` is pure string math. `file-ledger.ts`
 holds turn state. The `file-plane` layergate faults exact edits and clipped
 reads.
 
-## run: shell command
+## shell: shell command
 
 `shell` is the Nimbus POSIX shell over the `file` and `workspace.*` plane. It has
 pipelines, redirects, variables, loops, and the executor advertised "~95
@@ -416,8 +416,9 @@ coreutils" (`packages/core/src/execution/inline.ts`), not a document count.
 Live executor status defines hosted capability. Local execution uses the
 workspace process.
 
-`runtime` defaults to `workspace`. `sandbox` and `laptop` have separate files.
-`ExecutionRouter` has no fallback: absent runtimes return
+`runtime` accepts `workspace`, `sandbox`, or a device by the nickname the live prompt lists.
+It defaults to `workspace`. `sandbox` and `device` have separate files; each device
+mounts at `/pc/<name>`. `ExecutionRouter` has no fallback: absent runtimes return
 `runtime_not_provisioned`. Relative paths use `WORKSPACE_ROOT`, `/home/user`.
 Containers receive `/workspace`.
 

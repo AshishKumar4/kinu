@@ -520,7 +520,7 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
  *   (`@nimbus-sh/core` substrate/lifo/node-compat/tty.d.ts), so its processes
  *   have no controlling terminal to attach to.
  *
- * `laptop` — the owner's own machine, through its agent
+ * `device` — the owner's own machine, through its agent
  *   (`packages/pc-agent/src/pty.js`). The agent allocates a real terminal per
  *   session, claims it as the shell's controlling terminal, and streams bytes
  *   both ways over the one socket it already dials out on. Measured there
@@ -533,5 +533,5 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
  *   with no session of its own to attach to.
  */
 export function terminalLane(executor: string): TerminalLane {
-  return executor === 'sandbox' || executor === 'laptop' ? { mode: 'pty' } : { mode: 'line' };
+  return executor === 'sandbox' || executor === 'device' ? { mode: 'pty' } : { mode: 'line' };
 }

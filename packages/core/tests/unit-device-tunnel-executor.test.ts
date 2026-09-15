@@ -373,7 +373,7 @@ describe('createDeviceTunnelExecutor', () => {
     // Pooling the two would read a permission problem as an absent machine.
     expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
       reason: 'io',
-      error: 'laptop exec `ls`: permission denied',
+      error: 'device exec `ls`: permission denied',
     });
   });
 

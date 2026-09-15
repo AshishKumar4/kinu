@@ -465,14 +465,14 @@ Four fixed defects are pinned by `core/tests/unit-tool-failure-census.test.ts`:
 1. A no-handle `createSandboxExecutor()` stub in `cf-backend/src/runtime.ts`
    returned `NOT_CONFIGURED` prose, so escalation recorded `ok` and the census
    missed it.
-2. No attached `laptop` had the same invisible shape.
+2. No attached `device` had the same invisible shape.
 3. Sandbox admission refusals surviving retries became `io`, making capacity
    look like a tool defect.
 4. The misevolution veto returned `{ ok: false, error }` without `reason`, so
    the census filed a working gate as `broke`.
 
 `nimbus.listPorts` returned `'[]'` without a port API. `sandbox.exists` and
-`laptop.exists` returned `'false'` / `false` for an unmade call, the latter
+`device.exists` returned `'false'` / `false` for an unmade call, the latter
 swallowing its error. `workspace.readdir` returned `[]`. Each now refuses.
 
 Without observed execution metadata, `refused` holds `bad_input`, `denied`,

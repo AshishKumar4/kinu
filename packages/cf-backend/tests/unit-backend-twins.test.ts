@@ -496,7 +496,7 @@ function methodBody(body: string, name: string): string {
  * while the local merge passed the SESSION'S CHAT MODEL at a hardcoded `'low'`
  * and filed the result as `judge` spend anyway, so one split was synthesised by
  * the deep tier in the cloud and by whatever `/model` happened to be on a
- * laptop. Both bodies called into core. Neither was a "twin".
+ * device. Both bodies called into core. Neither was a "twin".
  *
  * WHAT MAKES THIS DIFFERENTIAL RATHER THAN TWO ASSERTIONS. Each seam declares
  * ONE shared fixture and ONE expected observable, and the check requires BOTH

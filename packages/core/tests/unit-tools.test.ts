@@ -629,7 +629,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = tools(rt);
     const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.shell) };
 
-    for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
+    for (const runtime of ['sandbox', 'nimbus', 'device'] as const) {
       const pending = tool.execute({ command: 'echo hi', runtime });
       await expect(pending).rejects.toMatchObject({ code: 'unavailable' });
       await expect(pending).rejects.toThrow('runtime_not_provisioned');

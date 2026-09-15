@@ -9,7 +9,7 @@ export interface LocalNodeRuntimeDeps {
   readonly origin: CLIRuntime;
   readonly approvalPolicy: ShellApprovalPolicy;
   readonly inline: Parameters<typeof createInlineExecutor>[0];
-  readonly laptop: ExecutorProvider | null;
+  readonly device: ExecutorProvider | null;
 }
 
 /**
@@ -55,7 +55,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
         if (provider) ownRouter.register(provider);
       }
 
-      if (deps.laptop && !ownRouter.getProvider(deps.laptop.name)) ownRouter.register(deps.laptop);
+      if (deps.device && !ownRouter.getProvider(deps.device.name)) ownRouter.register(deps.device);
       router = ownRouter;
     } else {
       // Sharing the origin's plane still means NOT sharing its context. The

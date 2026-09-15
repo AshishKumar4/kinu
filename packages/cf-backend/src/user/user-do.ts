@@ -2170,7 +2170,7 @@ export class UserDO extends Agent<Env> {
     return getActiveAccessTokenScopes(this.ctx.storage.sql, tokenHash);
   }
 
-  // ── Connected devices (user-level laptop/PC tunnel hub) ──────────────
+  // ── Connected devices (user-level device/PC tunnel hub) ──────────────
   //
   // The reverse-WS tunnel from a user's machine terminates HERE, not on a
   // specific agent — so one `kinu connect` lets every one of the user's
@@ -3473,7 +3473,7 @@ export class UserDO extends Agent<Env> {
 
   /**
    * The device plane as an agent runtime needs it: whether a machine is there,
-   * and what that machine can run. One call, because a laptop row that says
+   * and what that machine can run. One call, because a device row that says
    * "connected" and nothing about its toolchain is honest and useless — the
    * declared set is what the model reads to decide where to send work.
    *

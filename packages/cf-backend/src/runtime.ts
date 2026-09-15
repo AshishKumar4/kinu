@@ -301,7 +301,7 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 }
 
 /** Extended runtime that exposes the durable base for the parent-file RPC a
- *  fork reads through, the device transport for per-turn laptop-status
+ *  fork reads through, the device transport for per-turn device-status
  *  refreshes, and the Vectorize-backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
   /** `Storage.vfs`, typed — the workspace filesystem, plus the two operations
@@ -309,7 +309,7 @@ export type CFRuntime = AgentRuntime & {
    *  serves to a fork, so a fork reads exactly the bytes its parent's shell
    *  does. */
   localVfs: WorkspaceVFS;
-  /** The laptop runtime's hub transport. `refreshStatus()` is awaited at turn
+  /** The device runtime's hub transport. `refreshStatus()` is awaited at turn
    *  start so the turn's context reflects the CURRENT device state. */
   deviceTransport: DeviceTransport;
   /** Vectorize-backed semantic memory. Noop fallback when no binding. */
@@ -538,7 +538,7 @@ export function createCFRuntime(
   // whichever actor this runtime belongs to.
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
-  // Execution router — manages workspace plus the separate sandbox and laptop.
+  // Execution router — manages workspace plus the separate sandbox and device.
   // Live shell-approval policy every gated exec boundary consults (`shell`'s
   // workspace/router dispatch and every ExecutorProvider's exec — see
   // execution/approval.ts). `mode` reads actor_config directly off the SAME
@@ -748,7 +748,7 @@ export function createCFRuntime(
     executionRouter.register(createSandboxExecutor());
   }
 
-  // Register the laptop executor. The device socket lives on the user's UserDO
+  // Register the device executor. The device socket lives on the user's UserDO
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
   // one connected device serves all of the user's agents.
   const cliCwdForDevice = () => access.getCliCwdForDevice?.() ?? null;

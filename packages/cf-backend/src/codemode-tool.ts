@@ -12,7 +12,7 @@
  *   state.*     the key/value store that survives between programs
  *   agents.*    delegation (orchestrators only; heads get none)
  *   web.*, memory.*, tasks.*, agent.*, release.*, report.*   the projections
- *   workspace.* / sandbox.* / laptop.* / parent.*   one per live executor
+ *   workspace.* / sandbox.* / device.* / parent.*   one per live executor
  *
  * plus `require()` and `fetch` from the prelude. Actors differ only in the
  * fields of `CodemodeFactoryOptions`: an orchestrator adds its delegation deps
@@ -44,7 +44,7 @@ export interface CodemodeFactoryOptions {
   /** The loopback Fetcher the sandbox's `fetch` rides; null keeps it offline. */
   egress: Fetcher | null;
   /** The actor's runtime: craftStore (crafted source) and executionRouter
-   *  (the `workspace` / `sandbox` / `laptop` namespaces). */
+   *  (the `workspace` / `sandbox` / `device` namespaces). */
   rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'> };
   /** The actor's bound SQL — craft-score lookups and the `state` store. */
   sql: SqlExecutor;

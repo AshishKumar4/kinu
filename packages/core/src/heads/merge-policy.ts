@@ -13,7 +13,7 @@
  * local merge passed the SESSION'S CHAT MODEL at a hardcoded `'low'`, hand-rolled
  * the JSON extraction, and filed the result as `judge` anyway. So the same split,
  * on the same account, was synthesised by the deep tier in the cloud and by
- * whatever `/model` happened to be set to on a laptop — both reported as
+ * whatever `/model` happened to be set to on a device — both reported as
  * deep-tier grading, which is worse than either behaviour on its own, because the
  * ledger could not tell them apart.
  *

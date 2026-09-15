@@ -120,7 +120,7 @@ const EventVariantSchema = v.picklist([
 
 export interface LocalExecutorInfo {
   name: string;
-  kind: 'workspace' | 'laptop';
+  kind: 'workspace' | 'device';
   status: 'connected';
   capabilities: string[];
 }
@@ -738,8 +738,8 @@ export function listLocalExecutors(): LocalExecutorInfo[] {
       capabilities: ['shell', 'fs', 'memory', 'craft'],
     },
     {
-      name: 'laptop',
-      kind: 'laptop',
+      name: 'device',
+      kind: 'device',
       status: 'connected',
       // The same probe the live provider declares from, not a copy of its row:
       // this listing is what `kinu inspect` shows for the machine it is
@@ -824,7 +824,7 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   ensureLocalAgent(name);
   const normalized = executorId.toLowerCase();
 
-  if (!['workspace', 'laptop', 'local', 'your-pc'].includes(normalized)) {
+  if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
     throw new Error(`Executor "${executorId}" is not available for local agents.`);
   }
 

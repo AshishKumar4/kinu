@@ -255,7 +255,7 @@ export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
  * ./device-ownership, which owns the two-phase rule).
  *
  * Per invocation and not per turn, because one turn can hold several parallel
- * laptop commands and only the detaching call changes hands. A turn-wide
+ * device commands and only the detaching call changes hands. A turn-wide
  * handover would move requests that never detached, and the job-scoped cancel
  * that follows would then kill work the foreground is still waiting on. Absent
  * on inline surfaces (codemode, resume re-drives, the raw eval toolset) and on

@@ -49,7 +49,7 @@ const roster = <T>(items: T[]) => ({ items, total: items.length });
 
 const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: true, status: 'active' };
 
-const connectedLaptop: PromptExecutorInfo = { name: 'laptop', available: true, configured: true, active: true, status: 'active' };
+const connectedLaptop: PromptExecutorInfo = { name: 'device', available: true, configured: true, active: true, status: 'active' };
 
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
 
@@ -266,7 +266,7 @@ describe('renderDynamicContextBlock', () => {
     expect(text!).toContain(DYNAMIC_CONTEXT_HEADER);
     expect(text!).toContain('user.tz = Europe/Berlin');
     expect(text!).toContain('verify before claiming');
-    expect(text!).toContain('- laptop: connected');
+    expect(text!).toContain('- device: connected');
     expect(text!).toContain('- sandbox: ready on demand');
   });
 
@@ -296,7 +296,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('unselectable executors are omitted; empty state renders nothing', () => {
-    const offline: PromptExecutorInfo = { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' };
+    const offline: PromptExecutorInfo = { name: 'device', available: false, configured: true, active: false, status: 'disconnected' };
     expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();
     expect(renderDynamicContextBlock({})).toBeNull();
     expect(renderDynamicContextBlock({ factsBlock: '  ' })).toBeNull();
@@ -314,7 +314,7 @@ describe('renderDynamicContextBlock', () => {
     })!;
 
     expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
-    expect(text).toEndWith('- laptop: connected, files at /pc\n</dynamic_context>');
+    expect(text).toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 
   test('a half-declared cgroup reports only the half it measured', () => {
@@ -408,12 +408,12 @@ describe('renderDynamicContextBlock', () => {
     expect(executorAvailabilityLabel({ name: 'sandbox', configured: true })).toBe('ready on demand');
   });
 
-  test('laptop reports connection, not activity — on either signal', () => {
-    expect(executorAvailabilityLabel({ name: 'laptop', active: true })).toBe('connected');
-    expect(executorAvailabilityLabel({ name: 'laptop', status: 'active' })).toBe('connected');
-    // A configured-but-disconnected laptop is NOT 'ready on demand': the user's
+  test('device reports connection, not activity — on either signal', () => {
+    expect(executorAvailabilityLabel({ name: 'device', active: true })).toBe('connected');
+    expect(executorAvailabilityLabel({ name: 'device', status: 'active' })).toBe('connected');
+    // A configured-but-disconnected device is NOT 'ready on demand': the user's
     // machine has to actually be there.
-    expect(executorAvailabilityLabel({ name: 'laptop', configured: true })).toBe('available');
+    expect(executorAvailabilityLabel({ name: 'device', configured: true })).toBe('available');
   });
 
   /**
@@ -438,7 +438,7 @@ describe('renderDynamicContextBlock', () => {
       }],
     })!;
 
-    expect(text).toContain('- laptop: connected');
+    expect(text).toContain('- device: connected');
     expect(text).toContain('sandboxed full bash');
     expect(text).toContain('GPU: nvidia0, nvidiactl');
     expect(text).toContain('agent home /home/ashish/.kinu/agents/notes/home');
@@ -532,7 +532,7 @@ describe('renderDynamicContextBlock', () => {
 
   test('an executor with no sandbox block adds nothing to its row', () => {
     expect(renderDynamicContextBlock({ executors: [connectedLaptop] })!)
-      .toEndWith('- laptop: connected, files at /pc\n</dynamic_context>');
+      .toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 });
 
@@ -591,14 +591,14 @@ describe('the dynamic block carries every genuinely-live plane', () => {
         { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
         { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
       ]),
-      approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }]),
+      approvals: roster([{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }]),
     })!;
 
     expect(isDynamicBlock(text)).toBe(true);
     expect(text).toContain('- job-1 (think_heads): explore option 1');
     expect(text).toContain('- ana (subordinate), working: survey the prior art');
     expect(text).toContain('- run-7 (swarm node), 2 of 3 nodes running');
-    expect(text).toContain('- device consent: laptop: git push origin main');
+    expect(text).toContain('- device consent: device: git push origin main');
   });
 
   test('the task list renders subtasks under their task, with status at a glance', () => {
@@ -964,7 +964,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     history.push({ role: 'assistant', content: 'device connected' });
     const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedLaptop] }).at(-1)?.content);
 
-    expect(delta).toContain('- laptop: connected, files at /pc');
+    expect(delta).toContain('- device: connected, files at /pc');
     expect(delta).toContain('- sandbox: removed from execution status.');
     expect(delta).not.toContain('/sandbox');
     expect(delta).not.toContain('- workspace:');

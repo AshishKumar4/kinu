@@ -75,7 +75,7 @@ export const EXECUTOR_CAPABILITIES = [
 
 export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
-export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop' | 'parent';
+export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'device' | 'parent';
 
 export type ExecutorLifecycleStatus =
   | 'not_configured'
@@ -110,7 +110,7 @@ export interface ExecutorStatus {
   status: ExecutorLifecycleStatus;
   reason?: string;
   /** The environment's own name, when it HAS one the user chose — a linked
-   *  device is "ashish@studio", not "laptop". Absent where the namespace is
+   *  device is "ashish@studio", not "device". Absent where the namespace is
    *  the only name there is (workspace, sandbox). */
   label?: string;
   /** Whether this agent already holds the environment's access grant. Only a
@@ -130,7 +130,7 @@ export interface ExecutorStatus {
  * @cloudflare/codemode's interface exactly.
  */
 export interface ExecutorProvider {
-  /** Namespace in the codemode sandbox (e.g. "workspace", "sandbox", "laptop") */
+  /** Namespace in the codemode sandbox (e.g. "workspace", "sandbox", "device") */
   readonly name: string;
 
   /** Which kind of executor this is */
@@ -227,7 +227,7 @@ export interface ExecutorProvider {
   /**
    * Generic port-exposure surface. Returns the public preview URL when
    * supported, or a `{supported: false}` rejection with a clear reason
-   * for executors that can't open inbound ports (for example, laptop).
+   * for executors that can't open inbound ports (for example, device).
    *
    * Real implementation: sandbox (via @cloudflare/sandbox SDK).
    *
