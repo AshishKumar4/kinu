@@ -175,7 +175,7 @@ import { TierIdSchema,
   type AgentOrchestratorDeps, type LoopOrigin, type WriteObserver,
   // The ONE turn loop, and the transcript store the local backend keeps it over.
   ChatSession, ActorMessagesTranscript,
-  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, recoveryBackoffMs,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -916,6 +916,9 @@ export class LocalAgentSession implements BackendHost {
         terminal: () => this.terminal,
         holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
         driverGate: () => this.driverGate?.() ?? null,
+        // The turn's own wake at its open, the in-process half: a crashed turn
+        // re-arms from the ledger on the next start either way.
+        armTurnWake: () => this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(0)),
         modelWindow: () => ({
           contextWindow: this.sessionContextWindow(),
           modelOutputLimit: this.modelCatalog.modelOutputLimit(),

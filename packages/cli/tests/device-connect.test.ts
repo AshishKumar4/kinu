@@ -1147,6 +1147,54 @@ describe('classic cloud chat connect prompt', () => {
 });
 
 describe('kinu connect waits on the daemon and says less', () => {
+  /** A command under a PTY, read through the wait the suite shares. */
+  function spawnPtyCommand(command: string) {
+    const proc = Bun.spawn({
+      cmd: ['script', '-qefc', command, '/dev/null'],
+      cwd: newProjectDir(),
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    });
+
+    let output = '';
+    let eof = false;
+
+    const drained = (async () => {
+      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
+      eof = true;
+    })();
+
+    return {
+      proc,
+      output: () => output,
+      drained,
+      // The wait resolves on the awaited text or rejects only when the child
+      // has exited AND the reader has drained the PTY to EOF — no further
+      // data can arrive. Exit alone is not the end: PTY output can land
+      // after exit, so a fast connect that prints its line and exits still
+      // resolves. There is no deadline: the product waits on the daemon and
+      // not on a clock, and a harness that fires before the text arrives
+      // would be asserting the clock the product refuses to carry.
+      async waitFor(text: string): Promise<void> {
+        while (true) {
+          if (output.includes(text)) return;
+
+          if (eof) {
+            throw new Error(`pty reached EOF while waiting for ${JSON.stringify(text)} in:\n${output}`);
+          }
+
+          await Bun.sleep(25);
+        }
+      },
+      async send(line: string): Promise<void> {
+        await proc.stdin.write(`${line}\n`);
+        await proc.stdin.flush();
+      },
+    };
+  }
+
   /** The real `kinu connect`, under a PTY so its /dev/tty prompts are reachable. */
   function spawnConnectInPty(home: string, label?: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
@@ -1161,41 +1209,9 @@ describe('kinu connect waits on the daemon and says less', () => {
       ...(label === undefined ? [] : ['--label', quote(label)]),
     ].join(' ');
 
-    const proc = Bun.spawn({
-      cmd: ['script', '-qefc', command, '/dev/null'],
-      cwd: newProjectDir(),
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: process.env,
-    });
-
-    let output = '';
-
-    const drained = (async () => {
-      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
-    })();
-
-    return {
-      proc,
-      output: () => output,
-      drained,
-      // A separate process writes to a PTY; there is no event to await, so the
-      // wait polls the buffer the reader fills.
-      async waitFor(text: string, timeoutMs = 15_000): Promise<void> {
-        const deadline = Date.now() + timeoutMs;
-
-        while (!output.includes(text)) {
-          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
-          await Bun.sleep(25);
-        }
-      },
-      async send(line: string): Promise<void> {
-        await proc.stdin.write(`${line}\n`);
-        await proc.stdin.flush();
-      },
-    };
+    return spawnPtyCommand(command);
   }
+
 
   test('the hub row reading connected ends the wait with the row label', async () => {
     // The hub answers the row's own label, not the typed name: the stub
@@ -1325,6 +1341,20 @@ describe('kinu connect waits on the daemon and says less', () => {
     expect(name).toBe(host);
     expect(name.length).toBeGreaterThan(0);
   });
+
+  test('a stub that prints the awaited text and exits immediately resolves', async () => {
+    // The race the deploy red showed: the text lands in the buffer the SAME
+    // moment the child exits. The wait must read the buffer before it reads
+    // the EOF flag, or a fast exit loses what it printed on its way out.
+
+    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+    const print = `${quote(process.execPath)} -e ${quote('console.log("✓ Connected as hub-names-it")')}`;
+    const fast = spawnPtyCommand(print);
+
+    await fast.waitFor('✓ Connected as hub-names-it');
+    await fast.proc.exited;
+    await fast.drained;
+  }, 30_000);
 });
 
 describe('/connect slash command', () => {

@@ -18,7 +18,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
-import { hostedSubordinateHarness, orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /**
  * The actor these rows belong to.
@@ -266,19 +266,47 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(wake.time).not.toBe(owedAt);
 
     // One delivery, in the platform's own order: a one-shot `scheduled` row is
-    // CONSUMED when its alarm fires and the callback runs after. The order is
-    // load-bearing — the armer is soonest-wins, so a tick re-arming while its
-    // own immediate row is still armed would change nothing and this case would
-    // pass over a workspace that had lost the instant. The alarm itself is
-    // workerd's (tests/workerd/do-alarm.test.ts fires a real one); the row
-    // bookkeeping around it is what this file drives.
+    // CONSUMED when its alarm fires and the callback runs after. The alarm
+    // itself is workerd's (tests/workerd/do-alarm.test.ts fires a real one);
+    // the row bookkeeping around it is what this file drives.
     await workspace.agent.cancelSchedule(wake.id);
+    const nowSec = Math.floor(Date.now() / 1000);
     await workspace.agent._kinuTerminalRetryTick();
 
-    // Restored: the child's own instant, from a workspace-wide read the root
-    // performed. Without the re-arm the registry is EMPTY here — the immediate
-    // wake is spent, the attempt was not yet due, and nothing else ever looks.
-    expect((await wakes()).map((row) => row.time)).toEqual([owedAt]);
+    // The immediate wake is spent, the drain found the job not-yet-due, and
+    // the registry holds exactly the instant that job owes — one row at its
+    // own time, armed by the sweep that knows what it is waiting for, not by
+    // a guess about laps. The job's wake and the retry's wake are the same
+    // row, by collapse.
+    const restored = await wakes();
+    expect(restored.map((row) => row.time)).toEqual([owedAt]);
+    expect(restored[0]?.time).toBeGreaterThan(nowSec);
+  });
+
+  test('a deferred job costs one wake at its instant, not a climbing chain', async () => {
+    // The pace regression arm-first would otherwise buy: the pessimistic
+    // next-lap row collapses a deferred instant away, and owedWorkExists
+    // keeps it, so a workspace waiting sixty seconds wakes at two, four,
+    // eight, sixteen, thirty-two doing nothing — where the pre-arm shape woke
+    // once, at the instant. A FINISHED pass re-arms at the soonest timed owed
+    // instant instead, which is what the row below must show.
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+
+    const now = Date.now();
+    const resumeAt = now + 60_000;
+    db.prepare(
+      `INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, resume_after, created_at)
+       VALUES (?, 'job-deferred', 'agents', 'build', 'running', '{}', ?, ?)`,
+    ).run(harnessActorId(db), resumeAt, now);
+
+    await agent._kinuTerminalRetryTick();
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick')
+      .map((row) => row.time);
+
+    expect(armed).toEqual([Math.ceil(resumeAt / 1000)]);
   });
 
   test('a failed re-arm leaves the previous wake row in place', async () => {
@@ -460,6 +488,61 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(await fireArmedTick()).toBe(0);
   });
 
+  test('a tick killed after its arm and before its drain still leaves the wake', async () => {
+    // The arm-first ordering is the durability point: the pessimistic next-lap
+    // row is durable BEFORE any pass runs, so the one failure this test seeds
+    // — a roster row whose stored birth the lifecycle recovery refuses — is a
+    // row left behind, not a chain that ends. On the old shape the same throw
+    // propagated with nothing armed at all.
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+
+    // Real input, not a patched method: `birth_request` is TEXT the store
+    // JSON-parses on read, and `recoverSubordinateLifecycles` reaches
+    // `pendingBirths()` mid-tick — after the arm, before the drain.
+    db.prepare(
+      `INSERT INTO actor_subordinates
+        (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
+         lifetime, task_event_id, actor_reference, birth_request, delete_requested)
+       VALUES (?, 'poisoned-birth', 'orchestrator', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
+    ).run(harnessActorId(db), Date.now());
+
+    await expect(agent._kinuTerminalRetryTick()).rejects.toThrow('malformed');
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time > Math.floor(Date.now() / 1000));
+
+    expect(armed).toHaveLength(1);
+  });
+
+  test('a tick with nothing owed releases the row it armed', async () => {
+    // The other half of arm-first: the pessimistic row was insurance, not work
+    // anybody is waiting on, so a pass that ends with nothing unfinished and
+    // nothing owed deletes exactly the row it wrote — the registry sleeps
+    // empty rather than holding a wake that fires to find nothing.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    await agent._kinuTerminalRetryTick();
+
+    expect(await agent.listSchedules()).toEqual([]);
+  });
+
+  test('a tick with nothing owed releases the row it armed', async () => {
+    // The other half of arm-first: the pessimistic row was insurance, not work
+    // anybody is waiting on, so a pass that ends with nothing unfinished and
+    // nothing owed deletes exactly the row it wrote — the registry sleeps
+    // empty rather than holding a wake that fires to find nothing.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    await agent._kinuTerminalRetryTick();
+
+    expect(await agent.listSchedules()).toEqual([]);
+  });
+
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {
     // KINU-N003 (second half): the tick caught its re-arm failure, recorded a
     // diagnostic and returned. The alarm therefore looked successful, platform
@@ -571,6 +654,29 @@ describe('the workspace keeps exactly one wake row', () => {
     // work has a future row of its own.
     expect(rows.map((row) => row.time).sort((a, b) => a - b))
       .toEqual([dueSec, Math.ceil(laterAtMs / 1000)]);
+  });
+
+  test('a root turn arms the wake when it opens', async () => {
+    // A turn that opens has a run row but owes nothing yet — and on the old
+    // shape it held NO wake of its own either: the ledger's open turn sat
+    // un-driven until some unrelated event woke the object. The arm rides the
+    // terminal-retry row (soonest-wins), so exactly one is what an opened turn
+    // leaves behind it.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    const turns = thinkTurns(agent);
+    const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick');
+
+    expect(armed).toHaveLength(1);
+
+    // The turn is only parked, not owed by the suite: settle it so the pump
+    // finishes cleanly inside this test rather than leaking a pending call.
+    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
