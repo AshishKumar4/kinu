@@ -900,7 +900,8 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
       try {
         if (index === 0 && deps.delegation) {
-          session.openDelegatedTurn(lease, { messages: seed, birthContext: deps.delegation.birthContext });
+          const { birthContext } = deps.delegation;
+          session.openDelegatedTurn(lease, { messages: seed, birthContext: () => birthContext });
           seeded = session.history.length;
         }
 

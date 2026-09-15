@@ -147,47 +147,6 @@ export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
   };
 }
 
-/**
- * The envelope Think's chat-turn snapshot rides in.
- *
- * Every response — the first and every auto-continuation — runs inside a
- * `runFiber`, and the snapshot the framework writes before the body runs names
- * the request and the user message the turn opened on. The key is a literal
- * `_runChatRecoveryFiber` hands to `wrapChatFiberSnapshot` and the SDK exports
- * it nowhere — think.js spells it at each call site — so this mirrors Think's
- * spelling for the read below.
- *
- * The ENVELOPE is what the read below matches on, not the fiber's name: one
- * coupling to the framework instead of two, and no other lane writes a snapshot
- * shaped like this.
- */
-const CHAT_TURN_SNAPSHOT_KEY = '__cfThinkChatFiberSnapshot';
-
-const CHAT_TURN_ID_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.latestUserMessageId`;
-
-const CHAT_TURN_REQUEST_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.requestId`;
-
-/**
- * The responses of one durable turn that still hold a chat-turn fiber row, by
- * request id.
- *
- * The row exists for exactly as long as its response can still do something:
- * written before the turn body runs, deleted when that body returns, and
- * deleted by the framework's own scan once recovery has handled the row or
- * given up on it. So a row no live response of this activation owns is an
- * interrupted response — an auto-continuation caught mid tool call, say — that
- * chat recovery still owes a replay.
- */
-export function openChatTurnResponses(sql: SqlExecutor, turnId: string): string[] {
-  if (!fiberRowStore(sql).present()) return [];
-
-  return sql<{ request_id: string }>`
-    SELECT json_extract(snapshot, ${CHAT_TURN_REQUEST_PATH}) AS request_id
-    FROM cf_agents_runs
-    WHERE json_extract(snapshot, ${CHAT_TURN_ID_PATH}) = ${turnId}`
-    .map((row) => row.request_id);
-}
-
 /** How many rows one sweep dropped, how many it looked at, and whether it ran
  *  out of deadline before reaching the frozen boundary. */
 export interface FiberSweepResult {

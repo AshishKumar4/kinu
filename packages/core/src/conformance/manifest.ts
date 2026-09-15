@@ -396,6 +396,22 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('runFiber'),
       cli: { absent: 'the local scheduler records durable work in the core `fibers` table' },
     },
+    // The Agents SDK's resumable-stream store, created by the chat transport
+    // (`ResumableStream` over the object's SQL) when the root's ChatSession
+    // transport is built: the chunks a client redialing mid-answer replays,
+    // and the per-stream row that says which are complete. Both cf roots
+    // hold the one workspace object's tables; the subordinate never streams a
+    // chat answer of its own but shares the database the root created them in.
+    cf_ai_chat_stream_chunks: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
+      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
+    },
+    cf_ai_chat_stream_metadata: {
+      'cf-orchestrator': LAZY_ON_FIRST_USE('the chat transport'),
+      'cf-subordinate': LAZY_ON_FIRST_USE('the chat transport'),
+      cli: { absent: 'a local session streams to an in-process client; a redial has nothing to replay from' },
+    },
     // The Agents SDK's session store — the tables Think's activation creates
     // (`Session.create(this)` then a session read in Think's `onStart`, which
     // runs `AgentSessionProvider.ensureTable`) on every wake of either cf root,
@@ -700,7 +716,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // reads them. A resumed turn reads the context revision it was interrupted at
     // rather than the newest one, so the revisions travel with the claims.
     actor_turn_claims: EVERYWHERE,
-    actor_turn_inputs: EVERYWHERE,
     actor_context_revisions: EVERYWHERE,
     // The raw working history a `/context` edit rewrites, numbered per ACTOR
     // rather than per turn: an edit authored between turns, or before the

@@ -1,7 +1,7 @@
 /**
  * The vendor half of eviction durability, executed for real: a durable fiber
- * and a durable submission carried across an activation the object never chose
- * to end, and resumed with NO CLIENT.
+ * carried across an activation the object never chose to end, and recovered
+ * with NO CLIENT.
  *
  * WHY THIS FILE HAS TO EXIST. `ActorAgent`'s recovery is a decision per lane
  * over `FiberRecoveryContext`, and the bun suite runs those decisions for real.
@@ -17,8 +17,11 @@
  * a full actor turn needs the hosted workspace plane (NIMBUS_SESSION's wasm
  * subgraph, LOADER's worker_loaders) which this pool loads neither, and hosting
  * any `@callable()`-bearing class additionally needs legacy decorators. The
- * subject here is the SDK's fiber/submission machinery, which is the same
- * machinery under both.
+ * subject here is the SDK's fiber machinery, which is the same machinery under
+ * both. The SDK's durable-submission machinery is NOT a subject any more: the
+ * chat turn runs on the loop (`ChatSession`), whose sends are `pending_steers`
+ * rows the two-turn probe carries across a reset through the production
+ * orchestrator.
  *
  * THE OBSERVATION IS OUTSIDE THE PROBE, and that is the whole design. Reading
  * anything off this object is a REQUEST, and a request runs `onStart`, which runs
@@ -28,14 +31,7 @@
  * Until the witness answers, nothing has touched the probe since the reset.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { Think, type ChatRecoveryConfig } from '@cloudflare/think';
-import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
-import { jsonSchema, tool, type LanguageModel, type ToolSet } from 'ai';
-
-const USAGE = {
-  inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
-  outputTokens: { total: 3, text: 3, reasoning: undefined },
-};
+import { Think } from '@cloudflare/think';
 
 /**
  * Where the probe reports work it completed with nobody watching.
@@ -67,59 +63,6 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
    * fires, not what fires it.
    */
   static override options = { keepAliveIntervalMs: 1_000 };
-
-  /** The two settings `ActorAgent` declares, declared identically here so this
-   *  probe measures the shipped configuration. */
-  override chatRecovery: ChatRecoveryConfig = true;
-  override chatStreamStallTimeoutMs = 0;
-
-  private _model: LanguageModel | null = null;
-
-  /** Step one parks; every later step finishes. `park` decides which by reading
-   *  DURABLE state, so the turn resumed after a reset does not park again. */
-  override getModel(): LanguageModel {
-    this._model ??= scriptedTurnModel({
-      provider: 'fake',
-      modelId: 'eviction-probe',
-      doGenerate: (options) => (options.prompt.some((message) => message.role === 'tool')
-        ? {
-          content: [{ type: 'text' as const, text: 'answered after recovery' }],
-          finishReason: { unified: 'stop' as const, raw: undefined }, usage: USAGE, warnings: [],
-        }
-        : {
-          content: [{ type: 'tool-call' as const, toolCallId: 'park-1', toolName: 'park', input: '{}' }],
-          finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: USAGE, warnings: [],
-        }),
-    });
-
-    return this._model;
-  }
-
-  override getTools(): ToolSet {
-    return {
-      park: tool({
-        description: 'Blocks the first time, so the activation can be reset mid-turn.',
-        inputSchema: jsonSchema({ type: 'object', properties: {} }),
-        execute: async () => {
-          const parked = await this.ctx.storage.get<boolean>('parked');
-
-          if (parked === true) {
-            // The recovered turn. Reported to the witness, so the test learns
-            // the turn continued without ever addressing this object.
-            await this.witness().record('turn:resumed');
-
-            return 'resumed';
-          }
-
-          await this.ctx.storage.put('parked', true);
-
-          // Never settles. The activation is reset while this is held, which is
-          // exactly the eviction a keepAlive heartbeat cannot survive.
-          return new Promise<string>(() => undefined);
-        },
-      }),
-    };
-  }
 
   /** This probe's own witness, keyed to its name so two tests sharing the
    *  process cannot read each other's notes and call it a recovery. */
@@ -157,27 +100,5 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
   /** Durable fiber rows still awaiting recovery. */
   async openFiberRows(): Promise<{ id: string; name: string }[]> {
     return this.sql<{ id: string; name: string }>`SELECT id, name FROM cf_agents_runs ORDER BY created_at`;
-  }
-
-  /** One durable submission, the acceptance boundary a programmatic turn uses. */
-  async submit(text: string, idempotencyKey: string): Promise<{ submissionId: string; accepted: boolean; status: string }> {
-    const result = await this.submitMessages(
-      [{ id: `probe-${idempotencyKey}`, role: 'user', parts: [{ type: 'text', text }] }],
-      { idempotencyKey },
-    );
-
-    return { submissionId: result.submissionId, accepted: result.accepted, status: result.status };
-  }
-
-  async submissionStatuses(): Promise<{ idempotencyKey: string | undefined; status: string }[]> {
-    return (await this.listSubmissions()).map((row) => ({
-      idempotencyKey: row.idempotencyKey, status: row.status,
-    }));
-  }
-
-  /** The stored transcript, for a failure message that says what the turn did. */
-  async transcript(): Promise<string[]> {
-    return this.messages.map((message) => `${message.role}:${message.parts
-      .map((part) => (part.type === 'text' ? part.text : part.type)).join('|')}`);
   }
 }

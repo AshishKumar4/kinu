@@ -153,6 +153,12 @@ export class ExtensionHost {
     return this.extensions.length;
   }
 
+  /** Every registered extension, in registration order — what a host hands a
+   *  turn that composes its own per-turn host over them. */
+  list(): readonly KinuExtension[] {
+    return [...this.extensions];
+  }
+
   /** Merge every extension's contributed tools. Throws on a name collision so
    *  a plugin can never silently shadow another extension's tool. */
   tools(): ToolSet {

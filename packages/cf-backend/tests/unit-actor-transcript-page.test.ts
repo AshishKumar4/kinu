@@ -35,6 +35,28 @@ interface Root {
  * `created_at` intentionally repeats across rows, because several messages of
  * one turn share a stamp and the walk must seek on `rowid` rather than time.
  */
+/**
+ * The same `n` turns in the workspace ROOT's own store: the SDK-shaped pane
+ * table the root's transcript writes and every conversational reader answers
+ * from where it exists (`usesPaneStore`). No actor column — the root IS the
+ * pane — and `created_at` repeats for the same reason.
+ */
+function seedPane(sql: SqlExecutor, n: number): string[] {
+  const ids: string[] = [];
+
+  for (let i = 1; i <= n; i++) {
+    const id = `m${i}`;
+    const role = i % 2 === 0 ? 'assistant' : 'user';
+
+    ids.push(id);
+    void sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${id}, '', ${i === 1 ? null : `m${i - 1}`}, ${role},
+        ${JSON.stringify({ id, role, parts: [{ type: 'text', text: `message ${i}` }] })}, ${`2026-01-01 00:00:0${i % 10}`})`;
+  }
+
+  return ids;
+}
+
 function seed(sql: SqlExecutor, actorId: string, n: number): string[] {
   const ids: string[] = [];
 
@@ -69,7 +91,10 @@ async function walk(root: Root, limit: number): Promise<{ ids: string[]; pages: 
 describe('a transcript longer than one window is reachable page by page', () => {
   test('on the workspace root', async () => {
     const root = orchestratorHarness();
-    const seeded = seed(sqlOver(root.db), root.agent.observeRuntime().actor.actorId, 25);
+
+    await root.agent.activateActor();
+    // The ROOT's conversation is the pane store its transcript writes.
+    const seeded = seedPane(sqlOver(root.db), 25);
 
     const walked = await walk({ page: (request) => root.agent.getChatHistoryPage(request) }, 10);
 
@@ -116,7 +141,8 @@ describe('a transcript longer than one window is reachable page by page', () => 
     });
 
     const sql = sqlOver(parent.db);
-    seed(sql, parent.agent.observeRuntime().actor.actorId, 4);
+    await parent.agent.activateActor();
+    seedPane(sql, 4);
 
     expect((await walk({ page: (request) => parent.agent.getChatHistoryPage(request) }, 10)).ids)
       .toEqual(['m1', 'm2', 'm3', 'm4']);
