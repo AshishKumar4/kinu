@@ -133,7 +133,7 @@ import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { recordReleaseTransition } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import {
-  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
@@ -2231,25 +2231,24 @@ export class UserDO extends Agent<Env> {
     this._devices.accept(verified.deviceId, server);
     const now = Date.now();
 
-    // A connecting machine IS the answer to every open provisioning card:
-    // the condition those cards asked for now holds, so they settle as
-    // `connected` and the calls parked on them re-ask liveness below. A card
-    // whose workspace cannot be reached keeps its row — the NEXT accept
-    // retries it — because tearing it down here would strand the caller on a
-    // card nobody settled.
-    for (const pending of this.sqlx<{ agent_name: string; consent_id: string }>(
-      `SELECT agent_name, consent_id FROM device_provision_pending`,
+    // A machine landing clears the offline notice on exactly the workspaces a
+    // refused call already named it to — tracked rows, never a roster scan.
+    // An unreachable workspace keeps its row for the next accept.
+    const label = this.deviceLabel(verified.deviceId);
+
+    for (const { agent_name } of this.sqlx<{ agent_name: string }>(
+      `SELECT agent_name FROM device_notice_pending`,
     )) {
       try {
         const workspace = this.env.OrchestratorAgent.get(
-          this.env.OrchestratorAgent.idFromName(pending.agent_name),
+          this.env.OrchestratorAgent.idFromName(agent_name),
         );
 
-        await workspace.settleDeviceConsent(pending.consent_id, 'connected');
-        this.sqlx(`DELETE FROM device_provision_pending WHERE agent_name = ?`, pending.agent_name);
+        await workspace.announceDeviceAvailable({ id: verified.deviceId, label });
+        this.sqlx(`DELETE FROM device_notice_pending WHERE agent_name = ?`, agent_name);
       } catch (cause) {
-        diagnostics.event('device.provision_settle_unreachable', {
-          workspace: pending.agent_name, error: renderThrownChain({ cause }),
+        diagnostics.event('device.available_announce_unreachable', {
+          workspace: agent_name, error: renderThrownChain({ cause }),
         });
       }
     }
@@ -2762,9 +2761,9 @@ export class UserDO extends Agent<Env> {
    * resolves to the ONLY live machine; with several live it is a question for
    * the caller, not a coin for the hub — nothing crosses to any machine, and
    * the answer names the ones that could have been meant. With none live, a
-   * workspace operation raises one provisioning request when `consentAgent`
-   * names the workspace; owner-facing reads and terminal opens pass
-   * `undefined` and simply report that no machine is connected.
+   * workspace operation names the registered machines on the workspace's own
+   * rail; owner-facing reads and terminal opens pass `undefined` and simply
+   * report that no machine is connected.
    */
   private async resolveDeviceForCall(
     requested: string | undefined,
@@ -2774,26 +2773,46 @@ export class UserDO extends Agent<Env> {
 
     if (deviceId) return deviceId;
 
-    if (consentAgent !== undefined) {
-      // The card parks this call until the owner answers, the ask lapses, or
-      // a daemon's accept settles it — the case the wait exists for. Whatever
-      // the card's answer was, the question it asked is about THIS instant,
-      // so liveness is re-read rather than its word taken: a machine that
-      // connected while the card was up is the device the call wanted.
-      await this.raiseProvisioningRequest(consentAgent);
-
-      const arrived = this.liveDeviceForCall(requested);
-
-      if (arrived) return arrived;
-    }
+    if (consentAgent !== undefined) await this.announceDevicesUnavailable(consentAgent);
 
     throw new Error(NO_DEVICE_CONNECTED);
   }
 
+  /** The owner's registered machines that are not connected, for the notice a
+   *  refused call sends the workspace. Revoked rows are gone, not offline. */
+  private registeredOfflineDevices(): Array<{ id: string; label: string; lastSeenAt: number | null }> {
+    const live = new Set(this._devices.connectedDeviceIds());
+
+    return this.sqlx<{ id: string; label: string; last_seen_at: number | null }>(
+      `SELECT id, label, last_seen_at FROM user_devices WHERE revoked_at IS NULL ORDER BY created_at ASC`,
+    ).filter((row) => !live.has(row.id)).map((row) => ({
+      id: row.id, label: row.label, lastSeenAt: row.last_seen_at,
+    }));
+  }
+
+  /** A refused call names the registered machines on the workspace's own rail.
+   *  The call still fails: nothing executes until a daemon is linked. The
+   *  workspace is recorded, so the next connect clears exactly this notice. */
+  private async announceDevicesUnavailable(workspaceOrAgent: string): Promise<void> {
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
+
+      await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
+      this.sqlx(
+        `INSERT INTO device_notice_pending (agent_name, announced_at) VALUES (?, ?)
+         ON CONFLICT (agent_name) DO UPDATE SET announced_at = excluded.announced_at`,
+        workspaceOrAgent, Date.now(),
+      );
+    } catch (error) {
+      diagnostics.event('device.unavailable_announce_unreachable', {
+        workspace: workspaceOrAgent, error: renderThrownChain({ cause: error }),
+      });
+    }
+  }
+
   /** The device the call would reach right now, or null when none qualifies.
    *  An unnamed call with several live is ambiguous rather than absent, and
-   *  says so — both reads of liveness ask through here, before the card and
-   *  after it settles. */
+   *  says so. */
   private liveDeviceForCall(requested: string | undefined): string | null {
     const deviceId = this._devices.connectedDeviceId(requested);
 
@@ -3327,54 +3346,6 @@ export class UserDO extends Agent<Env> {
     return { allowed: true };
   }
 
-  /**
-   * The agent reached for its owner's computer and none was connected. Raise
-   * ONE provisioning card on the same rail per-action consent rides and park
-   * this call on it — but park on the card's END, not on a decision: the
-   * provisioning ask carries none. A daemon's accept is what settles it (the
-   * connect it asked for), an owner's answer or the ask's lapse ends it the
-   * same way, and in every case the caller re-reads liveness rather than
-   * taking the card's word — so `waitSettled` answers only "the card is
-   * down", and this method returns nothing.
-   *
-   * Raise and wait are TWO calls because the row below must name the card it
-   *  tracks: the accept path settles by `consent_id`, which only exists once
-   *  the registry answers the raise. A settle landing between them is safe —
-   *  `waitSettled` on a card already gone resolves at once. A retry loop
-   *  cannot stack cards: the registry joins an identical prompt already
-   *  waiting instead of minting a second id (DeviceConsentRegistry.raise).
-   */
-  private async raiseProvisioningRequest(workspaceOrAgent: string): Promise<void> {
-    try {
-      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
-
-      const consentId = await stub.raiseDeviceConsent({
-        deviceId: '',
-        deviceLabel: 'this computer',
-        method: DEVICE_PROVISION_METHOD,
-        command: `Connect this computer so "${workspaceOrAgent}" can run commands on it — you will be walked through \`kinu connect\`.`,
-        workspaceName: workspaceOrAgent,
-      });
-
-      // The connect path settles by this row: one per workspace, rewritten
-      // when the ask re-raises — the joined card's own id is what the accept
-      // hands back.
-      this.sqlx(
-        `INSERT OR REPLACE INTO device_provision_pending (agent_name, consent_id, raised_at) VALUES (?, ?, ?)`,
-        workspaceOrAgent, consentId, Date.now(),
-      );
-
-      await stub.waitDeviceConsentSettled(consentId);
-    } catch (error) {
-      // No one to show the card to is the unanswered case, never a refusal.
-      diagnostics.event('device.provision_request_unreachable', { error: renderThrownChain({ cause: error }) });
-    } finally {
-      // The card is gone — answered, lapsed, connected, or never raised at
-      // all (the workspace was unreachable). Its wait is over either way, so
-      // the row goes.
-      this.sqlx(`DELETE FROM device_provision_pending WHERE agent_name = ?`, workspaceOrAgent);
-    }
-  }
 
   /** The remembered bindings (Account settings → Devices — see and revoke which
    *  workspaces may use a device). */

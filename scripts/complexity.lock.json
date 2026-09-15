@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-15",
-  "files": 2336,
-  "functions": 57734,
+  "files": 2362,
+  "functions": 58296,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -219,6 +219,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/WorkPlans.tsx#WorkPlans",
+      "complexity": 36
+    },
+    {
+      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#7>handler",
       "complexity": 36
     },
     {

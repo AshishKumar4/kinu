@@ -15,8 +15,9 @@ import {
   ClockCounterClockwiseIcon, LightningIcon,
   SparkleIcon, ArrowBendUpRightIcon, GearSixIcon, EyeIcon,
   TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
-  ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon,
+  ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon,
 } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
@@ -42,6 +43,7 @@ import {
   type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
 import { useToggledSet } from "@/hooks/use-toggled-set";
+import type { UnavailableDevice } from "@/hooks/use-kinu";
 
 function getMessageText(msg: UIMessage): string {
   return msg.parts.filter(p => p.type === "text").map(p => p.text).join("");
@@ -517,13 +519,42 @@ function DeferredApprovalCard({ decision, count, state }: {
   );
 }
 
+/** One centered inline system row. The workspace opening and the refused-call
+ *  notice share the pill; each renders it inline rather than through a shared
+ *  component, because a shared wrapper with exactly two same-file callers is
+ *  the export the wiring gate reports as unwired. */
+const SYSTEM_PILL = "inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2";
+
+/**
+ * A refused device call, as one inline system row. The call already failed;
+ * this names which machines were not there to reach. Null renders nothing —
+ * the connect notice removes the row, not the thread.
+ */
+export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<UnavailableDevice> | null }) {
+  if (devices === null) return null;
+  const [only] = devices;
+
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <div className={SYSTEM_PILL}>
+        <DesktopTowerIcon size={13} className="p-warning" weight="fill" />
+        {only !== undefined && devices.length === 1
+          ? <span>{only.label} is offline</span>
+          : devices.length > 1
+            ? <span>Your computers are offline</span>
+            : <span>No computer connected <Link to="/user/settings#devices" className="p-accent hover:underline">Connect</Link></span>}
+      </div>
+    </div>
+  );
+}
+
 /** The workspace opening itself. The owner gave a MISSION in the New workspace
  *  dialog, not a message — so the first thing in the transcript is the agent
  *  being handed its own workspace, not the owner speaking. */
 function WorkspaceCreatedCard({ state }: { state: CardState }) {
   return (
     <div className="flex justify-center animate-fade-in py-1">
-      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
+      <div className={SYSTEM_PILL}>
         <SparkleIcon size={13} className="p-accent" weight="fill" />
         <span>Workspace created. The agent starts its mission.</span>
         <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>

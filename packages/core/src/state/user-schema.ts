@@ -399,17 +399,14 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Workspaces with a provisioning card open RIGHT NOW — one row per ask, so
-  // a second device call while one waits joins rather than stacking. The
-  // connect path reads it: a daemon accept settles every card here as
-  // `connected`, the condition the card asked for. Written when the card is
-  // raised, deleted when it settles for any reason — an answer, a lapse, or
-  // the connect itself.
+  // Workspaces a refused device call already named its offline notice to.
+  // The accept path reads exactly these rows, announces the landed machine to
+  // each, and deletes the row on success — an unreachable workspace keeps its
+  // row for the next accept. Never a parked call: the refusal already failed.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS device_provision_pending (
-      agent_name TEXT PRIMARY KEY,
-      consent_id TEXT NOT NULL,
-      raised_at INTEGER NOT NULL
+    CREATE TABLE IF NOT EXISTS device_notice_pending (
+      agent_name   TEXT PRIMARY KEY,
+      announced_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
 
