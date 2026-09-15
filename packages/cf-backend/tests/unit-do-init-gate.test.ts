@@ -74,21 +74,21 @@ describe('the scaffold precondition moved to the turn, and is still reached', ()
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
   test('beforeTurn awaits it, so every turn path is covered', () => {
-    // Through `assembleTurn`, the one assembly every turn path runs, and
-    // before the first thing that reads the workspace.
+    // Through `readTurnInputs`, the reads every turn path awaits before the
+    // turn opens, and before the first thing that reads the workspace.
     const beforeTurn = actor.slice(
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
-      actor.indexOf('const cfg: TurnConfig = {'),
+      actor.indexOf('this.orch.beginTurn('),
     );
 
-    expect(beforeTurn).toContain('await this.assembleTurn(');
+    expect(beforeTurn).toContain('await this.readTurnInputs(');
 
-    const assembly = actor.slice(
-      actor.indexOf('private async assembleTurn(input: TurnAssemblyInput)'),
+    const reads = actor.slice(
+      actor.indexOf('private async readTurnInputs(tools: ToolSet)'),
       actor.indexOf('this.profileInputs(),'),
     );
 
-    expect(assembly).toContain('await this.ensureOwnedScaffold()');
+    expect(reads).toContain('await this.ensureOwnedScaffold()');
   });
 
   test('it is declared once on the shared actor base, not per root', () => {
