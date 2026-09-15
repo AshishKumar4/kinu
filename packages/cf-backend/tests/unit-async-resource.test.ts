@@ -2,7 +2,7 @@
 // failed fetch must stay distinguishable from an empty result.
 import { describe, test, expect } from 'bun:test';
 import {
-  beginLoad, loadSucceeded, loadFailed, lastValue, describeError,
+  beginLoad, loadSucceeded, loadFailed, lastValue, describeError, mapResource,
   type AsyncResource,
 } from '../src/hooks/use-async-resource';
 
@@ -49,5 +49,21 @@ describe('async resource transitions', () => {
     expect(describeError(new Error(''))).toBe('request failed');
     expect(describeError(undefined)).toBe('request failed');
     expect(describeError({ code: 500 })).toBe('request failed');
+  });
+
+  test('a mapped resource keeps the read state and maps only what is on screen', () => {
+    const lengths = (rows: number[]) => rows.length;
+
+    expect(mapResource(loadSucceeded([1, 2, 3]), lengths)).toEqual({ status: 'ready', value: 3 });
+
+    expect(mapResource(LOADING, lengths)).toEqual({ status: 'loading' });
+
+    // A failure passes through with its message, but the stale value it still
+    // carries is the mapped one — the view reads `last`, not the old shape.
+    const stale = loadFailed(loadSucceeded([1, 2, 3]), new Error('offline'));
+    expect(mapResource(stale, lengths)).toEqual({ status: 'error', message: 'offline', last: 3 });
+
+    const cold = loadFailed<number[], Error>(LOADING, new Error('offline'));
+    expect(mapResource(cold, lengths)).toEqual({ status: 'error', message: 'offline', last: null });
   });
 });
