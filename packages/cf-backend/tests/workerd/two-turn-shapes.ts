@@ -191,6 +191,12 @@ export const ExerciseResultSchema = v.object({
   /** Owed-effect keys any finished close left behind — empty is clean. */
   owedEffects: v.array(v.string()),
   factsCompressed: v.number(),
+  /** `models_dev.catalog_fallback` events the drive emitted. Zero is the
+   *  proof the provider catalog was served, not refused: refused, every
+   *  provider took a slow fallback path — 51 per gate run on 2026-09-15. */
+  catalogFallbacks: v.number(),
+  /** Times the worker fetched the catalog from the probe's outbound. */
+  catalogHits: v.number(),
 });
 
 export type ExerciseResult = v.InferOutput<typeof ExerciseResultSchema>;
@@ -218,6 +224,12 @@ export const DriveOnceResultSchema = v.object({
   failures: v.array(DiagnosticFailureSchema),
   owedEffects: v.array(v.string()),
   factsCompressed: v.number(),
+  /** `models_dev.catalog_fallback` events the drive emitted. Zero is the
+   *  proof the provider catalog was served, not refused: refused, every
+   *  provider took a slow fallback path — 51 per gate run on 2026-09-15. */
+  catalogFallbacks: v.number(),
+  /** Times the worker fetched the catalog from the probe's outbound. */
+  catalogHits: v.number(),
 });
 
 export type DriveOnceResult = v.InferOutput<typeof DriveOnceResultSchema>;
