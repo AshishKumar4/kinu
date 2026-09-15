@@ -218,10 +218,33 @@ reads 3.5 to 5.0 and 21.5 to 31 against floors of 1.5 and 12.5, so commit
 8a5b9eee5 runs a third of the batches (under a second quiet) with a stated
 20 s budget.
 
+L5. The runner consumes the ladder; nothing is written twice. deploy.sh
+loads `bun scripts/ladder.ts --plan` (phase, label, weight, deadline,
+command per row) and schedules each phase as one wave; a row carries its
+own `label`, `weight`, `phase`/`alone` and `deadline`; the UI row claims the
+`*-ux` family by glob; the resolver is proved over a fixture tree. Decided
+2026-09-15, commits 5aac4b263, 45f6c3786, 7482c90c1, f6ec56c8f. Removed:
+deploy.sh's run lines, GATE_WEIGHT, GATE_DEADLINES, GATE_GROUP tables;
+ladder.ts's GATE_WEIGHTS, GATE_DEADLINES, SERIAL_GATES, EXCLUSION_GROUPS and
+the four deploy.sh parsers; deploy.test.ts's REQUIRED_GATES, POST_DEPLOY_GATES
+and BENCH_GATE_FILES lists; ladder.test.ts's bench list and rig-row spelling
+(the last edited by hand on f6d08d72d, the case that prompted this). Measured
+at f6ec56c8f with `--gates-only` at thread budget 12, the box under other
+lanes' hooks (load 9 to 21): run 1, 68/68 source gates green and the hammer
+green in 815.9 s wall with only the account gate red on a missing
+KINU_ACCESS_API_TOKEN in the measuring process; run 2, 67/68 in 528.8 s with
+`bun run test:workerd` past its 480 s deadline. That gate is the finding: solo
+it ran 160 s and 398 s on the same tree against a declared 12.7 s, with 51
+`models_dev.catalog_fallback` events (HTTP 500 through miniflare) per run
+while models.dev answered 200 in 0.3 s from the shell. Its row declares
+`derived` and its closure cannot see that fetch. Budget 24 on a quiet box
+stays unmeasured.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching.
 
 O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
-budget other than `nproc` is chosen.
+budget other than `nproc` is chosen; and `bun run test:workerd`'s wall and
+network path, which the ladder declares at 12.7 s and measured 160 to 398 s.
