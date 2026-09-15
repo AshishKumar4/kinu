@@ -410,7 +410,7 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
           enum: [...FILE_TOOL_ACTIONS],
           description: 'read contents, list a directory, stat a path, search a file for literal text, edit exact text, or write a whole file.',
         },
-        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
+        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Mounted executors\' files also appear under their mounts — a bound container at /sandbox, a connected device at /pc. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
         offset: { type: 'number', description: 'For action=read: 1-indexed first line to return (default 1).' },
         limit: { type: 'number', description: 'For action=read: how many lines to return (default: as many as fit).' },
         content: { type: 'string', description: 'For action=write: the file\'s complete new contents.' },

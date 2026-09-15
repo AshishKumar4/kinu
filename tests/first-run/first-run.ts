@@ -89,6 +89,7 @@ export const FIRST_RUN_CASES = [
   'sandbox-mount-write',
   'public-share',
   'device-link',
+  'background-settle',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -226,7 +227,6 @@ export const FIRST_RUN_DEFECTS = {
   'every-tool': {
     id: 'every-tool',
     found: 'The owner asked for one fast row proving every native tool answers on the deployed '
-      + 'product: the agent says which tools it sees, uses each one, and what each left behind '
       + 'is read back.',
     missedBecause: 'every tool has unit coverage over inputs its author wrote, and no row ever '
       + 'asked the deployed agent to use each one and then read what it left behind, so a tool '
@@ -278,7 +278,28 @@ export const FIRST_RUN_DEFECTS = {
       + 'command to reach the machine through a `once` consent answer, and revoke to end the '
       + 'socket and the credential.',
   },
+  'background-settle': {
+    id: 'background-settle',
+    found: 'A `run` on the sandbox that outlived the 30s foreground window detached to a '
+      + 'background job and replied with the handle — and the episode closed there. The job\'s '
+      + 'settled result either never woke the agent or woke it where nothing downstream could '
+      + 'see it: public-failure-recovery on c9a43fdb8 recorded the detach and no reply carrying '
+      + 'the test\'s outcome.',
+    missedBecause: 'the detach half is asserted in isolation everywhere the threshold is '
+      + 'tested, and the wake half never was: no row asked the deployed product what a detached '
+      + 'run\'s settlement does to the transcript, so a wake that never lands reads the same as '
+      + 'a command still running.',
+    provedRedAt: 'f1da0985f',
+    redDirection: 'RED live 2026-09-15 on deployed build f1da0985f: a sleep-45-then-echo row '
+      + 'against https://kinu.run held in-flight 20 min with no wake run closing and no marker '
+      + 'reply — killed by the row\'s own 10 min budget at '
+      + '/home/mrwhite0racle/kinu-logs/failure-recovery-live/background-settle-live.log. The '
+      + 'retained c9a43fdb8 episode (bench-artifacts/trajectory-product-1789455120159/'
+      + 'public-failure-recovery/events.jsonl) shows the same shape: the detached handle at '
+      + 'event 20 and a ledger that closed over a still-running job.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
+
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
 export const FIRST_RUN_TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
@@ -381,6 +402,7 @@ const SHORT_SUBJECT = {
   'sandbox-mount-write': 'mount',
   'public-share': 'public',
   'device-link': 'link',
+  'background-settle': 'wake',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

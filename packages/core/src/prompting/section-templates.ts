@@ -231,16 +231,22 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  * stays a shell over workspace bytes only — commands do not see mount points,
  * and that limit is stated so the model routes commands by namespace.
  *
- * It is stated ONCE, under ONE gate — `hasDevices`. Two paragraphs saying the
- * same three facts (separate machines, commands through their own namespace,
- * mounts showing native paths) in different words are free to disagree with
- * each other, and cost tokens twice: the recorded comparison is 724 characters
- * for 600 of content when the three facts are worded in separate paragraphs.
- * `hasDevices` is deliberately the WEAKER condition: `executors.length > 1`
- * implies it — with two or more executors at most one is `workspace`, so a
- * device is always among them — and not the
+ * The mount doctrine is stated ONCE, under ONE gate — `hasDevices`. Two
+ * paragraphs saying the same three facts (separate machines, commands through
+ * their own namespace, mounts showing native paths) in different words are
+ * free to disagree with each other, and cost tokens twice: the recorded
+ * comparison is 724 characters for 600 of content when the three facts are
+ * worded in separate paragraphs. `hasDevices` is deliberately the WEAKER
+ * condition: `executors.length > 1` implies it — with two or more executors
+ * at most one is `workspace`, so a device is always among them — and not the
  * reverse, so gating on it loses no surface and a lone non-workspace executor
  * (a sandbox with no workspace beside it) reads the doctrine too.
+ *
+ * What the mount paragraph cannot say is the one equivalence a device-less
+ * workspace still needs: the container mounts its WHOLE filesystem, so the
+ * file plane's `/sandbox` is the container's `/` while its commands run in
+ * `/workspace`. That is `hasSandbox`'s one sentence — gated separately because
+ * it names only the container and holds with or without a device bound.
  *
  * The approvals doctrine is stated ONCE, and only on turns that have a shell.
  * It is a standing fact about this surface, so it lives here and the parked
@@ -250,7 +256,7 @@ export const GENERIC_EXECUTOR_LINE = definePromptSection(
  */
 export const EXECUTORS_SECTION = definePromptSection(
   "executors/section",
-  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
+  "{{deviceNamespaces}}{{executorLines}}{{exposeCalls}}{{workspaceRoot}}{{#if hasSandbox}}{{/if}}{{#if hasDevices}}{{/if}}{{#if hasPreview}}{{/if}}{{#if workspacePreview}}{{/if}}",
   executorsSection.trimEnd(),
 );
 

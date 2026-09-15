@@ -717,6 +717,22 @@ const DeferredApprovalsSchema = v.array(DeferredApprovalSchema);
 
 const DecideApprovalsSchema = v.object({ decided: v.array(v.string()) });
 
+/** One background job's durable row, as `listBackgroundJobs` serves it. The
+ *  settled halves are what a recovery check reads: `status` leaves `running`,
+ *  `result`/`error` hold what the work produced. Other row fields exist; a
+ *  reader that needs none of them asks for no more than these. */
+const PublicBackgroundJobSchema = v.object({
+  id: v.string(),
+  kind: v.string(),
+  status: v.string(),
+  result: v.optional(v.nullable(v.string())),
+  error: v.optional(v.nullable(v.string())),
+});
+
+const BackgroundJobsSchema = v.array(PublicBackgroundJobSchema);
+
+export type PublicBackgroundJob = v.InferOutput<typeof PublicBackgroundJobSchema>;
+
 /** One parked command, as the queue hands it to the surface that decides it. */
 export type PublicDeferredApproval = v.InferOutput<typeof DeferredApprovalSchema>;
 
@@ -1178,6 +1194,24 @@ export class KinuPublicSession {
     );
 
     return v.parse(DecideApprovalsSchema, answer).decided;
+  }
+
+  /**
+   * The workspace's background jobs, as the Work tab's Supervise pane reads
+   *   them — `listBackgroundJobs`, the `@callable` the pane's own rpc is bound
+   *   to (pages/SupervisePage.tsx:240). This is how a harness asks what a
+   *   detached tool call became: `run`/`execute_tools` calls that outrun the
+   *   foreground window answer a `{jobId}` handle and settle out of turn, so
+   *   their result is reachable only through this row — never in the run
+   *   events of the prompt that issued them.
+   */
+  async backgroundJobs(): Promise<readonly PublicBackgroundJob[]> {
+    const answer = await infraBoundary(
+      `listBackgroundJobs on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listBackgroundJobs', [50]),
+    );
+
+    return v.parse(BackgroundJobsSchema, answer);
   }
 
   /** The tools this workspace holds that the MODEL wrote, as the Tools pane

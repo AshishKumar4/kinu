@@ -181,7 +181,12 @@ describe('the prompt stays inside its byte budget', () => {
     // 2026-09-13: seven root-only fusion rule families and the task worker
     // contract. Exact measured bytes, no headroom; GEPA stays at 4,800/section.
     // Family deltas, the Gemini surface and lifetime gating: exact measured bytes.
-    const MATRIX_CEILING_BYTES = 229_498;
+    // 2026-09-15: +501, measured 229,708. One sentence under `hasSandbox` in the
+    // executors section — the container's whole filesystem is mounted at
+    // `/sandbox` while its commands run in `/workspace` — which three matrix
+    // surfaces now render; the `hasDevices` mount paragraph never reached a
+    // device-less workspace.
+    const MATRIX_CEILING_BYTES = 229_708;
 
     const total = PROMPT_MATRIX
       .reduce((sum, c) => sum + Buffer.byteLength(buildSystemPromptSync(rt, c.opts), 'utf8'), 0);
