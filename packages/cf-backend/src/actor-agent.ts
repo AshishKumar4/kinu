@@ -5553,10 +5553,15 @@ export abstract class ActorAgent extends Think<Env> {
   /**
    * The SDK's transcript store, asserted present at wake.
    *
-   * The transcript's provider declares its table on the store's first breath,
-   * so building the store here is what creates `assistant_messages` on a fresh
-   * workspace. Every conversational reader in core answers from that table
-   * where it exists and falls to plain `actor_messages` where it does not
+   * Think's own `onStart` hydrates its session before it reaches this actor's
+   * (`@cloudflare/think` 0.17.0 `think.js` `startThink`: the
+   * `transcript-hydration` step runs `_syncMessages`, whose first session read
+   * declares the provider's DDL, and `_onStart` — the subclass's — is awaited
+   * after it; read 2026-09-15). So by the time this runs, the vendor has
+   * declared whatever table it keeps the transcript in, and the question is
+   * whether that table is the one Kinu's readers name. Every conversational
+   * reader in core answers from `assistant_messages` where it exists and
+   * falls to plain `actor_messages` where it does not
    * (`identity/conversation-store.ts` `hasPaneStore`): right for a local
    * workspace, and silently WRONG for a hosted workspace whose SDK has moved
    * the transcript. The Agents SDK's `brisk-chats-branch` changeset lifts
@@ -5564,13 +5569,20 @@ export abstract class ActorAgent extends Think<Env> {
    * `cf_agents_session_*` and drops them, after which the fork cut, the
    * archive export, conversation search, the eval split and
    * {@link readInheritedContext} would each read an empty default chat and
-   * report a conversation of zero messages. Asked with `tableExists`, never by
-   * catching: the throw IS the loud failure, at wake, before any of them runs.
+   * report a conversation of zero messages.
+   *
+   * Asked BEFORE this actor's own store is built, with `tableExists` and never
+   * by catching. The store's provider is the same vendor provider, so building
+   * it first would declare the table this guard then finds — under every SDK,
+   * including the one that moved it — and the guard would never fire.
    */
   protected assertSessionStore(): void {
-    this.resumeChatTranscript();
+    if (tableExists(this.boundSql, 'assistant_messages')) {
+      this.resumeChatTranscript();
 
-    if (tableExists(this.boundSql, 'assistant_messages')) return;
+      return;
+    }
+
     throw new Error(
       'The transcript store booted but the workspace database has no `assistant_messages` table: '
       + 'the SDK stores the transcript somewhere Kinu\'s conversational readers '

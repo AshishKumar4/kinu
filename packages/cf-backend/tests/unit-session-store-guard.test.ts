@@ -10,12 +10,13 @@
  * the one place the absence is named and refused, at the activation, before
  * any of them runs.
  *
- * Behavioural: the table is created by the vendor's own provider under the
- * transcript store the actor builds at wake, and the activation is the actor's
- * real `onStart`.
+ * Behavioural: the table is created by the vendor's own provider under Think's
+ * session hydration, which runs BEFORE the actor's `onStart` — so the guard
+ * asks before it builds anything of its own, and an activation whose vendor
+ * boot declared the transcript elsewhere finds nothing and refuses.
  */
 import { describe, expect, test } from 'bun:test';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, wakeOverMovedTranscript } from './helpers/actor-harness';
 
 describe('the activation refuses a hosted workspace whose SDK transcript store is gone', () => {
   test('a fresh workspace wakes with the table and no rows yet', async () => {
@@ -30,15 +31,22 @@ describe('the activation refuses a hosted workspace whose SDK transcript store i
     expect(db.query(`SELECT COUNT(*) AS n FROM assistant_messages`).get()).toEqual({ n: 0 });
   });
 
-  test('an activation whose store is gone throws, naming the table', async () => {
+  test('a fresh activation whose vendor boot declared the transcript elsewhere refuses to wake', async () => {
+    // The replatform, as a workspace would meet it: a wake on storage the
+    // last SDK wrote, under an SDK whose session hydration declares
+    // `cf_agents_session_*` and no `assistant_messages`. The old table is
+    // gone with the old rows, and the new activation's own store has not
+    // been built yet — which is exactly when the guard must ask.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
-    // The replatform's end state: the SDK lifted the rows elsewhere and dropped
-    // the table Kinu's readers name — after the store believed it had built it.
     db.exec('DROP TABLE assistant_messages');
 
-    await expect(agent.activateActor()).rejects.toThrow('no `assistant_messages` table');
+    await expect(wakeOverMovedTranscript(db)).rejects.toThrow('no `assistant_messages` table');
+    // Refused BEFORE anything of the actor's declared the table itself: a
+    // guard that built its own store first would have created the table
+    // under every SDK and never fired.
+    expect(db.query(`SELECT name FROM sqlite_master WHERE name = 'assistant_messages'`).all()).toHaveLength(0);
   });
 
   test('the store the guard reads is the one every turn writes', async () => {
