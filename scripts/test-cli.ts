@@ -28,7 +28,7 @@ const SUBPROCESS_HEAVY = [
 function run(files: readonly string[], parallel: number): void {
   const result = Bun.spawnSync(
     [process.execPath, 'test', `--parallel=${String(parallel)}`, ...files],
-    { cwd: REPO_ROOT, env: process.env, stdout: 'inherit', stderr: 'inherit' },
+    { cwd: REPO_ROOT, stdout: 'inherit', stderr: 'inherit' },
   );
 
   if (result.exitCode !== 0) process.exit(result.exitCode ?? 1);

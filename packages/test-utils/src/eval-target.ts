@@ -103,7 +103,7 @@ export type EvalBackendResolution =
   | { readonly kind: 'refused'; readonly reason: string };
 
 export function resolveEvalBackend(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = { [EVAL_BACKEND_ENV]: process.env.KINU_EVAL_BACKEND },
 ): EvalBackendResolution {
   const raw = env[EVAL_BACKEND_ENV]?.trim();
 

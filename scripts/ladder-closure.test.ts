@@ -113,9 +113,9 @@ describe('ladder-closure — what a closure holds', () => {
     expect(files).toContain('package.json');
   });
 
-  test('a graph that reaches the corpus module is the whole corpus', () => {
+  test('a graph that reaches the corpus module is the whole corpus, and a path read inside it needs no declaration', () => {
     const repo = fixture({
-      'scripts/sources.ts': 'export const corpus = 1;',
+      'scripts/sources.ts': "import { readFileSync } from 'node:fs';\nexport const corpus = readFileSync('package.json');",
       'scripts/g.ts': "import { corpus } from './sources';\nexport const g = corpus;",
       'packages/x/far.ts': 'export const far = 1;',
       'docs/note.md': 'prose',
@@ -153,6 +153,12 @@ describe('ladder-closure — what a closure holds', () => {
 
     const closure = deriveClosure('bun scripts/g.ts', { kind: 'derived', env: ['DELTA'] }, repo);
     expect(closure.kind === 'derived' ? closure.env : []).toEqual(['ALPHA', 'BETA', 'DELTA', 'GAMMA']);
+  });
+
+  test('a computed key bound to a same-file string constant is a literal read', () => {
+    const repo = fixture({ 'scripts/g.ts': "const NAME = 'GAMMA';\nexport const OTHER = 'DELTA';\nexport const g = [process.env[NAME], process.env[OTHER]];" });
+    const closure = deriveClosure('bun scripts/g.ts', DERIVED, repo);
+    expect(closure.kind === 'derived' ? closure.env : ['refused']).toEqual(['DELTA', 'GAMMA']);
   });
 
   test('destructuring the environment reads exactly the named keys', () => {
@@ -231,7 +237,7 @@ describe('ladder-closure — red in every direction it refuses', () => {
   });
 
   test('a computed environment key needs a declared env list', () => {
-    const repo = fixture({ 'scripts/g.ts': "const k = 'X';\nexport const g = process.env[k];" });
+    const repo = fixture({ 'scripts/g.ts': 'export const g = (k: string) => process.env[k];' });
     expect(refused(deriveClosure('bun scripts/g.ts', DERIVED, repo))).toContain('computed key');
     expect(deriveClosure('bun scripts/g.ts', { kind: 'derived', env: [] }, repo).kind).toBe('derived');
   });
