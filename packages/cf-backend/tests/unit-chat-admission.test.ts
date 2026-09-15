@@ -17,7 +17,8 @@ import * as v from 'valibot';
 import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { LanguageModel } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness, thinkTurns } from './helpers/actor-harness';
+import { fleetEnvForTest } from './helpers/analytics-plane';
+import { makeEnv, orchestratorHarness, thinkTurns } from './helpers/actor-harness';
 
 /** A turn the suite runs end to end answers one scripted line: no provider,
  *  no harness UserDO credential, so the admission is what the test measures
@@ -201,6 +202,61 @@ describe('a chat request through the production gate', () => {
     // And the close half of the same wiring: a resuming socket that goes
     // away releases the resume the handshake held for it.
     await agent.onClose(second.wire, 1000, 'gone', true);
+  });
+
+  test('a live turn records its fleet row at its own seal', async () => {
+    const { agent } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
+    await agent.activateActor();
+    agent.harnessObserveFleetPlane();
+    agent.harnessSupplyTurnModel(scriptedAnswer('hello back'));
+    agent.harnessNameWorkspace('Titled');
+
+    const gate = agent.harnessChatGate();
+    const { wire } = connection(agent);
+    await gate(wire, chatRequest('req-fleet', 'hello'));
+
+    for (let round = 0; round < 200 && agent.harnessFleetTurnRows().length === 0; round++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+
+
+
+    // The turn's own row, and only one of it — the positive half of the
+    // gate below, so a future change that drops ALL rows reds here rather
+    // than passing vacuously beside it. The sink's own install notice is the
+    // harness's, not the turn's.
+    const kinds = agent.harnessFleetTurnRows().flatMap((row) => {
+      const parsed = v.safeParse(v.object({ blobs: v.array(v.string()) }), row);
+
+      return parsed.success ? [parsed.output.blobs[0]] : [];
+    });
+
+    expect(kinds.filter((kind) => kind === 'turn')).toHaveLength(1);
+  });
+
+
+
+  test('a reconciled interrupted run records no fleet row', async () => {
+    const { agent } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
+    await agent.activateActor();
+
+    // Exactly what a dead activation leaves: a run the loop opened and never
+    // closed — openTurnRun's run_start with no run_end.
+    agent.harnessOpenDanglingRun('run-dead-activation');
+    agent.harnessObserveFleetPlane();
+
+    // The wake reconcile seals what the dead activation left, and the seal is
+    // not a turn the loop ran: no turn row for it. The sink's own install
+    // notice is the harness's, not a turn's.
+    await agent.harnessReconcileInterruptedRuns();
+
+    const kinds = agent.harnessFleetTurnRows().flatMap((row) => {
+      const parsed = v.safeParse(v.object({ blobs: v.array(v.string()) }), row);
+
+      return parsed.success ? [parsed.output.blobs[0]] : [];
+    });
+
+    expect(kinds).not.toContain('turn');
   });
 
   test('a refused send closes the request with the refusal and leaves nothing', async () => {
