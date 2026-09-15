@@ -41,7 +41,7 @@ import {
   partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode,
   type ChatTransport, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** What the transport asks of the actor: the connection set, and the loop.
  *  A connection is the SDK's: its resume handshake takes the full type. */
@@ -274,12 +274,16 @@ export class ChatWireTransport implements ChatTransport {
       try {
         landed = await this.wire.send({ ...chatInput(message), id: message.id });
       } catch (cause) {
-        // The loop refused the message — nothing to say, another driver holds
-        // the conversation — and wrote nothing. The request is closed with the
-        // refusal: the hook's send rejects with it instead of waiting on a
-        // turn-end that will never come.
+        // The loop REFUSED the message — nothing to say, another driver holds
+        // the conversation, a plan turn this surface cannot review — and wrote
+        // nothing. A refusal is the loop's own classified error; anything
+        // else is a fault in the send itself and is not the client's to read
+        // as a refusal. The request is closed with the refusal: the hook's
+        // send rejects with it instead of waiting on a turn-end that will
+        // never come.
+        if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
         this.requests.delete(message.id);
-        this.done(requestId, { error: renderThrownChain({ cause }) });
+        this.done(requestId, { error: refusalOf(cause).error });
 
         return;
       }
