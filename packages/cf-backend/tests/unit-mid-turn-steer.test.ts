@@ -20,10 +20,8 @@ import type { Database } from 'bun:sqlite';
 import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import type { ModelMessage } from 'ai';
 import type { UIMessage } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
-import type { PrepareStepContext } from '@cloudflare/think';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const SteerFrameSchema = v.object({
   type: v.literal('steer_status'),
@@ -112,10 +110,7 @@ function steerHarness(): SteerHarness {
       // Production opens a turn through beforeTurn; driving the same entry
       // point gives beforeStep the prepared snapshot it refuses without, and
       // writes the durable turn identity a mid-turn steer binds to.
-      await agent.beforeTurn({
-        system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
-        continuation: false, body: {},
-      });
+      await thinkTurns(agent).prepare({ messages: [...HISTORY] });
 
       inFlight = true;
       Reflect.set(agent, '_inFlight', true);
@@ -136,26 +131,11 @@ const DynamicContextSchema = v.object({
   content: v.pipe(v.string(), v.includes('<dynamic_context')),
 });
 
-/** A step context carrying what the pipeline reads. The provider handle a live
- *  streamText would also pass is never touched by `beforeStep` (it forwards only
- *  stepNumber and messages to composePrepareStep), so it is supplied as the
- *  model a step would carry rather than asserted away. */
-const HARNESS_MODEL = new MockLanguageModelV3();
-
-function prepareStepContext(stepNumber: number, messages: ModelMessage[]): PrepareStepContext {
-  return { stepNumber, messages, steps: [], model: HARNESS_MODEL, experimental_context: undefined };
-}
-
 /** The messages the step actually carries, minus that block. */
 async function stepMessages(
-  agent: HarnessOrchestratorAgent, stepNumber: number, messages: ModelMessage[],
+  agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
-  // The Think hook streamText calls, with this actor's real registered
-  // extensions.
-  const prepared = agent.beforeStep(prepareStepContext(stepNumber, messages));
-  const config = prepared instanceof Promise ? await prepared : prepared;
-  const rewritten = v.safeParse(v.object({ messages: v.array(v.custom<ModelMessage>(() => true)) }), config);
-  const carried = rewritten.success ? rewritten.output.messages : messages;
+  const carried = await thinkTurns(agent).step(stepNumber, messages);
 
   return carried.filter((m) => !v.is(DynamicContextSchema, m));
 }
@@ -188,12 +168,9 @@ describe('a message typed while the agent is working', () => {
     // Nothing was buffered for a step boundary: the next turn's steps carry no
     // splice. beforeTurn opens that turn the way production does, so beforeStep
     // reads its prepared snapshot.
-    const turn = await h.agent.beforeTurn({
-      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
-      continuation: false, body: {},
-    });
+    const turn = await thinkTurns(h.agent).prepare({ messages: [...HISTORY] });
 
-    expect(await stepMessages(h.agent, 0, turn?.messages ?? HISTORY)).toEqual(HISTORY);
+    expect(await stepMessages(h.agent, 0, turn.messages)).toEqual(HISTORY);
   });
 
   test('a plan-mode steer that missed its turn queues a plan turn, not a build one', async () => {
@@ -373,12 +350,7 @@ describe('stopping a turn with a steer still pending', () => {
     await h.agent.send('second');
     await h.agent.cancelCurrentWork();
 
-    await h.agent.onChatResponse({
-      status: 'aborted',
-      requestId: 'req-stop',
-      continuation: false,
-      message: { id: 'assistant-stop', role: 'assistant', parts: [{ type: 'text', text: 'partial' }] },
-    });
+    await thinkTurns(h.agent).settle({ messageId: 'assistant-stop', text: 'partial', requestId: 'req-stop', status: 'aborted' });
     await h.agent.harnessJoinDetachedFibers();
 
     expect(h.enqueued).toHaveLength(1);
@@ -396,12 +368,7 @@ describe('a steer that never saw a step boundary', () => {
     // Typed while the model was already writing its final answer: there is no
     // further step for it to land on.
     await h.agent.send('one more thing');
-    await h.agent.onChatResponse({
-      status: 'completed',
-      requestId: 'req-1',
-      continuation: false,
-      message: { id: 'assistant-1', role: 'assistant', parts: [{ type: 'text', text: 'deployed' }] },
-    });
+    await thinkTurns(h.agent).settle({ messageId: 'assistant-1', text: 'deployed', requestId: 'req-1' });
 
     expect(h.enqueued).toHaveLength(1);
     // The rerun key names the turn it interrupts and the steer it re-runs,
@@ -435,14 +402,8 @@ describe('a steer that never saw a step boundary', () => {
     await h.agent.send('plan next', [], 'plan');
     await h.agent.send('second build', [], 'build');
 
-    const settled = {
-      status: 'completed' as const,
-      continuation: false,
-      message: { id: 'assistant-groups', role: 'assistant' as const, parts: [{ type: 'text' as const, text: 'ok' }] },
-    };
-
-    await h.agent.onChatResponse({ ...settled, requestId: 'req-groups' });
-    await h.agent.onChatResponse({ ...settled, requestId: 'req-groups-duplicate' });
+    await thinkTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups' });
+    await thinkTurns(h.agent).settle({ messageId: 'assistant-groups', text: 'ok', requestId: 'req-groups-duplicate' });
 
     // One turn, the words in typed order. Plan is the narrower grant, so one
     // plan-mode message makes the whole rerun plan: merging never widens what
@@ -461,14 +422,8 @@ describe('a steer that never saw a step boundary', () => {
     await h.startTurn();
     await h.agent.send('one more thing');
 
-    const settled = {
-      status: 'completed' as const,
-      continuation: false,
-      message: { id: 'assistant-1', role: 'assistant' as const, parts: [{ type: 'text' as const, text: 'ok' }] },
-    };
-
-    await h.agent.onChatResponse({ ...settled, requestId: 'req-1' });
-    await h.agent.onChatResponse({ ...settled, requestId: 'req-2' });
+    await thinkTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-1' });
+    await thinkTurns(h.agent).settle({ messageId: 'assistant-1', text: 'ok', requestId: 'req-2' });
     expect(h.enqueued).toHaveLength(1);
   });
 });
