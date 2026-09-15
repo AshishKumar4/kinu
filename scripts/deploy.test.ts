@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { scratchDir } from "@kinu.run/test-utils";
 import {
-  EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions,
-  deployWaves,
+  EXCLUSION_GROUPS, GATE_DEADLINES, GATE_WEIGHTS, SERIAL_GATES, deployDeadlines, deployExclusions,
+  deployWaves, deployWeights,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
@@ -68,9 +68,8 @@ const REQUIRED_GATES = [
   "bun test scripts/nested-container-resolution.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
   "bun test scripts/chat-scroll.test.ts",
-  "bun test scripts/ladder.test.ts",
+  "bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts",
   "bun run gate:ladder-budget",
-  "bun run gate:complexity",
   "bun run gate:dead-code",
   "bun run gate:undeclared-imports",
   "bun run gate:client-graph",
@@ -79,6 +78,7 @@ const REQUIRED_GATES = [
   "bun run gate:wired",
   "bun scripts/test-census.ts --ratchet",
   "bun run gate:duplication",
+  "bun run gate:complexity",
   "bun run gate:capability-parity",
   "bun run gate:policy-drift",
   "bun run gate:silent-drop",
@@ -200,6 +200,8 @@ interface DeployRun {
   readonly tmpdir?: string;
   readonly option?: string;
   readonly ambientPhase?: string;
+  /** The thread budget the wave schedules against; the box's count when absent. */
+  readonly threads?: number;
 }
 
 function runDeploy({
@@ -209,6 +211,7 @@ function runDeploy({
   tmpdir: temporaryRoot,
   option,
   ambientPhase = "",
+  threads,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   const log = join(fixture, "events.log");
@@ -256,6 +259,9 @@ exit 87
   const argv = ["/usr/bin/bash", "scripts/deploy.sh"];
 
   if (option !== undefined) argv.push(option);
+  const budget: Record<string, string> = {};
+
+  if (threads !== undefined) budget.KINU_DEPLOY_THREADS = String(threads);
 
   const run = Bun.spawnSync(argv, {
     cwd: fixture,
@@ -273,6 +279,7 @@ exit 87
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
+      ...budget,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
     },
@@ -441,6 +448,53 @@ describe("deploy gate", () => {
     expect(run.stdout).toContain("cannot create a gate log directory");
     expect(run.events).toEqual([]);
   });
+
+  // THE WAVE IS SCHEDULED BY THREAD BUDGET. A count of gates is not a measure of
+  // load: on 2026-09-16 a six-gate width put the eleven-suite UI row beside two
+  // `--parallel=4` package suites and failed every deploy on a puppeteer wall,
+  // while the same row passed alone. Each heavy gate declares the threads it
+  // occupies at peak, in scripts/ladder.ts, and the runner's table is held
+  // equal to it here — written twice because the runner is bash.
+  test("the weight table in the runner is the one the ladder declares", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    expect(deployWeights(source)).toEqual({ ...GATE_WEIGHTS });
+    expect(source).toContain('weight="${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}"');
+    expect(source).toContain('if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi');
+
+    for (const [run, weight] of Object.entries(GATE_WEIGHTS)) {
+      // A weight of one is the default and a declaration of it is noise; a
+      // weight on a non-gate schedules nothing.
+      expect(weight, `${run} declares a weight of ${String(weight)}`).toBeGreaterThan(1);
+      const gates: string[] = [...REQUIRED_GATES];
+      expect(gates, `${run} has a weight and is not a gate`).toContain(run);
+    }
+
+    // Every browser suite and every multi-worker suite weighs more than one:
+    // a row that opens Chrome or four workers and weighs one is the 2026-09-16
+    // defect written back down. Derived from the tree, not from a list.
+    const browserSuites = trackedFiles().filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
+      && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
+
+    const weighted = new Set(Object.keys(GATE_WEIGHTS));
+
+    for (const gate of REQUIRED_GATES) {
+      const opensChrome = browserSuites.some((file) => gate.split(" ").includes(file));
+      const multiWorker = gate.includes("--parallel=") || gate === "bun run test" || gate === "bun run test:cli";
+
+      if (opensChrome || multiWorker) expect(weighted.has(gate), `${gate} opens Chrome or workers and weighs one`).toBeTrue();
+    }
+  });
+
+  test("a budget of one thread runs the wave in declared order, one gate at a time", () => {
+    const run = runDeploy({ threads: 1 });
+    const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
+    // With one thread nothing fits beside a running gate, so the scheduler
+    // launches the first unlaunched gate only after the previous settled: the
+    // event log IS the declared order. A count-based width would need six
+    // gates in flight to be observable at all.
+    expect(gates).toEqual([...REQUIRED_GATES]);
+    expect(run.stdout).toContain("within a budget of 1 threads");
+  }, 30_000);
 
   test("the exclusion table in the runner is the one the ladder declares", () => {
     // Written twice because the runner is bash and cannot import the
@@ -618,7 +672,19 @@ describe("deploy gate", () => {
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.infraPhase).toBeNull();
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap]");
+    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap|--gates-only]");
+  });
+
+  // The rehearsal path: every pre-publish gate, no build, no upload. It is how
+  // the wave's wall time is measured for the width figures in scripts/ladder.ts,
+  // so it has to run exactly the gates a deploy runs and touch nothing after.
+  test("gates-only runs every pre-publish gate and mutates nothing", () => {
+    const run = runDeploy({ option: "--gates-only" });
+
+    expect(run.status).toBe(0);
+    expect([...run.events].sort()).toEqual([...REQUIRED_GATES].sort());
+    expect(run.events.some((event) => event.startsWith("MUTATE ")), "gates-only built or published").toBe(false);
+    expect(run.stdout).toContain("Gates only: stopping before the build");
   });
 
   // ── The post-deploy phase ──────────────────────────────────────
