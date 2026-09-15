@@ -188,7 +188,6 @@
   "packages/core/src/execution/exec-result.ts#NO_OUTPUT (unreached-export)",
   "packages/core/src/execution/exec-result.ts#STDERR_LABEL (unreached-export)",
   "packages/core/src/execution/exec-result.ts#STDOUT_LABEL (unreached-export)",
-  "packages/core/src/execution/nimbus-agent-files.ts#AGENT_FS_CHUNK_BYTES (unreached-export)",
   "packages/core/src/execution/nimbus.ts#NimbusExecutorOpts.namespace (unsupplied-field)",
   "packages/core/src/execution/nimbus.ts#NimbusExecutorOpts.root (unsupplied-field)",
   "packages/core/src/execution/nimbus.ts#createNimbusExecutor (unreached-export)",
