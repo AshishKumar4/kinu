@@ -392,22 +392,37 @@ describe('account panels', () => {
           try {
             const body = await shared.evaluate(() => document.body.innerText);
 
-            for (const heading of ['My shared', 'Shared with me', 'Public', 'From people I know']) expect(body).toContain(heading);
+            // One grid behind five counted segments — the lists are tabs now.
+            expect(body).toContain('Shared');
+            expect(await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (els) => els.length)).toBe(5);
+
+            for (const label of ['All', 'Mine', 'With me', 'Public', 'People I know']) expect(body).toContain(label);
 
             if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Shared');
-            shots.push(await shoot(shared, `shared-four-${viewport}-${theme}`));
+            shots.push(await shoot(shared, `shared-segments-${viewport}-${theme}`));
           } finally {
             await shared.close();
           }
 
-          // Before anything is shared, each list says so rather than sitting blank.
+          // Before anything is shared, each segment says its own empty line.
           const empty = await freshPage(gallery, 'shared-empty', theme, viewport);
 
           try {
             const body = await empty.evaluate(() => document.body.innerText);
 
-            expect(body).toContain('Nothing is public yet.');
+            expect(body).toContain('Nothing shared yet');
             expect(await empty.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(0);
+
+            for (const [segment, line] of [
+              ['received', 'Nothing shared with you'],
+              ['public', 'Nothing public'],
+              ['known', 'Nothing from people you know'],
+            ] as const) {
+              await empty.click(`[data-segment="${segment}"]`);
+              await empty.waitForFunction(
+                (expected) => document.body.innerText.includes(expected), { timeout: 10_000 }, line,
+              );
+            }
           } finally {
             await empty.close();
           }
