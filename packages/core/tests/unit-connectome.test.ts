@@ -535,13 +535,24 @@ describe('the picture stays cheap', () => {
 
   // THE RED DIRECTION: ten steps per frame is what a picture ten times as
   // expensive costs, measured by the same loop against the same yardstick.
+  //
+  // Measured 2026-09-15 on the 24-thread box: ten steps cost 4.7x a canvas
+  // frame and 5.0x a mesh frame (`frame()` is a fixed part the steps do not
+  // scale), reading 3.5 and 26 quiet, 3.5 and 28 under twelve busy-loop
+  // threads, 4.1 and 31 under twelve memory-streaming threads — the ratio
+  // RISES under contention, so the proof holds in every shape measured. What
+  // did fail, under the deploy wave on 368b8d694, was the CLOCK: the full
+  // batch counts at ten steps are 3.2 s of CPU quiet and ran 5.96 s under the
+  // wave, past bun's 5 s default. The red direction needs margin, not
+  // precision, so it runs a third of the batches — under a second quiet —
+  // and the test states its own wall budget rather than inheriting one.
   test('the ratio pins go red on a picture that costs ten times as much', () => {
     const canvas = run(1729, 0);
     canvas.setActivity({ working: true, decisions: 0 });
-    expect(cheapestFrameRatio(canvas, 12, 300, 10)).toBeGreaterThan(1.5);
+    expect(cheapestFrameRatio(canvas, 4, 100, 10)).toBeGreaterThan(1.5);
 
     const mesh = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
     mesh.setActivity({ working: true, decisions: 0 });
-    expect(cheapestFrameRatio(mesh, 6, 100, 10)).toBeGreaterThan(12.5);
-  });
+    expect(cheapestFrameRatio(mesh, 2, 50, 10)).toBeGreaterThan(12.5);
+  }, 20_000);
 });
