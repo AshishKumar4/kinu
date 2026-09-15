@@ -48,6 +48,7 @@ import {
   LAST_INTERACTION_KEY,
   QUIET_SINCE_KEY,
   racedRestoreSteps, runRestoreStep, ContainerStartOverrun, ContainerStartInterrupted, type RestoreSteps,
+  REAL_START_CLOCK, type StartClock,
 } from './lifecycle';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
@@ -914,6 +915,12 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return true;
   }
 
+  /** The clock every start budget and its races are measured on. A test
+   *  double advances its own; the product runs on the platform's timers. */
+  protected get startClock(): StartClock {
+    return REAL_START_CLOCK;
+  }
+
   /** Plain SDK starts must also prove the control listener before our hook. */
   override start(...args: Parameters<Sandbox<Env>['start']>): Promise<void> {
     return this.startAndWaitForPorts({
@@ -968,7 +975,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
   /** One budget includes adoption, restore, resumption and durable settlement. */
   async #runStartHook(): Promise<void> {
     const budgetMs = Math.min(this.policy.attachBudgetMs, DEFAULT_DEVBOX_POLICY.attachBudgetMs);
-    const budget = openStartBudget(budgetMs);
+    const budget = openStartBudget(budgetMs, this.startClock);
     let generation = this.#generation;
 
     const result = await runRestoreStep(
@@ -994,6 +1001,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         if (failure !== undefined) console.error(`[devbox] start refused: ${describe(failure)}`);
       },
       (failure) => console.error(`[devbox] abandoned start hook failed: ${describe(failure)}`),
+      this.startClock,
     );
 
     if (!this.#owns(generation)) return;
@@ -1613,7 +1621,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       return;
     }
 
-    const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs));
+    const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs, this.startClock));
     steps.declare(2);
     const restored = await this.#restartWorkloads(generation, steps);
 
