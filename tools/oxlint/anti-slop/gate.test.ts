@@ -360,7 +360,7 @@ const ladder = readFileSync("scripts/ladder.ts", "utf8");
 assert.match(ci, /run: bun scripts\/ladder\.ts --tier=ci/u, "CI must run the ladder's ci tier");
 assert.match(
   ladder,
-  /run: 'bun run lint',\s*\n\s*tier: '(?:commit|push|ci)',/u,
+  /run: 'bun run lint',\s*\n\s*label: [^\n]*\n\s*tier: '(?:commit|push|ci)',/u,
   "the ladder must claim `bun run lint` at or before the ci tier",
 );
 

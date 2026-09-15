@@ -176,42 +176,80 @@ if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); 
   exit 1
 fi
 
-# ── The gate queue ───────────────────────────────────────────────
+# ── The gate plan ────────────────────────────────────────────────
 #
-# `run_required_gate` ENQUEUES; `flush_gates` runs the queue concurrently and
-# waits. Running them one after another buys nothing: 400s of declared cost on a
-# 24-thread box that sits idle for all of it.
+# WHAT RUNS IS READ, NOT WRITTEN HERE. `bun scripts/ladder.ts --plan` prints
+# every deploy-tier gate as one tab-separated line — phase, label, weight,
+# deadline, command — in the order the phases run. This script loads that
+# once and `run_phase <name>` schedules the phase's gates concurrently under
+# the thread budget, then waits: a barrier. Until 2026-09-15 this file held a
+# second copy of every row (the command lines, a weight table, a deadline
+# table, an exclusion table) that deploy.test.ts held equal to the ladder, and
+# every new suite was a hand edit in three files. There is one copy now.
 #
-# Two gates may not share the machine, and `SERIAL_GATES` in scripts/ladder.ts
-# names them with the reason. They get their own flush, which is what a barrier
-# looks like here: preflight alone before everything, gate:infra alone after
-# everything. deploy.test.ts asserts the barriers match that declaration, so a
-# third gate cannot be quietly made concurrent.
+# Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
+# anything; `source`, the one concurrent wave; `hammer` and `infra` alone after
+# it; `post-publish` after the upload and the smoke test. A gate's row in
+# scripts/ladder.ts declares which, and why it runs alone.
 #
-# The enqueue lines stay one per gate, spelled `run_required_gate "label" cmd`,
-# because scripts/ladder.ts PARSES them: they are the authoritative list of what
-# a deploy runs, and collapsing them into a loop would leave the ladder reading
-# an empty tier.
-#
-# Cross-wave barriers own every remaining exclusion. The empty table stays
-# explicit because deploy.test.ts holds it equal to EXCLUSION_GROUPS; a future
-# same-wave exclusion has to update both declarations.
-declare -A GATE_GROUP=()
+# Every gate is a plain argv of words — the plan carries no quotes — and
+# `flush_gates` splits it on whitespace; bash expands a glob word against the
+# tree, which is how the UI row's `scripts/*-ux.test.ts` reaches its family.
+PLAN_PHASE=()
+PLAN_LABEL=()
+PLAN_WEIGHT=()
+PLAN_DEADLINE=()
+PLAN_CMD=()
+
+load_plan() {
+  local plan
+  plan="$(bun scripts/ladder.ts --plan)" || {
+    echo -e "${RED}❌ the ladder printed no plan; nothing is scheduled without one.${NC}"
+    exit 1
+  }
+  local phase label weight deadline cmd
+  while IFS=$'\t' read -r phase label weight deadline cmd; do
+    [ -n "$cmd" ] || continue
+    PLAN_PHASE+=("$phase")
+    PLAN_LABEL+=("$label")
+    PLAN_WEIGHT+=("$weight")
+    PLAN_DEADLINE+=("$deadline")
+    PLAN_CMD+=("$cmd")
+  done <<< "$plan"
+  if [ "${#PLAN_CMD[@]}" -eq 0 ]; then
+    echo -e "${RED}❌ the plan holds no gate. A deploy that schedules nothing publishes nothing.${NC}"
+    exit 1
+  fi
+}
+
+# The gates of one phase, as the queue flush_gates runs.
 GATE_LABELS=()
 GATE_CMDS=()
+GATE_WEIGHTS=()
+GATE_DEADLINE=()
 
-run_required_gate() {
-  GATE_LABELS+=("$1")
-  shift
-  GATE_CMDS+=("$*")
+run_phase() {
+  local wanted="$1" index
+  GATE_LABELS=(); GATE_CMDS=(); GATE_WEIGHTS=(); GATE_DEADLINE=()
+  for ((index = 0; index < ${#PLAN_CMD[@]}; index++)); do
+    if [ "${PLAN_PHASE[index]}" != "$wanted" ]; then continue; fi
+    GATE_LABELS+=("${PLAN_LABEL[index]}")
+    GATE_CMDS+=("${PLAN_CMD[index]}")
+    GATE_WEIGHTS+=("${PLAN_WEIGHT[index]}")
+    GATE_DEADLINE+=("${PLAN_DEADLINE[index]}")
+  done
+  if [ "${#GATE_CMDS[@]}" -eq 0 ]; then
+    echo -e "${RED}❌ phase '$wanted' holds no gate in the plan.${NC}"
+    exit 1
+  fi
+  flush_gates
 }
 
 # The wave is scheduled by THREAD BUDGET, not by a count of gates. Each gate
-# weighs the hardware threads it occupies at peak — GATE_WEIGHT below, held
-# equal to GATE_WEIGHTS in scripts/ladder.ts by deploy.test.ts, and one for a
-# gate not named there — and a gate launches only while the running weight
-# plus its own fits the budget. A gate heavier than the whole budget still
-# launches when nothing else is running, so the budget can never wedge.
+# weighs the hardware threads it occupies at peak — its row's `weight`, one by
+# default — and a gate launches only while the running weight plus its own
+# fits the budget. A gate heavier than the whole budget still launches when
+# nothing else is running, so the budget can never wedge.
 #
 # Measured 2026-08-23: a half-thread rule launched 12 outer gates and up to 48
 # inner workers here, turned a 23.67s CLI file into a 173.54s run and produced
@@ -220,37 +258,9 @@ run_required_gate() {
 # package suites and failed every deploy that day on a puppeteer wall, while
 # the same row passed alone in 361s. Both are the same defect: a count of
 # gates is not a measure of load. The budget is the box's thread count.
-declare -A GATE_WEIGHT=(
-  ['bun test --parallel=4 packages/cf-backend/']=11
-  ['bun test --parallel=4 packages/cli-backend/']=11
-  ['bun run test:core']=11
-  ['bun run test:cli']=11
-  ['bun test scripts/*-ux.test.ts scripts/computed-style.test.ts']=5
-  ['bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts']=5
-  ['bun test scripts/react-runtime-identity.test.ts']=5
-  ['bun test scripts/swarm-tree-geometry.test.ts']=5
-  ['bun test scripts/chat-scroll.test.ts']=5
-  ['bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts']=5
-)
 gate_threads() {
   echo "${KINU_DEPLOY_THREADS:-$(nproc 2>/dev/null || echo 4)}"
 }
-
-# A gate that cannot exit is a failure, not an infinite deploy. The slowest
-# source gate is the five-suite UI batch, so the shared wall stays calibrated
-# for source work rather than being raised for a live account probe.
-GATE_DEADLINE_SECONDS=480
-
-# The launcher reads this table under `set -u`, so it exists even when no gate
-# has earned a different wall. A future deployed probe may add one only with its
-# matching declaration in `scripts/ladder.ts` and the deploy-contract proof.
-# Six deployed episodes use a real model, daemons and browser. Their configured
-# deadline remains 1800s. The six-case deployed wall is unmeasured.
-# deploy.test.ts holds this value equal to GATE_DEADLINES in scripts/ladder.ts.
-declare -A GATE_DEADLINES=(
-  ['bun run gate:first-run']=1800
-  ['bun run gate:trajectory']=3600
-)
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
 # own file and is printed ONLY if it fails: a wave's concurrent streams interleaved
@@ -314,8 +324,8 @@ flush_gates() {
   done
 
   local -a launched=() statuses=()
-  local -A busy=() gate_of_pid=()
-  local pick group finished status weight
+  local -A gate_of_pid=()
+  local pick finished status weight
   local running=0 load=0 settled=0 failures=0
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
@@ -334,18 +344,14 @@ flush_gates() {
       pick=-1
       for ((index = 0; index < total; index++)); do
         if [ "${launched[index]}" -eq 1 ]; then continue; fi
-        group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
-        if [ -n "$group" ] && [ -n "${busy[$group]:-}" ]; then continue; fi
-        weight="${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}"
+        weight="${GATE_WEIGHTS[index]}"
         if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi
         pick=$index
         break
       done
       if [ "$pick" -lt 0 ]; then break; fi
-      group="${GATE_GROUP[${GATE_CMDS[pick]}]:-}"
-      if [ -n "$group" ]; then busy[$group]=1; fi
       launched[pick]=1
-      load=$((load + ${GATE_WEIGHT[${GATE_CMDS[pick]}]:-1}))
+      load=$((load + GATE_WEIGHTS[pick]))
       # `timeout` signals the gate's process group and escalates after five
       # seconds. That kills the gate command tree, and no more: a child that
       # calls setsid (a detached dev server, a daemonized browser helper)
@@ -359,20 +365,19 @@ flush_gates() {
       # the status `wait` reports below is the gate's own, not a wrapper's.
       (
         # shellcheck disable=SC2086
-        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINES[${GATE_CMDS[pick]}]:-$GATE_DEADLINE_SECONDS}" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
+        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]} > "$dir/$pick.log" 2>&1
       ) &
       gate_of_pid[$!]=$pick
       running=$((running + 1))
     done
 
     if [ "$running" -eq 0 ]; then
-      # Nothing running and nothing launchable. After a failure that is the
-      # planned end of the wave. Without one, every unlaunched gate is held by a
-      # group no running gate owns, which is a defect in the exclusion table
-      # rather than a gate result — so it fails here instead of looping forever
-      # over a queue that cannot move.
+      # Nothing running and nothing launchable: after a failure that is the
+      # planned end of the wave, and with nothing running every unlaunched gate
+      # fits the budget by construction, so anything else here is a scheduler
+      # defect and fails rather than looping over a queue that cannot move.
       if [ "$failures" -ne 0 ]; then break; fi
-      echo -e "${RED}❌ $((total - settled)) gate(s) can never launch: the exclusion table holds them with nothing running.${NC}"
+      echo -e "${RED}❌ $((total - settled)) gate(s) can never launch with nothing running.${NC}"
       rm -rf "$dir"
       exit 1
     fi
@@ -389,11 +394,9 @@ flush_gates() {
     index="${gate_of_pid[$finished]}"
     unset "gate_of_pid[$finished]"
     running=$((running - 1))
-    load=$((load - ${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}))
+    load=$((load - GATE_WEIGHTS[index]))
     settled=$((settled + 1))
     statuses[index]=$status
-    group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
-    if [ -n "$group" ]; then unset "busy[$group]"; fi
     if [ "$status" -eq 0 ]; then
       echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC}"
     else
@@ -425,8 +428,6 @@ flush_gates() {
   fi
 
   rm -rf "$dir"
-  GATE_LABELS=()
-  GATE_CMDS=()
 }
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
@@ -446,14 +447,11 @@ echo ""
 # gate. Its whole job is to refuse to report on a poisoned environment, so it
 # has to run before anything that could be poisoned: an exhausted $TMPDIR inode
 # table surfaces later as a 5-second timeout inside an unrelated filesystem
-# test, which reads as a code regression and is not one. Running it at gate 1
-# still left `bun install` and the wrangler auth probe ahead of it. It repairs
-# nothing; `--reclaim` is explicit and separate.
-run_required_gate "Environment preflight" bun scripts/preflight.ts
-# BARRIER. Preflight runs alone, and this is why the queue exists: nothing may
-# report on this machine until the preflight has said the machine is fit to be
-# reported on. See SERIAL_GATES in scripts/ladder.ts.
-flush_gates
+# test, which reads as a code regression and is not one. It repairs nothing;
+# `--reclaim` is explicit and separate. The plan is loaded first because the
+# preflight is its first phase.
+load_plan
+run_phase preflight
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
 if ! command -v npx >/dev/null 2>&1; then
@@ -493,134 +491,24 @@ if [ "$KINU_BOOTSTRAP" = "1" ]; then
   echo "            anything deferred did not appear."
 fi
 
-# Keep the commands explicit and unconditional. These are the same strict,
-# credential-free gates used by the repository workflows, plus the complete
-# package test script and both Layergate proofs. No environment variable may
-# skip one when this production deploy path is running.
-run_required_gate "Anti-slop lint" bun run lint
-run_required_gate "Vendored runtime drift" bun test packages/agent-core/drift.test.ts
-run_required_gate "TypeScript projects" bun run typecheck
-run_required_gate "Pattern census and parser self-tests" bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts
-run_required_gate "Pattern inventory" bun scripts/pattern-inventory.ts
-run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
-run_required_gate "Core suite" bun run test:core
-run_required_gate "Agent-utils, agent-core and compaction suites" bun run test:spine
-run_required_gate "Bench Python suites" bun run gate:python-suites
-run_required_gate "Concurrency fences stay load-bearing" bun run gate:mutation-fences
-run_required_gate "Devbox durability decisions" bun test packages/devbox/
-run_required_gate "Test-utils suite" bun test packages/test-utils/
-run_required_gate "Cloudflare backend and conformance suite" bun test --parallel=4 packages/cf-backend/
-run_required_gate "Durable Object semantics under workerd" bun run test:workerd
-run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
-run_required_gate "Full production CLI suite" bun run test:cli
-run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts
-run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
-run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts
-run_required_gate "Secret scan" bun scripts/secret-scan.ts
-run_required_gate "Schema drift" bun scripts/schema-drift.ts
-# Traces are a separate switch from logs and wrangler does not inherit
-# `observability` into a named environment, so this asserts every deployable
-# environment has them on — and proves the tracer is live by observing real
-# spans under workerd with and without a tail sink, so green cannot come from
-# an empty result. Credential-free, 0.3 s.
-run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
-# `gate:computed-style` is deliberately NOT here: it boots vite and Chrome over
-# 19 gallery frames (~68 s) and would fail this pipeline for environmental
-# reasons unrelated to the change under test. It is a deliberate standalone run.
-# Its DECISION LOGIC is guarded below, though — a gate kept off the path for its
-# cost still needs its own reasoning tested, or the thing that would have caught
-# `--radius` undefined at `:root` is itself unguarded.
-run_required_gate "Hammer and fence gate self-tests" bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts
-run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts
-run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts
-run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
-run_required_gate "Wired gate self-tests" bun test scripts/wired.test.ts
-run_required_gate "UI gate self-tests" bun test scripts/*-ux.test.ts scripts/computed-style.test.ts
-run_required_gate "Public pages render" bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts
-run_required_gate "React runtime identity" bun test scripts/react-runtime-identity.test.ts
-run_required_gate "Nested container resolution" bun test scripts/nested-container-resolution.test.ts
-run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
-run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts
-run_required_gate "Gate ladder wiring and cache soundness" bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts
-run_required_gate "Tier-budget ratchet" bun run gate:ladder-budget
-run_required_gate "Dead code" bun run gate:dead-code
-# The other direction of the same census: `gate:dead-code` reports a declaration
-# nothing imports, this reports an import nothing declares. Neither can see the
-# other's class — an undeclared edge is not a declaration, so the census that
-# walks declarations cannot reach it.
-run_required_gate "Undeclared imports" bun run gate:undeclared-imports
-# Neither of those two reaches this class: the import a browser entry must not
-# reach is declared, imported and wired. Only its REACHABILITY from a client
-# entry is wrong, which no census of declarations resolves.
-run_required_gate "Client graph" bun run gate:client-graph
-run_required_gate "Core layering" bun run gate:core-layering
-# One prepare per statement against the vendor's OWN DDL: the `actor_id` read
-# over `assistant_messages` that failed every hosted workspace on 2026-09-11
-# is this class, and a unit suite seeding from Kinu's copy of the DDL cannot
-# see it.
-run_required_gate "Vendor schema" bun run gate:vendor-schema
-run_required_gate "Built but unwired" bun run gate:wired
-# The test corpus's own quality ratchet: a NEW coupled test, by the five axes
-# a test review judges on. Beside the wired gate because they hold two sides of
-# one boundary — an export added to satisfy a test is a wired finding, a
-# constant restated beside a module is a census finding.
-run_required_gate "Test census ratchet" bun scripts/test-census.ts --ratchet
-run_required_gate "Duplicate implementations" bun run gate:duplication
-run_required_gate "Complexity budget" bun run gate:complexity
-run_required_gate "Cross-backend capability parity" bun run gate:capability-parity
-run_required_gate "Duplicated policy constants" bun run gate:policy-drift
-run_required_gate "Silently dropped failures" bun run gate:silent-drop
-run_required_gate "Test scratch ownership" bun run gate:scratch-ownership
-run_required_gate "Agents action/field relation" bun run gate:agents-fields
-run_required_gate "Durable Object cold start" bun run gate:do-init
-run_required_gate "Unreachable RPC surface" bun run gate:reachability
-run_required_gate "Platform fact catalog" bun run gate:platform
-run_required_gate "Egress interception totality" bun run gate:egress-interception
-run_required_gate "Typecheck coverage" bun run gate:typecheck-coverage
-run_required_gate "Declared skip ratchet" bun run gate:skip-ratchet
-run_required_gate "Measured set equals governed set" bun run gate:set-equality
-run_required_gate "External citation register" bun run gate:literature-citations
-run_required_gate "Commit message hygiene" bun run gate:commit-message
-run_required_gate "Dependency install-script policy" bun run gate:install-scripts
-run_required_gate "Install scanner bundle" bun run gate:scanner-bundle
-run_required_gate "Dependency advisory policy" bun run gate:dependency-advisories
-run_required_gate "Committed patches reproduce node_modules" bun run gate:patch-parity
-run_required_gate "Seeded bench defects still apply" bun run gate:bench-corpus
-run_required_gate "Local-device daemon suite" bun test packages/pc-agent/
-run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
-run_required_gate "Layergate conformance" bun run layergate
-run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
-run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
+# The source wave: every gate the plan marks `source`, concurrent under the
+# thread budget, unconditional. No environment variable may skip one when this
+# production deploy path is running; a gate that should not be here leaves the
+# ladder, never this script.
+run_phase source
 
-# BARRIER. Everything above this line is independent and ran concurrently.
-flush_gates
-
-# ALONE, and deliberately so: this gate's SUBJECT is contention. It saturates
+# ALONE, and deliberately so: the hammer's SUBJECT is contention. It saturates
 # half the machine's threads on purpose, so a gate running beside it would fail
-# for a reason unrelated to the change under test — which is the one thing a
-# deploy gate must never do. See SERIAL_GATES in scripts/ladder.ts.
-run_required_gate "Contended reruns of the Cloudflare suite" bun run gate:hammer
-
-# BARRIER.
-flush_gates
+# for a reason unrelated to the change under test. Its row says so.
+run_phase hammer
 
 
-# Alone, and last. Everything above proves the SOURCE is deployable; this proves
-# the ACCOUNT is. Scoped to the environment being deployed (KINU_DEPLOY_ENV), so a
-# staging deploy is not refused for a production defect and a production deploy is
-# not refused for staging drift. `npx wrangler whoami` above is its precondition —
-# without a session it reports BLOCKED and non-zero rather than skipping. See
-# SERIAL_GATES in scripts/ladder.ts.
-#
-# It runs the phase KINU_INFRA_PHASE names: `full` normally, `bootstrap` when the
-# operator passed `--bootstrap`. The line itself stays ONE string because
-# scripts/ladder.ts parses these lines and holds them equal to LADDER, which is
-# why what varies per run travels in the environment beside it — exactly as
-# KINU_DEPLOY_ENV already does.
-run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
-
-# BARRIER.
-flush_gates
+# Alone, and last before the build. Everything above proves the SOURCE is
+# deployable; this proves the ACCOUNT is. Scoped to the environment being
+# deployed (KINU_DEPLOY_ENV) and the phase KINU_INFRA_PHASE names (`full`
+# normally, `bootstrap` under `--bootstrap`), both travelling in the
+# environment so the gate's command stays one string in the plan.
+run_phase infra
 
 # The agent tiers run AFTER the publish, in Step 4b — where first-run already
 # is. A tier whose subject is the agent on a deployed build can only measure a
@@ -855,35 +743,13 @@ fi
 # did the deploy land at all. Running this against an origin that is not serving
 # would report six product failures for one deployment failure.
 #
-# ONE WAVE, EXACTLY THESE TWO, and `SERIAL_GATES` in scripts/ladder.ts carries
-# the per-member reason each stays clear of the pre-publish waves: both drive
-# the account as the same identity `gate:infra` authenticates with — real
-# machines, a real browser, live model turns — so no gate whose subject is
-# this tree runs beside them. The two share a wave because they measure the
-# same thing — the build that just shipped — and neither perturbs what the
-# other asserts: the fleet case counts machines on the account and the
-# trajectory tier links none, and neither gate reads another's workspaces.
-#
-# THE ENQUEUE LINES STAY AT COLUMN 0. `scripts/ladder.ts` parses these lines
-# with `^run_required_gate`, so an indented one is invisible to `deployGates`/
-# `deployWaves`. Measured: indenting it drops the gate from the parse and leaves
-# `deploy.test.ts` green over a wave it cannot see.
-run_required_gate "First-run tier" bun run gate:first-run
-
-# THE TRAJECTORY TIER, BESIDE FIRST-RUN, AFTER THE PUBLISH. It proves the AGENT
-# on the build that just shipped: five two-turn episodes on the product's
-# default model, scored off durable state. It stood last before the build
-# until today, where it could only measure the PREVIOUS production build —
-# that placement blocks a regression but can never admit a fix, because the
-# fix is the build it has not shipped yet. On 2026-09-12 it went red against
-# 234ed5d7d on the turn-boundary defect caa21e7ca was deploying to repair, and
-# refused the very deploy it existed to clear. A red here is a red on what
-# users have NOW, and the runner says so: the build is live and this tier is
-# red against it.
-run_required_gate "Trajectory tier" bun run gate:trajectory
-
-# BARRIER.
-flush_gates
+# ONE WAVE, both gates the plan marks `post-publish`: their rows say why each
+# stays clear of the source wave (both drive the account as the same identity
+# `gate:infra` authenticates with — real machines, a real browser, live model
+# turns). They share a wave because they measure the same thing — the build
+# that just shipped — and neither perturbs what the other asserts. A red here
+# is a red on what users have NOW, and the runner says so.
+run_phase post-publish
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
 #

@@ -11,7 +11,7 @@
  * cache's stated blind spot.
  *
  * Reads only. A gate that WRITES into the tree is a scheduler question (see
- * `SERIAL_GATES`), not a closure one, and `--audit-closure` does not judge it.
+ * a row's `phase`), not a closure one, and `--audit-closure` does not judge it.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
