@@ -1044,7 +1044,15 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
       frames.push(frame);
 
-      if (type === 'cf_agent_use_chat_response' && done === true && id !== undefined) waiters.get(id)?.resolve(frame);
+      // A done frame resolves the waiter for its request whether that waiter
+      // was asked for before or after the frame arrived: the script asks for
+      // a parked turn's done only after releasing the model, and the frame can
+      // land in between.
+      if (type === 'cf_agent_use_chat_response' && done === true && id !== undefined) {
+        const waiter = waiters.get(id) ?? Promise.withResolvers<ParityFrame>();
+        waiters.set(id, waiter);
+        waiter.resolve(frame);
+      }
     });
 
     return {
