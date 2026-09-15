@@ -52,7 +52,7 @@ import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
-import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
+import { composeFacetManager, type ComposedFacetManager, type WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import {
   clearPortCapability,
   readPortExposure,
@@ -183,9 +183,11 @@ export interface HostedWorkspaceDeps {
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   onFilesChanged?(paths: readonly string[]): void;
   /**
-   * Bring the slate that owns a durable port to life before a preview request
-   * is routed to it: the process a reset took is re-driven, a process whose
-   * source changed is replaced, a live one is answered as it is. A refusal
+   * Bring the slate that owns a durable application to life: the process a
+   * reset took is re-driven, a process whose source changed is replaced, a
+   * live one is answered as it is. Asked before a preview request is routed
+   * to its port, and again by the launch journal on the wake after a reset
+   * or a hibernation took a launch (`resolveWorkerLaunch` below). A refusal
    * says why the slate cannot serve — `missing` once its tree is gone, the
    * compiler's `bad_input` when its source is broken.
    */
@@ -195,6 +197,12 @@ export interface HostedWorkspaceDeps {
    *  marks the invocation for the WebSocket case: it must outlive the routed
    *  response, which a 101 only opens. */
   slateInvocation?(port: number, socket: boolean): { readonly value: string; release: () => void } | null;
+}
+
+/** The two halves one composition yields: Nimbus's programmatic host and the facet manager it carries. */
+interface HostComposition {
+  readonly programmatic: ProgrammaticHost;
+  readonly facets: ComposedFacetManager;
 }
 
 export interface HostedWorkspace {
@@ -226,6 +234,12 @@ export interface HostedWorkspace {
    */
   registerPort(pid: number, port: number, target: RouteableFacetTarget, owner: string): Promise<void>;
   unregisterPorts(pid: number): void;
+  /**
+   * The facet manager composed over this object — the slate host's spawn
+   * and kill path. Composing it opens the workspace, exactly as the first
+   * file touch does.
+   */
+  facetManager(): Promise<ComposedFacetManager>;
   readonly apps: DurableApps;
   /**
    * Route a preview request whose signed hostname the edge has already
@@ -268,6 +282,33 @@ function previewUnavailable(refusal: Refusal): Response {
 }
 
 /**
+ * How a journalled worker launch is re-driven here.
+ *
+ * Every worker the slate host spawns is journalled under the slate that owns
+ * it, and the journal re-drives a row a reset or a hibernation interrupted
+ * through this hook. What a row carries is the recipe — image digests, port,
+ * cwd — and never the launch's inputs: a slate's bindings are minted per
+ * caller by the slate host and its modules are compiled from the tree as it
+ * is now, so those inputs are not re-resolved from the row. The slate host
+ * re-drives the application through its own boot instead — the same path a
+ * request on its URL takes, which also replaces a process whose source
+ * changed — and the row this re-drive was owed on is released by answering
+ * null. An interpreter resident (`recipe.resident`) is the session's own
+ * launch and never an embedder's; the guard keeps that true here.
+ */
+function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Promise<null> {
+  if (recipe.resident !== undefined || deps.ensureSlate === undefined) return Promise.resolve(null);
+
+  deps.ctx.waitUntil(deps.ensureSlate(recipe.owner).then((refusal) => {
+    if (refusal !== null) {
+      diagnostics.event('workspace.facet.redrive_refused', { owner: recipe.owner, reason: refusal.reason, error: refusal.error });
+    }
+  }));
+
+  return Promise.resolve(null);
+}
+
+/**
  * Compose the workspace this Durable Object owns.
  *
  * Called once per isolate, lazily — `nextWorkspaceGeneration` bumps a durable
@@ -295,12 +336,10 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
   // listener in this isolate's memory. What survives an eviction is Nimbus's
   // reservation record in `ctx.storage` and the manager's launch journal.
   const portRegistry = new PortRegistry();
-  let programmaticHost: ProgrammaticHost | undefined;
-  let facetManager: ComposedFacetManager | undefined;
-  let composing: Promise<ProgrammaticHost> | undefined;
+  let composing: Promise<HostComposition> | undefined;
 
-  const host = async (): Promise<ProgrammaticHost> => {
-    composing ??= (async () => {
+  const compose = async (): Promise<HostComposition> => {
+    composing ??= (async (): Promise<HostComposition> => {
       try {
         const session = await bundle.session();
 
@@ -327,10 +366,10 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
               setTimeout(sleep.resolve, delay);
               deps.ctx.waitUntil(sleep.promise.then(() => composed.pumpLaunches()));
             },
+            resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
           },
         });
 
-        facetManager = composed;
         // The first pump of an incarnation drains the launch journal's
         // cold-start recovery: a launch a reset or a hibernation interrupted
         // is re-driven here, on the wake that composed this manager.
@@ -348,9 +387,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // facets through the composed fabric, and `npm install` streams in
         // process — one tarball entry at a time, never a buffered whole — so
         // neither exhausts this isolate.
-        programmaticHost = buildProgrammaticHost(session, portRegistry, deps, facetManager);
-
-        return programmaticHost;
+        return { programmatic: buildProgrammaticHost(session, portRegistry, deps, composed), facets: composed };
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
         // the whole actor isolate, and a cached rejection would poison every
@@ -363,6 +400,8 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
     return await composing;
   };
+
+  const host = async (): Promise<ProgrammaticHost> => (await compose()).programmatic;
 
   const files = workspaceBoxFiles(async () => (await bundle.session()).vfs.as(CRED_SESSION_USER));
   const boxes = new Map<string, NimbusSandboxHandle>();
@@ -398,9 +437,10 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       if (adopted === null) await clearPortCapability({ ctx: deps.ctx, portRegistry }, port);
     },
     unregisterPorts(pid) { portRegistry.unregisterByPid(pid); },
+    facetManager: async () => (await compose()).facets,
     apps: {
       async ensure({ owner, preferredPort }) {
-        await host();
+        const { facets } = await compose();
         const held = await readPortReservationByOwner(deps.ctx, owner);
 
         // The declaration moved: the identity moves with it. The old
@@ -412,7 +452,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
           await releasePortReservation(deps.ctx, { owner, port: held.port });
         }
 
-        const reserved = await facetManager!.apps.ensureDurableApp({ owner, preferredPort, visibility: 'scoped' });
+        const reserved = await facets.apps.ensureDurableApp({ owner, preferredPort, visibility: 'scoped' });
 
         if (reserved.capability === null) {
           throw new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`);
@@ -421,8 +461,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         return { port: reserved.port, capability: reserved.capability };
       },
       async remove(owner) {
-        await host();
-        const removed = await facetManager!.apps.removeDurableApp(owner);
+        const removed = await (await compose()).facets.apps.removeDurableApp(owner);
 
         return { removed: removed.removed, port: removed.port };
       },
@@ -489,16 +528,14 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
 
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
-      await host();
+      const { facets } = await compose();
 
       // Nimbus routes with the WHOLE capability and checks it against the live
       // registration itself; this object only ever compared the handle. The
       // composed apps answer upgrades and plain fetches alike — the manager
       // is in-process, so a 101 never has to cross an RPC boundary.
       try {
-        const response = await facetManager!.apps.routeCapabilityPort(
-          port, exposure.capability, publicRequest, pathname,
-        );
+        const response = await facets.apps.routeCapabilityPort(port, exposure.capability, publicRequest, pathname);
 
         // A 101 only OPENS the socket session: the invocation stays minted
         // for its life, released by the process's close listener — releasing
