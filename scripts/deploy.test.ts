@@ -3,7 +3,7 @@ import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { scratchDir } from "@kinu.run/test-utils";
+import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
   EXCLUSION_GROUPS, GATE_DEADLINES, GATE_WEIGHTS, SERIAL_GATES, deployDeadlines, deployExclusions,
   deployWaves, deployWeights,
@@ -37,11 +37,14 @@ const BENCH_GATE_FILES = [
 
 const REQUIRED_GATES = [
   "bun scripts/preflight.ts",
-  "bun run check",
+  "bun run lint",
+  "bun test packages/agent-core/drift.test.ts",
+  "bun run typecheck",
   "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts",
   "bun scripts/pattern-inventory.ts",
   "bun test scripts/deploy.test.ts",
-  "bun run test",
+  "bun run test:core",
+  "bun run test:spine",
   "bun run gate:python-suites",
   "bun run gate:mutation-fences",
   "bun test packages/devbox/",
@@ -140,7 +143,7 @@ function freshHome(directory: string) {
   const home = join(directory, "home");
   mkdirSync(home, { recursive: true });
 
-  return { ...process.env, HOME: home, KINU_HOME: join(home, ".kinu") };
+  return childEnv({ HOME: home, KINU_HOME: join(home, ".kinu") });
 }
 
 /** Why a launch failed, in the assertion message. A bare exit code hides a
@@ -269,8 +272,7 @@ exit 87
 
   const run = Bun.spawnSync(argv, {
     cwd: fixture,
-    env: {
-      ...process.env,
+    env: childEnv({
       PATH: `${fixture}:/usr/bin:/bin`,
       KINU_DEPLOY_FAIL: failingGate,
       KINU_DEPLOY_KILL: killGate,
@@ -286,7 +288,7 @@ exit 87
       ...budget,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -429,12 +431,12 @@ describe("deploy gate", () => {
   // the script: the source-text version of this test passed over a runner that
   // could not report.
   test("a gate killed without a verdict of its own fails the deploy", () => {
-    const run = runDeploy({ killGate: "bun run check" });
+    const run = runDeploy({ killGate: "bun run lint" });
 
     expect(run.status).not.toBe(0);
     // 128 + SIGKILL. The status is the child's fate, not a claim the gate made.
-    expect(run.stdout).toContain("Strict lint and TypeScript failed (exit 137)");
-    expect(run.events, "the killed gate never launched").toContain("bun run check");
+    expect(run.stdout).toContain("Anti-slop lint failed (exit 137)");
+    expect(run.events, "the killed gate never launched").toContain("bun run lint");
     expect(
       run.events.some((event) => event.startsWith("MUTATE ")),
       "a gate died unreported and the build ran anyway",
@@ -483,7 +485,7 @@ describe("deploy gate", () => {
 
     for (const gate of REQUIRED_GATES) {
       const opensChrome = browserSuites.some((file) => gate.split(" ").includes(file));
-      const multiWorker = gate.includes("--parallel=") || gate === "bun run test" || gate === "bun run test:cli";
+      const multiWorker = gate.includes("--parallel=") || gate === "bun run test:core" || gate === "bun run test:cli";
 
       if (opensChrome || multiWorker) expect(weighted.has(gate), `${gate} opens Chrome or workers and weighs one`).toBeTrue();
     }

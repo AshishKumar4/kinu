@@ -196,7 +196,7 @@ function readReal(root: string): NodeEntry[] {
 /** The command as the container's shell runs it: `bash -c`, C collation for
  *  the `split` glob, the container's umask for what the shell creates. */
 function realShell(command: string): ShellReply {
-  const run = spawnSync('bash', ['-c', `umask 022\n${command}`], { env: { ...process.env, LC_ALL: 'C', PATH: `${root}/bin:${process.env.PATH ?? ''}` }, maxBuffer: 64 * 1024 * 1024 });
+  const run = spawnSync('bash', ['-c', `umask 022\n${command}`], { env: { PATH: `${root}/bin:${process.env.PATH ?? ''}`, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, LC_ALL: 'C' }, maxBuffer: 64 * 1024 * 1024 });
 
   return { stdout: run.stdout.toString(), stderr: run.stderr.toString(), exitCode: run.status ?? 1 };
 }

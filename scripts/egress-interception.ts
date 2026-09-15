@@ -79,6 +79,7 @@ import { dirname, join, relative } from 'node:path';
 
 import * as v from 'valibot';
 
+import { parseJsonc } from './jsonc';
 import { readSources } from './sources';
 import { assertMeasured, finding } from './gate-ratchet';
 import { classMembers, declaredName, literalText, parse, superClassName, walk, type SyntaxNode } from './syntax';
@@ -388,7 +389,7 @@ export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
 
 if (import.meta.main) {
   const sources = readSources();
-  const fromWrangler = wranglerContainerClasses(v.parse(WranglerContainers, require(`${root}${WRANGLER}`)));
+  const fromWrangler = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
   const { inspected, violations } = auditInterception(sources, classes);

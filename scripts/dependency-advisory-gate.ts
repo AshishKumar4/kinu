@@ -52,6 +52,7 @@ import {
   type AdvisoryScan, type Exposure, type ReviewedPackage,
 } from './security-scanner';
 import { SCANNER_BUNDLE } from './scanner-bundle-gate';
+import { childEnv } from '../packages/test-utils/src/ambient-env';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -131,7 +132,7 @@ export function scanViaBun(cwd: string = REPO_ROOT): AdvisoryScan {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
-    env: { ...process.env, [REPORT_ENV]: '1' },
+    env: childEnv({ [REPORT_ENV]: '1' }),
   });
 
   const stdout = proc.stdout.toString();

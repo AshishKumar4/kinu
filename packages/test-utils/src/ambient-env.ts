@@ -116,6 +116,31 @@ export function ambientByName(names: readonly string[]): Record<string, string |
   return Object.fromEntries(names.map((name) => [name, process.env[name]]));
 }
 
+/** The names a child process a test spawns needs from the ambient
+ *  environment: where to find programs, where home and temp are, and the
+ *  locale. Not credentials (the preload strips those) and not the whole
+ *  environment: a spread of `process.env` into a child is an input no list
+ *  of names bounds, which is what made every suite that spawns uncacheable
+ *  by the ladder's closure walker. */
+export const CHILD_ENV_NAMES: readonly string[] = [
+  'PATH', 'HOME', 'TMPDIR', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'LC_ALL', 'TZ', 'TERM',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'KINU_HOME', 'KINU_INFLIGHT_ROOT', 'BUN_INSTALL',
+];
+
+/** The environment for a child a test spawns: {@link CHILD_ENV_NAMES} read
+ *  from the ambient environment by name, then `overrides` on top. Absent
+ *  names stay absent, so a child cannot tell a projected environment from a
+ *  bare one by an empty string. */
+export function childEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+
+  for (const [name, value] of Object.entries({ ...ambientByName(CHILD_ENV_NAMES), ...overrides })) {
+    if (value !== undefined) env[name] = value;
+  }
+
+  return env;
+}
+
 /** A plain object as {@link EnvByName}. Presence is the test, never
  *  truthiness: `KINU_BASE_URL=` is what someone trying to CLEAR the variable
  *  produces, and an empty string is not absence. */

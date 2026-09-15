@@ -149,15 +149,42 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun run check',
+    run: 'bun run lint',
     tier: 'commit',
-    // Measured 2026-09-05 on the 24-thread box (load 2.3, worktree
-    // /home/mrwhite0racle/Kinu-wt-ops-prose): 37 s wall (test:anti-slop 22.07,
-    // oxlint 3.98, 17 tsc projects 11.3). Replaces the 6.8 s figure from 2026-08-17.
-    seconds: 37,
-    catches: `type errors and the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across all 11 `
-      + 'projects. The largest defect class by volume and the only total one — every file, every line.',
-    blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
+    // Measured 2026-09-15 on the 24-thread workstation, quiet: 21.4 s solo
+    // (test:anti-slop under node, then oxlint). Split out of `bun run check`
+    // (37 s) so the lint's closure — the anti-slop tool tree and the corpus —
+    // is keyed apart from the typecheck's.
+    seconds: 21.4,
+    catches: `the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across every file, every line, and the `
+      + 'rule suites that prove each rule red-to-green under node.',
+    blind: 'types and behaviour. A lint-clean call to the wrong function passes.',
+    // `anti-slop/rules.test.ts` imports every rule suite it discovers through
+    // `sources.ts`; the suites are tracked under this directory.
+    inputs: { kind: 'derived', imports: ['tools/oxlint/anti-slop/rules/'] },
+  },
+  {
+    run: 'bun test packages/agent-core/drift.test.ts',
+    tier: 'commit',
+    // Measured 2026-09-15 on the 24-thread workstation, quiet: 0.1 s solo.
+    seconds: 0.1,
+    catches: 'a byte of the vendored agent-core runtime that no longer matches its digest-pinned '
+      + 'upstream. Its closure is that dist and nothing else, which is why it is its own row.',
+    blind: 'whether the pinned upstream is the one that should ship.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun run typecheck',
+    tier: 'commit',
+    // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
+    // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
+    // One row rather than eighteen: every project reads the corpus, so their
+    // closures are one closure and a split would buy no cache hit.
+    seconds: 12,
+    catches: 'type errors across all the projects `package.json`\'s `typecheck` names, following '
+      + '`bun run` transitively. The largest defect class by volume and the only total one.',
+    blind: 'everything about behaviour. A well-typed call to the wrong function passes. '
+      + 'Also the three `node --check` parses of the pc-agent daemon, which prove syntax only.',
     inputs: { kind: 'derived' },
   },
   {
@@ -375,7 +402,9 @@ export const LADDER: readonly Gate[] = [
       + "checkout's, so one shared directory serves every worktree while `patches/` is per-commit, "
       + 'and at most one checkout can be truthful at a time. The gate prints its full blind-spot '
       + 'list on the GREEN path, where it is actually needed.',
-    inputs: AMBIENT_BY_NAME,
+    // Reads `package.json` (in the graph), `patches/` (in every closure) and
+    // the installed tree behind the lock; nothing else in the tree.
+    inputs: { ...AMBIENT_BY_NAME, reads: [] },
   },
   {
     run: 'bun run gate:ladder-budget',
@@ -673,7 +702,7 @@ export const LADDER: readonly Gate[] = [
       + 'SHAPE GATE from a coupled test: whether a source-text assertion guards a rule no '
       + 'behavioural test can express is a judgement, so the reach is reported and the ruling '
       + 'left to the reviewer.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:complexity',
@@ -950,27 +979,34 @@ export const LADDER: readonly Gate[] = [
   {
     // Measured 2026-08-22 on the 24-thread workstation: 33.15s with four
     // isolated Bun workers, versus 78.16s in one shared process.
-    run: 'bun run test',
+    run: 'bun run test:core',
     tier: 'push',
-    // Re-measured 2026-09-05 on the 24-thread box: 44.4/42.7s, both RED with the same
-    // 16 failures (stale prompt goldens, another lane). A red run's cost is still its
-    // cost; re-measure once those 16 are green — the last green figure was 34s.
-    seconds: 44,
-    catches: 'behavioural regressions in agent-utils, core and compaction — the whole '
-      + 'shared spine both backends run on. No test COUNT is quoted here: this entry '
-      + 'carried 3,105 against a measured 3,917, and forty lines below it this same '
-      + 'file records the CLI count being 17 tests out of date for months. A number '
-      + 'copied into prose has nothing that re-runs it. Every gate on this list spells '
-      + 'its suite ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
-      + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, '
-      + 'so the root one is not loaded and both `preload` and `pathIgnorePatterns` are '
-      + 'silently dropped. A probe printed `KINU_HOME= undefined` under `--cwd` and a '
-      + 'real temp home root-relative — meaning the throwaway home that exists because '
-      + 'cli-backend once wrote ~580 checkpoint stores into a developer\'s real ~/.kinu '
-      + 'was reaching NO per-package gate.',
-    blind: 'both backend composition roots, and every subprocess path. It also covers '
-      + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
-      + 'which pins the other 5 by equality with the gate that does run each.',
+    // Measured 2026-09-15 on the 24-thread workstation, quiet: 43.1 s solo,
+    // 5,645 tests. Split out of `bun run test` (44 s) so a change under
+    // `packages/core` re-runs this and a change elsewhere does not.
+    seconds: 43,
+    catches: 'behavioural regressions in core — the whole shared spine both backends run on. '
+      + 'No test COUNT is quoted as a contract: the old row carried 3,105 against a measured '
+      + '3,917. Spelled ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
+      + 'measured 2026-08-17, `--cwd` makes bun read a bunfig.toml from THAT directory, so the '
+      + 'root one is not loaded and both `preload` and `pathIgnorePatterns` are silently dropped.',
+    blind: 'both backend composition roots, and every subprocess path. It also covers only '
+      + 'core — see ROOT_TEST_OMISSIONS in ladder.test.ts, which pins every other package by '
+      + 'equality with the gate that runs it.',
+    // `mutation-exploration-policy.test.ts` imports a mutated copy of
+    // `strategy/archive.ts` it wrote to scratch; the bytes derive from these sources.
+    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/strategy/', 'packages/core/src/execution/codemode-node-shim.ts'] },
+  },
+  {
+    run: 'bun run test:spine',
+    tier: 'push',
+    // Measured 2026-09-15 on the 24-thread workstation, quiet: agent-core 0.1 s,
+    // agent-utils 0.3 s, compaction 1.1 s solo. One row: three suites under
+    // two seconds together, each with a closure a core change does not touch.
+    seconds: 1.5,
+    catches: 'behavioural regressions in agent-utils and compaction, and the vendored runtime\'s '
+      + 'own drift suite.',
+    blind: 'core, which `bun run test:core` covers, and both backend composition roots.',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -1039,7 +1075,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything needing a Workers runtime rather than a composition root — every '
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
-    inputs: AMBIENT_BY_NAME,
+    // `unit-codemode-sandbox.test.ts` imports the node shim it wrote to scratch
+    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's.
+    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
   },
 
   {
@@ -1902,7 +1940,7 @@ export const SERIAL_GATES = {
 export const GATE_WEIGHTS = {
   'bun test --parallel=4 packages/cf-backend/': 11,
   'bun test --parallel=4 packages/cli-backend/': 11,
-  'bun run test': 11,
+  'bun run test:core': 11,
   'bun run test:cli': 11,
   'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts': 5,
   'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts': 5,

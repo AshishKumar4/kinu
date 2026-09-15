@@ -24,9 +24,10 @@
 
 import { spawnSync } from 'node:child_process';
 import { resolve as resolveHostname } from 'node:dns/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 
 const REPO = new URL('..', import.meta.url).pathname;
@@ -90,7 +91,7 @@ function declaredAccountId(): string | undefined {
   // replaces read the raw text and would have matched a commented-out id. The
   // hex pin is the same contract the regex carried: an account id is 32 hex
   // digits, and a placeholder must lose to the ambient variable, not win.
-  const declared = v.parse(DeclaredAccount, require(config)).account_id;
+  const declared = parseJsonc(readFileSync(config, 'utf8'), DeclaredAccount, 'wrangler.jsonc').account_id;
 
   return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
 }

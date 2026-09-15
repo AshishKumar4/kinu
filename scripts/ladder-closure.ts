@@ -65,6 +65,12 @@ export type Inputs =
     /** Environment names whose values change the verdict, beyond the literal
      *  `process.env.NAME` reads the graph carries. */
     readonly env?: readonly string[];
+    /** Tracked paths a computed `import()` or `require()` in the graph can
+     *  load. A graph with such a site and no declaration is never cached; a
+     *  declaration on a graph with no such site is stale and refused. The
+     *  walker cannot follow the string, so `--audit-closure` is what checks
+     *  the declaration against the file the process really loaded. */
+    readonly imports?: readonly string[];
   }
   | {
     /** Never cached: the gate touches a network, a deployed build, a live
@@ -285,6 +291,8 @@ interface Walk {
   readonly files: Set<string>;
   readonly env: Set<string>;
   readonly readsByPath: string[];
+  /** `file:line` of every computed `import()`/`require()`. */
+  readonly computedImports: string[];
   readonly envEnumerated: string[];
   readonly envComputed: string[];
   readonly corpus: boolean;
@@ -300,6 +308,7 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
   const files = new Set<string>();
   const env = new Set<string>();
   const readsByPath: string[] = [];
+  const computedImports: string[] = [];
   const envEnumerated: string[] = [];
   const envComputed: string[] = [];
   let corpus = false;
@@ -322,13 +331,8 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
     if (!isParseable(file)) return paths;
     const parsed = parse(file, repo.read(file));
     const { edges, computed, resolvedByPath } = moduleEdges(parsed);
-    const [computedLine] = computed;
 
-    if (computedLine !== undefined) {
-      failure = `${file}:${String(computedLine)} imports by a computed specifier the walker cannot follow`;
-
-      return paths;
-    }
+    for (const line of computed) computedImports.push(`${file}:${String(line)}`);
 
     const scan = scanMarkers(parsed.root, edges.map((edge) => edge.specifier));
 
@@ -362,7 +366,7 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
     return paths;
   });
 
-  return { files, env, readsByPath, envEnumerated, envComputed, corpus, failure };
+  return { files, env, readsByPath, computedImports, envEnumerated, envComputed, corpus, failure };
 }
 
 interface Form {
@@ -462,6 +466,54 @@ function configsOnPath(file: string, universe: ReadonlySet<string>): string[] {
   return out;
 }
 
+/** The declaration a derived row carries, with every list present. */
+type Declared = Extract<Inputs, { kind: 'derived' }>;
+
+/**
+ * Why a walked graph cannot be cached under its declaration, or nothing.
+ *
+ * Each rule is fail-closed: the closure is a proof that nothing the gate can
+ * read has changed, and a graph that reads the environment whole, imports by
+ * a computed specifier, reads through a computed key, or opens the tree by an
+ * undeclared path has inputs no hash over the module graph stands for. A path
+ * read on a CORPUS gate is bounded by the corpus — every tracked file is
+ * already in the closure, and what it opens outside the tree is the cache's
+ * stated blind spot — so only a non-corpus gate must declare one.
+ */
+function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): string | undefined {
+  const [computedImport] = walked.computedImports;
+
+  if (computedImport !== undefined && inputs.imports === undefined) {
+    return `${run}: ${computedImport} imports by a computed specifier the walker cannot follow`;
+  }
+
+  if (computedImport === undefined && inputs.imports !== undefined) {
+    return `${run}: the row declares \`imports\` and the graph has no computed import — a stale declaration`;
+  }
+
+  const [enumerated] = walked.envEnumerated;
+
+  if (enumerated !== undefined) {
+    return `${run}: ${enumerated} reads the environment whole (spread, enumerated or passed as a value), `
+      + `so no list of names bounds what the gate can see (${String(walked.envEnumerated.length)} such file(s))`;
+  }
+
+  const [computedEnv] = walked.envComputed;
+
+  if (computedEnv !== undefined && inputs.env === undefined) {
+    return `${run}: ${computedEnv} reads the environment through a computed key and the row declares no \`env\``;
+  }
+
+  const [pathReader] = walked.readsByPath;
+
+  if (pathReader !== undefined && inputs.reads === undefined && !corpus) {
+    return `${run}: ${pathReader} reads by path or spawns and the row declares no \`reads\` `
+      + `(${String(walked.readsByPath.length)} such file(s) in the graph)`;
+  }
+
+  return undefined;
+}
+
 /** The closure of one gate command under its row's declaration. */
 export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure {
   if (inputs.kind === 'live') return { kind: 'live', why: inputs.why };
@@ -476,10 +528,16 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   const walked = walkGraph(form.entries, repo);
 
   if (walked.failure !== undefined) return { kind: 'uncomputable', why: `${run}: ${walked.failure}` };
+  const corpus = form.corpus || walked.corpus;
+  const refused = refusal(run, walked, inputs, corpus);
+
+  if (refused !== undefined) return { kind: 'uncomputable', why: refused };
+  const [computedImport] = walked.computedImports;
+  const [computedEnv] = walked.envComputed;
+  const [pathReader] = walked.readsByPath;
   const notes: string[] = [];
   const universe = new Set(repo.files);
   const files = new Set<string>(walked.files);
-  const corpus = form.corpus || walked.corpus;
 
   if (corpus) {
     for (const file of repo.files) files.add(file);
@@ -488,53 +546,17 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
       : 'reads the whole corpus: every tracked file is an input');
   }
 
-  // Effects the walker cannot bound. Each is fail-closed: the closure is a
-  // proof that nothing the gate can read has changed, and a graph that reads
-  // the environment whole, opens the tree by an undeclared path, or spawns a
-  // process has inputs no hash over the module graph stands for. The corpus
-  // case does not excuse a path read either — a corpus gate that also opens
-  // a file OUTSIDE the corpus (a generated bundle, `node_modules`) is exactly
-  // as unbounded as any other.
-  const [enumerated] = walked.envEnumerated;
-
-  if (enumerated !== undefined) {
-    return {
-      kind: 'uncomputable',
-      why: `${run}: ${enumerated} reads the environment whole (spread, enumerated or passed as a value), `
-        + `so no list of names bounds what the gate can see (${String(walked.envEnumerated.length)} such file(s))`,
-    };
-  }
-
-  const [computedEnv] = walked.envComputed;
-
-  if (computedEnv !== undefined && inputs.env === undefined) {
-    return {
-      kind: 'uncomputable',
-      why: `${run}: ${computedEnv} reads the environment through a computed key and the row declares no \`env\``,
-    };
-  }
-
-  const [pathReader] = walked.readsByPath;
-
-  // A path read on a CORPUS gate is bounded by the corpus: every tracked file
-  // is already in the closure, so a `reads` list could add nothing inside the
-  // tree, and what it opens outside the tree is the cache's stated blind spot
-  // (`node_modules` stands behind the lock). A non-corpus gate has no such
-  // bound and must declare.
-  if (pathReader !== undefined && inputs.reads === undefined && !corpus) {
-    return {
-      kind: 'uncomputable',
-      why: `${run}: ${pathReader} reads by path or spawns and the row declares no \`reads\` `
-        + `(${String(walked.readsByPath.length)} such file(s) in the graph)`,
-    };
-  }
-
-  for (const prefix of [...form.reads, ...(inputs.reads ?? [])]) {
+  for (const prefix of [...form.reads, ...(inputs.reads ?? []), ...(inputs.imports ?? [])]) {
     const matched = repo.files.filter((file) => file === prefix || (prefix.endsWith('/') && file.startsWith(prefix)));
 
     if (matched.length === 0) return { kind: 'uncomputable', why: `${run}: declared read ${prefix} matches no tracked file` };
 
     for (const file of matched) files.add(file);
+  }
+
+  if (computedImport !== undefined) {
+    notes.push(`${String(walked.computedImports.length)} computed import(s) at ${walked.computedImports.join(', ')}; the row `
+      + `declares imports [${(inputs.imports ?? []).join(', ')}] — checked by --audit-closure, not by the walker`);
   }
 
   // An untracked file in the closure is bytes the tree cannot name: a built
