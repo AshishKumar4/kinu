@@ -47,6 +47,21 @@ export function lastValue<T>(resource: AsyncResource<T>): T | null {
   return null;
 }
 
+/** A resource's value under a view transform: the read itself is unchanged —
+ *  loading stays loading, a failure stays a failure with the last value it
+ *  carried — only what a `ready` consumer sees is mapped. */
+export function mapResource<T, U>(resource: AsyncResource<T>, map: (value: T) => U): AsyncResource<U> {
+  if (resource.status === "ready") return { status: "ready", value: map(resource.value) };
+
+  if (resource.status === "error") {
+    const last = resource.last === null ? null : map(resource.last);
+
+    return { ...resource, last };
+  }
+
+  return resource;
+}
+
 export function describeError<ErrorValue>(error: ErrorValue): string {
   if (error instanceof Error && error.message) return error.message;
 
