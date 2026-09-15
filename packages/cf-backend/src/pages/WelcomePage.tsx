@@ -1,11 +1,7 @@
 /**
- * First-run setup — the four-step wizard an account that has never finished it
- * lands on, whatever URL it arrived at.
- *
- * The panels are the account's own, shared with settings and the setup card:
- * step 2 mounts `McpServersPanel` and `CliInstallCard` whole, so a server
- * added during onboarding is the same server settings would list, and the CLI
- * command the wizard shows is the same one the cli section copies.
+ * First-run setup — the wizard an account that has never finished it lands
+ * on, whatever URL it arrived at. Profile (name prefilled from the OAuth
+ * login, editable), model (provider connect + default model pick), showcase.
  */
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
@@ -22,9 +18,6 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
-import { McpServersPanel } from "@/components/account/McpServersPanel";
-import { CliInstallCard } from "@/components/account/CliInstallCard";
-import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { useAccount } from "@/hooks/use-account";
 import { lastValue } from "@/hooks/use-async-resource";
@@ -79,17 +72,18 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const navigate = useNavigate();
   const profile = lastValue(account.profile);
 
+  // The name field starts from the profile's display name — seeded from the
+  // OAuth login — and stays editable. `null` until the field is touched: the
+  // displayed name follows the loaded profile until the user types, so a slow
+  // profile never overwrites an edit. A seeded user confirms it in one click.
   const [step, setStep] = useState(() => Math.min(Math.max(0, initialStep), LAST_STEP));
-  // `null` until the field is touched: the displayed name follows the loaded
-  // profile until the user types, so a slow profile never overwrites an edit.
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
-
-  // The card follows the step it is showing: the track is as wide as all four
+  // The card follows the step it is showing: the track is as wide as all the
   // panels, but its height is the ACTIVE panel's, observed rather than
-  // guessed, so step 0 is not a 62vh card over a void. `attach` re-binds the
+  // guessed, so step 0 is not a tall card over a void. `attach` re-binds the
   // observer whenever `step` changes; `h` stays 0 ("not measured") until the
   // first callback, and an unmeasured wrapper means no inline height at all.
   const stepSize = useElementSize();
@@ -158,9 +152,6 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
         <h1 className="p-display text-[26px] leading-8 text-center">Let's set up your account</h1>
-        <p className="p-row-text p-text-3 text-center mt-2">
-          A few things before your first workspace. Everything here can be changed later in Account settings.
-        </p>
 
         <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
           {ONBOARDING_STEPS.map((s, i) => (
@@ -194,16 +185,12 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 inert={i !== step}
                 ref={i === step ? stepSize.attach : undefined}
               >
-                <h2 className="p-title p-text">{s.title}</h2>
-                <p className="p-meta p-text-3 mb-5">{s.lede}</p>
+                <h2 className="p-title p-text mb-5">{s.title}</h2>
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div className="flex flex-col items-center gap-1.5">
-                      <div className="size-16 rounded-full bg-[#2A2018] text-[22px] font-semibold text-[var(--c-accent)] flex items-center justify-center">
-                        {letter}
-                      </div>
-                      <p className="p-meta p-text-3 text-center max-w-28">This is the mark every surface shows you as.</p>
+                    <div className="size-16 rounded-full bg-[#2A2018] text-[22px] font-semibold text-[var(--c-accent)] flex items-center justify-center">
+                      {letter}
                     </div>
                     <div className="w-full flex-1">
                       <DisplayNameField value={displayName} onChange={setName} saving={busy} />
@@ -214,14 +201,6 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 {s.id === 'model' && (
                   <div className="space-y-5">
                     <ProvidersPanel returnTo={APP_ROUTES.welcome} />
-                    <ProfileCatalogSettings tiersOnly />
-                  </div>
-                )}
-
-                {s.id === 'connections' && (
-                  <div className="space-y-5">
-                    <McpServersPanel />
-                    <CliInstallCard />
                   </div>
                 )}
 
