@@ -394,11 +394,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // cliLocal has no device runtime: the machine is the workspace, so
   // the enum omits device nicknames there. The resolver below agrees: with
   // no fleet and no device executor, a nickname is an unknown runtime.
-
-  const deviceExecutors = deps.cliLocal === true
-    ? []
-    : (router?.listExecutors().map(({ name }) => name) ?? []);
-
+  const listed = router?.listExecutors().map(({ name }) => name) ?? [];
+  // cliLocal has no device runtime: the machine is the workspace, so the
+  // device name never reaches the enum — but the parent executor (a fork's
+  // canonical workspace) still does.
+  const deviceExecutors = deps.cliLocal === true ? listed.filter((name) => name !== 'device') : listed;
   const shellRuntimes = [...new Set(['workspace', ...deviceExecutors])];
 
   // A toolset built without a budget still budgets — a fresh one, scoped to
