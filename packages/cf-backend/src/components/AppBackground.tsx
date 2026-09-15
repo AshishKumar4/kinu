@@ -16,9 +16,7 @@
  * (`ground-text.ts`) is a keep-out box the picture fades under, re-read
  * when the page's contents change, scroll or resize.
  *
- * It shows only on surfaces with nothing to read through it: the home,
- * account settings, MCP servers, the shared library and a workspace's
- * settings. The chat, the explorer and the control plane never mount it.
+ * It shows on the home page only; every other route is a working surface.
  */
 import { useEffect, useRef, type ReactElement } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -51,14 +49,10 @@ const RESOLUTION = 1;
  *  gets the still, the hero's rule. */
 const RAIL_QUERY = '(min-width: 48rem)';
 
-/** The surfaces the tissue shows under: none of them holds a transcript, a
- *  code pane or a slate frame. */
+/** The tissue is the home page's alone; every other surface is a working
+ *  view and reads flat. */
 const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
   [APP_ROUTES.home]: true,
-  [APP_ROUTES.userSettings]: true,
-  [APP_ROUTES.userMcp]: true,
-  [APP_ROUTES.shared]: true,
-  [APP_ROUTES.agentSettings]: true,
 };
 
 /** What a gate can read off the live background: which renderer took the

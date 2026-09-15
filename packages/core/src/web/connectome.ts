@@ -79,9 +79,9 @@ const SIGNAL_TAIL = 0.012;
 /** How far in from the nearest edge the mat reaches, in view width units;
  *  the rim's density falls to nothing here. A corner reaches CORNER_REACH
  *  times further, which is what makes the corners densest. */
-const REACH = 0.3;
+const REACH = 0.22;
 
-const CORNER_REACH = 1.4;
+const CORNER_REACH = 1.7;
 
 /** Roots along an edge sit this far apart, before the seeded jitter; a corner holds CORNER_ROOTS of its own. */
 const ROOT_SPACING = 0.026;
