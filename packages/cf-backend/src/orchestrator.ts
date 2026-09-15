@@ -3072,6 +3072,34 @@ export class OrchestratorAgent extends ActorAgent {
     return this.consents.request(req);
   }
 
+  /** Raise the card and answer with the id its settle names, without parking.
+   *  The pair of {@link waitDeviceConsentSettled}: the UserDO takes the halves
+   *  separately for the provisioning card, because a connecting daemon is
+   *  what settles it — and that answer has to name the card, which only the
+   *  registry knows. An identical card already up joins it and answers its
+   *  id, so a retry never stacks a second ask. */
+  async raiseDeviceConsent(req: DeviceConsentRequest): Promise<string> {
+    return this.consents.raise(req);
+  }
+
+  /** Park until a card {@link raiseDeviceConsent} minted is GONE — the wait
+   *  the hub's provisioning flow performs as its second RPC. It carries no
+   *  decision because the provisioning card's answers are facts, not clicks:
+   *  the connect it asked for, or nothing. The UserDO re-reads liveness
+   *  either way, so the decision that dismissed it is never read here. */
+  async waitDeviceConsentSettled(consentId: string): Promise<void> {
+    return this.consents.waitSettled(consentId);
+  }
+
+  /** The hub's settlement, not the owner's: a daemon's socket accepted while
+   *  this workspace's provisioning card was up answers it `connected` — the
+   *  condition the card asked for now holds. Not {@link callable}: the
+   *  browser's answers go through resolveDeviceConsent, and a client-held
+   *  path to "the hub says it connected" would let a click forge the fact. */
+  async settleDeviceConsent(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }> {
+    return { ok: this.consents.settle(consentId, decision) };
+  }
+
   /** The chat UI calls this when the user clicks a consent card button. */
   @callable()
   async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
@@ -3085,9 +3113,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   // ── Deferred approval — the owner is asleep, the run carries on ──────
-  // Device consent parks the CALLER on a promise for five minutes, which is
-  // right when the answer is minutes away. This one is for the answer that is
-  // hours away: the action is parked on the owner in SQL, the agent is told so
+  // A call that needs the owner parks here: the approvable thing is queued,
   // and keeps working (or ends its turn), and the owner's decision wakes it
   // through the same signal seam a settled background job uses. Nothing is
   // ever reported as having run — see core's safety/deferred-approval.ts.

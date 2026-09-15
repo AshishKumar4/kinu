@@ -337,6 +337,11 @@
     "cancel_claim",
     "cancel_outcome"
   ],
+  "device_provision_pending@packages/core/src/state/user-schema.ts": [
+    "agent_name",
+    "consent_id",
+    "raised_at"
+  ],
   "driver_lease@packages/core/src/execution/driver-lease.ts": [
     "id",
     "pid",

@@ -451,6 +451,7 @@ const ORCHESTRATOR_METHODS = [
   'openDeviceTerminal',
   'prepareTerminal',
   'rawCopyFromFork',
+  'raiseDeviceConsent',
   'readExecutorFileChunk',
   'receivePeerMessage',
   'recordHeadStep',
@@ -459,11 +460,13 @@ const ORCHESTRATOR_METHODS = [
   'saveNoteFromMcp',
   'sendPeerFromMcp',
   'setAutoDisplayName',
+  'settleDeviceConsent',
   'setEmailAllowlist',
   'setEmailNotifications',
   'setInitialDisplayName',
   'startExecutorFileDownload',
   'transitionReleaseChange',
+  'waitDeviceConsentSettled',
   'writeExecutorFileChunk',
   // The workspace's byte plane. `routeWorkspacePreview` is the preview edge's
   // entry point: the edge verifies the hostname signature and the object
