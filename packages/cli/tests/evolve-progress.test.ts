@@ -8,15 +8,16 @@
  * below pin the WORDS on the terminal, through the command's own onProgress
  * wiring rather than the formatter's former export.
  */
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 
+import { rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type {
   AgentRuntime, ConvergenceResult, MCTSConfig, MCTSProgressEvent, SessionWriter,
 } from '@kinu.run/core';
 import { createCliAgent } from '../src/agent-create';
-import { AGENT_HOME, updateConfigFile } from '../src/config';
+import { AGENT_HOME, agentDir, updateConfigFile } from '../src/config';
 import { evolveCommand } from '../src/commands/evolve';
 
 // Dummy provider config so requireLLMConfig succeeds offline — the stub
@@ -39,6 +40,17 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 }
 
 const AGENT_NAME = `evolve-progress-${Date.now()}`;
+
+// The agent directory is this suite's own: every name the file creates is
+// removed when the test that created it ends — the same test-owned cleanup
+// project-refs already does — so a later file's roster reads exactly what IT
+// created. config.ts binds AGENT_HOME at module load, so in-process isolation
+// through KINU_HOME cannot carry the cleanup; rmSync on the agent dir does.
+const created: string[] = [];
+
+afterEach(() => {
+  for (const name of created.splice(0)) rmSync(agentDir(name), { recursive: true, force: true });
+});
 
 afterAll(() => {
   updateConfigFile((config) => {
@@ -75,6 +87,7 @@ async function stubEngine(
 
 describe('evolve progress rendering', () => {
   test('every search event reaches the terminal through the command', async () => {
+    created.push(AGENT_NAME);
     await createCliAgent({ name: AGENT_NAME, mode: 'local', purpose: 'render progress', ...OFFLINE_PROVIDER });
 
     const lines: string[] = [];

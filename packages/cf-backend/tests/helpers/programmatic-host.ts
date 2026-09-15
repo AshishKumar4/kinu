@@ -17,7 +17,17 @@ import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
-import type { ProgrammaticHost } from '../../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import * as v from 'valibot';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { NimbusSandboxHandle } from '@kinu.run/core';
+import {
+  rpcDeleteFile,
+  rpcExec,
+  type ProgrammaticHost,
+} from '../../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import {
+  _rpcExists, _rpcFsReadRange, _rpcMkdir, _rpcReadFile, _rpcReadFileBytes, _rpcReaddir, _rpcRename, _rpcStat, _rpcWriteFile,
+} from '../../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
 import { facetDiagnosticsHooks } from '../../src/nimbus-programmatic';
 
 export type DurableState = Map<string, unknown>;
@@ -124,4 +134,64 @@ export function programmaticHostOver(workspace: NimbusWorkspace, seams: Programm
   };
 
   return { host, facetManager, processes, portRegistry, durable };
+}
+
+/** What the session's `stat` answers, as the credentialed plane reads it. */
+const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number() });
+
+/**
+ * The session as the repo reaches it: `exec` carries the credential on every
+ * command, and `files.as(agent)` answers the credentialed file plane — the
+ * workspace's own file RPCs bound to `agent` through the one supervisor op —
+ * which is what the SDK's `files.as(cred)` calls. The top-level `files` verbs
+ * refuse, so a credentialed plane can never fall back to the session user.
+ * Shared by every suite that boxes a hosted node (node-home-wiring,
+ * facet-tmp-confinement): two copies of this shape already drifted once.
+ */
+export function credentialedSessionBox(
+  workspace: NimbusWorkspace,
+  host: ProgrammaticHost,
+  cred: VfsCred,
+): NimbusSandboxHandle {
+  const refuse = async (): Promise<never> => { throw new Error('a credentialed plane must not fall back to the session user'); };
+
+  const rpc = { ...host, supervisorOp: (envelope: Parameters<NimbusWorkspace['supervisorOp']>[0]) => workspace.supervisorOp(envelope) };
+
+  const filesAs = (agent: VfsCred): NimbusSandboxHandle['files'] => ({
+    as: filesAs,
+    read: (path) => _rpcReadFile(rpc, path, undefined, agent),
+    readBytes: (path) => _rpcReadFileBytes(rpc, path, undefined, agent),
+    readRange: (path, offset, length) => _rpcFsReadRange(rpc, path, offset, length, undefined, agent),
+    write: async (path, content) => { await _rpcWriteFile(rpc, path, content, undefined, agent); },
+    list: (path) => _rpcReaddir(rpc, path ?? '/', undefined, agent),
+    stat: async (path) => v.parse(v.nullable(FileStatSchema), await _rpcStat(rpc, path, undefined, agent)),
+    rename: (from, to) => _rpcRename(rpc, from, to, undefined, agent),
+    exists: (path) => _rpcExists(rpc, path, undefined, agent),
+    mkdir: (path) => _rpcMkdir(rpc, path, undefined, agent),
+    delete: (path, options) => rpcDeleteFile(rpc, path, options, agent),
+  });
+
+  return {
+    ready: async () => undefined,
+    exec: async (rawCommand, options) => {
+      // Assigned rather than spread conditionally: an absent environment must
+      // stay an ABSENT KEY, because the runner reads presence to decide whether
+      // it was handed a request at all.
+      const forwarded: Parameters<typeof rpcExec>[2] = { cred: options?.cred ?? cred };
+
+      if (options?.cwd !== undefined) forwarded.cwd = options.cwd;
+
+      if (options?.env !== undefined) forwarded.env = options.env;
+      const result = await rpcExec(host, rawCommand, forwarded);
+
+      return {
+        command: rawCommand,
+        success: result.exitCode === 0,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    },
+    files: { as: filesAs, read: refuse, write: refuse, list: refuse, exists: refuse, delete: refuse },
+  };
 }

@@ -27,7 +27,7 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import { programmaticHostOver } from './helpers/programmatic-host';
+import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
@@ -121,31 +121,8 @@ async function openOwner(): Promise<OwnerFixture> {
 }
 
 /** The session addressed as one node, for the credentialed file plane. */
-function sessionBoxFor(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHandle {
-  return {
-    ready: async () => undefined,
-    exec: async (rawCommand, options) => {
-      const forwarded: Parameters<typeof rpcExec>[2] = { cred: options?.cred ?? cred };
-
-      if (options?.env !== undefined) forwarded.env = options.env;
-      const result = await rpcExec(host, rawCommand, forwarded);
-
-      return {
-        command: rawCommand,
-        success: result.exitCode === 0,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
-    },
-    files: {
-      read: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      write: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      list: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      exists: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      delete: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-    },
-  };
+function sessionBoxFor(f: OwnerFixture, cred: VfsCred): NimbusSandboxHandle {
+  return credentialedSessionBox(f.workspace, f.host, cred);
 }
 
 function node(nodeId: string): NodeIdentity {
@@ -185,8 +162,8 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
-      const asA = nimbusSessionFiles(sessionBoxFor(f.host, a), a);
-      const asB = nimbusSessionFiles(sessionBoxFor(f.host, b), b);
+      const asA = nimbusSessionFiles(sessionBoxFor(f, a), a);
+      const asB = nimbusSessionFiles(sessionBoxFor(f, b), b);
 
       // The whole write path, including the stage-and-rename commit, which
       // resolves through the same rewrite as every other operation.
