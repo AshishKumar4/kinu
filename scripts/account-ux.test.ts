@@ -345,8 +345,34 @@ describe('account panels', () => {
                 .toBe(view === 'tiled' ? 'Tiled view' : 'List view');
               expect(await page.$eval('[data-workspaces-view]', (section) => section.getAttribute('data-workspaces-view'))).toBe(view);
 
+              // One state per card, no more: the chip count equals the row
+              // count, and the headline words are the shared rule's.
+              await page.waitForFunction(
+                () => document.querySelectorAll('[data-overview-chip]').length === 5, { timeout: 10_000 },
+              );
+              const body2 = await page.evaluate(() => document.body.innerText);
+              expect(body2).toContain('Needs you · 2');
+              expect(body2).toContain('Last run failed');
+              // The filter tabs and the page's own create action sit in the
+              // control row; the count is a tabular "N of M", not a sentence.
+              const tabs = await page.$$eval('[aria-label="Workspace state"] [role="tab"]', (els) => els.map((el) => el.textContent?.trim() ?? ''));
+              expect(tabs).toEqual(['All', 'Needs you', 'Working', 'Idle']);
+              expect(await page.$$eval('main button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'New workspace').length)).toBe(1);
+              expect(body2).toContain('5 of 5');
+
               if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
               shots.push(await shoot(page, `workspaces-${view}-${viewport}-${theme}`));
+
+              // 'Needs you' holds exactly the workspace whose decisions wait.
+              await page.click('[data-segment="needs"]');
+              await page.waitForFunction(
+                () => document.querySelectorAll('[data-workspaces-view] a').length === 1, { timeout: 10_000 },
+              );
+              expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Checkout coupon bug');
+              await page.click('[data-segment="all"]');
+              await page.waitForFunction(
+                () => document.querySelectorAll('[data-workspaces-view] a').length === 5, { timeout: 10_000 },
+              );
 
               await page.type('[aria-label="Search workspaces"]', 'perf');
               await page.waitForFunction(
@@ -392,22 +418,37 @@ describe('account panels', () => {
           try {
             const body = await shared.evaluate(() => document.body.innerText);
 
-            for (const heading of ['My shared', 'Shared with me', 'Public', 'From people I know']) expect(body).toContain(heading);
+            // One grid behind five counted segments — the lists are tabs now.
+            expect(body).toContain('Shared');
+            expect(await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (els) => els.length)).toBe(5);
+
+            for (const label of ['All', 'Mine', 'With me', 'Public', 'People I know']) expect(body).toContain(label);
 
             if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Shared');
-            shots.push(await shoot(shared, `shared-four-${viewport}-${theme}`));
+            shots.push(await shoot(shared, `shared-segments-${viewport}-${theme}`));
           } finally {
             await shared.close();
           }
 
-          // Before anything is shared, each list says so rather than sitting blank.
+          // Before anything is shared, each segment says its own empty line.
           const empty = await freshPage(gallery, 'shared-empty', theme, viewport);
 
           try {
             const body = await empty.evaluate(() => document.body.innerText);
 
-            expect(body).toContain('Nothing is public yet.');
+            expect(body).toContain('Nothing shared yet');
             expect(await empty.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(0);
+
+            for (const [segment, line] of [
+              ['received', 'Nothing shared with you'],
+              ['public', 'Nothing public'],
+              ['known', 'Nothing from people you know'],
+            ] as const) {
+              await empty.click(`[data-segment="${segment}"]`);
+              await empty.waitForFunction(
+                (expected) => document.body.innerText.includes(expected), { timeout: 10_000 }, line,
+              );
+            }
           } finally {
             await empty.close();
           }
