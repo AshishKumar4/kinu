@@ -19,6 +19,7 @@ import {
   type StopCondition,
   type TextStreamPart,
   type UIMessageChunk,
+  type LanguageModelUsage,
 } from 'ai';
 import {
   assertToolsSupportedByModel,
@@ -44,6 +45,7 @@ import { JsonObjectSchema, type JsonObject } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_SDK_RETRIES } from './providers/rate-limit-retry';
 import { diagnostics, toKinuError, type KinuError } from './obs/index';
+import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 
 export type ChatEvent =
@@ -196,6 +198,16 @@ export interface ChatOptions {
   /** Raw SDK output for a host UI bridge, before presentation/model conversion.
    * Not included in the serializable ChatEvent projection. */
   onToolOutput?: (output: ChatToolOutput) => Promise<void> | void;
+  /**
+   * Where the turn's own model calls open and close their lifecycle rows
+   * (`model_operation`, source `agent`). The step pipeline writes a row per
+   * FINISHED step; a turn whose provider call never returned leaves nothing
+   * behind — no row says which operation was in flight when the process died,
+   * which is the signature `RunEventRecorder.unterminatedModelOperations`
+   * exists to read. Optional for the same reason the other sinks are: a turn
+   * with no ledger wired is one whose calls record nothing.
+   */
+  operations?: ModelOperationSink;
 }
 
 /**
@@ -286,6 +298,45 @@ export const INTERRUPTED_TURN = 'The turn was interrupted before it finished.';
  * it runs until its work is done, the caller cancels it, or the provider or a
  * tool fails definitively.
  */
+
+/** One call's frame, closed whichever way it left. Called by the generator's
+ *  tail — never `await`ed there, because a cut path cannot touch the deferred
+ *  accessors and the end row should land before the consumer's `turn_end`
+ *  reads the stream as finished. */
+function settleModelOperation(
+  operation: ModelOperation,
+  stream: { totalUsage: PromiseLike<LanguageModelUsage>; response: PromiseLike<{ modelId: string }> },
+  cut: boolean,
+): void {
+  if (cut) {
+    operation.failed({ cause: new Error(INTERRUPTED_TURN) });
+
+    return;
+  }
+
+  // The natural finish: usage is what the provider reported across the whole
+  // call, the modelId the last step's. `response` settles on a non-cut path (it
+  // never settles on a cut), and `totalUsage` is the same deferred the
+  // ignoreDeferred guard already tolerates rejecting — the rejection handler
+  // here is the end row's own, not a second swallow of the same fault.
+  void Promise.all([stream.totalUsage, stream.response]).then(
+    ([totalUsage, response]) => operation.completed({
+      usage: normalizeUsage(totalUsage),
+      modelId: response.modelId,
+    }),
+    operationRejected(operation),
+  );
+}
+
+/** A deferred accessor rejecting on a call that finished: the frame's failure
+ *  row, written with the rejection as its cause. Kept as a named function so
+ *  the `then` rejection arm has a typed parameter — both rules the inline
+ *  shape would trip (a bare annotation reads as an unparsed boundary, a
+ *  missing one as an untyped catch variable) — and so the arm reads as the
+ *  event it writes, not the promise mechanics around it. */
+const operationRejected = (operation: ModelOperation) =>
+  <Failure>(cause: Failure): void => { operation.failed({ cause }); };
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -293,6 +344,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // Extension tools never shadow a caller (built-in) tool of the same name.
   const tools: ToolSet = extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools;
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
+
+  /** The spec every provider call this turn makes is attributed to — resolved
+   *  once, beside the tools those calls share. */
+  const modelSpec = opts.modelContext?.id;
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
@@ -406,6 +461,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     request: readonly ModelMessage[],
     stepOffset: number,
   ): AsyncGenerator<ChatEvent, CallOutcome> {
+    // One operation frame per PROVIDER CALL — the continuation below is a
+    // second `callModel`, so a turn that hit the output limit opens a second
+    // frame rather than quietly extending the first.
+    const operation = beginModelOperation(
+      { source: 'agent', operations: opts.operations },
+      'stream',
+      { spec: modelSpec },
+    );
+
     // streamText routes provider failures into the stream as an in-band error
     // chunk instead of throwing — captured here and rethrown VERBATIM after the
     // loop, so callers' failure handling (the overflow-recovery classifier)
@@ -651,7 +715,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // the SDK invokes `onAbort`; waiting on the callback made explicit
       // cancellation look like a provider failure. A cut falls through so the
       // partial turn is yielded as `done`, then throws INTERRUPTED_TURN.
-      if (!opts.signal?.aborted) throw err;
+      if (!opts.signal?.aborted) {
+        operation.failed({ cause: err });
+        throw err;
+      }
+
       interrupted = true;
     } finally {
       // The second reader drains the same tee to its end (or its error) before
@@ -679,7 +747,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // the structured facts (status, provider code, provider id) in the message,
     // keeps the raw failure on `cause`, and files the provider's own text on the
     // diagnostics record.
-    if (streamError !== undefined && !interrupted) throw providerErrorFor({ cause: streamError });
+    if (streamError !== undefined && !interrupted) {
+      operation.failed({ cause: streamError });
+      throw providerErrorFor({ cause: streamError });
+    }
 
     if (deadFinalStep && !interrupted) {
       // Deliberately still a bare throw, unlike the interrupt: this turn was
@@ -687,6 +758,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // the RESULT, so there is no "work the cancellation discarded" to rescue —
       // and the empty dead step would ride into the durable history with nothing
       // established about what an empty assistant message does on replay.
+      operation.failed({ cause: new Error('model stream ended without output') });
       throw new Error(
         'Model stream ended without output: the provider stream terminated prematurely ' +
         '(no finish reason, no content). The turn did not complete.',
@@ -705,6 +777,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // durable record are one construction, so neither can say something the
     // other does not.
     const cut = interrupted;
+
+    // The call's frame, closed whichever way it left — not awaited, so the end
+    // row lands before the consumer's `turn_end` and a cut path never touches
+    // the deferred accessors.
+    settleModelOperation(operation, result, cut);
     const steps = cut ? recordedSteps : await result.steps;
     const finished = [...responseSoFar];
 

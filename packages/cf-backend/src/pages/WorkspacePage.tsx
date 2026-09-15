@@ -510,9 +510,18 @@ function SubordinateChatColumn({
             <div className="flex items-center gap-2">
               <InlineRenameTitle title={title} onRename={onRename} subject="agent" textClass="text-sm font-medium" />
               {state.isStreaming && (
-                  <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
+                  <span
+                    className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle"
+                    title={state.providerWait
+                      ? `Waiting on ${state.providerWait.provider} — retry in ${Math.ceil(state.providerWait.waitMs / 1000)}s`
+                      : "The agent is working"}
+                  >
                     <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
+                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">
+                      {state.providerWait
+                        ? `waiting on ${state.providerWait.provider} · ${Math.ceil(state.providerWait.waitMs / 1000)}s`
+                        : "working"}
+                    </span>
                   </span>
                 )}
             </div>
@@ -1183,6 +1192,7 @@ export default function WorkspacePage() {
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}
+        providerWait={state.providerWait}
         waitingOnYou={state.pendingActions.length > 0 || state.pendingConsents.length > 0}
         model={as?.model}
         {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}

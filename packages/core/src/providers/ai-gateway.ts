@@ -81,7 +81,11 @@ export function createAIGatewayProvider(): ModelProvider {
         // Never fetched. The SDK builds `{baseURL}/chat/completions` and the
         // transport parses that into the binding's {gateway, provider, endpoint}.
         baseURL: String(deps.env.AI_GATEWAY_URL),
-        fetch: withRateLimitRetry(createGatewayBindingFetch(resolved)),
+        fetch: withRateLimitRetry(createGatewayBindingFetch(resolved), {
+          provider: AI_GATEWAY_PROVIDER_ID,
+          modelId,
+          ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+        }),
       }).chatModel(modelId);
     },
   };

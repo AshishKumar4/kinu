@@ -142,7 +142,7 @@ import {
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
-  recordModelOperations,
+  recordModelOperations, type ProviderWaitInfo,
   // The one builder for a model_call row: its shape AND the price-only-when-the
   // -rate-is-this-call's-own guard, spelled once for all three call sites.
   buildModelCallEvent,
@@ -1487,6 +1487,7 @@ export abstract class ActorAgent extends Think<Env> {
 
       return stub.getCredentialsRevision(caller);
     },
+    onProviderWait: (info) => { this.noteProviderWait(info); },
   });
 
   constructor(ctx: AgentContext, env: Env) {
@@ -4027,6 +4028,47 @@ export abstract class ActorAgent extends Think<Env> {
     { emit: (runId, input) => { this.eventRecorder.emit(runId, input); } },
     () => currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID),
   );
+
+  /** A model request is about to sleep on a provider-mandated wait. The row
+   *  lands in the run-event ledger (`provider_wait`) AND crosses the workspace
+   *  socket, because the two surfaces that read them differ: the ledger is
+   *  durable evidence of where a turn spent its time, the socket is what the
+   *  open pane renders to say the agent is waiting, not thinking. A recorder
+   *  fault is contained — a ledger write must never kill the sleep it was
+   *  annotating (the listener inside the retry layer catches its own, but a
+   *  throw here would still reach it). */
+  private noteProviderWait(info: ProviderWaitInfo): void {
+    const runId = currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID);
+
+    try {
+      this.eventRecorder.emit(runId, {
+        type: 'provider_wait',
+        provider: info.provider,
+        waitMs: info.waitMs,
+        attempt: info.attempt,
+        source: info.source,
+        ...(info.modelId !== undefined && { modelId: info.modelId }),
+        ...(info.status !== undefined && { status: info.status }),
+      });
+    } catch (cause) {
+      diagnostics.failure('event.provider_wait_emit_failed', toKinuError({
+        doing: 'recording a provider_wait run event',
+        cause,
+        otherwise: 'io',
+      }), { provider: info.provider });
+    }
+
+    this.broadcast(JSON.stringify({
+      type: 'provider_wait',
+      actorId: this.actorHandle().actorId,
+      provider: info.provider,
+      modelId: info.modelId,
+      waitMs: info.waitMs,
+      attempt: info.attempt,
+      source: info.source,
+      status: info.status,
+    }));
+  }
 
   // ── EventsHub: per-agent ingress + persistence + dispatch. ──────────────
   // Load-bearing primitives (spec §1):

@@ -111,7 +111,11 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
 
     createModel(modelId, deps): LanguageModel {
-      const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
+      const baseFetch = withRateLimitRetry(deps.fetch ?? fetch, {
+        provider: 'codex',
+        modelId,
+        ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+      });
 
       const customFetch = asFetchFunction(async (input, init) => {
         // A dead login presents two ways: the resolver refuses up front (its

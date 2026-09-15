@@ -320,6 +320,20 @@ const SocketMessageSchema = v.variant("type", [
     workspaceName: v.optional(v.nullable(v.string())),
   }),
   v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
+  // The turn is waiting on the provider — a 429/529's declared sleep, a
+  // backoff, or a sibling's cooldown — NOT thinking in silence. `waitMs` is
+  // what the transport is about to sleep; `attempt` is which refusal it was
+  // (0 when the wait precedes the first attempt: a pacer cooldown join).
+  v.object({
+    type: v.literal("provider_wait"),
+    provider: v.string(),
+    modelId: v.optional(v.string()),
+    waitMs: v.number(),
+    attempt: v.number(),
+    status: v.optional(v.number()),
+    source: v.picklist(["header", "backoff", "cooldown"]),
+    actorId: v.optional(v.string()),
+  }),
   v.object({ type: v.literal("work_cancelled") }),
   v.object({ type: v.literal("pending_actions_changed") }),
   v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
@@ -987,6 +1001,21 @@ export function useKinu(target?: string | KinuActorAddress) {
   // anything else is this session's turn failing live.
   const resumedRequestIds = useRef(new Set<string>());
   const [chatError, setChatError] = useState<ChatTurnError | null>(null);
+
+  /** A model call this turn is making is sleeping out a provider-mandated
+   *  wait — the difference between "thinking" and "waiting on the provider".
+   *  Set on `provider_wait` frames, cleared on the next stream frame, the
+   *  socket closing, or a timer keyed to the declared wait (the frame that
+   *  would clear it may never come if the request never leaves the retry
+   *  loop's sleep). */
+  const [providerWait, setProviderWait] = useState<{
+    provider: string;
+    modelId?: string;
+    waitMs: number;
+    attempt: number;
+  } | null>(null);
+
+  const providerWaitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
   /** Background-event cards, from the delivery seam's own lifecycle stream. */
@@ -998,6 +1027,24 @@ export function useKinu(target?: string | KinuActorAddress) {
   // window claiming it had none, and then replaced that claim with the
   // transcript. False is "not yet", never "nothing".
   const [transcriptSeeded, setTranscriptSeeded] = useState(false);
+
+  const clearProviderWait = useCallback(() => {
+    if (providerWaitTimer.current !== null) {
+      clearTimeout(providerWaitTimer.current);
+      providerWaitTimer.current = null;
+    }
+
+    setProviderWait(null);
+  }, []);
+
+  // The declared wait is the honest window: the notice's own `waitMs`, plus a
+  // grace for the next frame to arrive (a turn under a whole chain of waits
+  // updates with each one, so this only ever stands in for the LAST sleep).
+  const showProviderWait = useCallback((notice: { provider: string; modelId?: string; waitMs: number; attempt: number }) => {
+    clearProviderWait();
+    setProviderWait(notice);
+    providerWaitTimer.current = setTimeout(() => setProviderWait(null), notice.waitMs + 5_000);
+  }, [clearProviderWait]);
 
   const agentOptions: Parameters<typeof useAgent>[0] = {
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -1020,7 +1067,10 @@ export function useKinu(target?: string | KinuActorAddress) {
       // screen would claim to be current for as long as the reconnect takes.
       // The durable steps arrive again either way.
       forgetDeltas();
-    }, [forgetDeltas]),
+      // A wait this socket heard about is that socket's claim: with it gone
+      // the deadline may still be real, but nothing can re-announce it.
+      clearProviderWait();
+    }, [forgetDeltas, clearProviderWait]),
     // Don't clobber a healthy status; partysocket auto-reconnects in the
     // background and the next onOpen recovers. onError is a transient no-op.
     onError: useCallback(() => {}, []),
@@ -1040,6 +1090,16 @@ export function useKinu(target?: string | KinuActorAddress) {
         }));
       } else if (data?.type === "cf_agent_stream_resuming") {
         resumedRequestIds.current.add(data.id);
+      } else if (data?.type === "provider_wait") {
+        showProviderWait(data);
+      } else if (data?.type === "cf_agent_use_chat_response") {
+        // A stream frame IS the wait's end: tokens are flowing again. It is
+        // also the terminal record replay on connect — a workspace whose last
+        // turn died mid-wait must not paint "waiting" from the replay.
+        clearProviderWait();
+        const failed = terminalChatError(data, resumedRequestIds.current);
+
+        if (failed !== null) setChatError(failed);
       } else {
         // Terminal-error frame. During a live stream the transport also
         // surfaces it as useChat's `error`; on connect the server REPLAYS
@@ -1051,7 +1111,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
         if (failed !== null) setChatError(failed);
       }
-    }, [actorAddress.workspace]),
+    }, [actorAddress.workspace, clearProviderWait, showProviderWait]),
   };
 
   if (subordinate) {
@@ -2168,6 +2228,11 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   return {
     messages,
+    /** The wait a model call is sleeping out right now — set by the server's
+     *  `provider_wait` broadcast, cleared by the next stream frame, a socket
+     *  close, or the declared wait's own timer. Null = nothing is being waited
+     *  on, which is what "working" vs "waiting on {provider}" reads. */
+    providerWait,
     isStreaming,
     /** True once the server has stated this conversation's contents. Until then
      *  `messages` being empty means "not delivered", not "there is nothing". */
