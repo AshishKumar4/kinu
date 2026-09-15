@@ -2358,6 +2358,11 @@ export {
 } from './http/deployed-assets';
 
 export {
+  DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
+  type DeviceUpdateFrame, type DeviceUpdateState,
+} from './http/device-update';
+
+export {
   COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
   mark, markDocument, publicFooter, publicPage,
   type MarkId, type Mode, type PublicPageOptions, type PublicToken, type RadiusRole, type TokenSet,
