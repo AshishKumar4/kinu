@@ -252,9 +252,8 @@ describe('an interrupted terminal transition finishes the reply it still owed', 
 
     await harness.agent.activateActor();
     // The reconcile is detached from `onStart` (a bounded sweep plus one
-    // schedule write); a macrotask lets that chain settle.
-    await new Promise((resolve) => { setTimeout(resolve, 0); });
-    await new Promise((resolve) => { setTimeout(resolve, 0); });
+    // schedule write); the activation's own join settles that chain.
+    await harness.agent.harnessSettleBackgroundTasks();
 
     // The activation touched NOTHING: both leases are exactly as the dead
     // activation left them — it proved existence and armed the wake, which is

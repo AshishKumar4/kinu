@@ -4,17 +4,20 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
+import { AwaitedList } from '@kinu.run/test-utils';
+import type { SsePacing } from '../src/run-events-routes';
 
 mockAgentsSdk();
 
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
 function sseEnv(wire: () => string = () => '[]') {
-  let polls = 0;
+  // Every DO read the stream makes, as an event the test can await.
+  const polled = new AwaitedList<number>();
 
   const stub = {
     async getRunEventsWire() {
-      polls += 1;
+      polled.push(polled.items.length + 1);
 
       return wire();
     },
@@ -31,52 +34,101 @@ function sseEnv(wire: () => string = () => '[]') {
   // namespace and credential secret in this suite.
   const env = partialEnv as Env;
 
-  return { env, pollCount: () => polls };
+  return { env, pollCount: () => polled.items.length, polled: (count: number) => polled.until((items) => items.length >= count) };
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * The stream's pacing, driven by hand (D19): each poll interval is a wait the
+ * test releases with `tick`, so "a couple of poll iterations" is two releases
+ * and "no further DO request" is a release nobody polls after.
+ */
+function handPacing(): SsePacing & { tick(): void } {
+  let parked: (() => void) | undefined;
+  // A tick issued before the loop reaches its next wait releases that wait
+  // when it arrives: the test's continuation runs before the loop's after
+  // a DO read, so the order of the two is not the test's to assume.
+  let owed = 0;
+
+  return {
+    now: () => 0,
+    wait: () => {
+      if (owed > 0) {
+        owed -= 1;
+
+        return Promise.resolve();
+      }
+
+      const { promise, resolve } = Promise.withResolvers<void>();
+      parked = resolve;
+
+      return promise;
+    },
+    tick: () => {
+      if (parked === undefined) {
+        owed += 1;
+
+        return;
+      }
+
+      parked();
+      parked = undefined;
+    },
+  };
+}
 
 describe('run-events SSE client disconnect', () => {
   test('aborting the request stops the DO poll loop', async () => {
-    const { env, pollCount } = sseEnv();
+    const { env, pollCount, polled } = sseEnv();
     const aborter = new AbortController();
+    const pacing = handPacing();
 
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
-    ), env);
+    ), env, pacing);
 
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toContain('text/event-stream');
     // No wildcard CORS on this cookie-authenticated route.
     expect(res?.headers.get('access-control-allow-origin')).toBeNull();
 
-    await sleep(1200); // let a couple of poll iterations happen
-    expect(pollCount()).toBeGreaterThanOrEqual(2);
+    // The replay, then two poll iterations, each released by hand and each
+    // awaited on the DO read it makes.
+    await polled(1);
+    pacing.tick();
+    await polled(2);
+    pacing.tick();
+    await polled(3);
 
     aborter.abort();
-    await sleep(600); // one poll interval to observe the abort
+    // The loop is parked on its wait; releasing it after the abort must end
+    // it without another DO read, so a read here could only come from a loop
+    // that missed the abort.
     const after = pollCount();
-    await sleep(1200);
+    pacing.tick();
+    await res?.body?.cancel();
     expect(pollCount()).toBe(after); // loop is dead — no further DO requests
   });
 
   test('cancelling the response stream stops the DO poll loop', async () => {
-    const { env, pollCount } = sseEnv();
+    const { env, pollCount, polled } = sseEnv();
+    const pacing = handPacing();
 
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), env);
+    ), env, pacing);
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
-    await sleep(1200);
-    expect(pollCount()).toBeGreaterThanOrEqual(2);
+    await polled(1);
+    pacing.tick();
+    await polled(2);
+    pacing.tick();
+    await polled(3);
 
     await reader.cancel();
-    await sleep(600);
     const after = pollCount();
-    await sleep(1200);
+    pacing.tick();
     expect(pollCount()).toBe(after);
   });
 
@@ -88,21 +140,22 @@ describe('run-events SSE client disconnect', () => {
       eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
     }]));
 
+    // A stream that polled instead of closing would never reach `done`, and
+    // the hand pacing never releases a wait here: that hang is the failure,
+    // ended by the ladder at the gate's deadline rather than by a clock beside
+    // the stream.
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
-    ), env);
+    ), env, handPacing());
 
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let body = '';
     let finished = false;
-    const deadline = sleep(3000).then((): 'timed-out' => 'timed-out');
 
     for (;;) {
-      const next = await Promise.race([reader.read(), deadline]);
-
-      if (next === 'timed-out') break;
+      const next = await reader.read();
 
       if (next.done) { finished = true; break; }
 
