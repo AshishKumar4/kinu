@@ -41,7 +41,10 @@ export const RECENT_WORKSPACES = 5;
  *  effect on this identity. */
 const overviewRevalidate = (): number => LIVE_DATA_REFRESH_MS;
 
-type OverviewRead = AsyncResourceControl<WorkspaceOverview>;
+/** The read and its retry — the two halves a watcher can use. The primitive's
+ *  `set` stays with the watch that owns the read; nothing publishes an
+ *  overview it did not fetch. */
+type OverviewRead = Pick<AsyncResourceControl<WorkspaceOverview>, 'resource' | 'reload'>;
 
 interface OverviewsValue {
   readonly reads: ReadonlyMap<string, OverviewRead>;

@@ -4,7 +4,9 @@
  * handlers run.
  *
  * Routes:
- *   GET    /api/user/profile                       — user info
+ *   POST   /api/user/onboarding/complete         — first-run setup finished (account-routes.ts)
+ *   PATCH  /api/user/profile                     — rename the owner (account-routes.ts)
+ *   GET    /api/user/profile                     — user info
  *   GET    /api/user/profile-catalog               — the account's role/tier catalog envelope
  *   PUT    /api/user/profile-catalog               — compare-and-swap update ({ catalog, expectedVersion })
  *   GET    /api/user/cli                           — CLI setup commands

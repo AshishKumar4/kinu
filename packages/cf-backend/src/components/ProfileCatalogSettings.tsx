@@ -41,7 +41,7 @@ interface CatalogOperation {
  *  resolve by order, not by intent. */
 const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
 
-export function ProfileCatalogSettings() {
+export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: boolean }) {
   const [envelope, setEnvelope] = useState<ProfileCatalogEnvelope | null>(null);
   const [draft, setDraft] = useState<ProfileCatalog | null>(null);
   const [menu, setMenu] = useState<ModelMenu>(EMPTY_MENU);
@@ -310,7 +310,7 @@ export function ProfileCatalogSettings() {
         )}
       </Card>
 
-      {(draft && envelope) && (
+      {(draft && envelope && !tiersOnly) && (
         <Card title="Agent roles" icon={IdentificationCardIcon}
           description="Roles select instructions, tools, skills, a tier, and a swarm preset.">
           <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
@@ -399,18 +399,22 @@ export function ProfileCatalogSettings() {
         </Card>
       )}
 
-      {/* One save bar for the whole section: it docks to the bottom edge of
-          the page's own scroll container, so the action is on screen from
-          anywhere in the form instead of waiting at the end of the tallest
-          card. The composer shadow lifts it off the rows scrolling under it. */}
+      {/* One save bar for the whole section. The docked shape is for the
+          settings page: `sticky bottom-3` pins it to the bottom edge of the
+          page's scroll container so the action is on screen from anywhere in
+          the form. Inside the wizard's own scroll panel the same stickiness
+          floats it over the providers below, so tiersOnly renders it in flow
+          — undocked, and labeled for the tiers alone. */}
       {(draft && envelope) && (
-        <div className="sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]">
+        <div className={tiersOnly
+          ? "p-card p-surface px-4 py-3"
+          : "sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]"}>
           {error && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
           <div className="flex items-center justify-between gap-3">
             <span className="p-meta p-text-3">Catalog version {envelope.version}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
+              <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : (tiersOnly ? 'Save tiers' : 'Save roles and tiers')}</FilledButton>
             </div>
           </div>
         </div>

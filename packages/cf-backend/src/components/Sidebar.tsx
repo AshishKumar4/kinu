@@ -4,6 +4,10 @@
  *   ┌─────────────────┐
  *   │ ❯ Kinu          │   Newsreader brand lockup
  *   │ + New workspace │
+ *   │ ⌂ Home          │   primary nav: the four places an account goes
+ *   │ ▦ Workspaces    │
+ *   │ ⇄ Shared        │
+ *   │ ⚙ Plugins       │
  *   │ WORKSPACES      │
  *   │ ● Jarvis    4h  │
  *   │   ├ Scout       │   nested subordinates of the OPEN workspace
@@ -22,19 +26,32 @@
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, ShareNetworkIcon,
+  HouseIcon, SquaresFourIcon, PuzzlePieceIcon,
 } from "@phosphor-icons/react";
+import { APP_ROUTES } from "@kinu.run/core";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
 import { KinuLogo } from "./ui/KinuLogo";
-import { removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
+import { removeWorkspace, type WorkspaceEntry } from "../lib/user-api";
+import { useAccount } from "@/hooks/use-account";
 import { useWorkspaceRpc } from "../hooks/use-kinu";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
+import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { agentTitle, workspaceTitle } from "./SubordinateTabs";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
+
+/** The primary nav, in the order the rail draws it. Home is the mission form
+ *  and is only active at `/` exactly; the other three are their own pages. */
+const PRIMARY_NAV = [
+  { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
+  { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
+  { to: APP_ROUTES.shared, label: "Shared", Icon: ShareNetworkIcon, end: false },
+  { to: APP_ROUTES.plugins, label: "Plugins", Icon: PuzzlePieceIcon, end: false },
+] as const;
 
 // Route families in App.tsx that mount a live useKinu/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
@@ -178,23 +195,17 @@ export default function Sidebar() {
     remove: removeFromRoster,
   } = useWorkspaceRoster();
 
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [profileFailed, setProfileFailed] = useState(false);
+  const account = useAccount();
+  const profile = lastValue(account.profile);
+  const profileFailed = account.profile.status === "error";
   const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+
   const userMenuRef = useRef<HTMLDivElement>(null);
-
-
-  useEffect(() => {
-    getProfile().then(
-      (profile) => { setProfile(profile); setProfileFailed(false); },
-      () => setProfileFailed(true),
-    );
-  }, []);
 
   // Reflect the open workspace's live status on its roster row, and carry its
   // nested agent roster for the mock's indented block.
@@ -276,6 +287,29 @@ export default function Sidebar() {
           </Button>
         </div>
       )}
+      {/* Primary nav — the four places an account goes, in the workspace
+          rows' own rhythm and on their active token, above the roster. */}
+      <nav aria-label="Primary" className="px-2 pt-1">
+        {PRIMARY_NAV.map(({ to, label, Icon, end }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${
+                isActive ? 'bg-[var(--c-elevated)] p-text' : 'p-text-2 hover:bg-[var(--c-elevated)]'
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <Icon size={15} className={isActive ? 'p-accent' : 'p-text-3'} />
+                <span>{label}</span>
+              </>
+            )}
+          </NavLink>
+        ))}
+      </nav>
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto pt-2 pb-3">
         <div className="px-5 pb-2 pt-4 p-eyebrow">
