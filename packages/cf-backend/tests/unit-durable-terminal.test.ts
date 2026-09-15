@@ -20,44 +20,24 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   declareShadowCandidate,
-  orchestratorHarness,
+  orchestratorHarness, thinkTurns,
   reactivateOrchestratorHarness,
   type ActorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import type { TurnHarness } from './helpers/turn-harness';
 import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
-import { createChatFiberSnapshot, wrapChatFiberSnapshot } from 'agents/chat';
 
-// The envelope Think's chat-turn snapshot rides in. Spelled here rather than
-// imported: fiber-recovery.ts keeps the same mirror for its read, and the SDK
-// exports the string nowhere — think.js `_runChatRecoveryFiber` hands this
-// literal to `wrapChatFiberSnapshot` at each call site.
-const CHAT_TURN_ENVELOPE_KEY = '__cfThinkChatFiberSnapshot';
-
-import { projectJsonValue, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
+import { openTurnRun, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 
 /** One settled assistant response, as Think reports it. */
-function settledResponse(messageId: string, text = 'the answer'): Parameters<
-  HarnessOrchestratorAgent['onChatResponse']
->[0] {
-  return {
-    message: { id: messageId, role: 'assistant', parts: [{ type: 'text', text }] },
-    requestId: `req-${messageId}`, continuation: false, status: 'completed',
-  };
+/** The one way this suite runs a turn: the turn seam over the harness root. */
+function turns(harness: ActorHarness<HarnessOrchestratorAgent>): TurnHarness {
+  return thinkTurns(harness.agent);
 }
 
-function overflowResponse(messageId: string): Parameters<
-  HarnessOrchestratorAgent['onChatResponse']
->[0] {
-  return {
-    message: { id: messageId, role: 'assistant', parts: [] },
-    requestId: `req-${messageId}`,
-    continuation: false,
-    status: 'error',
-    error: 'prompt is too long: 210000 tokens > 200000 maximum',
-  };
-}
+const OVERFLOW_ERROR = 'prompt is too long: 210000 tokens > 200000 maximum';
 
 /**
  * How many reviews the window OWES — parked awaiting a follow-up or queued for a
@@ -149,7 +129,7 @@ function windowedTurns(harness: ActorHarness<HarnessOrchestratorAgent>): number 
 async function settleResponse(
   harness: ActorHarness<HarnessOrchestratorAgent>, messageId: string, text = 'the answer',
 ): Promise<void> {
-  await harness.agent.onChatResponse(settledResponse(messageId, text));
+  await turns(harness).settle({ messageId, text });
   await harness.agent.harnessTerminalReported();
   await joinHarnessFibers();
 }
@@ -157,7 +137,7 @@ async function settleResponse(
 describe('a terminal transition is claimed before its effects and released after', () => {
   test('a completed turn retains its terminal disposition so a duplicate callback is done', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-live');
+    turns(harness).open('u-live');
 
     await settleResponse(harness, 'a-live');
 
@@ -182,7 +162,7 @@ describe('a terminal transition is claimed before its effects and released after
    */
   test('each response of one durable turn settles its own sequence', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-multi');
+    turns(harness).open('u-multi');
 
     await settleResponse(harness, 'a-step', 'partway');
     await settleResponse(harness, 'a-final', 'the answer');
@@ -245,9 +225,9 @@ describe('overflow retry delivery is a durable terminal effect', () => {
 
       return 'undelivered';
     });
-    harness.agent.declareTurnCheckpoint('u-overflow');
+    turns(harness).open('u-overflow');
 
-    await harness.agent.onChatResponse(overflowResponse('a-overflow'));
+    await turns(harness).settle({ messageId: 'a-overflow', status: 'error', error: OVERFLOW_ERROR });
     await harness.agent.harnessTerminalReported();
     await joinHarnessFibers();
 
@@ -307,10 +287,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a cut at the first effect still leaves every later effect owed', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-head');
+    turns(harness).open('u-head');
     harness.agent.harnessArmTerminalFault('takes', 'before');
 
-    await expect(harness.agent.onChatResponse(settledResponse('a-head')))
+    await expect(turns(harness).settle({ messageId: 'a-head' }))
       .rejects.toThrow('terminal effect takes:a-head interrupted before its side effect');
 
     const owed = harness.agent.harnessTerminalEffects('u-head', 'a-head');
@@ -347,16 +327,13 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a message the conversion cannot read costs that effect and no others', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-unreadable');
+    turns(harness).open('u-unreadable');
     harness.agent.harnessArmTerminalFault('turn_record', 'before');
 
-    const unreadable = settledResponse('a-unreadable');
-    // The one shape `convertToModelMessages` refuses outright. Cast because the
-    // SDK's own type forbids it — which is the point: this is a stored row the
-    // converter will never accept, however many times it is replayed.
-    Reflect.set(unreadable.message, 'role', 'tool');
-
-    await expect(harness.agent.onChatResponse(unreadable))
+    // The one shape `convertToModelMessages` refuses outright: a tool-role
+    // message. This is a stored row the converter will never accept, however
+    // many times it is replayed.
+    await expect(turns(harness).settle({ messageId: 'a-unreadable', text: 'the answer', unreadableRole: 'tool' }))
       .rejects.toThrow('terminal effect turn_record:a-unreadable interrupted before its side effect');
 
     // THE CLAIM EXISTS. Nothing before it awaited, so the answer's effects are
@@ -391,10 +368,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('an announcing effect cut after its side effect is replayed, never doubled', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-spine');
+    turns(harness).open('u-spine');
     harness.agent.harnessArmTerminalFault('turn_record', 'after');
 
-    await expect(harness.agent.onChatResponse(settledResponse('a-spine')))
+    await expect(turns(harness).settle({ messageId: 'a-spine' }))
       .rejects.toThrow('terminal effect turn_record:a-spine interrupted after its side effect');
     expect(windowedTurns(harness)).toBe(1);
 
@@ -433,13 +410,13 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.harnessFacts().upsert('deploy_target', 'staging', { confidence: 0.6 });
     const decayOne = { upserts: [], decay: ['deploy_target'] };
     harness.agent.harnessRecordSleepTimeAnswer('a-decay', decayOne);
-    harness.agent.declareTurnCheckpoint('u-decay');
+    turns(harness).open('u-decay');
 
     harness.db.exec(`CREATE TRIGGER probe_block_sleep_tombstone
       BEFORE INSERT ON effect_tombstones WHEN NEW.scope = 'sleep_time'
       BEGIN SELECT RAISE(ABORT, 'the tombstone write failed'); END`);
 
-    await harness.agent.onChatResponse(settledResponse('a-decay'));
+    await turns(harness).settle({ messageId: 'a-decay' });
     await joinHarnessFibers();
 
     // UNCHANGED. The decay rolled back with the tombstone, so nothing is left for
@@ -471,10 +448,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a keyed effect cut after its side effect is replayed and the sequence closes', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-takes');
+    turns(harness).open('u-takes');
     harness.agent.harnessArmTerminalFault('takes', 'after');
 
-    await expect(harness.agent.onChatResponse(settledResponse('a-takes'))).rejects.toThrow('terminal effect takes:a-takes interrupted after its side effect');
+    await expect(turns(harness).settle({ messageId: 'a-takes' })).rejects.toThrow('terminal effect takes:a-takes interrupted after its side effect');
     expect(harness.agent.harnessTerminalEffects('u-takes', 'a-takes')
       .find((row) => row.effect_key === 'v1:takes:a-takes')?.status).toBe('pending');
 
@@ -493,10 +470,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    *  open. Without it the marker would say "finished" over work nobody did. */
   test('the outer transition does not settle while any effect is still owed', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-owed-gate');
+    turns(harness).open('u-owed-gate');
     harness.agent.harnessArmTerminalFault('auto_gepa', 'before');
 
-    await harness.agent.onChatResponse(settledResponse('a-owed-gate'));
+    await turns(harness).settle({ messageId: 'a-owed-gate' });
     await harness.agent.harnessTerminalReported();
 
     // Named, not an exact set: the detached effects are started in one tick, so
@@ -519,9 +496,9 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a cut around the turn recording leaves exactly one owed review', async () => {
     const before = orchestratorHarness();
-    before.agent.declareTurnCheckpoint('u-rev-b');
+    turns(before).open('u-rev-b');
     before.agent.harnessArmTerminalFault('turn_record', 'before');
-    await expect(before.agent.onChatResponse(settledResponse('a-rev-b'))).rejects.toThrow('terminal effect turn_record:a-rev-b interrupted before its side effect');
+    await expect(turns(before).settle({ messageId: 'a-rev-b' })).rejects.toThrow('terminal effect turn_record:a-rev-b interrupted before its side effect');
     expect(owedReviews(before)).toBe(0);
 
     const revived = await reactivateOrchestratorHarness(before.db, undefined, {
@@ -532,9 +509,9 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(owedReviews(before)).toBe(1);
 
     const after = orchestratorHarness();
-    after.agent.declareTurnCheckpoint('u-rev-a');
+    turns(after).open('u-rev-a');
     after.agent.harnessArmTerminalFault('turn_record', 'after');
-    await expect(after.agent.onChatResponse(settledResponse('a-rev-a'))).rejects.toThrow('terminal effect turn_record:a-rev-a interrupted after its side effect');
+    await expect(turns(after).settle({ messageId: 'a-rev-a' })).rejects.toThrow('terminal effect turn_record:a-rev-a interrupted after its side effect');
     expect(owedReviews(after)).toBe(1);
     await reactivateOrchestratorHarness(after.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -554,12 +531,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('each steer branch is claimed under its own key', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-branch');
+    turns(harness).open('u-branch');
     harness.agent.harnessDeclarePendingBranch('branch-a', 'try the other library');
     harness.agent.harnessDeclarePendingBranch('branch-b', 'try the other algorithm');
     harness.agent.harnessArmTerminalFault('takes', 'before');
 
-    await expect(harness.agent.onChatResponse(settledResponse('a-branch'))).rejects.toThrow('terminal effect takes:a-branch interrupted before its side effect');
+    await expect(turns(harness).settle({ messageId: 'a-branch' })).rejects.toThrow('terminal effect takes:a-branch interrupted before its side effect');
 
     expect(harness.agent.harnessTerminalEffects('u-branch', 'a-branch')
       .map((row) => row.effect_key)
@@ -579,10 +556,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
   test('a cut on either side of the recording leaves exactly one of every append', async () => {
     for (const phase of ['before', 'after'] as const) {
       const harness = orchestratorHarness();
-      harness.agent.declareTurnCheckpoint(`u-sfx-${phase}`);
+      turns(harness).open(`u-sfx-${phase}`);
       harness.agent.harnessArmTerminalFault('turn_record', phase);
 
-      await expect(harness.agent.onChatResponse(settledResponse(`a-sfx-${phase}`))).rejects.toThrow(`terminal effect turn_record:a-sfx-${phase} interrupted ${phase} its side effect`);
+      await expect(turns(harness).settle({ messageId: `a-sfx-${phase}` })).rejects.toThrow(`terminal effect turn_record:a-sfx-${phase} interrupted ${phase} its side effect`);
 
       // Replayed twice: the second pass is the one that would double anything the
       // first left un-tombstoned.
@@ -613,14 +590,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a branch settled twice writes one take set', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-take');
+    turns(harness).open('u-take');
     await harness.agent.harnessRecordBranchReport('branch-x', 'try the other library', 'the branch answer');
     harness.agent.harnessDeclarePendingBranch('branch-x', 'try the other library');
     // Cut BEFORE the branch effect runs, so its row is claimed and owed. Then the
     // live handles are gone, which is exactly what an eviction leaves: the journal
     // is the only record, and the replay settles from it.
     harness.agent.harnessArmTerminalFault('branches', 'before');
-    await harness.agent.onChatResponse(settledResponse('a-take', 'the live answer'));
+    await turns(harness).settle({ messageId: 'a-take', text: 'the live answer' });
     await harness.agent.harnessTerminalReported();
     harness.agent.harnessDropPendingBranches();
     expect(takeSets(harness)).toBe(0);
@@ -649,14 +626,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a branch settled LIVE and then replayed writes one take set', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-live-take');
+    turns(harness).open('u-live-take');
     await harness.agent.harnessRecordBranchReport('branch-l', 'try the other library', 'the branch answer');
     harness.agent.harnessDeclareLiveBranch('branch-l', 'try the other library', 'the branch answer');
     // AFTER the body: the live comparison has run and written its set, and the
     // row is interrupted before it can record that it did.
     harness.agent.harnessArmTerminalFault('branches', 'after');
 
-    await harness.agent.onChatResponse(settledResponse('a-live-take', 'the live answer'));
+    await turns(harness).settle({ messageId: 'a-live-take', text: 'the live answer' });
     await harness.agent.harnessTerminalReported();
     // The live pass wrote it, which is what makes the count below a duplicate
     // test rather than a replay test.
@@ -695,13 +672,13 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       ['branch-q', 'budget_exceeded', 'the branch ran out of wall clock'],
     ] as const) {
       const harness = orchestratorHarness();
-      harness.agent.declareTurnCheckpoint(`u-${branchId}`);
+      turns(harness).open(`u-${branchId}`);
       await harness.agent.harnessSpawnBranchHead(branchId, 'try the other library', {
         status, summary: '', errorMessage: message,
       });
       harness.agent.harnessDeclarePendingBranch(branchId, 'try the other library');
       harness.agent.harnessArmTerminalFault('branches', 'before');
-      await harness.agent.onChatResponse(settledResponse(`a-${branchId}`, 'the live answer'));
+      await turns(harness).settle({ messageId: `a-${branchId}`, text: 'the live answer' });
       await harness.agent.harnessTerminalReported();
       harness.agent.harnessDropPendingBranches();
 
@@ -738,12 +715,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a branch head still executing keeps the row owed until it reports', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-owed');
+    turns(harness).open('u-owed');
     // Spawned, no report: `running`, exactly as an in-flight head is journalled.
     await harness.agent.harnessSpawnBranchHead('branch-o', 'try the other library', null);
     harness.agent.harnessDeclarePendingBranch('branch-o', 'try the other library');
     harness.agent.harnessArmTerminalFault('branches', 'before');
-    await harness.agent.onChatResponse(settledResponse('a-owed', 'the live answer'));
+    await turns(harness).settle({ messageId: 'a-owed', text: 'the live answer' });
     await harness.agent.harnessTerminalReported();
     // No live handle left, so the replay has only the journal to read.
     harness.agent.harnessDropPendingBranches();
@@ -903,8 +880,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const open = orchestratorHarness();
     declareShadowCandidate(open.agent.observeRuntime());
     const openId = sampled(open);
-    open.agent.declareTurnCheckpoint('u-shadow-ok');
-    await open.agent.onChatResponse(settledResponse(openId));
+    turns(open).open('u-shadow-ok');
+    await turns(open).settle({ messageId: openId });
     await open.agent.harnessTerminalReported();
     expect(queued(open)).toBe(1);
 
@@ -912,16 +889,16 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       const harness = orchestratorHarness();
       declareShadowCandidate(harness.agent.observeRuntime());
       const messageId = sampled(harness);
-      harness.agent.declareTurnCheckpoint(`u-shadow-${shut}`);
+      turns(harness).open(`u-shadow-${shut}`);
 
       // The mode comes off the driving user message, which is where production
       // reads it — stubbing the orchestrator's live turn instead would assert
       // against a path `onChatResponse` never consults.
       if (shut === 'plan') harness.agent.harnessDrivingUserMessage('plan it', { kinuMode: 'plan' });
-      const response = settledResponse(messageId);
-      await harness.agent.onChatResponse(
-        shut === 'plan' ? response : { ...response, status: shut === 'error' ? 'error' : 'aborted' },
-      );
+      await turns(harness).settle({
+        messageId, text: 'the answer',
+        ...(shut !== 'plan' && { status: shut === 'error' ? 'error' : 'aborted' }),
+      });
       await harness.agent.harnessTerminalReported();
       expect(queued(harness)).toBe(0);
     }
@@ -966,9 +943,9 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a live sequence keeps a wake, pushed past the busy window', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-live-wake');
+    turns(harness).open('u-live-wake');
     harness.agent.harnessArmTerminalFault('turn_record', 'before');
-    await expect(harness.agent.onChatResponse(settledResponse('a-live-wake'))).rejects.toThrow('terminal effect turn_record:a-live-wake interrupted before its side effect');
+    await expect(turns(harness).settle({ messageId: 'a-live-wake' })).rejects.toThrow('terminal effect turn_record:a-live-wake interrupted before its side effect');
 
     const owedAt = harness.agent.harnessNextRetryAt(new Set());
     expect(owedAt).not.toBeNull();
@@ -995,10 +972,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('an effect no activation can finish stays owed rather than being abandoned', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-stuck');
+    turns(harness).open('u-stuck');
     harness.agent.harnessArmTerminalFault('auto_gepa', 'before');
 
-    await harness.agent.onChatResponse(settledResponse('a-stuck'));
+    await turns(harness).settle({ messageId: 'a-stuck' });
     await harness.agent.harnessTerminalReported();
 
     for (let attempt = 0; attempt < 5; attempt++) {
@@ -1077,26 +1054,23 @@ describe('a turn releases its tool claims only when no response can still run', 
   * row's NAME is decoration — the read matches on the snapshot — and is spelled
   * as Think spells it so the fixture reads true.
    */
-  function chatTurnFiber(
-    harness: ActorHarness<HarnessOrchestratorAgent>, requestId: string, turnId: string,
-  ): void {
-    const snapshot = createChatFiberSnapshot({
-      kind: 'think-chat-turn',
-      requestId,
-      recoveryRootRequestId: requestId,
-      continuation: true,
-      messages: [{ id: turnId, role: 'user' }],
+  /** The defect's durable shape on the loop: an open run the isolate died
+   *  inside — a response that started and has not finished. The restart
+   *  re-opens it as a continuation, so the turn's claims survive the close of
+   *  the earlier response. */
+  function openRun(harness: ActorHarness<HarnessOrchestratorAgent>, runId: string, turnId: string): void {
+    openTurnRun(harness.agent.harnessEventRecorder, runId, {
+      agentId: harness.agent.observeRuntime().actor.actorId,
+      causedBy: 'chat',
+      userMessage: 'the message the turn answers',
+      turnIndex: 1,
+      turn: { turnId, messageId: 'a-first', kind: 'user', text: 'the message the turn answers' },
     });
-
-    harness.agent.harnessSeedOrphanFiber(
-      `__cf_internal_chat_turn:${requestId}`,
-      projectJsonValue({ value: wrapChatFiberSnapshot(CHAT_TURN_ENVELOPE_KEY, snapshot, null) }),
-    );
   }
 
   test('a settled response with nothing else running releases them', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-done');
+    turns(harness).open('u-done');
     harness.agent.harnessClaimTool('u-done', 'call_send_1');
 
     await settleResponse(harness, 'a-done');
@@ -1112,9 +1086,8 @@ describe('a turn releases its tool claims only when no response can still run', 
    */
   test('the settling response is not mistaken for another one still running', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-self');
+    turns(harness).open('u-self');
     harness.agent.harnessClaimTool('u-self', 'call_send_1');
-    chatTurnFiber(harness, 'req-a-self', 'u-self');
 
     await settleResponse(harness, 'a-self');
 
@@ -1134,7 +1107,7 @@ describe('a turn releases its tool claims only when no response can still run', 
     harness.agent.harnessClaimTool('u-cont', 'call_send_1');
     // The earlier response: claimed, interrupted, and now being recovered.
     expect(harness.agent.harnessBeginTerminalTransition('u-cont', 'a-first')).toBe('first');
-    chatTurnFiber(harness, 'req-a-cont', 'u-cont');
+    openRun(harness, 'run-a-cont', 'u-cont');
 
     const restarted = await reactivateOrchestratorHarness(harness.db);
     await restarted.agent.harnessResumeTerminalTransitions();
@@ -1151,7 +1124,7 @@ describe('a turn releases its tool claims only when no response can still run', 
     harness.agent.harnessPersistActiveTurn('u-gone');
     harness.agent.harnessClaimTool('u-gone', 'call_send_1');
     expect(harness.agent.harnessBeginTerminalTransition('u-gone', 'a-first')).toBe('first');
-    chatTurnFiber(harness, 'req-other-turn', 'u-other');
+    openRun(harness, 'run-other-turn', 'u-other');
 
     const restarted = await reactivateOrchestratorHarness(harness.db);
     await restarted.agent.harnessResumeTerminalTransitions();

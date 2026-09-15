@@ -39,14 +39,10 @@ import { nimbusSessionFiles } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
   ensureProgrammaticReady,
-  rpcDeleteFile,
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import {
-  _rpcExists, _rpcFsReadRange, _rpcMkdir, _rpcReadFile, _rpcReadFileBytes, _rpcReaddir, _rpcRename, _rpcStat, _rpcWriteFile,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
-import { programmaticHostOver } from './helpers/programmatic-host';
+import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 const databases: Database[] = [];
@@ -484,52 +480,8 @@ describe('hosted node execution', () => {
  * file tools and its commands are one identity over one tree.
  */
 function sessionBox(f: Fixture, cred: VfsCred): NimbusSandboxHandle {
-  const refuse = async (): Promise<never> => { throw new Error('a credentialed plane must not fall back to the session user'); };
-
-  const { host } = f;
-  // The file RPCs dispatch through the workspace's one supervisor op, the
-  // same method a hosted workspace mounts for its facets.
-  const rpc = { ...host, supervisorOp: (envelope: Parameters<NimbusWorkspace['supervisorOp']>[0]) => f.workspace.supervisorOp(envelope) };
-
-  const filesAs = (agent: VfsCred): NimbusSandboxHandle['files'] => ({
-    as: filesAs,
-    read: (path) => _rpcReadFile(rpc, path, undefined, agent),
-    readBytes: (path) => _rpcReadFileBytes(rpc, path, undefined, agent),
-    readRange: (path, offset, length) => _rpcFsReadRange(rpc, path, offset, length, undefined, agent),
-    write: async (path, content) => { await _rpcWriteFile(rpc, path, content, undefined, agent); },
-    list: (path) => _rpcReaddir(rpc, path ?? '/', undefined, agent),
-    stat: async (path) => v.parse(v.nullable(FileStatSchema), await _rpcStat(rpc, path, undefined, agent)),
-    rename: (from, to) => _rpcRename(rpc, from, to, undefined, agent),
-    exists: (path) => _rpcExists(rpc, path, undefined, agent),
-    mkdir: (path) => _rpcMkdir(rpc, path, undefined, agent),
-    delete: (path, options) => rpcDeleteFile(rpc, path, options, agent),
-  });
-
-  return {
-    ready: async () => undefined,
-    exec: async (rawCommand, options) => {
-      // Assigned rather than spread conditionally: an absent environment must
-      // stay an ABSENT KEY, because the runner reads presence to decide whether
-      // it was handed a request at all.
-      const forwarded: Parameters<typeof rpcExec>[2] = { cred: options?.cred ?? cred };
-
-      if (options?.env !== undefined) forwarded.env = options.env;
-      const result = await rpcExec(host, rawCommand, forwarded);
-
-      return {
-        command: rawCommand,
-        success: result.exitCode === 0,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
-    },
-    files: { as: filesAs, read: refuse, write: refuse, list: refuse, exists: refuse, delete: refuse },
-  };
+  return credentialedSessionBox(f.workspace, f.host, cred);
 }
-
-/** What the session's `stat` answers, as the handle's stat reads it. */
-const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number() });
 
 describe('the hosted file plane acts as the node, or the home is unwritable', () => {
   test('an uncredentialed plane keeps the SDK surface — the ORIGIN is not routed through a runner', async () => {

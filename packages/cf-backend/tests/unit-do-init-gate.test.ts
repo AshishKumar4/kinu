@@ -73,15 +73,17 @@ describe('no Durable Object awaits anything unadmitted inside its init gate', ()
 describe('the scaffold precondition moved to the turn, and is still reached', () => {
   const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
 
-  test('beforeTurn awaits it, so every turn path is covered', () => {
+  test('prepareTurn awaits it, so every turn path is covered', () => {
     // Through `readTurnInputs`, the reads every turn path awaits before the
-    // turn opens, and before the first thing that reads the workspace.
-    const beforeTurn = actor.slice(
-      actor.indexOf('async beforeTurn(ctx: TurnContext)'),
-      actor.indexOf('this.orch.beginTurn('),
+    // turn's profile is bound, and before the first thing that reads the
+    // workspace. `prepareTurn` is the loop's one preparation seam: every
+    // turn — a client's, a wake's, a rerun's — is prepared through it.
+    const prepareTurn = actor.slice(
+      actor.indexOf('protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease)'),
+      actor.indexOf('this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);'),
     );
 
-    expect(beforeTurn).toContain('await this.readTurnInputs(');
+    expect(prepareTurn).toContain('await this.readTurnInputs(');
 
     const reads = actor.slice(
       actor.indexOf('private async readTurnInputs(tools: ToolSet)'),

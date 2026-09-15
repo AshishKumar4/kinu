@@ -15,8 +15,9 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { TURN_AUTHOR_METADATA_KEY, type JsonObject } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import * as v from 'valibot';
+import { TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
+import { hostedSubordinateHarness, orchestratorHarness, thinkTurns } from './helpers/actor-harness';
 import type { Database } from 'bun:sqlite';
 
 /** Activity rows for one actor. Scoped by handle: an unscoped read would let a
@@ -62,29 +63,21 @@ describe('the workspace root answers the actor control plane', () => {
    */
   test('steering with no turn running queues the text as the next ordinary turn', async () => {
     const { agent } = orchestratorHarness();
-    const enqueued: Array<{ text: string; metadata?: JsonObject; origin?: 'user'; steerIds?: readonly string[] }> = [];
-    Reflect.set(agent, '_host', {
-      broadcast: () => {},
-      enqueueTurn: async (turn: { text: string; metadata?: JsonObject; origin?: 'user'; steerIds?: readonly string[] }) => {
-        enqueued.push(turn);
+    const turns = thinkTurns(agent);
+    const next = turns.park();
 
-        return { status: 'queued' as const };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-      headRuntime: undefined,
-    });
-    // The inbox captured the real host when `orch` was built; rebuild it over
-    // the fake so the idle path's enqueue is the one observed here.
-    Reflect.set(agent, '_orch', null);
+    // The send is the turn: the loop admits it as the operator's own next
+    // turn, under the operator's stamp and the mode it was typed in, and the
+    // caller hears it landed as one once it has.
+    const landing = agent.send('use the other parser');
+    await next;
+    await turns.settle({ messageId: 'a-parser', text: 'ok' });
+    expect(await landing).toEqual({ landed: 'turn' });
 
-    expect(await agent.send('use the other parser')).toEqual({ landed: 'turn' });
-    expect(enqueued).toEqual([{
-      text: 'use the other parser',
-      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' },
-      origin: 'user',
-      steerIds: [expect.stringMatching(/^steer-/)],
-    }]);
+    const opened = agent.harnessTranscript.history().find((message) => message.role === 'user');
+    expect(opened?.parts).toEqual([{ type: 'text', text: 'use the other parser' }]);
+    expect(v.parse(v.looseObject({ metadata: v.optional(v.unknown()) }), opened).metadata)
+      .toEqual({ [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: 'build' });
   });
 
   test('cancelling with nothing running is a settled no-op, not a failure', async () => {

@@ -19,10 +19,9 @@
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns } from './helpers/actor-harness';
 import { createSandboxedExecutor } from '../../cli-backend/src/executor';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import type { TurnContext } from '@cloudflare/think';
 
 test('the real Think turn uses preselected versioned source, not the live alias', async () => {
   const harness = orchestratorHarness();
@@ -43,13 +42,13 @@ test('the real Think turn uses preselected versioned source, not the live alias'
   db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected program proof', 'current')")
     .run(rt.actor.actorId);
   rt.identity.scaffold.read = async () => 'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }';
-  const result = await agent.runTurn({ input: 'Run the selected program.' });
+  const result = await thinkTurns(agent).run('Run the selected program.');
   expect(result.status).toBe('completed');
   expect(JSON.stringify(result.message)).toContain('selected-root-v1');
   expect(JSON.stringify(result.message)).not.toContain('wrong-live-alias');
 });
 
-test('the real cancelAllChats stops new selected-program effects and preserves its cause', async () => {
+test('the loop\'s stop halts new selected-program effects and preserves its cause', async () => {
   const { agent, db } = orchestratorHarness();
   agent.modelFactory = () => scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text: 'unused default' }], finishReason: { unified: 'stop', raw: undefined },
@@ -67,13 +66,10 @@ test('the real cancelAllChats stops new selected-program effects and preserves i
 
     return result;
   } };
-  const turns: TurnContext[] = [];
-  const beforeTurn = agent.beforeTurn.bind(agent);
-  agent.beforeTurn = async context => {
-    turns.push(context);
-
-    return beforeTurn(context);
-  };
+  // The turn's own abort signal, read off the lease the loop hands the
+  // preparation: what a Stop aborts, and what the program's failure names.
+  const signals: AbortSignal[] = [];
+  agent.harnessObserveLease((lease) => { signals.push(lease.signal); });
 
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
@@ -87,15 +83,16 @@ test('the real cancelAllChats stops new selected-program effects and preserves i
   const effects: string[] = [];
   rt.memory.append = async (_path, content) => { effects.push(content); started.resolve(); await release.promise; };
 
-  const running = agent.runTurn({ input: 'Run until stopped.' });
+  const running = thinkTurns(agent).run('Run until stopped.');
   await started.promise;
-  await agent.cancelAllChats();
+  // The composer's Stop, as the transport dispatches it: the loop's own stop.
+  await agent.cancelCurrentWork();
   release.resolve();
   await running;
   expect(effects).toEqual(['first']);
-  const signal = turns.at(-1)?.signal;
+  const signal = signals.at(-1);
 
-  if (signal === undefined) throw new Error('Think did not expose its actual turn signal');
+  if (signal === undefined) throw new Error('the loop did not hand the preparation its turn signal');
   expect(signal.aborted).toBe(true);
   expect(errors.join('\n')).toContain(renderThrownChain({ cause: signal.reason }));
 });

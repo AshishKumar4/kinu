@@ -22,7 +22,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { createFactsStore } from '../src/memory/facts';
 import { TaskListStore, readPlanTasks } from '../src/tasks/store';
-import { runTaskPlan, type TaskPlan } from '../src/tasks/plan-scope';
+import { bindTaskPlan, type TaskPlan } from '../src/tasks/plan-scope';
 import { HeadJournal } from '../src/heads/journal';
 import { BackgroundJobStore } from '../src/jobs/store';
 import { MctsSearchStore } from '../src/mcts/search-store';
@@ -169,8 +169,8 @@ describe('two actors, one database: agent_tasks', () => {
     const plan: TaskPlan = { id: 'plan-1', revision: 1, sessionId: 'default' };
     const a = tasks(w, w.a);
     const b = tasks(w, w.b);
-    runTaskPlan({ sql: [w.sql], plan }, () => a.add(['a step'], null, 1_000));
-    runTaskPlan({ sql: [w.sql], plan }, () => b.add(['b step'], null, 1_000));
+    bindTaskPlan(() => a.add(['a step'], null, 1_000), { sql: [w.sql], plan })();
+    bindTaskPlan(() => b.add(['b step'], null, 1_000), { sql: [w.sql], plan })();
 
     expect(readPlanTasks(w.sql, w.a, plan).map((t) => t.title)).toEqual(['a step']);
     expect(readPlanTasks(w.sql, w.b, plan).map((t) => t.title)).toEqual(['b step']);

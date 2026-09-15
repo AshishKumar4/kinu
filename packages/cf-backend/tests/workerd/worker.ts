@@ -32,10 +32,6 @@ export { SpendProbeDO } from './spend-probe';
 
 export { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 
-// The send-admission probe — the same charter exception, for the durable
-// submission ledger two concurrent clients race.
-export { SendAdmissionProbeDO } from './send-admission-probe';
-
 // The durable device-command ledger — the same charter exception, for a
 // precedence protocol whose whole subject is surviving an activation reset.
 export { DeviceLedgerProbeDO } from './device-inflight-probe';
@@ -525,24 +521,6 @@ export class AlarmDO extends DurableObject<Cloudflare.Env> {
 }
 
 /**
- * The send route two concurrent clients arrive on.
- *
- * One hop, resolved the way production resolves one: the conversation's name is
- * a path segment, `idFromName` turns it into the object, and the send is
- * forwarded. What it adds over calling the stub from the test is the part the
- * duplicate-send question is about — two INDEPENDENT HTTP requests, each its own
- * worker invocation, overlapping at one Durable Object.
- */
-async function routeSend(request: Request, env: Cloudflare.Env, url: URL): Promise<Response> {
-  const [, name, key] = url.pathname.split('/').filter((segment) => segment.length > 0);
-
-  if (name === undefined || key === undefined) return new Response('bad send path', { status: 400 });
-  const stub = env.SEND_ADMISSION_PROBE.get(env.SEND_ADMISSION_PROBE.idFromName(name));
-
-  return Response.json(await stub.submit(await request.text(), key));
-}
-
-/**
  * Defect 6 — transfer framing across a re-origination.
  *
  * The pool requires a default export from `main`, and it is the one thing here
@@ -561,10 +539,7 @@ async function routeSend(request: Request, env: Cloudflare.Env, url: URL): Promi
  * survived whichever framing was chosen.
  */
 export default {
-  async fetch(request: Request, env: Cloudflare.Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname.startsWith('/send/')) return routeSend(request, env, url);
+  async fetch(request: Request): Promise<Response> {
     const body = await request.arrayBuffer();
 
     return Response.json({

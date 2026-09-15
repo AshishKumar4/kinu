@@ -114,17 +114,6 @@ export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
 export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt';
 
-/** One durable input row `actor_turn_inputs` persisted — the request-owned
- *  admission ledger the cold test reads across a reset. */
-export const InputReceiptSchema = v.object({
-  actorId: v.string(),
-  requestId: v.string(),
-  messageIds: v.array(v.string()),
-  settled: v.boolean(),
-});
-
-export type InputReceipt = v.InferOutput<typeof InputReceiptSchema>;
-
 /** A durable `pending_steers` row — the reservation a mid-turn send writes:
  *  the client's own message id bound to the turn it will land in. */
 export const PendingSteerSchema = v.object({
@@ -156,7 +145,6 @@ export const PreparedConversationSchema = v.object({
   bFrame: v.string(),
   cFrame: v.string(),
   /** Every durable input row at prepare time (idle-path admissions only). */
-  receipts: v.array(InputReceiptSchema),
   /** The durable mid-turn reservations at prepare time — B's in-flight send and
    *  C's queued send, each bound to the turn it will land in. */
   steers: v.array(PendingSteerSchema),
@@ -302,3 +290,39 @@ export const ParityCompletedSchema = v.object({
 });
 
 export type ParityCompleted = v.InferOutput<typeof ParityCompletedSchema>;
+
+/** The wake proof's marker: what the detached command prints, and what the
+ *  woken turn's reply must carry back. */
+export const WAKE_MARKER = 'KINU_SETTLED_AFTER_DETACH';
+
+/** Where the wake proof holds the interactive turn while its detached job
+ *  settles: inside the running turn's reply step, or inside its settle. */
+export const WakeHoldPlacementSchema = v.picklist(['reply', 'settle']);
+
+export type WakeHoldPlacement = v.InferOutput<typeof WakeHoldPlacementSchema>;
+
+/** What the background-wake drive hands back: the job row the detached
+ *  command settled, the runs the ledger holds with what each was started for,
+ *  the transcript, and the two instants that prove the settle window was held
+ *  when the job settled. */
+export const WakeRowsSchema = v.object({
+  jobs: v.array(v.object({
+    id: v.string(), kind: v.string(), status: v.string(), result: v.nullable(v.string()), settledAt: v.nullable(v.number()),
+  })),
+  runs: v.array(v.object({ runId: v.string(), userMessage: v.string(), reason: v.nullable(v.string()) })),
+  assistantTexts: v.array(v.string()),
+});
+
+export type WakeRows = v.InferOutput<typeof WakeRowsSchema>;
+
+export const WakeDriveResultSchema = v.object({
+  where: WakeHoldPlacementSchema,
+  rows: WakeRowsSchema,
+  /** When the drive released the held title call — after the job had settled. */
+  releasedAt: v.number(),
+  /** The runner's own settle instant, off the job row. */
+  settledAt: v.number(),
+  calls: v.array(v.object({ model: v.string(), users: v.array(v.string()), toolResults: v.array(v.string()) })),
+});
+
+export type WakeDriveResult = v.InferOutput<typeof WakeDriveResultSchema>;

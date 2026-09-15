@@ -1,4 +1,5 @@
 import type { ModelMessage, ToolSet } from 'ai';
+import * as v from 'valibot';
 import { INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
@@ -10,6 +11,7 @@ import { KinuError, renderThrownChain } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
+import type { ChatTurnInput } from './chat-session';
 import { captureOperationProfile, currentOperationProfile, operationProfileStream } from '../profiles/operation';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
@@ -289,13 +291,41 @@ export class ActorSession {
    * Birth context is used only before the conversation's first turn. */
   openDelegatedTurn(lease: ActorTurnLease, input: {
     readonly messages: readonly ModelMessage[];
-    readonly birthContext: readonly ModelMessage[];
+    readonly birthContext: () => readonly ModelMessage[];
   }): void {
     if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'a delegated input must belong to a preparing turn');
     const claims = this.options.claims;
-    const fallback = this.messages.length === 0 && claims.latestTurn() === null ? input.birthContext : this.messages;
+    const fallback = this.messages.length === 0 && claims.latestTurn() === null ? input.birthContext() : this.messages;
     const history = claims.historyForInput(lease.turnId, input.messages, fallback);
     this.messages.splice(0, this.messages.length, ...history);
+  }
+
+  /**
+   * Place an admitted turn's input on the working history — the ONE rule for
+   * where a turn's conversation comes from, on every backend.
+   *
+   * A turn queued to answer a delivery (`metadata.drainTurnId`) is a delegated
+   * turn: it opens on the actor's settled working revision, and an actor with
+   * no conversation of its own yet — a child hired for context, whose first
+   * turn is the delivery — is born from the conversation the delivery names,
+   * read lazily since most actors never need it. Every other turn appends its
+   * input. Either way a re-opened turn's prior output follows the input, so
+   * the model continues its own answer rather than starting one.
+   */
+  openTurnInput(lease: ActorTurnLease, input: {
+    readonly item: Pick<ChatTurnInput, 'metadata' | 'priorOutput'>;
+    readonly message: ModelMessage;
+    readonly birthContext: (drainTurnId: string) => readonly ModelMessage[];
+  }): void {
+    const drainTurn = v.safeParse(v.string(), input.item.metadata?.drainTurnId);
+
+    if (drainTurn.success) {
+      this.openDelegatedTurn(lease, { messages: [input.message], birthContext: () => input.birthContext(drainTurn.output) });
+    } else {
+      this.appendInput(lease, input.message);
+    }
+
+    if (input.item.priorOutput !== undefined) this.appendPriorOutput(lease, input.item.priorOutput);
   }
 
   appendInput(lease: ActorTurnLease, message: ModelMessage): void {
@@ -382,10 +412,15 @@ export class ActorSession {
 
   interrupt(): readonly UserSteer[] {
     const dropped = this.orchestrator.inbox.interrupt();
-
-    if (this.active?.phase !== 'settling') this.active?.abort.abort();
+    this.stop();
 
     return dropped;
+  }
+
+  /** Abort the turn in flight and nothing else: what the model has not read
+   *  stays queued, for the settle to rerun as the operator's next turn. */
+  stop(): void {
+    if (this.active?.phase !== 'settling') this.active?.abort.abort();
   }
 
   /**
@@ -467,12 +502,18 @@ export class ActorSession {
       const admitted = this.context.startTurn({ turnId: lease.turnId, history: this.messages });
       this.messages.splice(0, this.messages.length, ...admitted.messages);
 
+      // The claim records the REQUEST, not the history alone: the turn-local
+      // tail (unapproved instruction files, activation reasons) is spliced
+      // after the history at prompt assembly and never enters the working
+      // history, so a claim naming the history alone would understate what
+      // the model saw — and the shadow trial that replays the claim's context
+      // would score a narrower prompt than the live turn ran.
       const claim = this.options.claims.admit({
         runId: lease.runId,
         turnId: lease.turnId,
         workMode: this.mode,
         program: programIdentityOf(program, this.options.installedBuild),
-        context: this.messages,
+        context: [...this.messages, ...(input.chat.turnLocal ?? [])],
         workingRevision: admitted.workingRevision,
       });
 
@@ -500,7 +541,12 @@ export class ActorSession {
           case 'tool-call': pending.push(event); break;
           case 'tool-result': this.recordToolResult(pending, event); break;
 
-          case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
+          case 'step-finish':
+            this.orchestrator.acc.recordStep({
+              text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
+              response: { messages: event.responseMessages }, usage: event.usage,
+            });
+            break;
           case 'error': {
             this.orchestrator.acc.hadError = true;
 

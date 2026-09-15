@@ -289,6 +289,14 @@ export class PendingSendStore {
     }
   }
 
+  /** Whether this actor still owes a send under this id — the reservation an
+   *  accepted send holds until its row lands or it is retired. A transport
+   *  that is handed the same message twice asks this before the loop does. */
+  has(id: string): boolean {
+    return this.sql<{ id: string }>`
+      SELECT id FROM pending_steers WHERE actor_id = ${this.actorId} AND id = ${id}`.length > 0;
+  }
+
   /** The attachments a reservation carried, in the order the steer was sent —
    *  restored with it so a restart does not lose the files a dead process
    *  acknowledged. */
@@ -448,6 +456,25 @@ export class Inbox implements AgentInbox {
   /** Whether a message sent now rides a turn that already exists — running,
    *  or admitted by this inbox and not yet open. The same read {@link send}
    *  makes, for a backend that must decide before it hands a message over. */
+  /** The event deliveries the running turn has answered so far — every
+   *  absorbed signal's reply turn. Read at the commit, before `settle` decides
+   *  what re-delivers, because the roster that owes those replies is frozen
+   *  with the answer. */
+  get answeredDeliveries(): ReadonlySet<string> {
+    const answered = new Set<string>();
+
+    for (const signal of this.absorbed) {
+      if (signal.replyTurnId) answered.add(signal.replyTurnId);
+    }
+
+    return answered;
+  }
+
+  /** The kinds of every signal the running turn has absorbed so far. */
+  absorbedKinds(): readonly string[] {
+    return this.absorbed.map((signal) => signal.kind);
+  }
+
   get busy(): boolean {
     return this.starting !== null || this.host.turnInFlight();
   }

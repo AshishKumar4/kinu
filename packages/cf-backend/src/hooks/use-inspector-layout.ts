@@ -25,37 +25,15 @@ import {
 import { getProfile } from "@/lib/user-api";
 import { useMediaQuery } from "./use-media-query";
 
-const INSPECTOR_DEFAULT_PX = 340;
-
-const INSPECTOR_MIN_PX = 280;
-
-const INSPECTOR_WIDE_QUERY = "(min-width: 900px)";
+import {
+  INSPECTOR_DEFAULT_PX, INSPECTOR_MIN_PX, INSPECTOR_WIDE_QUERY,
+  isInspectorInputKey, readDecision, readInspectorChoice,
+  type InspectorTarget,
+} from "./inspector-policy";
 
 const CHAT_PANEL_ID = "chat";
 
 const INSPECTOR_PANEL_ID = "inspector";
-
-interface InspectorTarget { readonly collapsed: boolean; readonly widthPx: number }
-
-/** The WIDTH is the account's: a preference about this person's display,
- *  stored as a plain pixel number beside the theme choice. */
-function readInspectorWidth(account: string): number | null {
-  const raw = localStorage.getItem(`kinu.inspector.${account}`);
-  const width = raw === null ? NaN : Number(raw);
-
-  return Number.isFinite(width) ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : null;
-}
-
-/** The OPEN/CLOSED choice is the workspace's: `"1"` opened here, `"0"` closed
- *  here, absent means the first-visit policy decides. A choice made in one
- *  workspace can never leak into another. */
-function readInspectorChoice(account: string, workspace: string | undefined): boolean | null {
-  const raw = workspace === undefined
-    ? null
-    : localStorage.getItem(`kinu.inspector.open.${account}.${workspace}`);
-
-  return raw === "1" ? true : raw === "0" ? false : null;
-}
 
 /** The account that keys a persisted layout, or why there is none: a signed-in
  *  profile with no email keys nothing, and a profile that could not be read is
@@ -94,18 +72,6 @@ export interface InspectorGroupProps {
   readonly elementRef: (element: HTMLDivElement | null) => void;
 }
 
-/** The decided layout: the stored choice when one exists, else the
- *  first-visit policy — collapsed unless the workspace holds something worth
- *  seeing (the live signal, or the one auto-open it already served). */
-function readDecision(
-  account: string | null, workspace: string | undefined, showContent: boolean,
-): InspectorTarget {
-  const width = (account === null ? null : readInspectorWidth(account)) ?? INSPECTOR_DEFAULT_PX;
-  const choice = account === null ? null : readInspectorChoice(account, workspace);
-
-  return { collapsed: choice === null ? !showContent : !choice, widthPx: width };
-}
-
 /** A committed inspector width in pixels: flex share × measured group box.
  *  (`getSize()` inside a commit report reads the DOM a commit early.) */
 function committedWidthPx(
@@ -128,16 +94,6 @@ function committedWidthPx(
   }
 
   return Math.round((share / total) * Math.max(0, group.clientWidth - separators));
-}
-
-/** The keys the library's separator keydown acts on — the marks these press
- *  leave are what the committed layout's classification reads. */
-const INSPECTOR_INPUT_KEYS = {
-  ArrowLeft: true, ArrowRight: true, Home: true, End: true, Enter: true,
-} satisfies Record<string, true>;
-
-function isInspectorInputKey(key: string): boolean {
-  return Object.hasOwn(INSPECTOR_INPUT_KEYS, key);
 }
 
 /** Where a committed layout came from: an input observed at its source. */
