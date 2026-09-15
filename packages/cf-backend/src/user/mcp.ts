@@ -15,7 +15,7 @@ import {
   JsonArraySchema, JsonObjectSchema,
   admitMcpDescriptors, McpToolSurfaceSchema,
   mcpPresetById, MCP_PRESETS,
-  type JsonObject, type McpPreset, type McpPresetId,
+  type JsonObject, type JsonValue, type McpPreset, type McpPresetId,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
@@ -202,17 +202,7 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
 
   const obj = parsedInput.output;
 
-  let preset: McpPreset | undefined;
-
-  if (obj.presetId !== undefined && obj.presetId !== null) {
-    const parsedPresetId = v.safeParse(v.string(), obj.presetId);
-
-    if (!parsedPresetId.success) throw new Error('`presetId` must be a string.');
-
-    preset = mcpPresetById(parsedPresetId.output);
-
-    if (!preset) throw new Error(`Unknown MCP preset '${parsedPresetId.output}'.`);
-  }
+  const preset = validateMcpPresetId(obj.presetId);
 
   const name = preset ? preset.title : validateMcpServerName(obj.name);
 
@@ -303,6 +293,24 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
     name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
     presetId: preset?.id,
   };
+}
+
+/** The `presetId` leg of an add: absent → a custom server; present but not a
+ *  catalog id → an error, because a preset the catalog cannot name has no
+ *  endpoint to connect. The preset it returns supplies name, URL, transport —
+ *  the body may not override them. */
+function validateMcpPresetId(presetId: JsonValue | undefined): McpPreset | undefined {
+  if (presetId === undefined || presetId === null) return undefined;
+
+  const parsedPresetId = v.safeParse(v.string(), presetId);
+
+  if (!parsedPresetId.success) throw new Error('`presetId` must be a string.');
+
+  const preset = mcpPresetById(parsedPresetId.output);
+
+  if (!preset) throw new Error(`Unknown MCP preset '${parsedPresetId.output}'.`);
+
+  return preset;
 }
 
 /**
