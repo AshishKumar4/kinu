@@ -292,7 +292,6 @@ describe('the workspace keeps exactly one wake row', () => {
     // instant instead, which is what the row below must show.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
 
     const now = Date.now();
     const resumeAt = now + 60_000;
@@ -491,20 +490,24 @@ describe('the workspace keeps exactly one wake row', () => {
 
   test('a tick killed after its arm and before its drain still leaves the wake', async () => {
     // The arm-first ordering is the durability point: the pessimistic next-lap
-    // row is durable BEFORE any pass runs, so the one failure this test
-    // manufactures — the first sweep dying mid-tick — is a row left behind,
-    // not a chain that ends. On the old shape the same throw propagated with
-    // nothing armed at all.
-    const { agent } = orchestratorHarness();
+    // row is durable BEFORE any pass runs, so the one failure this test seeds
+    // — a roster row whose stored birth the lifecycle recovery refuses — is a
+    // row left behind, not a chain that ends. On the old shape the same throw
+    // propagated with nothing armed at all.
+    const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
 
-    Object.defineProperty(agent, 'maintenanceSweeps', {
-      configurable: true,
-      value: (): boolean => { throw new Error('sweep died mid-tick'); },
-    });
+    // Real input, not a patched method: `birth_request` is TEXT the store
+    // JSON-parses on read, and `recoverSubordinateLifecycles` reaches
+    // `pendingBirths()` mid-tick — after the arm, before the drain.
+    db.prepare(
+      `INSERT INTO actor_subordinates
+        (actor_id, name, created_by, status, current_task, created_at, dismissed_at,
+         lifetime, task_event_id, actor_reference, birth_request, delete_requested)
+       VALUES (?, 'poisoned-birth', 'orchestrator', 'idle', NULL, ?, NULL, 'durable', NULL, NULL, '{malformed', 0)`,
+    ).run(harnessActorId(db), Date.now());
 
-    await expect(agent._kinuTerminalRetryTick()).rejects.toThrow('sweep died mid-tick');
+    await expect(agent._kinuTerminalRetryTick()).rejects.toThrow('malformed');
 
     const armed = (await agent.listSchedules())
       .filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time > Math.floor(Date.now() / 1000));
@@ -519,7 +522,20 @@ describe('the workspace keeps exactly one wake row', () => {
     // empty rather than holding a wake that fires to find nothing.
     const { agent } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    await agent._kinuTerminalRetryTick();
+
+    expect(await agent.listSchedules()).toEqual([]);
+  });
+
+  test('a tick with nothing owed releases the row it armed', async () => {
+    // The other half of arm-first: the pessimistic row was insurance, not work
+    // anybody is waiting on, so a pass that ends with nothing unfinished and
+    // nothing owed deletes exactly the row it wrote — the registry sleeps
+    // empty rather than holding a wake that fires to find nothing.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
     expect(await agent.listSchedules()).toEqual([]);
 
     await agent._kinuTerminalRetryTick();
@@ -648,7 +664,6 @@ describe('the workspace keeps exactly one wake row', () => {
     // leaves behind it.
     const { agent } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
     expect(await agent.listSchedules()).toEqual([]);
 
     const turns = thinkTurns(agent);
