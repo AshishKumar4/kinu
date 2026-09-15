@@ -20,7 +20,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { BUILTIN_TOOLS, DEPS_GATED_TOOLS, type JsonValue, type RunEvent } from '../../packages/core/src/index';
+import { BUILTIN_TOOLS, DEPS_GATED_TOOLS, normalizeFactKey, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -188,13 +188,16 @@ describe(SUITE, () => {
 
         // `save` or `remember`: both write a fact the search must find, and the
         // prompt says "save the fact" — an agent that remembers it wrote what it
-        // was asked. Measured live (post-publish-ac73ffc5e): the turn wrote via
-        // `remember` and the search answered `[fact: every-tool_probe] … ok`.
+        // was asked. The search renders facts by their STORED key — folded
+        // lowercase, whitespace to underscores — never the spelling the call
+        // carried, so the match is on `normalizeFactKey(TASK_TITLE)`. Measured
+        // live (post-publish-ac73ffc5e): the turn wrote via `remember` and the
+        // search answered `[fact: every-tool_probe] … ok`.
         const saved = memory.find((call) =>
           (actionOf(call) === 'save' || actionOf(call) === 'remember') && answered(call));
 
         const found = memory.find((call) =>
-          actionOf(call) === 'search' && answered(call) && textOf(call.result).includes(TASK_TITLE));
+          actionOf(call) === 'search' && answered(call) && textOf(call.result).includes(`[fact: ${normalizeFactKey(TASK_TITLE)}]`));
 
         subgoals.push({
           what: 'memory-saved-and-found', reached: saved !== undefined && found !== undefined,
