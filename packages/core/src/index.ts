@@ -2180,9 +2180,9 @@ export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, overviewHeadline, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

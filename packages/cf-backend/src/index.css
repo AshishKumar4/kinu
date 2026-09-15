@@ -1408,3 +1408,20 @@ body > .annotation-toolbar {
   .plan-review-document pre[data-block-id] { font-size: 0.8125rem; line-height: 1.65; } /* 13px */
   .plan-review-document pre[data-block-id]::before { font-size: 0.6875rem; } /* 11px */
 }
+
+/* ── Pages redesign ──────────────────────────────────────────────────
+   The Shared page's card hover: the accent hairline at forty percent and a
+   one-pixel lift, fast. Its own layer block so it sits under utilities like
+   the grammar above and overrides `.p-card`'s transition list by order. */
+@layer components {
+.p-card-lift {
+  transition: border-color 120ms ease-out, transform 120ms ease-out;
+}
+.p-card-lift:hover {
+  border-color: color-mix(in srgb, var(--c-accent) 40%, transparent);
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .p-card-lift:hover { transform: none; }
+}
+}

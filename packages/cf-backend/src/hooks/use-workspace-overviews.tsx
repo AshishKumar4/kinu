@@ -44,7 +44,7 @@ const overviewRevalidate = (): number => LIVE_DATA_REFRESH_MS;
 /** The read and its retry — the two halves a watcher can use. The primitive's
  *  `set` stays with the watch that owns the read; nothing publishes an
  *  overview it did not fetch. */
-type OverviewRead = Pick<AsyncResourceControl<WorkspaceOverview>, 'resource' | 'reload'>;
+export type OverviewRead = Pick<AsyncResourceControl<WorkspaceOverview>, 'resource' | 'reload'>;
 
 interface OverviewsValue {
   readonly reads: ReadonlyMap<string, OverviewRead>;
@@ -133,6 +133,18 @@ export function useWorkspaceOverview(name: string): OverviewRead {
   useEffect(() => watch([name]), [name, watch]);
 
   return reads.get(name) ?? LOADING;
+}
+
+/** Every workspace's overview at once, watched while the caller is mounted:
+ *  the page that buckets a whole roster by state. `names` is the caller's
+ *  memoised list — the provider ref-counts each, so a name is fetched once
+ *  however many watchers ask. */
+export function useOverviewReads(names: readonly string[]): ReadonlyMap<string, OverviewRead> {
+  const { reads, watch } = useOverviews();
+
+  useEffect(() => watch(names), [names, watch]);
+
+  return reads;
 }
 
 /** What the recent workspaces add up to, watched while the caller is mounted:
