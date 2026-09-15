@@ -2192,28 +2192,6 @@ export class LocalAgentSession implements BackendHost {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  /** A hired-for-context turn opens on an empty history but names the turn
-   *  whose conversation it inherits (`metadata.drainTurnId`): seed those rows
-   *  before the live prompt so the child reads its parent context in place. */
-  /** A delegated turn opens on the actor's working revision through the shared
-   *  rule; a root turn appends its input as before. */
-  private openTurnInput(item: ChatTurnInput, lease: ActorTurnLease, message: ModelMessage): void {
-    const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
-
-    if (drainTurn.success) {
-      this.actorSession.openDelegatedTurn(lease, {
-        messages: [message],
-        birthContext: subordinateTurnContext(this.eventLog, drainTurn.output).map(inheritedAsModelMessage),
-      });
-    } else {
-      this.actorSession.appendInput(lease, message);
-    }
-
-    // A re-opened turn's prior output follows its input: the model continues
-    // its own answer rather than starting one.
-    if (item.priorOutput !== undefined) this.actorSession.appendPriorOutput(lease, item.priorOutput);
-  }
-
   /**
    * Assemble one admitted turn — the ChatSession's `prepareTurn` port.
    *
@@ -2373,9 +2351,13 @@ export class LocalAgentSession implements BackendHost {
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
 
-    this.openTurnInput(item, lease, fileParts.length > 0
-      ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-      : { role: 'user', content: item.text });
+    this.actorSession.openTurnInput(lease, {
+      item,
+      message: fileParts.length > 0
+        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+        : { role: 'user', content: item.text },
+      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+    });
 
     // Live state (facts, memory tail, executor status, running background work,
     // the open fork roster) rides the dynamic-context ledger — the shared step
