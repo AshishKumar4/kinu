@@ -26,7 +26,7 @@
  * into a slower green. That is also why this belongs to the DEPLOY tier and
  * not the commit tier — it costs minutes, and a gate slow enough to tempt
  * `--no-verify` is a design failure — and why it runs ALONE there
- * (`SERIAL_GATES`): a gate whose subject is contention cannot share a machine
+ * (its row's `phase` and `alone`): a gate whose subject is contention cannot share a machine
  * with gates whose timeouts it would blow.
  *
  * THE MEASURED SET versus THE GOVERNED SET. GOVERNED: every tracked test file
