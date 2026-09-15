@@ -43,5 +43,5 @@ describe('the chat surface on a real terminal, fresh install', () => {
     // line and the muted annotations.
     expect(inkBefore(run.raw, 'agent prose reply')).toBe(light.colors.text.strong);
     expect(light.colors.text.strong).not.toBe(light.colors.text.primary);
-  }, 60_000);
+  });
 });
