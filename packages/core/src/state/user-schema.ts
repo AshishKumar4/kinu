@@ -206,6 +206,7 @@ export function initUserTables(sql: SqlExec): void {
   // sealed at rest by user/credential-envelope.ts exactly like a credential —
   // it holds the same class of secret.
   // `allowed_tools` is a JSON array of MCP tool names; null = expose all.
+  // `preset_id` names the `MCP_PRESETS` entry the row came from; null = custom.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
       id            TEXT PRIMARY KEY,
@@ -214,6 +215,7 @@ export function initUserTables(sql: SqlExec): void {
       transport     TEXT NOT NULL,
       headers       TEXT,
       allowed_tools TEXT,
+      preset_id     TEXT,
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )

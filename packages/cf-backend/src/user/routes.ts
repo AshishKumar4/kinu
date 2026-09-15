@@ -481,8 +481,34 @@ export async function handleUserRequest(
   }
 
   // ── MCP servers ────────────────────────────────────────────────────
+  const mcp = await handleMcpRoutes({ request, stub, owner, path, method });
+
+  if (mcp) return mcp;
+
+  return err(404, `No such user route: ${method} ${path}`);
+}
+
+interface McpRoutesContext {
+  readonly request: Request;
+  readonly stub: DurableObjectStub<UserDO>;
+  readonly owner: UserCaller;
+  readonly path: string;
+  readonly method: string;
+}
+
+/** /api/user/mcp/* — the server roster, the preset availability report, and
+ *  the OAuth callback. One routed helper because handleUserRequest is locked
+ *  at the budget line and the family adds and removes routes together. */
+async function handleMcpRoutes(ctx: McpRoutesContext): Promise<Response | null> {
+  const { request, stub, owner, path, method } = ctx;
+
   if (path === '/mcp/servers' && method === 'GET') {
-    try { return json(await stub.userMcp_list(await ownerCaller(env))); }
+    try { return json(await stub.userMcp_list(owner)); }
+    catch (e) { return err(500, renderThrownChain({ cause: e })); }
+  }
+
+  if (path === '/mcp/presets' && method === 'GET') {
+    try { return json(await stub.userMcp_presets(owner)); }
     catch (e) { return err(500, renderThrownChain({ cause: e })); }
   }
 
@@ -492,7 +518,7 @@ export async function handleUserRequest(
     if (body === null) return err(400, 'Body must be JSON');
     const origin = publicOrigin(request);
 
-    try { return json(await stub.userMcp_add(await ownerCaller(env), body, origin), { status: 201 }); }
+    try { return json(await stub.userMcp_add(owner, body, origin), { status: 201 }); }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
 
@@ -503,7 +529,7 @@ export async function handleUserRequest(
 
     if (method === 'DELETE') {
       try {
-        await stub.userMcp_remove(await ownerCaller(env), id);
+        await stub.userMcp_remove(owner, id);
 
         return json({ ok: true });
       }
@@ -516,7 +542,7 @@ export async function handleUserRequest(
       if (body === null) return err(400, 'Body must be JSON');
 
       try {
-        await stub.userMcp_update(await ownerCaller(env), id, body);
+        await stub.userMcp_update(owner, id, body);
 
         return json({ ok: true });
       }
@@ -529,7 +555,7 @@ export async function handleUserRequest(
     // need to extract it here — `userMcp_handleOAuthCallback` does the validation
     // inside UserDO. The Worker's browser auth middleware (above) already
     // resolved the caller's identity, so we know which UserDO to dispatch to.
-    const result = await stub.userMcp_handleOAuthCallback(await ownerCaller(env), request.url);
+    const result = await stub.userMcp_handleOAuthCallback(owner, request.url);
     // Redirect the browser back to the settings page regardless of outcome.
     // The page polls userMcp_list and the per-server status surfaces the
     // result. We include `?mcp_auth=ok|failed&error=...` for UX clarity.
@@ -543,7 +569,7 @@ export async function handleUserRequest(
     return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
   }
 
-  return err(404, `No such user route: ${method} ${path}`);
+  return null;
 }
 
 /** Derive the public origin the client sees. CF puts the canonical host

@@ -19,9 +19,10 @@ import {
   CheckIcon, WarningIcon, ClockClockwiseIcon,
 } from "@phosphor-icons/react";
 import {
-  listMcpServers, addMcpServer, removeMcpServer,
-  type McpServerSummary, type McpTransport,
+  listMcpServers, listMcpPresets, addMcpServer, removeMcpServer,
+  type McpPresetAvailability, type McpServerSummary, type McpTransport,
 } from "@/lib/user-api";
+import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
@@ -49,6 +50,7 @@ function statusBadge(status: McpServerSummary['status']) {
 
 export function McpServersPanel() {
   const [servers, setServers] = useState<McpServerSummary[]>([]);
+  const [presets, setPresets] = useState<McpPresetAvailability[] | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -57,7 +59,10 @@ export function McpServersPanel() {
 
   // The mount effect, poll, OAuth return and mutation callbacks all invoke this
   // synchronous reader. React owns its transition and the visible error remains
-  // the one place every refresh failure is recorded.
+  // the one place every refresh failure is recorded. The preset availability
+  // read rides the same poll: a deploy that rotates an app credential in or out
+  // re-cards itself without a page reload, and a presets failure leaves the
+  // last answer on screen rather than taking the server list down with it.
   const refresh = useCallback((): void => {
     setErr(null);
     startTransition(async () => {
@@ -69,6 +74,11 @@ export function McpServersPanel() {
       } finally {
         setLoading(false);
       }
+
+      // The presets read must not take the server list down with it — a
+      // failure only means the cards keep their last answer.
+      try { setPresets(await listMcpPresets()); }
+      catch (cause) { console.warn('mcp preset availability read failed:', renderThrownChain({ cause })); }
     });
   }, []);
 
@@ -76,7 +86,7 @@ export function McpServersPanel() {
     refresh();
     pollRef.current = setInterval(refresh, POLL_MS);
 
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    return () => { if (pollRef.current !== null) clearInterval(pollRef.current); };
   }, [refresh]);
 
   // Returning from OAuth — surface result, then strip query params so reloads
@@ -104,10 +114,14 @@ export function McpServersPanel() {
 
   return (
     <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <McpPresetCards servers={servers} availability={presets} onChanged={refresh} />
+      </div>
+
       <div className="flex justify-end">
         <Button size="sm" variant="secondary" icon={<PlusIcon size={12} />}
           onClick={() => setShowAdd((v) => !v)}>
-          Add MCP server
+          Add custom server
         </Button>
       </div>
 

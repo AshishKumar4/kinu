@@ -18,15 +18,24 @@ import {
 } from "@phosphor-icons/react";
 import { APP_ROUTES, BUILTIN_SKILL_HEADERS } from "@kinu.run/core";
 import {
-  listDeviceConsents, listDevices, listExperience, listMcpServers,
+  listDeviceConsents, listDevices, listExperience, listMcpServers, listMcpPresets,
   type McpServerSummary,
 } from "@/lib/user-api";
-import { useAsyncResource, mapResource, type AsyncResource } from "@/hooks/use-async-resource";
+import { useAsyncResource, mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { PluginCard, type PluginStatus } from "@/components/plugins/PluginCard";
+import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
 
 const loadCrafts = () => listExperience('craft');
+
+/** While a preset sign-in is open in another tab the user returns to this
+ *  page mid-flow, so the server list re-reads itself until every connection
+ *  has settled — the same 5s the MCP panel polls on, and only while one is
+ *  actually pending. */
+const revalidateServers = (rows: McpServerSummary[] | null): number | null =>
+  rows?.some((s) => s.status === 'authenticating' || s.status === 'connecting'
+    || s.status === 'discovering') ? 5000 : null;
 
 /** A server's reachability as a card status: the same words the MCP panel's
  *  badge uses, in the card's own tone vocabulary. */
@@ -77,7 +86,8 @@ function PluginSection({ title, cards, onRetry, what, action, note, empty }: {
 }
 
 export default function PluginsPage() {
-  const servers = useAsyncResource(listMcpServers);
+  const servers = useAsyncResource(listMcpServers, revalidateServers);
+  const presets = useAsyncResource(listMcpPresets);
   const crafts = useAsyncResource(loadCrafts);
   const consents = useAsyncResource(listDeviceConsents);
   const devices = useAsyncResource(listDevices);
@@ -96,10 +106,15 @@ export default function PluginsPage() {
         <PluginSection title="MCP servers" onRetry={servers.reload} what="your MCP servers"
           action={<Button variant="ghost" size="sm" onClick={() => setManaging(true)}>Manage</Button>}
           empty="No MCP server yet."
-          cards={mapResource(servers.resource, (rows) => rows.map((server) => (
-            <PluginCard key={server.id} icon={PlugsConnectedIcon} name={server.name} line={server.serverUrl}
-              status={serverStatus(server.status)} />
-          )))}
+          cards={mapResource(servers.resource, (rows) => [
+            <McpPresetCards key="presets" servers={rows}
+              availability={lastValue(presets.resource) ?? undefined}
+              onChanged={servers.reload} />,
+            ...rows.map((server) => (
+              <PluginCard key={server.id} icon={PlugsConnectedIcon} name={server.name} line={server.serverUrl}
+                status={serverStatus(server.status)} />
+            )),
+          ])}
         />
 
         <PluginSection title="Crafted tools" onRetry={crafts.reload} what="your crafted tools"
