@@ -93,7 +93,6 @@ async function workspaceWithQueuedWork(
     messages: [{ role: 'user', content: 'deploy the api' }, { role: 'assistant', content: 'starting' }],
   });
 
-  seeded.agent.declareTurnInFlight(true);
   expect(await seeded.agent.send(STEER)).toEqual({ landed: 'mid-turn' });
 
   const clock = spawnedAt === undefined
