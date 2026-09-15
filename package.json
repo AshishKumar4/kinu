@@ -149,6 +149,7 @@
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.22.0",
     "aws4fetch": "^1.0.20",
+    "capnweb": "0.8.0",
     "esbuild": "^0.28.1",
     "jose": "^6.2.3",
     "knip": "6.32.2",
