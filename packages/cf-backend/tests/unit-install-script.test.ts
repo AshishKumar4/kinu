@@ -92,14 +92,14 @@ function approvedBun(): string {
 }
 
 /** A Bun stand-in that records the path it was invoked through, answers
- *  `--version`, and prints the CLI help line for `shell` — so a test can prove
+ *  `--version`, and prints the CLI help line for `run` — so a test can prove
  *  WHICH Bun binary ran, not merely that something did. */
 function bunStub(version: string, logPath: string): string {
   return [
     '#!/bin/sh',
     `printf '%s\\n' "$0" >> "${logPath}"`,
     `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
-    'if [ "$1" = "shell" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi',
+    'if [ "$1" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi',
     'exit 0',
     '',
   ].join('\n');
