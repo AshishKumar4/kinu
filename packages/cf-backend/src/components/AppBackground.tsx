@@ -65,6 +65,8 @@ export interface AppBackgroundHandle {
   mode(): ConnectomeMode;
   pointer(): number;
   advance(dt: number): void;
+  freeze(): void;
+  thaw(): void;
 }
 
 declare global {
@@ -200,6 +202,8 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
       mode: () => mounted.art().mode(),
       pointer: () => mounted.art().pointerHold(),
       advance: (dt: number) => mounted.advance(dt),
+      freeze: () => mounted.freeze(),
+      thaw: () => mounted.thaw(),
     };
 
     living.current = mounted;
