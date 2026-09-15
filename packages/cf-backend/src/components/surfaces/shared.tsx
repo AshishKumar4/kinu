@@ -256,14 +256,6 @@ export function EmptyState({ icon, title, hint, children }: {
   );
 }
 
-/** Default hints for empty surfaces. */
-export const EMPTY_HINTS = {
-  memory: "Ask your agent to remember something and it keeps it here.",
-  tools: "Your agent writes a tool when a pattern repeats, and scores it against later runs.",
-  forks: "A search shows one scored branch per candidate.",
-  preview: "Your agent can expose a Workspace or Sandbox port, and the running app shows as a preview.",
-};
-
 /* ── small readouts shared by the fork tree's inspector and the evolution
       panels — one copy, so a metric tile means the same thing everywhere ── */
 

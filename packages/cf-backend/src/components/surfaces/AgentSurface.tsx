@@ -27,7 +27,7 @@ import {
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
 import type { ToolInfo, MemoryEntry, Rpc } from "@kinu.run/core";
-import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
+import { MarkdownContent, EmptyState, Section } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
@@ -232,7 +232,7 @@ export function AgentSurface(
           ) : !memorySearch ? (
             as === null
               ? unloaded("memory")
-              : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" hint={EMPTY_HINTS.memory} />
+              : <EmptyState icon={<FolderOpenIcon size={28} />} title="No memories yet" />
           ) : memory.length === 0 ? (
             <EmptyState icon={<MagnifyingGlassIcon size={28} />} title="No results" />
           ) : memory.map((entry, i) => (
@@ -280,7 +280,7 @@ export function AgentSurface(
             ? tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)
             : as === null
               ? unloaded("tools")
-              : <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />}
+              : <EmptyState icon={<PackageIcon size={28} />} title="No tools yet" />}
         </div>
       </Section>
 

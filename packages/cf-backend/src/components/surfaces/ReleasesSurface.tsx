@@ -431,8 +431,7 @@ export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: Execu
 
       {changes.length === 0 ? (
         <>
-          <EmptyState icon={<GitDiffIcon size={28} />} title="No release changes"
-            hint="Ask the agent in chat to prepare a release. It returns here for approval after applying and checking the patch." />
+          <EmptyState icon={<GitDiffIcon size={28} />} title="No releases" />
           {bindings.length > 0 && <SourceList bindings={bindings} />}
         </>
       ) : (
