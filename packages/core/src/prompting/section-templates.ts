@@ -195,7 +195,7 @@ export const SANDBOX_EXECUTOR_LINE = definePromptSection(
  */
 export const LAPTOP_EXECUTOR_LINE = definePromptSection(
   "executors/laptop",
-  "{{#if cliLocal}}{{/if}}",
+  "",
   laptopExecutorLine.trimEnd(),
 );
 

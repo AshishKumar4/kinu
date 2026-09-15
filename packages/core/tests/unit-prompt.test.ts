@@ -887,8 +887,8 @@ describe('buildSystemPromptSync', () => {
       // What the line DOES teach: grants are per machine, the first call asks
       // once, and a fleet of several needs the machine named on every call.
       expect(prompt).toContain('Grants are per machine');
-    expect(prompt).toContain('the runtime asks the user once');
-      expect(prompt).toContain('device: "<name>"');
+      expect(prompt).toContain('the runtime asks the user once');
+      expect(prompt).toContain('runtime: "<nickname>"');
       expect(prompt).toContain('The runtime refuses a call that names none');
       // The live-state framing replaces "assume absent forever".
       expect(prompt).toContain('live state at the start of this turn');
@@ -912,20 +912,20 @@ describe('buildSystemPromptSync', () => {
     expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
   });
 
-  test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
+  test('cli-local has no device row: the machine is the workspace', () => {
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+        { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       ],
     });
 
-    expect(prompt).toContain('laptop.*');
-    expect(prompt).toContain('the local machine the Kinu CLI is running on');
-    expect(prompt).toContain('no tunnel or consent prompt');
-    expect(prompt).not.toContain('device tunnel');
+    expect(prompt).not.toContain('laptop.***');
+    expect(prompt).toContain('the machine the CLI runs on');
+    expect(prompt).toContain('rooted in the directory the session was started in');
   });
 
   test('omits executor section when no executors registered', () => {
