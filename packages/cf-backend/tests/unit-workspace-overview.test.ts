@@ -131,13 +131,13 @@ describe('getWorkspaceOverview', () => {
 
     recorder.emit('run-1', { type: 'run_start', agentId: 'main', userMessage: 'done' });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
-    agent.declareTurnInFlight(true);
+    await agent.declareTurnInFlight(true);
 
     const overview = await agent.getWorkspaceOverview();
 
     expect(overview.activity).toBe('working');
     expect(overview.latestRun?.status).toBe('completed');
 
-    agent.declareTurnInFlight(false);
+    await agent.declareTurnInFlight(false);
   });
 });
