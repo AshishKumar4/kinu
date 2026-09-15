@@ -8,6 +8,7 @@
 import { newHttpBatchRpcSession } from 'capnweb';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 export type SlateViewerAnswer<Value> = { readonly value: Value } | { readonly error: string };
 
@@ -19,6 +20,6 @@ export async function callSharedSlate<Value>(
   try {
     return { value: v.parse(schema, await stub[method]()) };
   } catch (cause) {
-    return { error: cause instanceof Error ? cause.message : String(cause) };
+    return { error: renderThrownChain({ cause }) };
   }
 }
