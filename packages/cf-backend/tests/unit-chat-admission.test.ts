@@ -111,7 +111,7 @@ function userRows(agent: { harnessTranscript: { history(): SessionMessage[] } })
 
 describe('a chat request through the production gate', () => {
   test('an idle send leaves exactly one row, under the id the client rendered', async () => {
-    const { agent } = orchestratorHarness();
+    const { agent, tableNames } = orchestratorHarness();
     const { wire, sent } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
@@ -129,6 +129,11 @@ describe('a chat request through the production gate', () => {
 
     expect(userRows(agent)).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
+    // The row above and the loop's own send ledger are the whole durable
+    // record of an admission: neither Think's submission ledger nor an input
+    // receipt table exists for the loop to write, or a reset to read.
+    expect(tableNames()).not.toContain('cf_think_submissions');
+    expect(tableNames()).not.toContain('actor_turn_inputs');
   });
 
   test('a mid-turn send that lands leaves exactly one row, stamped where it landed', async () => {
