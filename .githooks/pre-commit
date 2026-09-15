@@ -4,7 +4,7 @@
 #
 # It runs no tests on purpose. At commit time you can afford something TOTAL —
 # every file, every line — and 12s buys exactly that: the typecheck across every
-# project `bun run check` names, every enabled anti-slop rule, and four
+# project `bun run typecheck` names, every enabled anti-slop rule, and four
 # structural gates that each name a defect
 # class this repo has actually shipped. A test suite at this tier would be a
 # sample, would cost 25s at minimum, and would push the hook into the range

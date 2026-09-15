@@ -37,11 +37,14 @@ const BENCH_GATE_FILES = [
 
 const REQUIRED_GATES = [
   "bun scripts/preflight.ts",
-  "bun run check",
+  "bun run lint",
+  "bun test packages/agent-core/drift.test.ts",
+  "bun run typecheck",
   "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts",
   "bun scripts/pattern-inventory.ts",
   "bun test scripts/deploy.test.ts",
-  "bun run test",
+  "bun run test:core",
+  "bun run test:spine",
   "bun run gate:python-suites",
   "bun run gate:mutation-fences",
   "bun test packages/devbox/",
@@ -428,12 +431,12 @@ describe("deploy gate", () => {
   // the script: the source-text version of this test passed over a runner that
   // could not report.
   test("a gate killed without a verdict of its own fails the deploy", () => {
-    const run = runDeploy({ killGate: "bun run check" });
+    const run = runDeploy({ killGate: "bun run lint" });
 
     expect(run.status).not.toBe(0);
     // 128 + SIGKILL. The status is the child's fate, not a claim the gate made.
-    expect(run.stdout).toContain("Strict lint and TypeScript failed (exit 137)");
-    expect(run.events, "the killed gate never launched").toContain("bun run check");
+    expect(run.stdout).toContain("Anti-slop lint failed (exit 137)");
+    expect(run.events, "the killed gate never launched").toContain("bun run lint");
     expect(
       run.events.some((event) => event.startsWith("MUTATE ")),
       "a gate died unreported and the build ran anyway",
@@ -482,7 +485,7 @@ describe("deploy gate", () => {
 
     for (const gate of REQUIRED_GATES) {
       const opensChrome = browserSuites.some((file) => gate.split(" ").includes(file));
-      const multiWorker = gate.includes("--parallel=") || gate === "bun run test" || gate === "bun run test:cli";
+      const multiWorker = gate.includes("--parallel=") || gate === "bun run test:core" || gate === "bun run test:cli";
 
       if (opensChrome || multiWorker) expect(weighted.has(gate), `${gate} opens Chrome or workers and weighs one`).toBeTrue();
     }

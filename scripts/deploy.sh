@@ -223,7 +223,7 @@ run_required_gate() {
 declare -A GATE_WEIGHT=(
   ['bun test --parallel=4 packages/cf-backend/']=11
   ['bun test --parallel=4 packages/cli-backend/']=11
-  ['bun run test']=11
+  ['bun run test:core']=11
   ['bun run test:cli']=11
   ['bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts']=5
   ['bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts']=5
@@ -498,11 +498,14 @@ fi
 # credential-free gates used by the repository workflows, plus the complete
 # package test script and both Layergate proofs. No environment variable may
 # skip one when this production deploy path is running.
-run_required_gate "Strict lint and TypeScript" bun run check
+run_required_gate "Anti-slop lint" bun run lint
+run_required_gate "Vendored runtime drift" bun test packages/agent-core/drift.test.ts
+run_required_gate "TypeScript projects" bun run typecheck
 run_required_gate "Pattern census and parser self-tests" bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts
 run_required_gate "Pattern inventory" bun scripts/pattern-inventory.ts
 run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
-run_required_gate "Agent-utils, Core, and compaction suites" bun run test
+run_required_gate "Core suite" bun run test:core
+run_required_gate "Agent-utils, agent-core and compaction suites" bun run test:spine
 run_required_gate "Bench Python suites" bun run gate:python-suites
 run_required_gate "Concurrency fences stay load-bearing" bun run gate:mutation-fences
 run_required_gate "Devbox durability decisions" bun test packages/devbox/
