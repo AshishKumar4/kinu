@@ -89,6 +89,11 @@ export interface Gate {
   readonly tier: Tier;
   /** Measured wall clock in seconds. Every entry carries its own date and box beside it; re-validated 2026-09-05 on the 24-thread workstation. */
   readonly seconds: number;
+  /** Hardware threads the gate occupies at peak, for the deploy wave's thread
+   *  budget. Absent means one. Declared only where measured above one: a
+   *  browser suite's Chrome, a `--parallel=4` row's four workers. See
+   *  {@link gateWeight} for the measurement behind the figures. */
+  readonly weight?: number;
   /** The defect class this makes impossible. Not what it "checks". */
   readonly catches: string;
   /** What it does NOT catch. A gate whose blind spot nobody wrote down gets
@@ -919,6 +924,7 @@ export const LADDER: readonly Gate[] = [
     // is secret-scan.test.ts at 16.0s — the history walk grows with the object store —
     // plus workspace-name-ux at 1.9s. Replaces 1.2s.
     seconds: 19,
+    weight: 5,
     catches: 'a secret scanner that stopped matching, an exact historical adjudication that '
       + 'widened into a path or test exemption, or an enumeration that stopped treating '
       + 'tracked-ness as authoritative. The red fixture puts a credential only on a non-current '
@@ -985,6 +991,7 @@ export const LADDER: readonly Gate[] = [
     // 5,645 tests. Split out of `bun run test` (44 s) so a change under
     // `packages/core` re-runs this and a change elsewhere does not.
     seconds: 43,
+    weight: 11,
     catches: 'behavioural regressions in core — the whole shared spine both backends run on. '
       + 'No test COUNT is quoted as a contract: the old row carried 3,105 against a measured '
       + '3,917. Spelled ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
@@ -1072,6 +1079,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --parallel=4 packages/cf-backend/',
     tier: 'push',
     seconds: 13,
+    weight: 11,
     catches: 'the Cloudflare composition root observed against the capability manifest '
       + '— the conformance gate.',
     blind: 'anything needing a Workers runtime rather than a composition root — every '
@@ -1128,6 +1136,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --parallel=4 packages/cli-backend/',
     tier: 'ci',
     seconds: 19,
+    weight: 11,
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
@@ -1140,6 +1149,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test:cli',
     tier: 'ci',
     seconds: 41,
+    weight: 11,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
       + 'file it claims runs in no other tier. The runner derives all files in the directory, '
       + 'isolates the measured contention-sensitive file, then runs the remainder at parallel=4. '
@@ -1320,6 +1330,7 @@ export const LADDER: readonly Gate[] = [
     // workstation (293.62s with app-background alone, declared 315; 324.74s
     // with account-ux alone, declared 350; 265.76s before either joined).
     seconds: 375,
+    weight: 5,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1391,6 +1402,7 @@ export const LADDER: readonly Gate[] = [
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
     seconds: 55,
+    weight: 5,
     catches: 'the signed-out pages as a browser renders them: the hero tree grows and '
       + 'settles on the landing page, the sign-in and install pages carry the shell, '
       + 'and the landing landmarks and deploy link name the product Kinu. '
@@ -1416,6 +1428,7 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-09-06, these 48 browser tests pass in 13.84 seconds.
     // The snapshot suite exercises Files and memory recovery after read faults.
     seconds: 45,
+    weight: 5,
     catches: 'what the browser does when a client-side failure has nowhere to go. The '
       + 'error boundary reports to the server rather than only to a console nobody '
       + 'reads, a stalled report never leaves the page waiting, retry and navigation '
@@ -1435,6 +1448,7 @@ export const LADDER: readonly Gate[] = [
     // Runs the real client build twice, then drives three routes in Chromium.
     // Measured 2026-08-27: 8.92s.
     seconds: 20,
+    weight: 5,
     catches: 'which React the shipped bundle contains and which dispatcher the page '
       + 'runs on. It builds with the production Vite config the deploy uses, then '
       + 'asserts one React runtime module in one chunk, zero development-only text '
@@ -1467,6 +1481,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test scripts/swarm-tree-geometry.test.ts',
     tier: 'ci',
     seconds: 29,
+    weight: 5,
     catches: 'where the swarm trees LAND, at 640px and 1280px in both palettes — the '
       + 'class of defect no source-reading instrument in this repository can see. Six '
       + 'wires, each proven red by reverting it: a node label clipped at a flat 20 '
@@ -1493,6 +1508,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test scripts/chat-scroll.test.ts',
     tier: 'ci',
     seconds: 34,
+    weight: 5,
     catches: 'whether older history arriving above the viewport moves the message the '
       + 'reader is looking at — measured, in a real cascade, at 0px over four prepends '
       + 'of 1190px each. `gallery.tsx`\'s `chathistory` frame was built expressly to be '
@@ -1916,9 +1932,9 @@ export const SERIAL_GATES = {
 } satisfies Record<string, string>;
 
 /**
- * How many hardware threads a gate occupies while it runs, for every gate
- * that occupies more than one. The pre-publish wave is scheduled by this
- * budget against the machine's thread count, not by a count of gates.
+ * A gate's weight: the hardware threads it occupies at peak, one unless the
+ * row declares more. The deploy wave is scheduled by this budget against the
+ * machine's thread count, not by a count of gates.
  *
  * Why. Measured 2026-09-16 on the 24-thread workstation: the eleven-suite UI
  * row passes alone in 361 s and failed every deploy attempt at width 6 AND at
@@ -1932,34 +1948,18 @@ export const SERIAL_GATES = {
  * `gate:dead-code` at 1.7 (37 samples, mean 0.9). Six of the first beside two
  * of the second is forty threads on a box with twenty-four.
  *
- * The figures below are the measured PEAKS, rounded up, because a wall clock
- * inside a gate is hit by the peak and not by the mean. A browser row weighs
- * its one Chrome instance's peak; every `--parallel=4` row weighs the peak of
- * four workers each running its own thread pool; `bun run test:cli` runs the
- * same four workers through `scripts/test-cli.ts`. Everything not named here
- * weighs one. `deploy.test.ts` holds deploy.sh's table equal to this one.
+ * The declared figures are the measured PEAKS, rounded up, because a wall
+ * clock inside a gate is hit by the peak and not by the mean: a browser row
+ * weighs its one Chrome instance's peak (5); every `--parallel=4` row weighs
+ * the peak of four workers each running its own thread pool (11), and
+ * `bun run test:cli` runs the same four workers through `scripts/test-cli.ts`.
  */
-export const GATE_WEIGHTS = {
-  'bun test --parallel=4 packages/cf-backend/': 11,
-  'bun test --parallel=4 packages/cli-backend/': 11,
-  'bun run test:core': 11,
-  'bun run test:cli': 11,
-  'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts': 5,
-  'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts': 5,
-  'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts': 5,
-  'bun test scripts/react-runtime-identity.test.ts': 5,
-  'bun test scripts/swarm-tree-geometry.test.ts': 5,
-  'bun test scripts/chat-scroll.test.ts': 5,
-  'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts': 5,
-} satisfies Readonly<Record<string, number>>;
-
-/** A gate's weight: its declared figure, or one. */
-export function gateWeight(run: string): number {
-  return Object.entries(GATE_WEIGHTS).find(([declared]) => declared === run)?.[1] ?? 1;
+export function gateWeight(gate: Pick<Gate, 'weight'>): number {
+  return gate.weight ?? 1;
 }
 
 /** deploy.sh's weight table, parsed. The runner is bash and cannot import
- *  {@link GATE_WEIGHTS}, so the two are written twice and asserted once. */
+ *  the rows, so the copy it carries is held equal to them by `deploy.test.ts`. */
 export function deployWeights(
   source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
 ): Record<string, number> {
