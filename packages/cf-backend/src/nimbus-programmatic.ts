@@ -28,9 +28,11 @@
  */
 
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
+import type { FacetManagerHostHooks } from '@nimbus-sh/worker/workspace-host';
+import { diagnostics } from '@kinu.run/core/obs';
 import type * as programmaticModule from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
-import type * as routesModule from '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
-import type * as gitModule from '../../../node_modules/@nimbus-sh/worker/dist/git/commands.js';
+import type * as portCapabilityModule from '@nimbus-sh/worker/port-capability';
+import type * as gitModule from '@nimbus-sh/worker/git';
 
 // The per-port reservation record is Nimbus-owned storage: the owner that holds
 // a port, the capability its URL is built on, and its visibility. These reads
@@ -43,25 +45,25 @@ export {
   readPortReservationByOwner,
   releasePortReservation,
   restoreReservedPortCapability,
-} from '../../../node_modules/@nimbus-sh/worker/dist/session/port-capability.js';
+} from '@nimbus-sh/worker/port-capability';
 
 // A durable application's facet name, pinned per owner in Durable Object
 // storage so its SQLite is the same store on every launch.
 export {
   acquireDurableFacetSlot,
   freeDurableFacetSlot,
-} from '../../../node_modules/@nimbus-sh/worker/dist/facets/durable-slots.js';
+} from '@nimbus-sh/worker/durable-slots';
 
 export type {
   ProgrammaticExecOptions,
   ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
 
-export type { ResidentAppSummary, ResidentIdentity } from '../../../node_modules/@nimbus-sh/worker/dist/facets/manager.js';
+export type { ResidentAppSummary, ResidentIdentity } from '@nimbus-sh/worker/workspace-host';
 
 type Programmatic = typeof programmaticModule;
 
-type Routes = typeof routesModule;
+type Ports = typeof portCapabilityModule;
 
 type Git = typeof gitModule;
 
@@ -86,7 +88,7 @@ export interface NimbusProgrammatic {
    *  for WebSocket previews only: `rpcRouteCapabilityPort` answers an upgrade
    *  with 409 because a 101 cannot cross a Durable Object RPC boundary, and
    *  this one keeps fetch semantics. */
-  readonly routeCapabilityPort: Routes['routeCapabilityPort'];
+  readonly routeCapabilityPort: Ports['routeCapabilityPort'];
   /** `git` over a Nimbus filesystem — isomorphic-git against SqliteVFS, with no
    *  child process and nothing reaching a host's git. The session registers
    *  the command itself; the workspace host does the same here, because Kinu
@@ -98,10 +100,10 @@ let loading: Promise<NimbusProgrammatic> | null = null;
 
 export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
   loading ??= (async () => {
-    const [programmatic, routes, git] = await Promise.all([
+    const [programmatic, ports, git] = await Promise.all([
       import('../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js'),
-      import('../../../node_modules/@nimbus-sh/worker/dist/session/routes.js'),
-      import('../../../node_modules/@nimbus-sh/worker/dist/git/commands.js'),
+      import('@nimbus-sh/worker/port-capability'),
+      import('@nimbus-sh/worker/git'),
     ]);
 
     return {
@@ -121,7 +123,7 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
       rpcRunCode: programmatic.rpcRunCode,
       rpcStartProcess: programmatic.rpcStartProcess,
       rpcUnexposePort: programmatic.rpcUnexposePort,
-      routeCapabilityPort: routes.routeCapabilityPort,
+      routeCapabilityPort: ports.routeCapabilityPort,
       runGitCommand: git.runGitCommand,
     };
   })();
@@ -150,3 +152,24 @@ export const HOST_FABRIC_COMPOSITION: FabricComposition = {
   hostNamespace: 'OrchestratorAgent',
   hostDispatchMethod: 'supervisorOp',
 };
+
+/**
+ * What the facet manager tells its host, as this host hears it: an exit it
+ * did not run, a spawn, a line meant for the user. A session shows these on
+ * its terminal; a hosted workspace has none, so each lands as a diagnostics
+ * event under a stable name. The one hook missing here, `requestLaunchTurn`,
+ * is the host's own turn-granting primitive and is composed beside these.
+ */
+export function facetDiagnosticsHooks(): Pick<FacetManagerHostHooks, 'onExternalExit' | 'onSpawn' | 'notify'> {
+  return {
+    onExternalExit: (pid, code, reason) => {
+      diagnostics.event('workspace.facet.external_exit', { pid, code, reason });
+    },
+    onSpawn: (pid, command) => {
+      diagnostics.event('workspace.facet.spawn', { pid, command });
+    },
+    notify: (line) => {
+      diagnostics.event('workspace.facet.notify', { line });
+    },
+  };
+}

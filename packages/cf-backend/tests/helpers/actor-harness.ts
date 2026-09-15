@@ -982,6 +982,30 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
       // and the delete it performs when a port capability is revoked — which
       // answers whether a row was there, as the platform's does.
       delete: async (key: string) => kv.delete(key),
+      // The facet manager's launch journal and port reservations: listed by
+      // prefix, claimed inside a transaction, synced after a release.
+      list: async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
+        const entries = new Map<string, JsonValue>();
+
+        for (const [key, value] of kv) {
+          if (key.startsWith(options.prefix)) entries.set(key, value);
+        }
+
+        // SAFETY: the storage list contract types each row by the caller's T,
+        // which the untyped stand-in rows cannot name; `never` keeps the Map
+        // assignable to every T.
+        return entries as Map<string, never>;
+      },
+      transaction: async <T,>(body: (txn: {
+        get(key: string): Promise<JsonValue | undefined>;
+        put(key: string, value: JsonValue): Promise<void>;
+        delete(key: string): Promise<boolean>;
+      }) => Promise<T>): Promise<T> => body({
+        get: async (key) => kv.get(key),
+        put: async (key, value) => { kv.set(key, value); },
+        delete: async (key) => kv.delete(key),
+      }),
+      sync: async () => undefined,
       deleteAll: async () => {
         // workerd's `storage.deleteAll()` empties BOTH halves — the KV pairs
         // and every SQLite table. Clearing only the map would leave a
@@ -1083,7 +1107,10 @@ export function makeEnv(
   parentNamespace?: HarnessParentNamespace,
 ): Env {
   const bindings = {
-    LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
+    LOADER: {
+      get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); },
+      load: () => { throw new Error('harness LOADER: a dynamic worker is not loadable under bun'); },
+    },
     // The platform gateway is the harness's model provider: a parseable gateway
     // URL plus a recording AI binding, since the transport is the binding now.
     ...platformGatewayEnv(),

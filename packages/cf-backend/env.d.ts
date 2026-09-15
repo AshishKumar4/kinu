@@ -42,6 +42,14 @@ declare global {
      *  runtimes as npm packages. */
     NIMBUS_RUNTIME_CACHE?: R2Bucket;
     LOADER: WorkerLoader;
+    /** The facet manager's optional knobs, read once when it is composed
+     *  over the hosted workspace. None is bound here: a resident process is
+     *  hosted as a facet of the workspace's own object (`facet`, the
+     *  default — never `peer`), launches are paced at the library's default
+     *  chunk, and the debug placement line stays off. */
+    NIMBUS_PROCESS_HOST?: 'facet';
+    NIMBUS_LAUNCH_CHUNK_BYTES?: string;
+    NIMBUS_DEBUG?: string;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
