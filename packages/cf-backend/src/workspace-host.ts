@@ -39,7 +39,7 @@
  * run as resident Fabric processes; npm dev servers use the sandbox container.
  */
 
-import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { SupervisorOpResult, WorkspaceBundle, WorkspaceSession } from '@kinu.run/core/workspace';
 import { decodeJsonValue } from '@kinu.run/core';
 import type {
@@ -308,7 +308,7 @@ function resolveSlateLaunch(deps: HostedWorkspaceDeps, recipe: WorkerRecipe): Pr
 /**
  * Compose the workspace this Durable Object owns.
  *
- * Called once per isolate, lazily — `nextWorkspaceGeneration` bumps a durable
+ * Called once per isolate, lazily — `workspaceGenerationStorage` bumps a durable
  * counter, and the filesystem itself does not open until the first operation
  * touches it, so an activation that never reads a file pays for neither.
  */
@@ -318,7 +318,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
   const bundle = createWorkspace({
     sql,
     transactions: deps.ctx,
-    generation: nextWorkspaceGeneration(sql),
+    generation: workspaceGenerationStorage(sql),
     // What makes this object a workspace HOST rather than a bare filesystem
     // holder: the fabric mints every facet's `env.SUPERVISOR` binding, and
     // `ctx.exports` is adopted off `transactions` — which here IS the Durable
