@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  EXCLUSION_GROUPS, GATE_DEADLINES, GATE_WEIGHTS, SERIAL_GATES, deployDeadlines, deployExclusions,
-  deployWaves, deployWeights,
+  EXCLUSION_GROUPS, GATE_DEADLINES, LADDER, SERIAL_GATES, deployDeadlines, deployExclusions,
+  deployWaves, deployWeights, gateWeight,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
@@ -14,6 +14,7 @@ import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
+
 
 /** The bench gate's argv AS THE FIXTURE REPO EXPANDS IT: the first seven words
  *  are what bash resolves the two globs to inside `runDeploy`'s fixture, and the
@@ -461,13 +462,14 @@ describe("deploy gate", () => {
   // while the same row passed alone. Each heavy gate declares the threads it
   // occupies at peak, in scripts/ladder.ts, and the runner's table is held
   // equal to it here — written twice because the runner is bash.
-  test("the weight table in the runner is the one the ladder declares", () => {
+  test("the weight table in the runner is the one the ladder's rows declare", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(deployWeights(source)).toEqual({ ...GATE_WEIGHTS });
+    const declared = Object.fromEntries(LADDER.filter((gate) => gate.weight !== undefined).map((gate) => [gate.run, gateWeight(gate)]));
+    expect(deployWeights(source)).toEqual(declared);
     expect(source).toContain('weight="${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}"');
     expect(source).toContain('if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi');
 
-    for (const [run, weight] of Object.entries(GATE_WEIGHTS)) {
+    for (const [run, weight] of Object.entries(declared)) {
       // A weight of one is the default and a declaration of it is noise; a
       // weight on a non-gate schedules nothing.
       expect(weight, `${run} declares a weight of ${String(weight)}`).toBeGreaterThan(1);
@@ -481,7 +483,7 @@ describe("deploy gate", () => {
     const browserSuites = trackedFiles().filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
       && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
 
-    const weighted = new Set(Object.keys(GATE_WEIGHTS));
+    const weighted = new Set(Object.keys(declared));
 
     for (const gate of REQUIRED_GATES) {
       const opensChrome = browserSuites.some((file) => gate.split(" ").includes(file));
