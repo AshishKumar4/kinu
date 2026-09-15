@@ -223,6 +223,42 @@ describe('ChatEvent tool success/error fidelity', () => {
   });
 });
 
+describe('the loop repairs a malformed tool call before it lands', () => {
+  // The repair is the loop's own (`experimental_repairToolCall`), so a call the
+  // SDK cannot parse reads the same on every backend: a case-drifted name is
+  // rewritten to the one tool it names, double-encoded arguments are decoded,
+  // and the call then executes as the model meant it. What each rewrite settles
+  // is pinned in unit-repair-tool-call; this pins that the loop asks for it.
+  function readFileTool(received: unknown[]) {
+    return {
+      readFile: tool({
+        description: 'reads',
+        inputSchema: z.object({ path: z.string() }),
+        execute: async (input) => {
+          received.push(input);
+
+          return 'contents';
+        },
+      }),
+    };
+  }
+
+  test('a case-drifted name executes as the one tool it names', async () => {
+    const received: unknown[] = [];
+    const events = await collect(toolThenTextModel({ toolName: 'ReadFile', input: JSON.stringify({ path: 'a.txt' }) }), readFileTool(received));
+    expect(received).toEqual([{ path: 'a.txt' }]);
+    expect(events.find((e) => e.type === 'tool-call')).toMatchObject({ toolName: 'readFile', args: { path: 'a.txt' } });
+    expect(events.find((e) => e.type === 'tool-result')).toMatchObject({ toolName: 'readFile', result: 'contents', success: true });
+  });
+
+  test('double-encoded arguments are decoded and the call executes', async () => {
+    const received: unknown[] = [];
+    const events = await collect(toolThenTextModel({ toolName: 'readFile', input: JSON.stringify(JSON.stringify({ path: 'b.txt' })) }), readFileTool(received));
+    expect(received).toEqual([{ path: 'b.txt' }]);
+    expect(events.find((e) => e.type === 'tool-result')).toMatchObject({ toolName: 'readFile', result: 'contents', success: true });
+  });
+});
+
 describe('ChatEvent tool-result completeness', () => {
   // The result string is the call's durable record AND the turn steering's
   // identity for it. A head slice made two different outputs sharing a long

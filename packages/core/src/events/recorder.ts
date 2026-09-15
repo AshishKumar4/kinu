@@ -17,9 +17,9 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import {
   CONTEXT_EDIT_BOUNDARIES, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_VIA,
-  type RunEvent, type RunEventInput, type RunEventType,
+  type OpenTurnIdentity, type RunEvent, type RunEventInput, type RunEventType,
 } from './types';
-import { JsonValueSchema } from '../utils/json';
+import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
@@ -35,6 +35,12 @@ import { ToolOutcomeSchema } from '../types/tool-outcome';
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
  *  codec narrows native handles with (compaction/src/codec.ts:634-639). */
+const OpenTurnIdentitySchema: v.GenericSchema<OpenTurnIdentity> = v.object({
+  turnId: v.string(), messageId: v.string(), kind: v.picklist(['user', 'programmatic']), text: v.string(),
+  metadata: v.optional(JsonObjectSchema), pendingSendId: v.optional(v.string()),
+  steerIds: v.optional(v.array(v.string())),
+});
+
 const StoredModelMessageSchema: v.GenericSchema<ModelMessage> =
   v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success);
 
@@ -80,7 +86,8 @@ const HeadFileChangeSetSchema = v.object({
 export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('run_start'), agentId: v.string(),
     userMessage: v.optional(v.string()), caused_by: v.optional(v.string()),
-    ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()) }),
+    ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()),
+    turn: v.optional(OpenTurnIdentitySchema) }),
   v.object({ ...BaseFields, type: v.literal('turn_start'), turnIndex: v.number() }),
   v.object({ ...BaseFields, type: v.literal('tool_call_end'), name: v.string(),
     toolCallId: v.string(), args: v.optional(JsonValueSchema),
@@ -91,6 +98,9 @@ export const RunEventSchema = v.variant('type', [
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     usdFloorTokens: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema) }),
+  v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
+    toolCalls: v.array(v.object({ toolCallId: v.string(), toolName: v.string(), args: JsonValueSchema,
+      result: v.optional(v.string()), error: v.optional(v.string()) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
     usd: v.optional(v.number()), usdFloorTokens: v.optional(v.number()),
@@ -729,6 +739,58 @@ export class RunEventRecorder {
 
       return event.type === 'step_finish' ? event.messages ?? [] : [];
     });
+  }
+
+  /**
+   * The turn a run opened and never closed, with everything it made durable
+   * before the process that ran it died: the completed steps' messages, in
+   * order, and the newest partial of the step that was in flight (absent when
+   * that step never wrote one, or when it finished).
+   *
+   * "Never closed" is the absence of a `run_end` row: the loop seals every
+   * run it opens, on every path, so a run without one belongs to a dead
+   * process. Only runs the turn loop opened carry a turn identity; a scaffold
+   * or side-lane run without one is not a turn and is not answered.
+   */
+  openTurn(): {
+    readonly runId: string;
+    readonly turn: OpenTurnIdentity;
+    readonly steps: ModelMessage[];
+    readonly partial: Extract<RunEvent, { type: 'step_partial' }> | null;
+  } | null {
+    this.actor.assertCurrent();
+
+    const rows = this.sql<{ run_id: string; payload: string }>`
+      SELECT run_id, payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = ${'run_start' satisfies RunEventType}
+        AND run_id NOT IN (
+          SELECT run_id FROM run_events
+          WHERE actor_id = ${this.actorId} AND type = ${'run_end' satisfies RunEventType})
+      ORDER BY ts DESC, rowid DESC LIMIT 1`;
+
+    const row = rows[0];
+
+    if (row === undefined) return null;
+    const start = parseStoredRunEvent(row.payload);
+
+    if (start.type !== 'run_start' || start.turn === undefined) return null;
+
+    const steps = this.transcript(row.run_id);
+
+    const finishedSteps = this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_finish' satisfies RunEventType}`[0]?.n ?? 0;
+
+    const partials = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_partial' satisfies RunEventType}
+      ORDER BY event_index DESC LIMIT 1`;
+
+    const newest = partials[0] === undefined ? null : parseStoredRunEvent(partials[0].payload);
+    // A partial of a step that later finished is superseded by that step's row.
+    const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
+
+    return { runId: row.run_id, turn: start.turn, steps, partial };
   }
 
   /**

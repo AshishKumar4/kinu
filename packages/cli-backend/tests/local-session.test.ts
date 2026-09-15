@@ -4737,9 +4737,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const events = session.getRunEvents(runs[0]!.runId);
     // Profile resolution lands before the step. A first turn records no
     // steering row: the step-0 delegation hint is gone, so nothing is spliced
-    // and nothing is counted.
+    // and nothing is counted. The step's first delta writes the partial the
+    // continuation invariant reads back (AN INTERRUPTED TURN CONTINUES), and
+    // the step's own finish row supersedes it.
     expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'profile_resolution', 'step_finish',
+      'run_start', 'turn_start', 'profile_resolution', 'step_partial', 'step_finish',
       'turn_end', 'run_end',
     ]);
 
@@ -4748,6 +4750,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     if (!start || start.type !== 'run_start') throw new Error('run_start event is missing');
     expect(start.caused_by).toBe('chat');
     expect(start.userMessage).toBe('hi');
+    // The run names the turn it was opened for, which is what lets the next
+    // process re-open the same turn where this one stopped.
+    expect(start.turn).toMatchObject({ kind: 'user', text: 'hi' });
 
     const end = events.at(-1);
 
@@ -4756,9 +4761,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.error).toBeUndefined();
 
     // Monotonic indices are what makes a resume possible at all.
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
-    expect(session.getRunEvents(runs[0]!.runId, { since: 4 }).map((e) => e.type))
+    expect(session.getRunEvents(runs[0]!.runId, { since: 5 }).map((e) => e.type))
       .toEqual(['turn_end', 'run_end']);
 
     await session.end();

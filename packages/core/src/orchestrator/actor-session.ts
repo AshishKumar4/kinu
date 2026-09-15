@@ -300,7 +300,24 @@ export class ActorSession {
 
   appendInput(lease: ActorTurnLease, message: ModelMessage): void {
     if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'actor input must belong to a preparing turn');
+
+    // The one rule `historyForInput` states for a delegated turn, applied to a
+    // root turn too: a turn that already holds a durable claim was admitted
+    // against a context that carries its input, and the working history
+    // restored from that claim already ends in it. A turn re-opened after the
+    // process that admitted it died is exactly that turn; appending again
+    // would ask the model the same question twice in one request.
+    if (this.options.claims.read(lease.turnId) !== null) return;
+
     this.messages.push(message);
+  }
+
+  /** What a re-opened turn had already produced, placed after its input: the
+   *  assistant's own prior output, which the model continues from. Never
+   *  deduplicated — it is new to this activation's working history. */
+  appendPriorOutput(lease: ActorTurnLease, messages: readonly ModelMessage[]): void {
+    if (this.requireTurn(lease).phase !== 'preparing') throw new KinuError('denied', 'prior output must belong to a preparing turn');
+    this.messages.push(...messages);
   }
 
   /**
@@ -349,13 +366,15 @@ export class ActorSession {
 
   /** The user's message, through the inbox: it rides the running turn's next
    *  step, or, when nothing is running, becomes the next user turn. */
-  send(steer: UserSteer & { readonly id: string }): Promise<SendOutcome> {
+  send(steer: UserSteer & { readonly id: string; readonly mode?: WorkMode }): Promise<SendOutcome> {
     return this.orchestrator.inbox.send({
       kind: USER_MESSAGE_SIGNAL_KIND,
       text: steer.text,
       user: {
         id: steer.id,
-        mode: this.mode,
+        // The composer's mode when the message names one; the running turn's
+        // otherwise — a leftover reruns under the mode its words were typed in.
+        mode: steer.mode ?? this.mode,
         ...(steer.files !== undefined && { files: steer.files }),
       },
     });

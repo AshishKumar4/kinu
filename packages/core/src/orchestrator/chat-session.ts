@@ -41,6 +41,18 @@
  *   restored — mid-turn rows into the inbox, idle rows as reruns in acceptance
  *   order; a stranded event delivery is re-pended under the single-driver
  *   lease; owed terminal effects resume through the backend's ledger.
+ *
+ *   AN INTERRUPTED TURN CONTINUES. A turn the process died inside is re-opened
+ *   by the next one where it stopped, not restarted: the run ledger holds
+ *   every completed step's messages (`step_finish`) and the in-flight step's
+ *   output at the last partial cadence (`step_partial`, written on the first
+ *   delta and then every {@link PARTIAL_FLUSH_EVERY}), and the continuation
+ *   re-enters them as the assistant's own prior output, so the model makes
+ *   only the remaining calls, no tool whose result is in the ledger runs
+ *   again, a tool call cut before it answered is repaired to an explicit
+ *   interrupted outcome the model reads, and the answer persisted is the
+ *   concatenation the client streamed. A turn cut before any output is the
+ *   degenerate case: nothing to re-enter, so it is the same turn run again.
  */
 
 import type { ModelMessage } from 'ai';
@@ -49,7 +61,7 @@ import type { ChatEvent } from '../chat';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
-import type { RunEvent } from '../events/types';
+import type { PartialToolCall, RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
 import { estimateTokens } from '../llm';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
@@ -79,6 +91,16 @@ import {
 import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
+
+/**
+ * How often an interrupted answer's partial text is made durable: on its first
+ * delta, then every this many. ONE cadence for the two consumers of a partial
+ * — the loop's own step ledger, which a continuation re-enters into the model
+ * call, and a backend's wire replay store, which a reconnecting client is
+ * replayed from — so the two never disagree about how much of the answer
+ * survived an eviction.
+ */
+const PARTIAL_FLUSH_EVERY = 10;
 
 /**
  * The grace this backend allows a stranded event delivery: none.
@@ -118,7 +140,10 @@ type TurnCommit = { readonly committed: CommittedTurn } | { readonly failure: Ki
 /** What the frontends render. A superset of runChat's ChatEvent with the
  *  lifecycle + side-channel (evolution, broadcast, background) events. */
 export type SessionEvent =
-  | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode }
+  | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string; workMode: WorkMode;
+      /** The opening row's id and the answer's id, both minted at admission,
+       *  so a transport can key a turn's frames and its persisted row. */
+      turnId: string; messageId: string }
   | { type: 'text-delta'; delta: string }
   | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | ({ type: 'tool-result'; toolName: string; toolCallId: string; result: string } & ToolOutcome)
@@ -165,6 +190,9 @@ interface QueueItem {
    *  here, or already durable — the pump yields the slot and settles it
    *  'yielded' without running a turn. See ProgrammaticTurn.yieldsToUserMessage. */
   yieldsToUserMessage?: boolean;
+  /** The turn a dead process left open, re-opened here under its own ids:
+   *  what it had already produced, re-entered ahead of the remaining calls. */
+  continuation?: TurnContinuation;
   /**
    * Settle whoever queued this item — exactly once, and told whether the turn
    * RAN.
@@ -180,6 +208,58 @@ interface QueueItem {
   settle: (refusal: Refusal | null, yielded?: boolean) => void;
 }
 
+/** What a re-opened turn resumes from: the answer's id it was streaming under,
+ *  the completed steps' messages and the cut step's output. */
+interface TurnContinuation {
+  readonly messageId: string;
+  readonly steps: readonly ModelMessage[];
+  readonly partial: { readonly text: string; readonly toolCalls: readonly PartialToolCall[] } | null;
+}
+
+/** What a tool that was cut before it answered tells the model on the
+ *  continuation: the outcome is stated, never dropped, so the model knows the
+ *  call never ran to completion and can decide to make it again. */
+const INTERRUPTED_TOOL_OUTPUT = 'This tool call was interrupted before it produced a result; the process running it stopped. Make the call again if its result is still needed.';
+
+/**
+ * The assistant's prior output for a re-opened turn, as model messages: every
+ * finished step's messages as recorded, then the cut step — its text and the
+ * tool calls it issued as one assistant message, each call answered by the
+ * result the ledger holds or, for a call cut before it answered, by the
+ * explicit interrupted outcome (the repair the SDK's own recovery applies to a
+ * dangling tool part). A cut step that produced nothing adds nothing.
+ */
+function priorOutputOf(continuation: TurnContinuation): ModelMessage[] {
+  const messages: ModelMessage[] = [...continuation.steps];
+  const partial = continuation.partial;
+
+  if (partial === null || (partial.text === '' && partial.toolCalls.length === 0)) return messages;
+
+  messages.push({
+    role: 'assistant',
+    content: [
+      ...(partial.text === '' ? [] : [{ type: 'text' as const, text: partial.text }]),
+      ...partial.toolCalls.map((call) => ({ type: 'tool-call' as const, toolCallId: call.toolCallId, toolName: call.toolName, input: call.args })),
+    ],
+  });
+
+  if (partial.toolCalls.length > 0) {
+    messages.push({
+      role: 'tool',
+      content: partial.toolCalls.map((call) => ({
+        type: 'tool-result' as const,
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        output: call.error !== undefined
+          ? { type: 'error-text' as const, value: call.error }
+          : { type: 'text' as const, value: call.result ?? INTERRUPTED_TOOL_OUTPUT },
+      })),
+    });
+  }
+
+  return messages;
+}
+
 /** How events reach the client: the CLI's in-process callback today, a
  *  WebSocket frame writer on the hosted backend later. May throw — the session
  *  records the failure and the loop continues. */
@@ -193,6 +273,11 @@ export interface ChatTurnInput {
   readonly text: string;
   readonly files?: ReadonlyArray<PromptFile>;
   readonly metadata?: ProgrammaticTurn['metadata'];
+  /** What the turn had already produced when the last process died — the
+   *  assistant's own prior output, placed after the input on the working
+   *  history so the model continues rather than starts over. Absent on a
+   *  turn that is new. */
+  readonly priorOutput?: readonly ModelMessage[];
 }
 
 /** One assembled turn, ready to execute. */
@@ -296,6 +381,9 @@ export class ChatSession {
    *  written by `persist`, and the scope every effect claim this turn makes is
    *  keyed to. Null between turns. */
   private turnId: string | null = null;
+  /** The id the in-flight turn's answer is persisted under — minted with the
+   *  turn, streamed under, committed under. */
+  private messageId = '';
   /** The mechanical completion gate (core completion-gate.ts). Armed only by a
    *  one-shot task turn: on the interactive surface the human reading the
    *  answer is the check, so it never arms and costs nothing. */
@@ -335,6 +423,7 @@ export class ChatSession {
       onDrain: (rows) => { this.commitLandedSteers(rows); },
       turnId: () => this.steerTurnId(),
     });
+    this.restoreOpenTurn();
     this.restorePendingSends();
   }
 
@@ -530,7 +619,16 @@ export class ChatSession {
    */
   async send(
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
-    opts: { tier?: TierId } = {},
+    opts: {
+      readonly tier?: TierId;
+      /** The message's own id, when the client minted one: the opening row,
+       *  the reservation and every announcement then carry the id the client
+       *  already renders under. Absent, the session mints one. */
+      readonly id?: string;
+      /** The composer's mode, a fact on the message: a turn it starts runs
+       *  under it, and a splice's leftovers rerun under it. Build by default. */
+      readonly mode?: WorkMode;
+    } = {},
   ): Promise<SendLanding> {
     const { text, files } = normalizePromptInput(input);
 
@@ -538,8 +636,8 @@ export class ChatSession {
       // Identity is assigned on ACCEPTANCE, so the queued announcement, the
       // landed one and the durable row are all the same message to a surface —
       // which is what stops one being rendered twice under two names.
-      const id = `steer-${crypto.randomUUID().slice(0, 12)}`;
-      const steer: UserSteer & { readonly id: string } = { text, id };
+      const id = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
+      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
       if (files !== undefined && files.length > 0) Object.assign(steer, { files });
       const outcome = await this.actorSession.send(steer);
@@ -551,15 +649,21 @@ export class ChatSession {
     }
 
     const { promise, resolve, reject } = Promise.withResolvers<SendLanding>();
-    const metadata = opts.tier === undefined ? undefined : { profile_tier: opts.tier };
+    const mode = opts.mode ?? 'build';
+
+    const metadata = opts.tier === undefined && opts.mode === undefined ? undefined : {
+      ...(opts.tier !== undefined && { profile_tier: opts.tier }),
+      ...(opts.mode !== undefined && { kinuMode: opts.mode }),
+    };
+
     // The acceptance and the row are the same fact: the pending_steers insert
     // runs BEFORE the pump can begin the turn, so a process that dies after
     // this line still owes the person the message it acknowledged.
-    const pendingSendId = `steer-${crypto.randomUUID().slice(0, 12)}`;
-    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode: 'build', text, files });
+    const pendingSendId = opts.id ?? `steer-${crypto.randomUUID().slice(0, 12)}`;
+    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files });
     this.queue.push({
       text, files, metadata, kind: 'user',
-      turnId: crypto.randomUUID(), pendingSendId,
+      turnId: opts.id ?? crypto.randomUUID(), pendingSendId,
       settle: (refusal) => {
         // A refusal means this process never owed the message — another driver
         // took it — so the reservation goes with the refusal. Leaving it
@@ -843,13 +947,6 @@ export class ChatSession {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     const mode = workModeForTurnMetadata(item.metadata);
-    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode });
-
-    const startedAt = Date.now();
-    // Open this turn's run in the durable event log (core turn-lifecycle).
-    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
-    // one names its trigger.
-    this.runId = `run-${crypto.randomUUID()}`;
     // The id the turn's opening row will carry, decided HERE rather than at
     // persist time: the effect claims a tool makes mid-turn are keyed to it, and
     // a re-announced programmatic turn must key to the same one its first
@@ -857,6 +954,19 @@ export class ChatSession {
     this.turnId = item.kind === 'programmatic'
       ? `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${item.idempotencyKey ?? crypto.randomUUID()}`
       : item.turnId ?? crypto.randomUUID();
+    // The answer's id, minted with the turn's: the roster keys on it at the
+    // commit, and a transport streams the answer under it from the first chunk,
+    // so the row the client builds live and the row persisted are one message.
+    // A re-opened turn keeps the id it was streaming under: the client that
+    // reconnects holds that message, and the answer is one row either way.
+    this.messageId = item.continuation?.messageId ?? crypto.randomUUID();
+    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId });
+
+    const startedAt = Date.now();
+    // Open this turn's run in the durable event log (core turn-lifecycle).
+    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
+    // one names its trigger.
+    this.runId = `run-${crypto.randomUUID()}`;
 
     // A USER turn's opening row is durable at admission, not at commit — a
     // steer landed mid-turn is written when the drain sees it (before the
@@ -878,6 +988,14 @@ export class ChatSession {
       causedBy: event ?? 'chat',
       userMessage: item.text,
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
+      // The turn this run is for, so a process that dies inside it leaves the
+      // next one enough to re-open the same turn where it stopped.
+      turn: {
+        turnId: this.turnId, messageId: this.messageId, kind: item.kind, text: item.text,
+        ...(item.metadata !== undefined && { metadata: item.metadata }),
+        ...(item.pendingSendId !== undefined && { pendingSendId: item.pendingSendId }),
+        ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
+      },
     });
 
     try {
@@ -943,17 +1061,93 @@ export class ChatSession {
 
   /** The turn itself: assemble it, stream it, finalize it. Everything here may
    *  throw; processTurn owns what that means. */
+  /**
+   * The in-flight step's output, made durable at the partial cadence: the
+   * text so far and the tool calls issued so far with their results, written
+   * on the step's first delta and then every {@link PARTIAL_FLUSH_EVERY}
+   * chunks, and at once when a tool answers. `step_finish` supersedes it for a
+   * step that finishes; a step that does not is what a continuation resumes
+   * from. Step indices count from the steps a continuation already carries,
+   * so the row names the same step the accumulator does.
+   */
+  private partialLedger(continuation: TurnContinuation | undefined) {
+    let stepIndex = (continuation?.steps.length ?? 0) + 1;
+    let text = '';
+    let toolCalls: PartialToolCall[] = [];
+    let sinceFlush = 0;
+    let flushedContent = false;
+
+    const flush = (): void => {
+      if (this.runId === null) return;
+      this.eventRecorder.emit(this.runId, { type: 'step_partial', stepIndex, text, toolCalls });
+      sinceFlush = 0;
+      flushedContent = true;
+    };
+
+    return {
+      observe: (event: ChatEvent) => {
+        switch (event.type) {
+          case 'text-delta':
+            text += event.delta;
+            sinceFlush += 1;
+
+            if (!flushedContent || sinceFlush >= PARTIAL_FLUSH_EVERY) flush();
+
+            return;
+          case 'tool-call':
+            toolCalls = [...toolCalls, { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args }];
+            sinceFlush += 1;
+
+            if (!flushedContent || sinceFlush >= PARTIAL_FLUSH_EVERY) flush();
+
+            return;
+          case 'tool-result':
+            toolCalls = toolCalls.map((call) => call.toolCallId === event.toolCallId
+              ? { ...call, ...(event.success ? { result: event.result } : { error: event.error ?? event.result }) }
+              : call);
+            flush();
+
+            return;
+          case 'step-finish':
+            stepIndex += 1;
+            text = '';
+            toolCalls = [];
+            sinceFlush = 0;
+            flushedContent = false;
+
+            return;
+          case 'reasoning-delta':
+          case 'done':
+          case 'error':
+            return;
+        }
+      },
+    };
+  }
+
   private async runTurn(item: QueueItem, event: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
-    const prepared = await this.ports.prepareTurn(item, lease);
+    const prepared = await this.ports.prepareTurn(
+      item.continuation === undefined ? item : { ...item, priorOutput: priorOutputOf(item.continuation) },
+      lease,
+    );
+
+    const partial = this.partialLedger(item.continuation);
 
     const execution = await this.actorSession.execute(lease, {
       task: item.text,
       ...prepared.execution,
     }, (event) => {
+      partial.observe(event);
+
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
     });
 
-    const fullText = execution.text;
+    // A continuation's answer is what the client streamed as ONE message: the
+    // cut step's text the last process left, then what this one produced. The
+    // finished steps' text is already in the ledger as those steps' own
+    // messages and in the client's rendering of them; it is not part of the
+    // answer row twice.
+    const fullText = (item.continuation?.partial?.text ?? '') + execution.text;
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;
@@ -1114,9 +1308,9 @@ export class ChatSession {
       // stamped metadata is what states authorship at rest; the prefix only keys
       // the idempotency.
       const turnId = this.turnId ?? crypto.randomUUID();
-      // Minted HERE rather than inside `persist`, because the roster keys on it
-      // and the roster is frozen before the write.
-      const messageId = crypto.randomUUID();
+      // Minted at admission rather than inside `persist`, because the roster
+      // keys on it and the roster is frozen before the write.
+      const messageId = this.messageId;
 
       // The confirming turn is over: what the agent did with its free re-look
       // IS the gate's conversion number, and the run row carries it. Before the
@@ -1285,13 +1479,71 @@ export class ChatSession {
     return this.queue.find((item) => item.kind === 'user')?.turnId ?? this.turnId;
   }
 
+  /**
+   * AN INTERRUPTED TURN CONTINUES — session start's half.
+   *
+   * The run ledger names the turn the last process died inside (`run_start`
+   * carries the turn's identity; `run_end` never came) and holds what it had
+   * produced: the finished steps' messages and the cut step's partial. That
+   * turn is re-queued FIRST, under its own opening row and answer id, with
+   * that output as its prior output, so the model picks up where it stopped.
+   * The reservation the turn was admitted from is still on disk — the commit
+   * that would have retired it never ran — so it is claimed by the re-opened
+   * item here, and {@link restorePendingSends} leaves it alone rather than
+   * queueing the same words a second time.
+   *
+   * The degenerate case: a turn cut before any output has an empty ledger, and
+   * the re-opened item is the same turn run again.
+   */
+  private reopened: string | null = null;
+
+  private restoreOpenTurn(): void {
+    const open = this.eventRecorder.openTurn();
+
+    if (open === null) return;
+    const { turn, steps, partial } = open;
+
+    const item: QueueItem = {
+      text: turn.text,
+      kind: turn.kind,
+      turnId: turn.turnId,
+      ...(turn.metadata !== undefined && { metadata: turn.metadata }),
+      ...(turn.pendingSendId !== undefined && { pendingSendId: turn.pendingSendId, files: this.pendingSends.files(turn.pendingSendId) }),
+      ...(turn.steerIds !== undefined && { steerIds: turn.steerIds }),
+      rerun: true,
+      continuation: {
+        messageId: turn.messageId,
+        steps,
+        partial: partial === null ? null : { text: partial.text, toolCalls: partial.toolCalls },
+      },
+      settle: () => {},
+    };
+
+    if (turn.kind === 'programmatic') item.idempotencyKey = turn.turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length);
+    this.reopened = turn.pendingSendId ?? null;
+    this.queue.push(item);
+
+    this.emit({
+      type: 'background', event: 'turn_reopened',
+      message: `continuing the turn the last process left: ${String(steps.length)} step${steps.length === 1 ? '' : 's'} kept`
+        + (partial === null ? '' : `, resuming mid-step ${String(partial.stepIndex)}`),
+    });
+
+    queueMicrotask(() => {
+      if (this.ended) return;
+      this.pump();
+    });
+  }
+
   /** Session start's half of the send rule: the rows a dead process left
    *  acknowledged, restored before any new work runs. Mid-turn rows re-enter
    *  the inbox (they land in the next turn's first step); idle-queued rows
    *  re-enter the pump in sequence order as turns of their own — the same
    *  sweep the cf backend runs on wake, over this workspace's own store. */
   private restorePendingSends(): void {
-    const rows = this.pendingSends.restore();
+    // The row a re-opened turn was admitted from is that turn's, not a send to
+    // rerun; the rows bound to the re-opened turn land in its first step.
+    const rows = this.pendingSends.restore().filter((row) => row.id !== this.reopened);
 
     if (rows.length === 0) return;
 
