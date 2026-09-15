@@ -1678,7 +1678,6 @@ export {
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONSENT_TIMEOUT_MS,
-  DEVICE_PROVISION_METHOD,
   DEVICE_CONNECT_DISCLOSURE,
   summarizeDeviceAction,
   type DeviceConsentDecision,
@@ -2310,7 +2309,7 @@ export {
 export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
 
 export {
-  executorDescription, executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
+  executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
   pickDefaultExecutor, releaseSubstrate, type ExecutorAvailability, type ReleaseSubstrate,
 } from './read-models/executors';
 
