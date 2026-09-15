@@ -124,6 +124,8 @@ interface BackgroundHandle {
   mode(): 'idle' | 'working' | 'attention';
   pointer(): number;
   advance(dt: number): void;
+  freeze(): void;
+  thaw(): void;
 }
 
 declare global {
@@ -476,16 +478,19 @@ describe('the living background', () => {
         await pause(4000);
 
         // Absolute presence in the pointer's disc, each live shot against
-        // the same hidden-host ground, gated on the hold itself: the shot
+        // the same hidden-host ground, gated on the hold itself: the shot.
+        // The rAF loop would race the readback, so the measured window runs
+        // frozen — the test's own advances are the only steps the picture
+        // takes, and the pixels are a pure function of them.
         const disc = { x: 0.94, y: 0.2, r: 0.06 };
+
+        await page.evaluate(() => window.__kinuAppBackground?.freeze());
+
         const quiet = await page.screenshot({ captureBeyondViewport: false });
 
         // Onto the card first: the hold arms there.
         await page.mouse.move(0.8 * 1440, 0.3 * 900, { steps: 12 });
 
-        // The hold ramps on the picture's clock, not wall time: drive the
-        // simulation deterministically through `advance`, so the assertion
-        // reads the picture after the same number of ticks every run.
         const cardHold = await page.evaluate(() => {
           const handle = window.__kinuAppBackground;
 
@@ -519,6 +524,7 @@ describe('the living background', () => {
         });
 
         const after = await page.screenshot({ captureBeyondViewport: false });
+
         await page.evaluate(() => {
           const host = document.querySelector<HTMLElement>('[data-app-background]');
 
@@ -527,13 +533,15 @@ describe('the living background', () => {
 
         const ground = await page.screenshot({ captureBeyondViewport: false });
 
+        await page.evaluate(() => window.__kinuAppBackground?.thaw());
+
         const quietPresence = await bandDeltas(page, quiet, ground, disc);
         const heldPresence = await bandDeltas(page, held, ground, disc);
         const afterPresence = await bandDeltas(page, after, ground, disc);
         process.stdout.write(
           `mesh-live: disc presence quiet=${quietPresence.rim.toFixed(5)} held=${heldPresence.rim.toFixed(5)} after=${afterPresence.rim.toFixed(5)}\n`,
         );
-        expect(heldPresence.rim).toBeGreaterThan(quietPresence.rim * 1.2);
+        expect(heldPresence.rim).toBeGreaterThan(quietPresence.rim * 1.3);
         expect(afterPresence.rim).toBeLessThan(quietPresence.rim * 1.3);
       } finally {
         await page.close();
