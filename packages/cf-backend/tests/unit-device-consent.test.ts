@@ -37,16 +37,15 @@ describe('device consent prompt data', () => {
     expect(DEVICE_CONSENT_DENIED).not.toContain('later');
   });
 
-  test('the connect disclosure states the sandbox and where the switch is', () => {
-    // The disclosure is what a person reads BEFORE the daemon is installed, so
-    // it has to describe what actually happens: a sandbox by default, and one
-    // switch that turns it off. "Run commands, read and write files here, as
-    // you" is true only with the sandbox off.
-    const text = DEVICE_CONNECT_DISCLOSURE.join(' ');
-    expect(text).toContain('sandbox');
-    expect(text).toContain('Sandbox switch');
-    expect(text).toContain('each workspace');
-    expect(text).toContain('no inbound ports');
+  test('the connect disclosure is three lines: daemon, sandbox, revoke', () => {
+    // The disclosure is what a person reads BEFORE the daemon is installed,
+    // in the owner's own fewer words. Six sentences drifted back into it; a
+    // fourth line arriving unnoticed is how that happens again.
+    expect(DEVICE_CONNECT_DISCLOSURE).toEqual([
+      'Kinu installs a small daemon here and links this machine to your account.',
+      'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
+      'The daemon only dials out. Revoke it any time under Account settings → Devices.',
+    ]);
   });
 });
 

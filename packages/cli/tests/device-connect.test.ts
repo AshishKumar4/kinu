@@ -220,10 +220,11 @@ function connectedDevice(connected: boolean, overrides: Partial<CloudDevice> = {
   };
 }
 
-/** What connectDevice returns for the stub's default row: the device id plus
- *  the sandbox state that row reported. */
-function connectedResult() {
-  return { kind: 'connected', deviceId: 'dev_1', sandbox: connectedDevice(true).sandbox };
+/** What connectDevice returns for the stub's default row: the device id, the
+ *  row's own label (the name that prints), and the sandbox state it
+ *  reported. */
+function connectedResult(label = connectedDevice(true).label) {
+  return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox };
 }
 
 async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
@@ -1106,9 +1107,9 @@ describe('classic cloud chat connect prompt', () => {
   });
 });
 
-describe('kinu connect states its terms, takes a name, and waits for a yes', () => {
+describe('kinu connect waits on the daemon and says less', () => {
   /** The real `kinu connect`, under a PTY so its /dev/tty prompts are reachable. */
-  function spawnConnectInPty(home: string) {
+  function spawnConnectInPty(home: string, label?: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
     const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
@@ -1118,6 +1119,7 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
       quote(process.execPath),
       quote(cliBin),
       'connect',
+      ...(label === undefined ? [] : ['--label', quote(label)]),
     ].join(' ');
 
     const proc = Bun.spawn({
@@ -1156,42 +1158,95 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     };
   }
 
-  test('it states what access it grants, registers under the name given, and links', async () => {
+  test('the hub row reading connected ends the wait with the row label', async () => {
+    // The hub answers the row's own label, not the typed name: the stub
+    // reports them apart so a success that echoes the prompt input fails.
     let registered = false;
-    let label: string | undefined;
 
-    const stub = startStubCloud({
-      devices: () => (registered ? [connectedDevice(true)] : []),
-      onRegister: (body) => { registered = true; label = body?.label; },
-    });
+    const devices = () => (registered ? [connectedDevice(true, { label: 'hub-names-it' })] : []);
+    const stub = startStubCloud({ devices, onRegister: () => { registered = true; } });
 
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const connect = spawnConnectInPty(home);
-    // The terms come BEFORE anything is installed.
-    await connect.waitFor('Connecting installs the Kinu daemon on this machine');
-    await connect.waitFor('Revoke it under Account settings');
-    await connect.waitFor('one Sandbox switch per device');
-    await connect.waitFor('Name this device');
+    // The three-line disclosure comes BEFORE anything is installed.
+    await connect.waitFor('Kinu installs a small daemon here');
+    await connect.waitFor('Everything else stays invisible to it.');
+    await connect.waitFor('The daemon only dials out.');
+    await connect.waitFor('Device name');
     expect(stub.hits.register).toBe(0);
     expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
 
-    await connect.send('studio tower');
-    await connect.waitFor('Link this machine as "studio tower" and start the daemon?');
+    await connect.send('typed-name');
+    await connect.waitFor('Link and start the daemon?');
     expect(stub.hits.register).toBe(0); // still nothing, the question is unanswered
 
     await connect.send('y');
-    await connect.waitFor('Connected this machine as');
+    await connect.waitFor('✓ Connected as hub-names-it');
     // The machine's own report reaches the terminal.
     await connect.waitFor('Sandbox on. The agent sees its home plus the folders you picked');
+    await connect.waitFor('Manage it under Account settings → Devices.');
+    await connect.waitFor('Daemon log:');
     await connect.proc.exited;
     await connect.drained;
 
-    expect(connect.output()).toContain('studio tower');
     expect(stub.hits.register).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
-    expect(label).toBe('studio tower');
     expect(existsSync(join(home, 'device.json'))).toBe(true);
+
+    const daemonPid = await waitForDaemonPid(home);
+    process.kill(daemonPid, 'SIGTERM');
+    expect(await waitForPidExit(daemonPid)).toBe(true);
+  }, 30_000);
+
+  test('the stub daemon exiting ends the wait with its tail', async () => {
+    // The daemon the CLI ships answers 401 with the rejection it logs, then
+    // exits 4. That exit is the failure the wait reports, quoting the
+    // daemon's own last lines.
+    const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [401] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const connect = spawnConnectInPty(home, 'tail-box');
+    await connect.waitFor('Link and start the daemon?');
+    await connect.send('y');
+    await connect.waitFor('the device daemon exited before it could connect (exit code 4)');
+    await connect.waitFor('device credentials were rejected; re-run: kinu connect');
+    await connect.proc.exited;
+    await connect.drained;
+
+    expect(connect.output()).not.toContain('✓ Connected as');
+  }, 30_000);
+
+  test('a stub alive and never connecting leaves the command waiting', async () => {
+    // The hub keeps answering 404 to the daemon's tickets, so the daemon
+    // keeps dialling; the roster row never reads connected. After a short
+    // scripted advance the command is still on the wait — no deadline fires
+    // on its behalf, and the product code carries no clock for one to read.
+    const stub = startStubCloud({ devices: () => [connectedDevice(false)], ticketStatuses: [404] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const waiting = spawnConnectInPty(home, 'patient-box');
+    await waiting.waitFor('Link and start the daemon?');
+    await waiting.send('y');
+    await waiting.waitFor('Waiting for the daemon to connect');
+    // Advance two list polls by watching the stub's own counter: the wait is
+    // alive, not finished — the process neither exited nor printed either
+    // ending. A sleep would name a duration the product never promises; this
+    // names the polls the wait actually makes.
+
+    const listsAtStart = stub.hits.list;
+
+    await waiting.waitFor('.');
+
+    while (stub.hits.list < listsAtStart + 2) await Bun.sleep(25);
+    expect(waiting.proc.exitCode).toBeNull();
+    expect(waiting.output()).not.toContain('✓ Connected as');
+    expect(waiting.output()).not.toContain('exited before it could connect');
+    expect(stub.hits.list).toBeGreaterThanOrEqual(listsAtStart + 2);
+
+    waiting.proc.kill('SIGINT');
+    await waiting.proc.exited;
+    await waiting.drained;
 
     const daemonPid = await waitForDaemonPid(home);
     process.kill(daemonPid, 'SIGTERM');
@@ -1203,9 +1258,9 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const connect = spawnConnectInPty(home);
-    await connect.waitFor('Name this device');
-    await connect.send(''); // take the suggested user@hostname
-    await connect.waitFor('and start the daemon?');
+    await connect.waitFor('Device name');
+    await connect.send(''); // take the suggested hostname
+    await connect.waitFor('Link and start the daemon?');
     await connect.send('n');
     await connect.proc.exited;
     await connect.drained;
@@ -1218,19 +1273,17 @@ describe('kinu connect states its terms, takes a name, and waits for a yes', () 
     expect(existsSync(join(home, 'pc-agent.pid'))).toBe(false);
   }, 30_000);
 
-  test('the suggested name is this machine, not a generic label', async () => {
+  test('the suggested name is the hostname, nothing else', async () => {
     const home = makeHome({ origin: 'https://example.invalid', accessToken: 'ptc_test' });
 
     const out = await runScript(home, `
       import { hostname } from 'node:os';
       import { defaultDeviceName } from './packages/cli/src/device-connect.ts';
-      console.log(JSON.stringify({ name: defaultDeviceName(), host: hostname() }));
+      console.log(JSON.stringify({ name: defaultDeviceName(), host: hostname().trim() }));
     `);
 
     const { name, host } = v.parse(v.object({ name: v.string(), host: v.string() }), JSON.parse(out.trim()));
-    // On any POSIX box with a passwd entry this is user@host; 'Your PC' is the
-    // only other legal answer, and it is never the empty string.
-    expect(name === 'Your PC' || name.endsWith(`@${host}`)).toBe(true);
+    expect(name).toBe(host);
     expect(name.length).toBeGreaterThan(0);
   });
 });
