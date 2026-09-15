@@ -1,22 +1,27 @@
 /**
  * The account's first-run read model.
- *
- * One row in `user_onboarding` is the whole onboarding state: absent means not
- * onboarded, present carries the timestamp. These are the two questions any
- * surface asks of it — the gate's yes/no (`needsOnboarding`) and the wizard's
- * step list (`ONBOARDING_STEPS`) — plus the display-name constraint every
- * naming surface enforces (`displayNameProblem`). They live in core because
- * the wizard, the settings Profile card, the routes and the UserDO must all
- * answer them the same way.
+ * One row in `user_onboarding` is the onboarding stamp: absent means the
+ * wizard never ran to `finish()`, present carries the timestamp. The gate's
+ * second input is the workspace roster's size, counted in the same profile
+ * read, so the two questions every surface asks — the gate's yes/no
+ * (`needsOnboarding`) and the wizard's step list (`ONBOARDING_STEPS`) — plus
+ * the display-name constraint every naming surface enforces
+ * (`displayNameProblem`) live in core and are answered the same way
+ * everywhere.
  */
-export interface AccountOnboarding { readonly onboardedAt: number | null }
+export interface AccountOnboarding {
+  readonly onboardedAt: number | null;
+  /** How many workspaces the account's roster lists. */
+  readonly workspaceCount: number;
+}
 
-/** Whether this account must land on the setup wizard. A null profile — the
+/** Whether this account must land on the setup wizard: only a new account —
+ *  no onboarding stamp and not one workspace — is gated. A null profile — the
  *  read failed — never locks the app behind the wizard: the profile row
  *  exists for every signed-in account and a missing answer is a read failure,
  *  not a new account. */
 export function needsOnboarding(profile: AccountOnboarding | null): boolean {
-  return profile !== null && profile.onboardedAt === null;
+  return profile !== null && profile.onboardedAt === null && profile.workspaceCount === 0;
 }
 
 /** The wizard's steps in order — the indicator and the sliding panel both

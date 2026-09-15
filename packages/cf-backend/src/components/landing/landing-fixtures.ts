@@ -52,13 +52,15 @@ export const LANDING_ROSTER = {
   total: 3,
 } satisfies { entries: WorkspaceEntry[]; total: number };
 
-/** The rail's user row, served by the same shim and read through `getProfile`. */
+/** The rail's user row, served by the same shim and read through `getProfile`.
+ *  Its workspaceCount is the roster's total — the gate reads both. */
 export const LANDING_PROFILE: UserProfile = {
   email: 'ashish@example.com',
   displayName: 'Ashish',
   createdAt: NOW - 90 * 864e5,
   lastSeenAt: NOW,
   onboardedAt: NOW - 90 * 864e5,
+  workspaceCount: LANDING_ROSTER.total,
 };
 
 /* ── The checkout workspace: a Build turn, mid-fix ─────────────────────── */

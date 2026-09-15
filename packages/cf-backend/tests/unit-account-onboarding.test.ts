@@ -3,10 +3,12 @@
  * real object against in-memory storage. What a test here proves that a unit
  * of the read model cannot: the row exists, the stamp is written once and
  * kept, the name constraint is enforced inside the object, and a workspace
- * token is refused before it reaches either one.
+ * token is refused before it reaches either one. It also proves the profile's
+ * `workspaceCount`, the read the gate consults so an account that already
+ * holds a workspace is never sent through the wizard.
  */
 import { describe, expect, test } from 'bun:test';
-import { CapabilityDeniedError } from '@kinu.run/core';
+import { CapabilityDeniedError, needsOnboarding } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 
 describe('account onboarding on the real UserDO', () => {
@@ -18,6 +20,24 @@ describe('account onboarding on the real UserDO', () => {
     const profile = await harness.userDO.getProfile(owner);
     expect(profile).not.toBeNull();
     expect(profile?.onboardedAt).toBeNull();
+    harness.close();
+  });
+
+  test('a workspace its owner registered makes the account established, wizard or not', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    await harness.userDO.ensureProfile(owner, 'owner@example.com', 'Owner');
+
+    const fresh = await harness.userDO.getProfile(owner);
+    expect(fresh?.workspaceCount).toBe(0);
+    expect(needsOnboarding(fresh ?? null)).toBe(true);
+
+    await harness.userDO.registerWorkspace(owner, 'w-a', 'Workspace A');
+
+    const established = await harness.userDO.getProfile(owner);
+    expect(established?.workspaceCount).toBe(1);
+    expect(established?.onboardedAt).toBeNull();
+    expect(needsOnboarding(established ?? null)).toBe(false);
     harness.close();
   });
 
