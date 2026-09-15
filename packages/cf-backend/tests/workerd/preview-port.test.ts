@@ -15,6 +15,16 @@ describe('a served port from the hosted workspace', () => {
     expect(filed.stderr).toContain('sandbox');
   });
 
+  it('a user-invoked program runs past the old 30 s wall-clock lifetime and reports its own exit', async () => {
+    const subject = open('outlast');
+
+    // worker 0.7 dropped the 30 s cap on a user-invoked program (a Ctrl-C
+    // now reports 130); a program that runs 33 s must end on its own terms.
+    const ran = await subject.outlast(33);
+    expect(ran.exitCode).toBe(0);
+    expect(ran.stdout).toContain('outlasted');
+  }, 90_000);
+
   it('answers a loopback fetch with served bytes or a classified refusal, never a bare 1003', async () => {
     const subject = open('loopback');
 
