@@ -183,6 +183,13 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "match",
+      "sourceSha256": "7c6bf3e688d18df165a15ea7e31935d5e923b14afcf46ecf6350bcafb22c4b01",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/cf-backend/tests/unit-do-init-gate.test.ts",
       "kind": "regex-literal",
       "owner": "<module>",
