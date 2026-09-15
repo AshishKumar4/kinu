@@ -118,7 +118,7 @@ describe('ControlPlaneDO in workerd', () => {
     expect(stderr).toBe('');
     expect(exitCode).toBe(0);
     expect(stdout.trim().split('\n')).toHaveLength(1);
-  }, 120_000);
+  });
 
   test('a caller without the capability is REJECTED across the RPC boundary', async () => {
     const result = await reported;
@@ -143,7 +143,7 @@ describe('ControlPlaneDO in workerd', () => {
     expect(undergraded).toHaveLength(2);
     expect(undergraded.map((entry) => entry.message.split(' requires ')[0]).sort())
       .toEqual(['ControlDeniedError: audit.write', 'ControlDeniedError: overview.read']);
-  }, 120_000);
+  });
 
   test('the error class does not survive RPC, so the message is the contract', async () => {
     const { platform } = await reported;
@@ -158,7 +158,7 @@ describe('ControlPlaneDO in workerd', () => {
     expect(platform.rejectionName).toBe('Error');
     expect(platform.rejectionConstructor).toBe('Error');
     expect(platform.nameCarriedInMessage).toBe(true);
-  }, 120_000);
+  });
 
   test('the index and the audit log outlive the object', async () => {
     const result = await reported;
@@ -185,7 +185,7 @@ describe('ControlPlaneDO in workerd', () => {
     // Two activations, one per runtime: the object really was re-constructed, so
     // `initControlPlaneSchema` ran a second time against tables that existed.
     expect(result.isolate.sinkInstalls).toBe(2);
-  }, 120_000);
+  });
 
   test('an attempt whose outcome was never recorded survives, and can be finished', async () => {
     // The two-phase write's reason to exist, measured across a real process
@@ -201,7 +201,7 @@ describe('ControlPlaneDO in workerd', () => {
     expect(persistence.pendingAfterSettlement).toBe(0);
     // And a replayed settlement cannot rewrite a settled row.
     expect(persistence.resettleRefused).toBe(true);
-  }, 120_000);
+  });
 
   test('the audit marker is emitted inside the object, and carries no address', async () => {
     const { isolate } = await reported;
@@ -220,7 +220,7 @@ describe('ControlPlaneDO in workerd', () => {
     // line the isolate emitted, because this dataset is retained on the platform's
     // clock and rendered in an admin UI.
     expect(isolate.addressLeaks).toBe(0);
-  }, 120_000);
+  });
 
   test('the object exercises the binding shape production declares', async () => {
     const { platform } = await reported;
@@ -234,5 +234,5 @@ describe('ControlPlaneDO in workerd', () => {
     expect(platform.compatibilityFlags).toContain('nodejs_compat');
     expect(platform.compatibilityDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(platform.workerdVersion).toMatch(/^1\.\d{8}\.\d+$/);
-  }, 120_000);
+  });
 });

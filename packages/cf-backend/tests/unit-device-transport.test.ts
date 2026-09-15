@@ -99,7 +99,7 @@ describe('createHubDeviceTransport', () => {
     await sleep(50); // let the kicked re-check land
     expect(listCalls).toBe(2);
   // A wall-clock wait past a 5 s TTL; measured ~5.3 s in this tree.
-  }, 15_000);
+  });
 
   test('no owner hub → the workspace is unattached, which is not an unlinked machine', async () => {
     // This pin said "rpc rejects with the connect guidance", and the guidance
