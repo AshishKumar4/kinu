@@ -112,7 +112,7 @@ describe('account panels', () => {
 
             const text = await dialogText(mcp);
             expect(text).toContain('github');
-            expect(text).toContain('Add MCP server');
+            expect(text).toContain('Add custom server');
             expect(text).toContain('auth needed');
 
             // A status the layout pushed sideways is textContent that passes
@@ -403,7 +403,7 @@ describe('account panels', () => {
               button.click();
             });
             await plugins.waitForSelector('[role="dialog"]', { timeout: 10_000 });
-            expect(await dialogText(plugins)).toContain('Add MCP server');
+            expect(await dialogText(plugins)).toContain('Add custom server');
           } finally {
             await plugins.close();
           }
