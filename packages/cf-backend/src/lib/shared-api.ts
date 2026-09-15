@@ -4,8 +4,8 @@
  * bare; the blueprint read needs none.
  */
 import {
-  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema,
-  type BlueprintFork, type BlueprintView, type SharedLibrary,
+  BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, LiveShareRecordSchema,
+  type BlueprintFork, type BlueprintView, type SharedLibrary, type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -68,3 +68,22 @@ export async function signedInEmail(): Promise<string | null> {
   return v.parse(MeSchema, await res.json()).user?.email ?? null;
 }
 
+/** Share the running slate under the members the owner approved; answers
+ *  the row and the URL it serves at (null where this deployment cannot sign one). */
+export function shareLive(input: {
+  workspace: string; slate: string; visibility: LiveShareVisibility; emails?: string[];
+  approved: { slate: string; binding: string; member: string }[];
+}): Promise<LiveShareCreated> {
+  return api(LiveShareCreatedSchema, 'POST', '/api/shared/live', input);
+}
+
+/** Revoke one of the owner's live shares; answers the row with `revokedAt` set. */
+export function revokeLiveShare(input: { workspace: string; share: string }): Promise<LiveShareRecord> {
+  return api(LiveShareRecordSchema, 'POST', '/api/shared/live/revoke', input);
+}
+
+/** The URL this signed-in user opens a live share at: the share origin for a
+ *  public one, a ticket-bearing entry for a share that names people. */
+export function openLiveShare(input: { workspace: string; share: string }): Promise<{ url: string }> {
+  return api(v.object({ url: v.string() }), 'POST', '/api/shared/live/open', input);
+}
