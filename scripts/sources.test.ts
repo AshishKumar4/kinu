@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
+import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { enumerateRepository, isTextSource, readRepositoryFile } from './sources';
 import { scanText } from './secret-scan';
 
@@ -129,7 +129,7 @@ describe('tracked-ness is authoritative', () => {
       import { enumerateRepository } from ${JSON.stringify(probeSources)};
       process.stdout.write(JSON.stringify(enumerateRepository(${JSON.stringify(target)}).files));
     `], {
-      env: { ...process.env, GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy },
+      env: childEnv({ GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy }),
       encoding: 'utf8',
     });
 

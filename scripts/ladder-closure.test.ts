@@ -207,14 +207,23 @@ describe('ladder-closure — red in every direction it refuses', () => {
     expect(refused(deriveClosure('bun run gate:absent', DERIVED, repo))).toContain('no package script');
   });
 
-  test('a computed dynamic import or require refuses the whole gate', () => {
+  test('a computed dynamic import or require refuses the gate until the row declares what it can load', () => {
     const repo = fixture({
       'scripts/g.ts': "const name = 'x';\nexport const g = () => import(`./${name}`);",
       'scripts/h.ts': "const name = 'x';\nexport const h = require(name);",
+      'scripts/x.ts': 'export const x = 1;',
+      'scripts/plain.ts': 'export const plain = 1;',
     });
 
     expect(refused(deriveClosure('bun scripts/g.ts', DECLARED, repo))).toContain('computed specifier');
     expect(refused(deriveClosure('bun scripts/h.ts', DECLARED, repo))).toContain('computed specifier');
+    // Declared: the named files join the closure.
+    const declared = deriveClosure('bun scripts/g.ts', { ...DECLARED, imports: ['scripts/x.ts'] }, repo);
+    expect(derived(declared)).toContain('scripts/x.ts');
+    // A declaration on a graph with no computed import is stale.
+    expect(refused(deriveClosure('bun scripts/plain.ts', { ...DECLARED, imports: ['scripts/x.ts'] }, repo))).toContain('stale declaration');
+    // A declaration naming nothing tracked is stale too.
+    expect(refused(deriveClosure('bun scripts/g.ts', { ...DECLARED, imports: ['scripts/gone/'] }, repo))).toContain('matches no tracked file');
   });
 
   test('a local import that resolves to nothing refuses the gate', () => {

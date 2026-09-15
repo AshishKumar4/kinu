@@ -170,18 +170,29 @@ workstation, load 0.6 at start:
 | cold (store emptied) | 0 | 32 | 15 | 429.6 s |
 | warm (same tree) | 32 | 0 | 15 | 301.3 s |
 
-The 15 never-cached rows hold the tier's heaviest work (`bun run check`,
-`bun run test`, `packages/devbox/`, `deploy.test.ts`) and each names one
-cause: a computed `import()` in `anti-slop/rules.test.ts`,
-`egress-interception.ts`, `gates.test.ts`, `mutation-exploration-policy`
-and `unit-codemode-sandbox`; the environment passed whole in
-`deploy.test.ts`, `sources.test.ts`, `delta-shell-parity`, `ambient-env.test`
-and `mutation-fences.ts`; undeclared path reads in `patch-parity.ts`; and the
-cache module's own by-name reader on the census row. Each is a declaration
-or a seam, never a cache change. `--audit-closure` ran every derivable
-push-tier gate under strace on 2026-09-15: 32 audited, 0 undeclared reads,
-after its first pass caught `gate:scanner-bundle` reading two files off its
-graph.
+The 15 never-cached rows held the tier's heaviest work and each named one
+cause. Commits 2804d8e54 (computed imports declare what they load),
+97009f393 and d1aa2e0d6 (a child a test spawns gets the environment by
+name), and b73710162 (`check` split into lint, drift and typecheck; `test`
+into core and spine, each keyed by its own closure) closed nine of them.
+Re-measured at d1aa2e0d6 on 2026-09-15, load 5.1 at start:
+
+| run | hits | recorded | never cached | wall |
+| --- | --- | --- | --- | --- |
+| cold (store emptied) | 0 | 42 | 8 | 434.8 s |
+| warm (same tree) | 42 | 0 | 8 | 194.9 s |
+
+The 8 left: preflight and commit-message (live); `test:core`, whose graph
+reaches `test-utils/src/scratch.ts` and needs a `reads` declaration;
+`packages/devbox/`, whose miniflare settle helper reads by path; `typecheck`,
+whose `node --check` of the pc-agent daemon reaches a file that reads the
+environment whole by design; the gate self-tests row through
+`commit-hygiene.ts`; `packages/test-utils/` through `ambient-env.test.ts`,
+which tests the strip itself; and the cf-backend suite through
+`unit-install-script.test.ts`, which says it must inherit python's own
+environment. `--audit-closure` ran every derivable push-tier gate under
+strace on 2026-09-15: 32 audited, 0 undeclared reads, after its first pass
+caught `gate:scanner-bundle` reading two files off its graph.
 
 L3. A deploy wave stops launching at its first red and lets running gates
 finish; `--all` audits the whole wave. Decided 2026-09-15, commit a924a3fb2,
