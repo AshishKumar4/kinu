@@ -5375,11 +5375,13 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   getTools(): ToolSet {
-    // The Think chat loop's tool source (first hook called by _runInferenceLoop).
-    // Returns the CHAT view = the raw surface + the auto-background wrap (#173).
-    // Internal eval side-streams use getRawTools() instead, so a >30s tool run
-    // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
-    // injects an unsolicited "job completed" turn into the user's chat.
+    // The chat turn's tool source, read once per turn as prepareTurn opens.
+    // Returns the CHAT view = the raw surface + the auto-background wrap (#173)
+    // + the operation profile. Internal eval side-streams use getRawTools()
+    // instead, so a >30s tool run inside a shadow-eval / scaffold / GEPA
+    // evaluation never detaches a job or injects an unsolicited "job
+    // completed" turn into the user's chat. Also starts the turn clock every
+    // activity line is stamped against.
     this._turnT0 = performance.now();
 
     const tools = this.wrapToolsForBackground(this.getRawTools());
@@ -5836,7 +5838,11 @@ export abstract class ActorAgent extends Think<Env> {
   protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
     this._turnItem = item;
     this._turnProgram = null;
-    const reads = await this.readTurnInputs(this.getRawToolsForWorkMode(this.turnWorkMode()));
+    // The CHAT view, not the raw surface: a slow `run` must detach into a
+    // background job whose settle wakes a turn, and that wrap lives here. The
+    // workerd background-wake proof is what tells the two apart.
+    const tools = this.getTools();
+    const reads = await this.readTurnInputs(tools);
     this._executorsUsedThisTurn.clear();
     const body = item.metadata === undefined ? {} : jsonObject(item.metadata);
     this._cliCwd = readCliCwd(body);
@@ -5870,7 +5876,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (item.priorOutput !== undefined) this.actorSession.appendPriorOutput(lease, item.priorOutput);
 
     const history = this.actorSession.history;
-    const assembled = await this.assembleTurn({ history, tools: this.getRawToolsForWorkMode(this.turnWorkMode()), body, reads });
+    const assembled = await this.assembleTurn({ history, tools, body, reads });
     this._turnDurableLength = assembled.rawMessages.length;
     // The profile the turn runs under, bound exactly once before execution —
     // the actor session's own guard, and where the CLI adapter binds it too.
