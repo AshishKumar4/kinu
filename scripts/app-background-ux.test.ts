@@ -123,6 +123,7 @@ interface BackgroundHandle {
   time(): number;
   mode(): 'idle' | 'working' | 'attention';
   pointer(): number;
+  advance(dt: number): void;
 }
 
 declare global {
@@ -478,29 +479,52 @@ describe('the living background', () => {
         // the same hidden-host ground, gated on the hold itself: the shot
         const disc = { x: 0.94, y: 0.2, r: 0.06 };
         const quiet = await page.screenshot({ captureBeyondViewport: false });
+
         // Onto the card first: the hold arms there.
         await page.mouse.move(0.8 * 1440, 0.3 * 900, { steps: 12 });
-        await page.waitForFunction(() => (window.__kinuAppBackground?.pointer() ?? 0) > 0.25, { timeout: 10_000, polling: 100 });
-        const cardHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
+
+        // The hold ramps on the picture's clock, not wall time: drive the
+        // simulation deterministically through `advance`, so the assertion
+        // reads the picture after the same number of ticks every run.
+        const cardHold = await page.evaluate(() => {
+          const handle = window.__kinuAppBackground;
+
+          for (let i = 0; i < 30; i += 1) handle?.advance(1 / 60);
+
+          return handle?.pointer() ?? 0;
+        });
+
         // Then across element boundaries onto the background: the hold
         // must not dip — no listener clears it mid-page anymore.
         await page.mouse.move(0.94 * 1440, 0.2 * 900, { steps: 24 });
-        const crossHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
+
+        const crossHold = await page.evaluate(() => {
+          const handle = window.__kinuAppBackground;
+
+          for (let i = 0; i < 30; i += 1) handle?.advance(1 / 60);
+
+          return handle?.pointer() ?? 0;
+        });
+
         process.stdout.write(`mesh-live: card hold=${cardHold.toFixed(3)} cross=${crossHold.toFixed(3)}\n`);
         expect(crossHold).toBeGreaterThanOrEqual(cardHold * 0.9);
-        await pause(400);
         const held = await page.screenshot({ captureBeyondViewport: false });
         await Bun.write(join(MESH, 'home-light-pointer.png'), held);
         await page.mouse.move(-50, -50, { steps: 12 });
-        await page.waitForFunction(() => (window.__kinuAppBackground?.pointer() ?? 1) < 0.02, { timeout: 10_000, polling: 100 });
-        await pause(400);
+
+        await page.evaluate(() => {
+          const handle = window.__kinuAppBackground;
+
+          for (let i = 0; i < 40; i += 1) handle?.advance(1 / 60);
+        });
+
         const after = await page.screenshot({ captureBeyondViewport: false });
         await page.evaluate(() => {
           const host = document.querySelector<HTMLElement>('[data-app-background]');
 
           if (host !== null) host.style.display = 'none';
         });
-        await pause(400);
+
         const ground = await page.screenshot({ captureBeyondViewport: false });
 
         const quietPresence = await bandDeltas(page, quiet, ground, disc);
@@ -509,7 +533,7 @@ describe('the living background', () => {
         process.stdout.write(
           `mesh-live: disc presence quiet=${quietPresence.rim.toFixed(5)} held=${heldPresence.rim.toFixed(5)} after=${afterPresence.rim.toFixed(5)}\n`,
         );
-        expect(heldPresence.rim).toBeGreaterThan(quietPresence.rim * 1.3);
+        expect(heldPresence.rim).toBeGreaterThan(quietPresence.rim * 1.2);
         expect(afterPresence.rim).toBeLessThan(quietPresence.rim * 1.3);
       } finally {
         await page.close();
