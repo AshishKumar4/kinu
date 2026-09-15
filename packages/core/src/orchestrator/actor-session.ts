@@ -382,10 +382,15 @@ export class ActorSession {
 
   interrupt(): readonly UserSteer[] {
     const dropped = this.orchestrator.inbox.interrupt();
-
-    if (this.active?.phase !== 'settling') this.active?.abort.abort();
+    this.stop();
 
     return dropped;
+  }
+
+  /** Abort the turn in flight and nothing else: what the model has not read
+   *  stays queued, for the settle to rerun as the operator's next turn. */
+  stop(): void {
+    if (this.active?.phase !== 'settling') this.active?.abort.abort();
   }
 
   /**
@@ -500,7 +505,12 @@ export class ActorSession {
           case 'tool-call': pending.push(event); break;
           case 'tool-result': this.recordToolResult(pending, event); break;
 
-          case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
+          case 'step-finish':
+            this.orchestrator.acc.recordStep({
+              text: event.text, finishReason: event.finishReason, toolCalls: event.toolCalls, toolResults: event.toolResults,
+              response: { messages: event.responseMessages }, usage: event.usage,
+            });
+            break;
           case 'error': {
             this.orchestrator.acc.hadError = true;
 

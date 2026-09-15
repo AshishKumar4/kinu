@@ -881,6 +881,9 @@ export class LocalAgentSession implements BackendHost {
       // version in this repo is a placeholder, so a claim for a builtin turn
       // records the build as unknown rather than naming one nobody can verify.
       installedBuild: null,
+      // The context-edit evidence the working history writes lands in this
+      // session's own run-event log, as it does on the hosted root.
+      events: this.eventRecorder,
       orchestration: orchestration.deps,
     });
 
@@ -894,6 +897,9 @@ export class LocalAgentSession implements BackendHost {
       actorSession: this.actorSession,
       sessionId: this.sessionId,
       transcript: new ActorMessagesTranscript(this.rt.storage.sql, this.rt.actor, this.sessionId),
+      // An answer's id is a random UUID here; the hosted root names its own
+      // through the same seam.
+      mintAnswerId: () => crypto.randomUUID(),
       pendingSends,
       eventLog: this.eventLog,
       eventRecorder: this.eventRecorder,

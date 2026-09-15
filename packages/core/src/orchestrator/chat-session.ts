@@ -43,7 +43,9 @@
  *   lease; owed terminal effects resume through the backend's ledger.
  *
  *   AN INTERRUPTED TURN CONTINUES. A turn the process died inside is re-opened
- *   by the next one where it stopped, not restarted: the run ledger holds
+ *   by the next one where it stopped, not restarted, and ONCE: the
+ *   continuation runs under the run the dead process opened, so the run that
+ *   was open is the run that closes. The run ledger holds
  *   every completed step's messages (`step_finish`) and the in-flight step's
  *   output at the last partial cadence (`step_partial`, written on the first
  *   delta and then every {@link PARTIAL_FLUSH_EVERY}), and the continuation
@@ -77,15 +79,15 @@ import type { TierId } from '../types/profile';
 import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor } from '../utils/ui-message';
+import { PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../utils/ui-message';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
-import type { LandedSteerRow, PendingSendStore, UserSteer } from './inbox';
+import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
 import type { TerminalTransition, TerminalTransitions } from './terminal-transition';
 import {
   applyOverflowRecovery, classifyRunEnd, closeTurnRun, creditedTurnId, openTurnRun,
-  persistMeasuredPromptTokens, snapshotCompletedTurn,
+  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT, persistMeasuredPromptTokens, snapshotCompletedTurn,
   type CompactionTriggerState, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
@@ -100,7 +102,7 @@ type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
  * replayed from — so the two never disagree about how much of the answer
  * survived an eviction.
  */
-const PARTIAL_FLUSH_EVERY = 10;
+export const PARTIAL_FLUSH_EVERY = 10;
 
 /**
  * The grace this backend allows a stranded event delivery: none.
@@ -211,6 +213,10 @@ interface QueueItem {
 /** What a re-opened turn resumes from: the answer's id it was streaming under,
  *  the completed steps' messages and the cut step's output. */
 interface TurnContinuation {
+  /** The run the dead process opened. The continuation runs UNDER it — its
+   *  steps and its seal append to that run — so the run that was open is the
+   *  run that closes, and a later restart finds nothing to re-open. */
+  readonly runId: string;
   readonly messageId: string;
   readonly steps: readonly ModelMessage[];
   readonly partial: { readonly text: string; readonly toolCalls: readonly PartialToolCall[] } | null;
@@ -314,6 +320,13 @@ export interface OwedTerminalEffectsInput {
    *  check. A cold replay has no live toolset to ask. */
   readonly reachableTools: readonly string[];
   readonly overflowRetry: boolean;
+  /** The event deliveries this turn answered: the drain turn it was queued
+   *  for, and every signal it absorbed mid-turn. A backend with reply
+   *  channels owes each an outbound reply. */
+  readonly answeredDeliveries: ReadonlySet<string>;
+  /** The turn's last model step ended at the output limit, and the turn was
+   *  not itself a continuation — ONE continuation is owed. */
+  readonly outputContinuation: boolean;
 }
 
 /**
@@ -361,6 +374,10 @@ export interface ChatSessionOptions {
   readonly transaction: <T>(body: () => T) => T;
   readonly transport: ChatTransport;
   readonly ports: ChatSessionPorts;
+  /** How the session mints an answer's id — the key every durable row of the
+   *  answer is written under. Each owner names its minter: a random UUID, or
+   *  the id a harness must assert on before it reads it back. */
+  readonly mintAnswerId: () => string;
 }
 
 export class ChatSession {
@@ -374,6 +391,7 @@ export class ChatSession {
   private readonly transaction: <T>(body: () => T) => T;
   private readonly transport: ChatTransport;
   private readonly ports: ChatSessionPorts;
+  private readonly mintAnswerId: () => string;
   private ended = false;
   /** The run the in-flight turn belongs to; null between turns. */
   private runId: string | null = null;
@@ -412,6 +430,7 @@ export class ChatSession {
     this.transaction = options.transaction;
     this.transport = options.transport;
     this.ports = options.ports;
+    this.mintAnswerId = options.mintAnswerId;
 
     // THE ONE SEND RULE, the loop's half: every send the session
     // acknowledges is a pending_steers row first and a landed row or retired
@@ -632,6 +651,12 @@ export class ChatSession {
   ): Promise<SendLanding> {
     const { text, files } = normalizePromptInput(input);
 
+    // Nothing to say and nothing attached is not a message: refused at the
+    // door, never a blank turn or a blank steer the model is asked to read.
+    if (text.trim() === '' && (files === undefined || files.length === 0)) {
+      throw new KinuError('bad_input', 'send requires the message text');
+    }
+
     if (this.turnInFlight()) {
       // Identity is assigned on ACCEPTANCE, so the queued announcement, the
       // landed one and the durable row are all the same message to a surface —
@@ -651,9 +676,11 @@ export class ChatSession {
     const { promise, resolve, reject } = Promise.withResolvers<SendLanding>();
     const mode = opts.mode ?? 'build';
 
-    const metadata = opts.tier === undefined && opts.mode === undefined ? undefined : {
+    // The message's own facts, on the row it becomes: the mode it was typed
+    // under (build unless the composer said otherwise) and the tier it named.
+    const metadata: JsonObject = {
       ...(opts.tier !== undefined && { profile_tier: opts.tier }),
-      ...(opts.mode !== undefined && { kinuMode: opts.mode }),
+      kinuMode: mode,
     };
 
     // The acceptance and the row are the same fact: the pending_steers insert
@@ -700,6 +727,14 @@ export class ChatSession {
     this.pendingSends.retire(returned.flatMap((steer) => steer.id === undefined ? [] : [steer.id]));
 
     return returned.map((steer) => steer.text);
+  }
+
+  /** Stop the turn on screen (the composer's Stop button): the in-flight
+   *  model request is aborted, and the steers the model never saw STAY
+   *  queued — the settle reruns them as the operator's next user-origin turn.
+   *  The other verb, {@link interrupt}, hands them back instead. */
+  stop(): void {
+    this.actorSession.stop();
   }
 
   /** Run any pending event drain to completion NOW, bypassing the ~250ms
@@ -959,14 +994,15 @@ export class ChatSession {
     // so the row the client builds live and the row persisted are one message.
     // A re-opened turn keeps the id it was streaming under: the client that
     // reconnects holds that message, and the answer is one row either way.
-    this.messageId = item.continuation?.messageId ?? crypto.randomUUID();
+    this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId });
 
     const startedAt = Date.now();
     // Open this turn's run in the durable event log (core turn-lifecycle).
     // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
-    // one names its trigger.
-    this.runId = `run-${crypto.randomUUID()}`;
+    // one names its trigger. A re-opened turn continues the run it was left
+    // in; only a new turn opens a run.
+    this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
 
     // A USER turn's opening row is durable at admission, not at commit — a
     // steer landed mid-turn is written when the drain sees it (before the
@@ -976,14 +1012,22 @@ export class ChatSession {
     // exactly as before: `announcementOnDisk` is its dedup — an admitted-but-
     // unfinished gate turn must read as not-yet-said so the retry re-queues it.
     if (item.kind === 'user') {
-      this.transcript.appendUser({ id: this.turnId, text: item.text, ...(item.files !== undefined && { files: item.files }) });
+      this.transcript.appendUser({
+        id: this.turnId, text: item.text,
+        ...(item.files !== undefined && { files: item.files }),
+        // ONE row shape per message, whichever transport carried it: the
+        // operator's own message says so and names the mode it was typed in.
+        metadata: { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
+      });
     }
 
     const lease = this.actorSession.beginTurn(
       { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,
     );
 
-    openTurnRun(this.eventRecorder, this.runId, {
+    // The run row already exists for a continuation: what follows appends to
+    // it, and the identity it carries is the one being continued.
+    if (item.continuation === undefined) openTurnRun(this.eventRecorder, this.runId, {
       agentId: lease.actorId,
       causedBy: event ?? 'chat',
       userMessage: item.text,
@@ -1031,6 +1075,17 @@ export class ChatSession {
    * a local session has no transport in front of its reply channels, so the
    * durable answer is all of what it owes.
    */
+  /** The event deliveries the turn in flight has answered so far: the drain
+   *  turn it was queued for, and the reply turn of every signal absorbed. */
+  private answeredDeliveries(item: QueueItem): ReadonlySet<string> {
+    const answered = new Set(this.actorSession.orchestrator.inbox.answeredDeliveries);
+    const queued = v.safeParse(v.string(), item.metadata?.drainTurnId);
+
+    if (queued.success) answered.add(queued.output);
+
+    return answered;
+  }
+
   private closeEventDeliveryLeases(item: QueueItem, absorbed: SettledSignals['absorbed']): void {
     const drainTurns = new Set<string>();
     const queued = v.safeParse(v.string(), item.metadata?.drainTurnId);
@@ -1300,6 +1355,20 @@ export class ChatSession {
   }): TurnCommit {
     const { item, runError } = input;
 
+    // THE OUTPUT-LIMIT CONTINUATION, decided at the one moment all three facts
+    // are readable: the accumulator's last finish reason (reset at the next
+    // turn's start), the driving item, and what this turn absorbed. A turn
+    // already IS the continuation two ways, and both spend it: queued as its
+    // own turn (the `kinuEvent` stamp on the item) or spliced into a running
+    // one (the same signal at a step boundary). Reading only the first would
+    // let a spliced continuation earn a second one; the bound is exactly one.
+    const outputContinuation = owesOutputLimitContinuation({
+      completed: runError === null,
+      lastFinishReason: this.actorSession.orchestrator.acc.lastFinishReason,
+      turnWasContinuation: item.metadata?.kinuEvent === OUTPUT_CONTINUATION_EVENT
+        || this.actorSession.orchestrator.inbox.absorbedKinds().includes(OUTPUT_CONTINUATION_EVENT),
+    });
+
     try {
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
@@ -1350,6 +1419,8 @@ export class ChatSession {
         interrupted: facts.interrupted,
         startedAt: input.startedAt,
         trialContext: input.trialContext,
+        answeredDeliveries: this.answeredDeliveries(item),
+        outputContinuation,
         reachableTools: input.reachableTools,
         overflowRetry: input.overflowRetry,
       });
@@ -1371,6 +1442,9 @@ export class ChatSession {
           // themselves were written by their own drains, at the step boundary.
           this.actorSession.landedSteers,
           input.assistantText,
+          // The opening row already carries the operator's message's facts;
+          // a programmatic turn's row is written here, with the producer's
+          // stamp and event.
           item.kind === 'programmatic' ? item.metadata : undefined,
         );
 
@@ -1496,12 +1570,14 @@ export class ChatSession {
    * the re-opened item is the same turn run again.
    */
   private reopened: string | null = null;
+  /** The turn {@link restoreOpenTurn} re-opened, whose bound sends are its own. */
+  private reopenedTurnId: string | null = null;
 
   private restoreOpenTurn(): void {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { turn, steps, partial } = open;
+    const { runId, turn, steps, partial } = open;
 
     const item: QueueItem = {
       text: turn.text,
@@ -1512,6 +1588,7 @@ export class ChatSession {
       ...(turn.steerIds !== undefined && { steerIds: turn.steerIds }),
       rerun: true,
       continuation: {
+        runId,
         messageId: turn.messageId,
         steps,
         partial: partial === null ? null : { text: partial.text, toolCalls: partial.toolCalls },
@@ -1521,6 +1598,7 @@ export class ChatSession {
 
     if (turn.kind === 'programmatic') item.idempotencyKey = turn.turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length);
     this.reopened = turn.pendingSendId ?? null;
+    this.reopenedTurnId = turn.turnId;
     this.queue.push(item);
 
     this.emit({
@@ -1548,6 +1626,13 @@ export class ChatSession {
     if (rows.length === 0) return;
 
     const midTurn: (UserSteer & { mode: WorkMode })[] = [];
+    // Sends bound to a turn no process is running any more — the activation
+    // that owned that turn died before its settle, and this one re-opened a
+    // different turn or none. Swept per dead turn into ONE user-origin rerun,
+    // the words in the order they were accepted, under the narrower mode any
+    // of them was typed in: merging never widens what a message was typed
+    // under. Their reservations are spent by that rerun's own row.
+    const dead = new Map<string, PendingSendRow[]>();
     let queued = 0;
 
     for (const row of rows) {
@@ -1563,12 +1648,28 @@ export class ChatSession {
           settle: () => {},
         });
         queued += 1;
-      } else {
+      } else if (row.turnId === this.reopenedTurnId) {
         midTurn.push({
           id: row.id, text: row.text, mode: row.mode,
           files: this.pendingSends.files(row.id),
         });
+      } else {
+        dead.set(row.turnId, [...(dead.get(row.turnId) ?? []), row]);
       }
+    }
+
+    for (const group of dead.values()) {
+      const mode: WorkMode = group.some((row) => row.mode === 'plan') ? 'plan' : 'build';
+
+      this.queue.push({
+        text: group.map((row) => row.text).join('\n\n'), kind: 'user', turnId: crypto.randomUUID(),
+        rerun: true,
+        steerIds: group.map((row) => row.id),
+        metadata: { kinuMode: mode },
+        files: group.flatMap((row) => this.pendingSends.files(row.id)),
+        settle: () => {},
+      });
+      queued += 1;
     }
 
     if (midTurn.length > 0) this.actorSession.orchestrator.inbox.restorePending(midTurn);
