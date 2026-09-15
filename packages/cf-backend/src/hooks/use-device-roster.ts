@@ -12,6 +12,16 @@
 import type { Revalidate, AsyncResourceControl } from "./use-async-resource";
 import { useAsyncResource } from "./use-async-resource";
 import { listDevices, type UserDevice } from "@/lib/user-api";
+import type { DeviceUpdateState } from "@kinu.run/core";
+
+/** The badge beside a device's link state, for the two update states worth
+ *  a word. `behind` is the hub's own reading (`deviceUpdateState`), and the
+ *  same reading is what makes it push the update — so the badge names what
+ *  the hub is doing, not a hint the owner has to act on. */
+export const DEVICE_UPDATE_COPY = {
+  behind: "update available",
+  off: "update off",
+} satisfies Partial<Record<DeviceUpdateState, string>>;
 
 /** A daemon that starts flips `connected` within seconds, and the connect
  *  panel waits on exactly that flip, so the roster keeps one live cadence. */
