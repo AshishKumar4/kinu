@@ -400,6 +400,16 @@ describe('two real turns over the HTTP model seam', () => {
     expect(failures).toEqual([]);
     expect(out.owedEffects).toEqual([]);
     expect(out.factsCompressed).toBe(2);
+    // THE CATALOG WAS SERVED, NOT REFUSED. Every listing sweep asks models.dev
+    // for the provider catalog; refused, each provider takes a slow fallback
+    // path and the gate's wall goes from its declared seconds to minutes
+    // (measured 2026-09-15: 51 fallbacks, 160–398 s solo). A test that reaches
+    // the network measures the network, so the probe's outbound answers the
+    // catalog from a fixture and no drive may take the fallback. The hit
+    // count is not asserted above zero: the catalog module caches per fetch
+    // identity for its TTL, so a drive after another suite's sweep reads the
+    // cache and asks the outbound nothing — which is the same proof.
+    expect(out.catalogFallbacks).toBe(0);
   });
 
   it('round-trips a real file tool call through the HTTP seam', async () => {

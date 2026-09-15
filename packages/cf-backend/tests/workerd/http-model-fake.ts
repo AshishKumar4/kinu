@@ -44,6 +44,28 @@ export interface CapturedHttpCall {
 
 const log: CapturedHttpCall[] = [];
 
+/** How many times the worker asked for the provider catalog. Read through
+ *  `/log`, so a suite can assert the catalog was served rather than refused. */
+let catalogHits = 0;
+
+/** The provider catalog the probe serves for `https://models.dev/api.json`.
+ *  One provider the fixture credential does not name, so the dynamic catalog
+ *  source lists nothing and the static providers keep their fallback menus;
+ *  what matters is that the answer is 200 and well-formed, so no provider
+ *  takes the fallback path. Shape follows `ModelsDevCatalogSchema`. */
+const MODELS_DEV_CATALOG = {
+  groq: {
+    id: 'groq', name: 'Groq', doc: 'https://console.groq.com/docs/models',
+    env: ['GROQ_API_KEY'], npm: '@ai-sdk/openai-compatible', api: 'https://api.groq.com/openai/v1',
+    models: {
+      'llama-3.3-70b-versatile': {
+        id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B', tool_call: true,
+        limit: { context: 131072, output: 32768 }, modalities: { input: ['text'] },
+      },
+    },
+  },
+};
+
 interface HeldGate {
   readonly arrived: PromiseWithResolvers<void>;
   readonly release: PromiseWithResolvers<void>;
@@ -581,11 +603,12 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   }
 
   if (url.pathname === '/log' && request.method === 'GET') {
-    return Response.json({ calls: [...log] });
+    return Response.json({ calls: [...log], catalogHits });
   }
 
   if (url.pathname === '/reset' && request.method === 'POST') {
     log.length = 0;
+    catalogHits = 0;
 
     return Response.json({ ok: true });
   }
@@ -593,10 +616,23 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
 }
 
+/** The provider catalog, for a GET of `https://models.dev/api.json`; `null`
+ *  for any other request, so the caller's dispatch stays a host switch. */
+function catalogAnswer(url: URL, request: Request): Response | null {
+  if (url.host !== 'models.dev' || url.pathname !== '/api.json' || request.method !== 'GET') return null;
+  catalogHits += 1;
+
+  return Response.json(MODELS_DEV_CATALOG);
+}
+
 export async function probeOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
   if (url.host === 'probe-control.invalid') return probeControl(url, request);
+
+  const catalog = catalogAnswer(url, request);
+
+  if (catalog !== null) return catalog;
 
   if (url.host === 'fake-models.invalid') {
     if (url.pathname === '/v1/models' && request.method === 'GET') {

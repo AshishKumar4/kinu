@@ -127,6 +127,45 @@ memory, root-only RPC and the shared approval ladder), `unit-slate-project`,
 and workerd's `plan-code` (a declared crafted binding runs live source with no
 delegation globals). O3 closed.
 
+M4. A slate's durable application is a journalled launch of the workspace's
+one facet manager, and the journal re-drives it on the wake after a reset or
+a hibernation. Decided 2026-09-15 with Nimbus worker 0.7 (`composeFacetManager`,
+`spawnWorker`). Reversed: the hosted workspace's rule that "an object that
+is never asked never boots anything" (a resident was re-driven only on the
+next request for its URL, `workspace-host.ts` at `92c769b6b`). The launch
+journal recovers on the first pump of an incarnation, which the hosted
+workspace runs from `waitUntil` when it composes the manager, because its one
+alarm slot is the SDK scheduler's. The recipe carries digests, port and cwd
+and never a launch's inputs; a slate's bindings are minted per caller and its
+modules compiled from the tree as it is now, so the embedder's
+`resolveWorkerLaunch` answers null and brings the slate back through the
+slate host's own boot, which also replaces a process whose source changed.
+Measured 2026-09-15 by `unit-workspace-locality`'s "a launch a hibernation
+interrupted is re-driven through the slate host on the next wake": a
+`resident-launch` row below the wake's pid floor drives one `ensureSlate` of
+its owner and is released; red with the hook answering null alone. The
+URL-on-request path stays and is pinned by workerd `slate-durability`.
+
+## Workspace
+
+W1. The workspace's process generation is allocated by fabric's own
+`adoptGeneration`, over a storage the host supplies; Kinu keeps no allocator.
+Decided 2026-09-15 with Nimbus fabric 0.5. Reversed: `nextWorkspaceGeneration`
+(`core/src/vfs/nimbus-workspace.ts` at `92c769b6b`), a SQL upsert that bumped
+`kinu_workspace_generation` once per `createWorkspace`. The row stays: on both
+backends the storage is `workspaceGenerationStorage(sql)`, one row in that
+same table, so the counter continues rather than restarts and the pid floor
+(`generation * 1_000_000`, below which every append writer is revoked at open)
+never repeats across the switch. The adopt is async, so the supervisor's pid
+base is set inside the first open, which every spawn awaits; a counter read
+that fails surfaces the storage's own error (fabric's adopt would swallow it),
+and a bump that did not persist refuses the open rather than serving pids at
+floor zero. Measured 2026-09-15 by `unit-nimbus-workspace-executor`'s "each
+open of the same database adopts the next generation": two opens over one
+`bun:sqlite` file hand out pids a million apart and leave the row at 2; the
+revocation invariant is pinned by workerd `slate-durability` and the
+workspace-reset case of `unit-node-home-wiring`.
+
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
@@ -218,10 +257,62 @@ reads 3.5 to 5.0 and 21.5 to 31 against floors of 1.5 and 12.5, so commit
 8a5b9eee5 runs a third of the batches (under a second quiet) with a stated
 20 s budget.
 
+L5. The runner consumes the ladder; nothing is written twice. deploy.sh
+loads `bun scripts/ladder.ts --plan` (phase, label, weight, deadline,
+command per row) and schedules each phase as one wave; a row carries its
+own `label`, `weight`, `phase`/`alone` and `deadline`; the UI row claims the
+`*-ux` family by glob; the resolver is proved over a fixture tree. Decided
+2026-09-15, commits 5aac4b263, 45f6c3786, 7482c90c1, f6ec56c8f. Removed:
+deploy.sh's run lines, GATE_WEIGHT, GATE_DEADLINES, GATE_GROUP tables;
+ladder.ts's GATE_WEIGHTS, GATE_DEADLINES, SERIAL_GATES, EXCLUSION_GROUPS and
+the four deploy.sh parsers; deploy.test.ts's REQUIRED_GATES, POST_DEPLOY_GATES
+and BENCH_GATE_FILES lists; ladder.test.ts's bench list and rig-row spelling
+(the last edited by hand on f6d08d72d, the case that prompted this). Measured
+at f6ec56c8f with `--gates-only` at thread budget 12, the box under other
+lanes' hooks (load 9 to 21): run 1, 68/68 source gates green and the hammer
+green in 815.9 s wall with only the account gate red on a missing
+KINU_ACCESS_API_TOKEN in the measuring process; run 2, 67/68 in 528.8 s with
+`bun run test:workerd` past its 480 s deadline. That gate was the finding:
+solo it ran 160 s and 398 s on the same tree against a declared 12.7 s, with
+51 `models_dev.catalog_fallback` events per run — the two-turn probe's
+outbound refused `https://models.dev/api.json`, which the worker saw as
+HTTP 500, and every provider fell back on each listing sweep. The seam is the
+probe's outbound: it now answers the catalog from a fixture (the shape the
+core unit tests already use), the drive records zero fallbacks and the
+two-turn suite pins that at zero, proved red by refusing the route again
+(3 fallbacks per drive). Re-measured with zero fallbacks: 439 s and 399 s
+solo, 36 files serial by design with 139 to 159 s of module import. So the
+network was a dependency, not the wall; the row now declares 420 s and the
+480 s deadline stands with 60 s of margin, which is thin and recorded as
+O2. Budget 24 on a quiet box stays unmeasured.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching.
 
 O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
-budget other than `nproc` is chosen.
+budget other than `nproc` is chosen; and `bun run test:workerd`'s 399 to
+439 s solo wall against its 480 s deadline. Measured 2026-09-15: one file
+with 73 ms of tests costs 15.2 s (transform 4.3 s, import 11.5 s), and the
+36 files' own walls sum to 115 s of a 393 s run, so the wall is the per-file
+boot and import, about 280 s. Per file the runner transforms and workerd
+evaluates 1,311 modules (transform itself is 0.9 s; evaluation is the rest):
+
+| modules | source |
+| --- | --- |
+| 615 | `packages/core/src` (read-models 38, prompts 37, providers 35, events 31, evolution 31, tools 30, execution 28, orchestrator 26, …) |
+| 201 | vite-skipped |
+| 83 | `zod` |
+| 59 | `yaml` |
+| 43 | `@nimbus-sh/core` |
+| 29 | `@opentelemetry/api` |
+| 23 each | `agents`, `agent-core`, `mdast-util-to-markdown`, `micromark-core-commonmark` |
+
+The graph is that wide because `tests/workerd/worker.ts` re-exports fifteen
+probe Durable Objects, each importing the real product, and the installed
+`@cloudflare/vitest-pool-workers` 0.22 evaluates the worker once per test
+file with no shared-worker or isolated-storage option in its own code. No
+single lever cuts 60 s without a redesign: the lever is splitting the main
+test worker so a file boots only the probe family it drives, which is a
+harness change across 36 files and stays open.

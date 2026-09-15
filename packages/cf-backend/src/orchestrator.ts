@@ -228,6 +228,7 @@ import {
   buildWorkspaceOverview, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
+  isPlaceholderWorkspaceTitle,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
@@ -2947,32 +2948,22 @@ export class OrchestratorAgent extends ActorAgent {
     return this.consents.request(req);
   }
 
-  /** Raise the card and answer with the id its settle names, without parking.
-   *  The pair of {@link waitDeviceConsentSettled}: the UserDO takes the halves
-   *  separately for the provisioning card, because a connecting daemon is
-   *  what settles it — and that answer has to name the card, which only the
-   *  registry knows. An identical card already up joins it and answers its
-   *  id, so a retry never stacks a second ask. */
-  async raiseDeviceConsent(req: DeviceConsentRequest): Promise<string> {
-    return this.consents.raise(req);
+  /** A refused device call names the owner's registered machines that are not
+   *  connected, on the workspace's own socket. Not {@link callable}. */
+  async announceDeviceUnavailable(
+    devices: Array<{ id: string; label: string; lastSeenAt: number | null }>,
+  ): Promise<{ ok: boolean }> {
+    this.broadcast(JSON.stringify({ type: 'device_unavailable', devices }));
+
+    return { ok: true };
   }
 
-  /** Park until a card {@link raiseDeviceConsent} minted is GONE — the wait
-   *  the hub's provisioning flow performs as its second RPC. It carries no
-   *  decision because the provisioning card's answers are facts, not clicks:
-   *  the connect it asked for, or nothing. The UserDO re-reads liveness
-   *  either way, so the decision that dismissed it is never read here. */
-  async waitDeviceConsentSettled(consentId: string): Promise<void> {
-    return this.consents.waitSettled(consentId);
-  }
+  /** A daemon's socket was accepted: the offline notice everywhere goes away.
+   *  Not {@link callable}. */
+  async announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }> {
+    this.broadcast(JSON.stringify({ type: 'device_available', deviceId: device.id, label: device.label }));
 
-  /** The hub's settlement, not the owner's: a daemon's socket accepted while
-   *  this workspace's provisioning card was up answers it `connected` — the
-   *  condition the card asked for now holds. Not {@link callable}: the
-   *  browser's answers go through resolveDeviceConsent, and a client-held
-   *  path to "the hub says it connected" would let a click forge the fact. */
-  async settleDeviceConsent(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }> {
-    return { ok: this.consents.settle(consentId, decision) };
+    return { ok: true };
   }
 
   /** The chat UI calls this when the user clicks a consent card button. */
@@ -3616,7 +3607,13 @@ export class OrchestratorAgent extends ActorAgent {
   // ── Callable RPC methods ───────────────────────────────────────
 
   private getDisplayName(): string {
-    return this.titleState().displayName || this.name;
+    // The title, not the slug: an untitled workspace answers "" here and every
+    // surface names it "Untitled workspace" through workspaceDisplayTitle —
+    // returning `this.name` put the slug back on screen as the workspace's name.
+
+    const state = this.titleState();
+
+    return isPlaceholderWorkspaceTitle(state.displayName, this.name) ? '' : state.displayName;
   }
 
   @callable()
@@ -5058,10 +5055,9 @@ export class OrchestratorAgent extends ActorAgent {
 
   protected get slates(): SlateHost {
     this._slates ??= new SlateHost({
-      ctx: this.ctx, env: this.env, workspace: this.name,
+      ctx: this.ctx, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
-      registerPort: (pid, port, target, owner) => this.hostedWorkspace().registerPort(pid, port, target, owner),
-      unregisterPorts: (pid) => this.hostedWorkspace().unregisterPorts(pid),
+      facetManager: () => this.hostedWorkspace().facetManager(),
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),

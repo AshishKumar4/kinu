@@ -21,7 +21,99 @@ import { withGallery, type Gallery } from './gallery-harness';
 
 const SHOTS = '/home/mrwhite0racle/kinu-logs/app-background/ux';
 
+/** The mesh-live deliverables: after shots, the pointer shot, rim numbers. */
+const MESH = '/home/mrwhite0racle/kinu-logs/mesh-live';
+
 mkdirSync(SHOTS, { recursive: true });
+
+mkdirSync(MESH, { recursive: true });
+
+/** The two bands the gate reads: the mesh rim and the mission-form centre. */
+type Band = 'rim' | 'centre';
+
+/** Mean absolute luminance delta between two screenshots, per band. The
+ *  browser decodes its own PNGs through an image into a 2d canvas, so no
+ *  image dependency lands in the repo for one gate's arithmetic. A `disc`
+ *  restricts the read to a circle in viewport units — the pointer's
+ *  neighbourhood — instead of the whole bands. */
+async function bandDeltas(page: Page, shotA: Uint8Array, shotB: Uint8Array, disc?: { readonly x: number; readonly y: number; readonly r: number }): Promise<Record<Band, number>> {
+  const sums = await page.evaluate(async (a: number[], b: number[], d: { readonly x: number; readonly y: number; readonly r: number } | null) => {
+    const load = async (bytes: number[]): Promise<ImageData> => {
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+      const url = URL.createObjectURL(blob);
+
+      try {
+        const image = new Image();
+        image.decoding = 'sync';
+        image.src = url;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+
+        if (context === null) throw new Error('no 2d context for the delta read');
+        context.drawImage(image, 0, 0);
+
+        return context.getImageData(0, 0, canvas.width, canvas.height);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+
+    const first = await load(a);
+    const second = await load(b);
+
+    if (first.width !== second.width || first.height !== second.height) throw new Error('shot size diverged');
+    const { width: w, height: h } = first;
+
+    const sums = { rim: 0, rimN: 0, centre: 0, centreN: 0 };
+
+    const linearize = (channel: number): number => {
+      const c = channel / 255;
+
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+
+    const lum = (r: number, g: number, b2: number): number => 0.2126 * linearize(r) + 0.7152 * linearize(g) + 0.0722 * linearize(b2);
+
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        if (d !== null) {
+          const dx = x / w - d.x;
+          const dy = y / h - d.y;
+
+          if (dx * dx + dy * dy >= d.r * d.r) continue;
+        }
+
+        const i = (y * w + x) * 4;
+
+        const delta = Math.abs(
+          lum(first.data[i] ?? 0, first.data[i + 1] ?? 0, first.data[i + 2] ?? 0)
+          - lum(second.data[i] ?? 0, second.data[i + 1] ?? 0, second.data[i + 2] ?? 0),
+        );
+
+        const rim = x < w * 0.15 || x >= w * 0.85 || y < h * 0.15 || y >= h * 0.85;
+
+        const centre = x >= w * 0.22 && x < w * 0.78 && y >= h * 0.10 && y < h * 0.95;
+
+        if (rim || d !== null) {
+          sums.rim += delta;
+          sums.rimN += 1;
+        }
+
+        if (centre) {
+          sums.centre += delta;
+          sums.centreN += 1;
+        }
+      }
+    }
+
+    return sums;
+  }, [...shotA], [...shotB], disc ?? null);
+
+  return { rim: sums.rim / sums.rimN, centre: sums.centre / sums.centreN };
+}
 
 /** The five names the stock gallery roster displays, in card order. */
 const DISPLAYED = ['checkout-fixes', 'perf-audit', 'email-triage', 'design-sys', 'handwrought-walnut-4166c321'];
@@ -30,6 +122,7 @@ interface BackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   time(): number;
   mode(): 'idle' | 'working' | 'attention';
+  pointer(): number;
 }
 
 declare global {
@@ -312,4 +405,156 @@ describe('the living background', () => {
       }
     });
   }, 90_000);
+
+  test('the light mesh reads at twice its old presence and the dark picture does not move', async () => {
+    // Re-based 2026-09-16 on light's own baseline (rim-before): light rim
+    // 0.00139 → band [0.00278, 0.00348], floor with a 2% tissue allowance;
+    // light centre ≤ 0.00060 (blur bleed scales with the lift); dark rim
+    // 0.00045 and dark centre 0.00036 pinned where they were.
+    await withGallery(async (gallery) => {
+      const rows: string[] = [];
+
+      for (const theme of ['dark', 'light'] as const) {
+        const page = await freshPage(gallery, '&path=/', theme);
+
+        try {
+          await page.setViewport({ width: 1440, height: 900 });
+          await liveBackground(page);
+
+          for (const name of DISPLAYED) await setOverview(page, name, idleBody());
+          await waitForMode(page, 'idle');
+          await pause(4000);
+
+          const renderer = await page.evaluate(() => window.__kinuAppBackground?.renderer() ?? null);
+          const on = await page.screenshot({ captureBeyondViewport: false });
+          await page.evaluate(() => {
+            const host = document.querySelector<HTMLElement>('[data-app-background]');
+
+            if (host !== null) host.style.display = 'none';
+          });
+          await pause(400);
+          const off = await page.screenshot({ captureBeyondViewport: false });
+          await Bun.write(join(MESH, `home-${theme}-after.png`), on);
+
+          const deltas = await bandDeltas(page, on, off);
+          const row = `${theme}: renderer=${String(renderer)} rim=${deltas.rim.toFixed(5)} centre=${deltas.centre.toFixed(5)}`;
+          process.stdout.write(`mesh-live: ${row}\n`);
+          rows.push(row);
+
+          if (theme === 'light') {
+            // Re-based 2026-09-16 on light's own baseline (rim-before
+            // 0.00139): twice presence is 0.00278; the floor keeps a
+            // 2% allowance for tissue state (reads 0.00277-0.00280).
+            expect(deltas.rim).toBeGreaterThanOrEqual(0.00272);
+            expect(deltas.rim).toBeLessThanOrEqual(0.00348);
+          } else {
+            expect(deltas.rim).toBeLessThanOrEqual(0.0009);
+            expect(deltas.centre).toBeLessThanOrEqual(0.0009);
+          }
+        } finally {
+          await page.close();
+        }
+      }
+
+      await Bun.write(join(MESH, 'rim-after.txt'), rows.join('\n') + '\n');
+    });
+  }, 120_000);
+
+  test('a hovered mesh brightens near the pointer and settles back after it leaves', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.browser.newPage();
+      await page.evaluateOnNewDocument((mode: string) => localStorage.setItem('theme', mode), 'light');
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${gallery.origin}/gallery.html?frame=app&path=${encodeURIComponent('/')}`, { waitUntil: 'networkidle0' });
+
+      try {
+        await liveBackground(page);
+
+        for (const name of DISPLAYED) await setOverview(page, name, idleBody());
+        await waitForMode(page, 'idle');
+        await pause(4000);
+
+        // Absolute presence in the pointer's disc, each live shot against
+        // the same hidden-host ground, gated on the hold itself: the shot
+        const disc = { x: 0.94, y: 0.2, r: 0.06 };
+        const quiet = await page.screenshot({ captureBeyondViewport: false });
+        // Onto the card first: the hold arms there.
+        await page.mouse.move(0.8 * 1440, 0.3 * 900, { steps: 12 });
+        await page.waitForFunction(() => (window.__kinuAppBackground?.pointer() ?? 0) > 0.25, { timeout: 10_000, polling: 100 });
+        const cardHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
+        // Then across element boundaries onto the background: the hold
+        // must not dip — no listener clears it mid-page anymore.
+        await page.mouse.move(0.94 * 1440, 0.2 * 900, { steps: 24 });
+        const crossHold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? 0);
+        process.stdout.write(`mesh-live: card hold=${cardHold.toFixed(3)} cross=${crossHold.toFixed(3)}\n`);
+        expect(crossHold).toBeGreaterThanOrEqual(cardHold * 0.9);
+        await pause(400);
+        const held = await page.screenshot({ captureBeyondViewport: false });
+        await Bun.write(join(MESH, 'home-light-pointer.png'), held);
+        await page.mouse.move(-50, -50, { steps: 12 });
+        await page.waitForFunction(() => (window.__kinuAppBackground?.pointer() ?? 1) < 0.02, { timeout: 10_000, polling: 100 });
+        await pause(400);
+        const after = await page.screenshot({ captureBeyondViewport: false });
+        await page.evaluate(() => {
+          const host = document.querySelector<HTMLElement>('[data-app-background]');
+
+          if (host !== null) host.style.display = 'none';
+        });
+        await pause(400);
+        const ground = await page.screenshot({ captureBeyondViewport: false });
+
+        const quietPresence = await bandDeltas(page, quiet, ground, disc);
+        const heldPresence = await bandDeltas(page, held, ground, disc);
+        const afterPresence = await bandDeltas(page, after, ground, disc);
+        process.stdout.write(
+          `mesh-live: disc presence quiet=${quietPresence.rim.toFixed(5)} held=${heldPresence.rim.toFixed(5)} after=${afterPresence.rim.toFixed(5)}\n`,
+        );
+        expect(heldPresence.rim).toBeGreaterThan(quietPresence.rim * 1.3);
+        expect(afterPresence.rim).toBeLessThan(quietPresence.rim * 1.3);
+      } finally {
+        await page.close();
+      }
+    });
+  }, 120_000);
+
+  test('a hoverless visitor sees the undisturbed picture', async () => {
+    // A touch-first viewport reports (hover: none); the mount never
+    // listens there, so the same sweep that answers on desktop moves no
+    // pixel here beyond the tissue's own drift.
+    await withGallery(async (gallery) => {
+      const page = await gallery.browser.newPage();
+      await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'light'));
+
+      try {
+        await page.setViewport({ width: 1440, height: 900, hasTouch: true, isMobile: false });
+        await page.goto(`${gallery.origin}/gallery.html?frame=app&path=/`, { waitUntil: 'networkidle0' });
+        await liveBackground(page);
+
+        for (const name of DISPLAYED) await setOverview(page, name, idleBody());
+        await waitForMode(page, 'idle');
+        await pause(4000);
+
+        const hoverNone = await page.evaluate(() => matchMedia('(hover: none)').matches);
+        expect(hoverNone).toBe(true);
+
+        // A touch sweep: here the picture must not answer, because the
+        // mount ignores touch pointers and the media query stays hoverless.
+        const quiet = await page.screenshot({ captureBeyondViewport: false });
+        await page.touchscreen.touchStart(0.8 * 1440, 0.3 * 900);
+        await page.touchscreen.touchMove(0.85 * 1440, 0.35 * 900);
+        await page.touchscreen.touchEnd();
+        const swept = await page.screenshot({ captureBeyondViewport: false });
+        const hold = await page.evaluate(() => window.__kinuAppBackground?.pointer() ?? -1);
+        process.stdout.write(`mesh-live: hover:none hold=${hold}\n`);
+        expect(hold).toBe(0);
+        const moved = await bandDeltas(page, quiet, swept);
+        process.stdout.write(`mesh-live: hover:none rim=${moved.rim.toFixed(5)}\n`);
+        // No pointer answer: the hold stays 0 and the rim moves only with
+        // the tissue's own 1.5 s drift (floor ≈ 0.0006-0.0025 by state).
+        expect(moved.rim).toBeLessThan(0.003);
+      } finally {
+        await page.close();
+      }
+    });
+  }, 120_000);
 });

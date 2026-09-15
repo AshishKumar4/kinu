@@ -1677,7 +1677,7 @@ export interface RunnerClaim {
  * Every claim is RESOLVED, never listed. `ladder.ts`'s own `claims()` answers
  * for each gate command — it follows `bun run` bodies, expands globs, and
  * narrows by bunfig's `pathIgnorePatterns` and by bun's own matcher — and
- * `deployGates()` parses deploy.sh's roster. The non-ladder runners come from
+ * `deployGates()` is the ladder's deploy plan. The non-ladder runners come from
  * `package.json`'s scripts table. A second resolver here would be the defect
  * `gate-set-equality` exists to prevent: one set measured, another governed.
  *

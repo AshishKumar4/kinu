@@ -41,7 +41,7 @@ import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
-import { EmptyState, EMPTY_HINTS, formatScore } from "./shared";
+import { EmptyState, formatScore } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
@@ -108,7 +108,7 @@ export function ExplorationSurface({
   }
 
   if (runs.length === 0) {
-    return <EmptyState icon={<GitForkIcon size={28} />} title="No forks yet" hint={EMPTY_HINTS.forks} />;
+    return <EmptyState icon={<GitForkIcon size={28} />} title="No swarms" />;
   }
 
   // The newest fork is what the operator came to look at, so it is focused on
@@ -622,8 +622,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
   if (nodes.length === 0) {
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center p-4">
-        <EmptyState icon={<TreeStructureIcon size={24} />} title="No node has been journalled yet"
-          hint="The search lists each node as it creates them, before any of them reports." />
+        <EmptyState icon={<TreeStructureIcon size={24} />} title="No nodes yet" />
       </div>
     );
   }

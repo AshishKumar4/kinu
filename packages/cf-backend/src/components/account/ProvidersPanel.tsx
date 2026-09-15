@@ -86,8 +86,7 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
 
   return (
     <>
-      <Card title="Cloudflare AI" icon={CloudIcon}
-        description="Workers AI models on your quota, and an AI Gateway for provider keys or Unified Billing.">
+      <Card title="Cloudflare AI" icon={CloudIcon}>
         <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
           {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
             <div className="space-y-5">
@@ -110,15 +109,13 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
         </CardSlot>
       </Card>
 
-      <Card title="ChatGPT (Codex)" icon={OpenAiLogoIcon}
-        description="Your ChatGPT subscription and its Codex models.">
+      <Card title="ChatGPT (Codex)" icon={OpenAiLogoIcon}>
         <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
           {(status) => <CodexConnect status={status} onChanged={reloadAll} />}
         </CardSlot>
       </Card>
 
-      <Card title="API keys" icon={KeyIcon}
-        description="Keys you paste here are stored once and used by every workspace.">
+      <Card title="API keys" icon={KeyIcon}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
           {(credentials) => (
             <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
@@ -159,7 +156,7 @@ function CloudflareAccountSection({ status, onChanged }: {
   };
 
   return (
-    <Field label="Workers AI account" hint="Changing this account clears the AI Gateway selection.">
+    <Field label="Workers AI account">
       <select
         value={status.selectedId ?? ''}
         onChange={(e) => choose(e.target.value)}
@@ -208,16 +205,12 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
 
   if (status.gateways.length === 0) {
     return (
-      <p className="p-meta p-text-3">
-        No AI Gateway found in this account. Create one under AI &gt; AI Gateway in Cloudflare to use
-        provider keys or Unified Billing credits.
-      </p>
+      <span className="p-meta p-text-3">No AI Gateway</span>
     );
   }
 
   return (
-    <Field label="AI Gateway"
-      hint={<>Models matching <code className="p-code-inline">my-gateway/&lt;provider&gt;/&lt;model&gt;</code> use this gateway's provider keys or Unified Billing credits.</>}>
+    <Field label="AI Gateway">
       {status.gateways.length === 1 && status.selectedId === status.gateways[0].id ? (
         <div className="flex items-center gap-2 text-xs">
           <CheckIcon size={13} className="p-success" />
@@ -330,8 +323,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
   return (
     <div className="space-y-2">
-      <Field inline label="Not connected"
-        hint="Authorize once. Every agent can then use your ChatGPT subscription and its Codex models.">
+      <Field inline label="Not connected">
         <FilledButton onClick={start}>Connect ChatGPT</FilledButton>
       </Field>
       {error && <p className="text-xs p-danger">{error}</p>}
@@ -431,8 +423,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       )}
 
       {/* Connect any catalog provider */}
-      <Field label="Connect a provider"
-        hint={`Paste an API key for any of ${catalog.length} providers. Every agent you own can use it.`}>
+      <Field label="Connect a provider">
         <Combobox
           items={catalog}
           value={selected}
@@ -457,14 +448,6 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         </Combobox>
         {selected && (
           <div className="space-y-2">
-            <p className="p-meta p-text-3">
-              {selected.envVar && <>Environment variable: <code className="p-code-inline">{selected.envVar}</code>. </>}
-              {selected.doc && (
-                <a href={selected.doc} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">
-                  {selected.name} docs <ArrowSquareOutIcon size={10} className="inline" />
-                </a>
-              )}
-            </p>
             <div className="flex gap-2">
               <input
                 type="password"
@@ -484,8 +467,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       </Field>
 
       {/* OpenAI-compat slot */}
-      <Field label="OpenAI-compatible (Groq, Together, …)"
-        hint={<>Each endpoint stores a base URL and API key. Use model spec <code className="p-code-inline">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</>}>
+      <Field label="OpenAI-compatible (Groq, Together, …)">
         <div className="grid gap-2 sm:grid-cols-[1fr_1.6fr_1fr]">
           <input
             value={compatName}

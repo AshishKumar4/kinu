@@ -42,6 +42,14 @@ declare global {
      *  runtimes as npm packages. */
     NIMBUS_RUNTIME_CACHE?: R2Bucket;
     LOADER: WorkerLoader;
+    /** The facet manager's optional knobs, read once when it is composed
+     *  over the hosted workspace. None is bound here: a resident process is
+     *  hosted as a facet of the workspace's own object (`facet`, the
+     *  default — never `peer`), launches are paced at the library's default
+     *  chunk, and the debug placement line stays off. */
+    NIMBUS_PROCESS_HOST?: 'facet';
+    NIMBUS_LAUNCH_CHUNK_BYTES?: string;
+    NIMBUS_DEBUG?: string;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
@@ -101,6 +109,14 @@ declare global {
     GITHUB_OAUTH_CLIENT_ID?: string;
     GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITHUB_OAUTH_SCOPES?: string;
+    /** Registered OAuth apps for `oauth-app` MCP presets — the vendored
+     *  identity the server's sign-in runs under (GitHub's remote MCP, Google
+     *  Workspace MCP). Wrangler secrets on the deployment; either absent ⇒
+     *  that preset falls back to a token, or is not offered. */
+    MCP_GITHUB_CLIENT_ID?: string;
+    MCP_GITHUB_CLIENT_SECRET?: string;
+    MCP_GOOGLE_CLIENT_ID?: string;
+    MCP_GOOGLE_CLIENT_SECRET?: string;
     /** The Worker's root secret for the user plane. A Wrangler secret, never a
      *  var. It seals the credential store (`user_credentials.value`) and, under
      *  a separate label, derives the owner capability every privileged UserDO

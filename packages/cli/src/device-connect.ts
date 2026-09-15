@@ -15,15 +15,15 @@
 
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { hostname, userInfo } from 'node:os';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { classify, classifyErrorCode, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
-import { rotateDaemonLogIfNeeded } from './daemon-log';
+import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
@@ -65,20 +65,9 @@ const AGENT_ROOT = join(AGENT_HOME, 'agents');
 
 const CONNECT_POLL_MS = 1_000;
 
-/** The name a machine has when nobody named it. */
-const UNNAMED_DEVICE_NAME = 'Your PC';
-
-/**
- * What this machine offers as its own name: `user@hostname`, which is what a
- * person recognises in a device list. `os.userInfo()` is the POSIX answer and
- * raises ENOENT when the uid has no passwd entry (a container built without
- * one), so the environment answers second and the neutral name last.
- */
+/** The name a machine offers when nobody named it: the hostname, nothing else. */
 export function defaultDeviceName(): string {
-  const user = (tolerate(() => userInfo().username, 'enoent') ?? process.env.USER ?? '').trim();
-  const host = hostname().trim();
-
-  return user && host ? `${user}@${host}` : UNNAMED_DEVICE_NAME;
+  return hostname().trim();
 }
 
 /**
@@ -92,7 +81,7 @@ function ensureAgentRoot(): void {
 
 /**
  * What linking this machine means. The words live in `@kinu.run/core` because
- * the web connect panel renders the same five sentences; this re-export keeps
+ * the web connect panel renders the same three lines; this re-export keeps
  * every CLI surface importing them from the module it already imports.
  */
 export { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
@@ -120,7 +109,8 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  | { kind: 'connected'; deviceId: string; sandbox: CloudDeviceSandbox }
+  /** `label` is the hub roster row's own label — the name that prints. */
+  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox }
   /** The caller's `signal` aborted before the daemon connected. */
   | { kind: 'cancelled'; deviceId: string }
   /** Session mode found a persistent daemon already running and left it alone. */
@@ -146,7 +136,9 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
   anyDeviceConnected = true;
 
-  return { kind: 'connected', deviceId: device.deviceId, sandbox: connected.sandbox };
+  // The ROW's label names the device: the hub is the authority on what this
+  // machine is called, not the name typed at the prompt.
+  return { kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox };
 }
 
 
@@ -530,12 +522,14 @@ function syncAgentDirectory(): void {
 }
 
 /**
- * The connected device row the server reports. The wait ends on the daemon's
- * own signals: its row turning connected, or its exit or spawn failure, which
- * is the definitive failure (a daemon that died cannot connect). The caller's
- * `signal` ends it early with `undefined`. There is no clock: a daemon that is
- * still dialling has not failed. The row carries what the machine said about
- * its own sandbox, so the caller states that without a second request.
+ * The connected device row the server reports. The readiness wait ends on
+ * exactly three events: the hub roster row reads connected (success), the
+ * daemon process exits (failure — its last output lines say why), or the
+ * user interrupts. There is no deadline and no clock anywhere: a daemon that
+ * is still dialling has not failed, and a transient GET error while the
+ * daemon is alive is not-yet, not failure. The row carries what the machine
+ * said about its own sandbox, so the caller states that without a second
+ * request.
  */
 async function waitForDeviceConnected(
   auth: DeviceAuth,
@@ -551,7 +545,7 @@ async function waitForDeviceConnected(
     const outcome = signal ?? (code === null ? 'unknown exit' : `exit code ${code}`);
     launch.failure = new KinuError(
       'unavailable',
-      `the device daemon exited before it could connect (${outcome}). See ${DAEMON_LOG_PATH}`,
+      `the device daemon exited before it could connect (${outcome}). Its last lines:\n${daemonTailForFailure()}\nSee ${DAEMON_LOG_PATH}`,
     );
     stop.abort();
   };
@@ -568,9 +562,29 @@ async function waitForDeviceConnected(
 
   try {
     const connected = await waitForAnswer(async () => {
-      const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
+      // A transient GET error while the daemon is alive is not-yet, not
+      // failure: the hub answered nothing, and only the daemon's exit ends
+      // the wait. The miss travels as a SHAPE — a recorded miss that names
+      // what the hub said — never as a sentinel a healthy answer could also
+      // return.
+      let miss: { readonly transient: string } | undefined;
+      let rows: CloudDevice[] | undefined;
 
-      return devices.find((device) => device.id === deviceId && device.connected);
+      try {
+        rows = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
+      } catch (cause) {
+        const failure = toKinuError({ doing: 'checking whether the device daemon connected', cause, otherwise: 'unavailable' });
+        diagnostics.failure('device.connect.list_transient', failure);
+        miss = { transient: renderThrownChain({ cause: failure }) };
+      }
+
+      if (miss !== undefined) {
+        diagnostics.event('device.connect.list_transient_not_yet', { detail: miss.transient });
+
+        return undefined;
+      }
+
+      return rows?.find((device) => device.id === deviceId && device.connected);
     }, wait);
 
     if (connected !== undefined) return connected;
@@ -583,6 +597,12 @@ async function waitForDeviceConnected(
     launch.child.off('error', onError);
     opts.signal?.removeEventListener('abort', stopOnCaller);
   }
+}
+
+/** The daemon's last output lines for a failure that quoted them, or the
+ *  line that says where to look when the log holds nothing yet. */
+function daemonTailForFailure(): string {
+  return readDaemonLogTail(DAEMON_LOG_PATH, 15) ?? `no daemon log yet at ${DAEMON_LOG_PATH}`;
 }
 
 function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch {

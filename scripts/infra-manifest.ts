@@ -660,6 +660,37 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'nothing — CLOUDFLARE_WORKERS_AI_SCOPES in core/src/providers/cloudflare-oauth.ts is the one source '
       + 'of truth and this only overrides it.',
   }],
+  ['MCP_GITHUB_CLIENT_ID', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'the GitHub preset card still renders, but without the registered OAuth app it '
+      + 'asks the user for a personal access token instead of offering sign-in.',
+    source: 'https://github.com/settings/developers — OAuth App with callback '
+      + '`<origin>/api/user/mcp/callback`; then `wrangler secret put`. See docs/DEPLOYMENT.md.',
+  }],
+  ['MCP_GITHUB_CLIENT_SECRET', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'same as MCP_GITHUB_CLIENT_ID — the pair is the registered app, and the card '
+      + 'falls back to the token field when either half is missing.',
+    source: 'the same GitHub OAuth app as MCP_GITHUB_CLIENT_ID.',
+  }],
+  ['MCP_GOOGLE_CLIENT_ID', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'the Gmail preset card is not rendered at all — the preset declares no token '
+      + 'fallback, so without the registered app there is nothing to show.',
+    source: 'https://console.cloud.google.com — OAuth 2.0 client with '
+      + '`<origin>/api/user/mcp/callback` among its authorized redirect URIs; then '
+      + '`wrangler secret put`. See docs/DEPLOYMENT.md.',
+  }],
+  ['MCP_GOOGLE_CLIENT_SECRET', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'same as MCP_GOOGLE_CLIENT_ID — without both halves of the registered client '
+      + 'the Gmail card is hidden.',
+    source: 'the same Google OAuth client as MCP_GOOGLE_CLIENT_ID.',
+  }],
 ]);
 
 /* ── Derivation ───────────────────────────────────────────────────────── */

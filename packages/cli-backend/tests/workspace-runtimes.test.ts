@@ -14,7 +14,7 @@ import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js'
 import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
-import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import { nimbusSql, localTransactions } from '../src/runtime';
 
@@ -37,7 +37,7 @@ function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): Wor
   return createWorkspace({
     sql,
     transactions: localTransactions(database),
-    generation: nextWorkspaceGeneration(sql),
+    generation: workspaceGenerationStorage(sql),
     runtimes,
     runtimeFacets: localFacetHost(),
   });

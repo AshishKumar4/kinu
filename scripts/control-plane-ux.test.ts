@@ -709,8 +709,8 @@ describe('the control plane in a browser', () => {
       await browserPage.waitForNetworkIdle();
 
       const first = await browserPage.evaluate(() => document.body.innerText);
-      expect(first).toContain('w000');
-      expect(first).not.toContain('w200');
+      expect(first).toContain('Workspace 0');
+      expect(first).not.toContain('Workspace 200');
 
       // `PageWalker`'s own label, arrow included: an exact match is what keeps
       // the job row's Cancel apart from the modal's.
@@ -720,8 +720,8 @@ describe('the control plane in a browser', () => {
       const second = await browserPage.evaluate(() => document.body.innerText);
       // The rows that were unreachable before, and the honest statement that this
       // page did not re-reconcile.
-      expect(second).toContain('w200');
-      expect(second).toContain('w249');
+      expect(second).toContain('Workspace 200');
+      expect(second).toContain('Workspace 249');
       expect(second).toContain('end of list');
       expect(second).toContain('later page of the walk');
       await browserPage.close();

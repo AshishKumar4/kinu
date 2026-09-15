@@ -4,6 +4,7 @@ import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { SlateHost } from '../../src/slates/host';
 import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
@@ -33,15 +34,17 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
+  private readonly facets = probeFacetManager({
+    ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs,
+  });
+
   private readonly host = new SlateHost({
-    ctx: this.ctx, env: this.env, workspace: this.ctx.id.toString(),
+    ctx: this.ctx, workspace: this.ctx.id.toString(),
     session: async () => ({ vfs: this.vfs, processes: this.processes }),
-    registerPort: async (pid, port, target) => { this.ports.bindFacetStub(pid, target); this.ports.register(port, pid); },
-    unregisterPorts: pid => { this.ports.unregisterByPid(pid); },
+    facetManager: async () => this.facets,
     dispatch: async () => { throw new Error('The fixture declares no capability bindings'); },
     apps: {
-      ensure: async () => ({ port: 20000, capability: '0'.repeat(24) }),
-      remove: async () => ({ removed: false, port: null }),
+      ...probeDurableApps(this.facets),
       url: async () => { throw new Error('The fixture does not publish preview URLs'); },
     },
     catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),

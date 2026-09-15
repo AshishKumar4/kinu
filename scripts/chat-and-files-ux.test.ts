@@ -115,13 +115,11 @@ interface Observed {
   readonly filesAfterDelete: string[];
   /** Rows visible while the filter says "credo". */
   readonly filesFiltered: string[];
-  /** The stated-absence row for a disconnected device, on &offline=laptop. */
+  /** The stated-absence row a disconnected device leaves on the drive. */
   readonly filesOfflineRow: string;
-  /** The Environment tab, reworked: cards, and NO capability doctrine. */
-  readonly envCards: Array<{ name: string; status: string; durability: string }>;
+  readonly envCards: Array<{ name: string; kind: string; status: string; mount: string }>;
   readonly envCapabilityChips: number;
   readonly envCapabilityAbsences: number;
-  /** An Environment card's Files action lands the Files surface. */
   readonly envFilesJumpLandsOnDrive: boolean;
   /** The line terminal's rendered rows after one typed command and one pasted
    *  two-line command. Rows, not a string: the defect was which row a
@@ -563,8 +561,9 @@ async function run(): Promise<Observed> {
 
     const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
       name: card.querySelector('.font-medium')?.textContent ?? '',
+      kind: [...card.querySelectorAll('.p-meta')].map((el) => el.textContent ?? '').join('|'),
       status: card.querySelector('[data-env-status]')?.textContent ?? '',
-      durability: card.querySelector('[data-env-durability]')?.textContent ?? '',
+      mount: card.querySelector('[data-env-mount]')?.textContent ?? '',
     })));
 
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
@@ -843,13 +842,13 @@ describe('the drive, browsing the one composite plane', () => {
 });
 
 describe('the Environment tab, as a user reads it', () => {
-  test('one card per environment: status, durability, and the device wears its own name', () => {
+  test('one card per environment: status, mount path, and the device wears its own name', () => {
     const byName = Object.fromEntries(observed.envCards.map((card) => [card.name, card]));
     expect(byName["Ashish's MacBook"]?.status).toBe('active');
-    // 33056d3d8 cut the live-shared hint to "Files stay on your machine."
-    expect(byName["Ashish's MacBook"]?.durability).toContain('Files stay on your machine');
-    expect(byName['Workspace']?.durability).toContain('Durable');
-    expect(byName['Sandbox']?.durability).toContain('Ephemeral');
+    expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
+    expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
+    expect(byName['Workspace']?.mount).toBe('/');
+    expect(byName['Sandbox']?.mount).toBe('/sandbox');
   });
 
   test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {
@@ -1810,9 +1809,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
       // The disclosure is on screen BEFORE anything is installed.
       expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
-        // 162182954 cut the line to "The daemon dials out and opens no
-        // inbound ports."
-        .toContain('The daemon dials out and opens no inbound ports.');
+        // 98caa7776 cut the disclosure to three lines, ending on "The daemon
+        // only dials out. Revoke it any time under Account settings → Devices."
+        .toContain('The daemon only dials out. Revoke it any time under Account settings → Devices.');
 
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-command]');
@@ -2364,6 +2363,126 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
     }
   });
 }, 120_000);
+
+/**
+ * The rail reads one size on every page. The workbench's compact type scale
+ * once shrank the same rows on workspace routes while home kept them at the
+ * default — nav 11px vs 14px, account label 11px vs 14px — until the flag
+ * moved off `html` onto the workspace's own content root.
+ */
+test('sidebar rows keep one height and font size on home and workspace routes', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const rowsFor = async (frame: string) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1280, height: 860 });
+      await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('nav[aria-label="Primary"] a');
+
+      const rows = await page.$$eval('nav[aria-label="Primary"] a', (anchors) =>
+        anchors.map((a) => ({
+          height: a.getBoundingClientRect().height,
+          font: getComputedStyle(a).fontSize,
+        })));
+
+      const aside = await page.$eval('aside', (rail) => {
+        const rows = [...rail.querySelectorAll('a[href^="/workspace/"]')]
+          .map((a) => ({ height: a.getBoundingClientRect().height, font: getComputedStyle(a).fontSize }));
+
+        const buttons = [...rail.querySelectorAll('button')];
+        const account = buttons.find((b) => b.querySelector('[class*="26px"]'));
+
+        const accountLabel = account?.querySelector('span.min-w-0') ?? account?.querySelector('span');
+
+        return {
+          rows,
+          account: accountLabel === null || accountLabel === undefined
+            ? null
+            : { height: accountLabel.getBoundingClientRect().height, font: getComputedStyle(accountLabel).fontSize },
+        };
+      });
+
+      await page.close();
+
+      return { nav: rows, ws: aside.rows, account: aside.account };
+    };
+
+    const home = await rowsFor('home');
+    const shell = await rowsFor('shell');
+
+    expect(home.nav).toHaveLength(4);
+    expect(shell.nav).toHaveLength(4);
+
+    for (const rows of [home.nav, shell.nav]) {
+      for (const row of rows) {
+        expect(row.font).toBe('14px');
+        expect(Math.round(row.height)).toBe(34);
+      }
+    }
+
+    expect(home.ws.length).toBeGreaterThan(0);
+    expect(home.ws.length).toBe(shell.ws.length);
+
+    for (let i = 0; i < home.ws.length; i++) {
+      expect(shell.ws[i]?.font).toBe(home.ws[i]?.font);
+      expect(Math.abs((shell.ws[i]?.height ?? 0) - (home.ws[i]?.height ?? 0))).toBeLessThan(1);
+    }
+
+    expect(home.account).not.toBeNull();
+    expect(shell.account).not.toBeNull();
+    expect(shell.account?.font).toBe(home.account?.font);
+    expect(Math.abs((shell.account?.height ?? 0) - (home.account?.height ?? 0))).toBeLessThan(1);
+  });
+}, 240_000);
+
+/**
+ * One rule between the rail and the content, one rule above the account row,
+ * and both tab-strip headers on the same bottom edge as their active
+ * underline. Measured on the real workspace frame at 1440 wide, dark.
+ */
+test('rail gap is zero with one border, the footer keeps one rule, both strips share one height', async () => {
+  await withGallery(async ({ browser, origin }) => {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 1000 });
+    await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'dark'));
+    await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('aside');
+    await page.waitForSelector('nav[aria-label="Workspace agents"]');
+    await page.waitForSelector('.p-tabstrip');
+
+    const measured = await page.$eval('aside', (aside) => {
+      const main = aside.nextElementSibling;
+      const asideBox = aside.getBoundingClientRect();
+      const mainBox = main === null ? null : main.getBoundingClientRect();
+      const footerDivs = [...aside.querySelectorAll('div')];
+      const footers = footerDivs.filter((el) => getComputedStyle(el).borderTopWidth !== '0px');
+
+      const chat = document.querySelector('nav[aria-label="Workspace agents"]');
+      const stripDivs = [...document.querySelectorAll('div.p-tabstrip')];
+      const strip = stripDivs.find((el) => el.getAttribute('aria-label') === null) ?? document.querySelector('.p-tabstrip');
+
+
+      const active = document.querySelector('.p-tab-active');
+
+      return {
+        gap: mainBox === null ? -1 : mainBox.left - asideBox.right,
+        asideBorder: getComputedStyle(aside).borderRightWidth,
+        mainBorder: main === null ? '?' : getComputedStyle(main).borderLeftWidth,
+        footerRules: footers.length,
+        chatY: chat === null ? -1 : chat.getBoundingClientRect().bottom,
+        stripY: strip === null ? -1 : strip.getBoundingClientRect().bottom,
+        activeY: active === null ? -1 : active.getBoundingClientRect().bottom,
+      };
+    });
+
+    expect(measured.gap).toBe(0);
+    expect(measured.asideBorder).toBe('1px');
+    expect(measured.mainBorder).toBe('0px');
+    expect(measured.footerRules).toBe(1);
+    expect(Math.abs(measured.chatY - measured.stripY)).toBeLessThan(1);
+    expect(Math.abs(measured.activeY - measured.stripY)).toBeLessThan(1);
+    await page.close();
+  });
+}, 240_000);
 
 test('workspace tabs keep scrolling horizontal and suppress the scrollbar', async () => {
   await withGallery(async ({ browser, origin }) => {
