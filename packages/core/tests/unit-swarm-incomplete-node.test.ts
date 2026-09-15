@@ -329,7 +329,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
     expect(cutRow?.status).toBe('failed');
     expect(cutRow?.visits).toBe(0);
     expect(cutRow?.value).toBe(0);
-  }, 60_000);
+  });
 
   test('the node that did not finish cannot win, even carrying the better program', async () => {
     // THE RANKING WAS MEASURING THE CLOCK. Branch 1 reports the OPTIMAL program and
@@ -351,7 +351,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
     expect(best.incomplete).toBeNull();
     expect(best.artifact).toContain('let wins = 0');
     expect(best.artifact).not.toContain('let best = t[0]');
-  }, 60_000);
+  });
 
   test('a run whose every node was cut crowns nothing and says which nodes were cut', async () => {
     // The live run's own shape: the cancellation landed mid-wave, so no node finished —
@@ -372,7 +372,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
       expect(candidate.score).toBeNull();
       expect(candidate.measured).toBeNull();
     }
-  }, 60_000);
+  });
 
   test('a node that ran out of BUDGET is reported the same way, by its own status', async () => {
     // Not only the cancel: every non-`completed` status is a node with no answer, and
@@ -391,7 +391,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
     expect(cut?.incomplete).toStartWith('budget_exceeded after ');
     expect(cut?.incomplete).toContain('wall-clock budget exhausted');
     expect(cut?.score).toBeNull();
-  }, 60_000);
+  });
 });
 
 describe('every node runs to the deadline its caller declared, and to none other', () => {
@@ -410,7 +410,7 @@ describe('every node runs to the deadline its caller declared, and to none other
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates.map((candidate) => candidate.incomplete)).toEqual([null, null]);
-  }, 60_000);
+  });
 
   test('a clock the caller declared reaches the node; zero is a declaration', async () => {
     // ZERO IS THE ONE INPUT THAT CATCHES THIS. `runSwarm` resolves a caller's clock with
@@ -446,7 +446,7 @@ describe('every node runs to the deadline its caller declared, and to none other
         cut: result.candidates.map((candidate) => candidate.incomplete !== null),
       }).toEqual({ case: declaration.name, cut: [...declaration.cut] });
     }
-  }, 120_000);
+  });
 });
 
 /**
@@ -480,7 +480,7 @@ describe('a node the run LOST is counted, and the count denies the run a clean s
     // A lost node denies the clean settle. Without this the caller reads `settled`
     // and treats a half-width wave as the search it asked for.
     expect(result.report.stop).toBe('budget');
-  }, 60_000);
+  });
 
   test('a node that did not finish is carried, so the level keeps both candidates', async () => {
     const { result } = await run({
@@ -495,7 +495,7 @@ describe('a node the run LOST is counted, and the count denies the run a clean s
     expect(result.report.expansions).toBe(2);
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates.some((candidate) => candidate.incomplete !== null)).toBe(true);
-  }, 60_000);
+  });
 
   test('deriveStop: only an untouched budget with a closed frontier earns `settled`', () => {
     const settled = {

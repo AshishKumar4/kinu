@@ -411,5 +411,5 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     }
 
     expect(result.report.expansions).toBe(3);
-  }, 60_000);
+  });
 });

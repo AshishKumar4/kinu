@@ -154,7 +154,7 @@ describe('a turn interrupted between a tool call and its result', () => {
     } finally {
       await provider.stop();
     }
-  }, 20_000);
+  });
 
   test('records the interruption as the call\'s result, not as a call that never happened', async () => {
     const provider = scriptedProvider([() => toolStep(ORPHAN_ID)]);
@@ -179,7 +179,7 @@ describe('a turn interrupted between a tool call and its result', () => {
     } finally {
       await provider.stop();
     }
-  }, 20_000);
+  });
 
   test('keeps the completed steps the interrupt did not touch', async () => {
     // Interrupt on the SECOND call: step one ran a tool and finished cleanly,
@@ -220,7 +220,7 @@ describe('a turn interrupted between a tool call and its result', () => {
     } finally {
       await provider.stop();
     }
-  }, 20_000);
+  });
 });
 
 describe('a history that already holds an orphaned call', () => {
@@ -254,7 +254,7 @@ describe('a history that already holds an orphaned call', () => {
     } finally {
       await provider.stop();
     }
-  }, 20_000);
+  });
 
   test('is not rewritten in place — assembly repairs the request, not the record', async () => {
     const provider = scriptedProvider([() => textStep('back with you')]);
@@ -269,5 +269,5 @@ describe('a history that already holds an orphaned call', () => {
     } finally {
       await provider.stop();
     }
-  }, 20_000);
+  });
 });

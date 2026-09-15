@@ -296,7 +296,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     if (!row) return;
     const stored = new MctsSearchStore(h.rt.storage.sql, h.rt.actor).readSwarmProfile(row.root_id);
     expect(stored?.profile.tier.model).toBe('m-deep-v1');
-  }, 30_000);
+  });
 
   test('a role\'s own tier routes without the caller naming one', async () => {
     // `auditor` declares tier `deep`, and nothing in this call says so. The
@@ -315,7 +315,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     expect(h.deepV1Calls()).toBeGreaterThan(0);
     expect(h.callerCalls()).toBe(0);
     expect(result.profile.sources.tierSource).toBe('role');
-  }, 30_000);
+  });
 
   test('an unrouted actor — no catalog — still runs its nodes on the caller\'s model', async () => {
     // The honest unrouted case, kept working: no profile authority means no tier
@@ -336,7 +336,7 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     expect(result.preset).toBe('ideate');
     expect(caller.calls()).toBeGreaterThan(0);
-  }, 30_000);
+  });
 });
 
 describe('a re-drive continues under the profile it started under', () => {
@@ -358,7 +358,7 @@ describe('a re-drive continues under the profile it started under', () => {
     expect(h.deepV2Calls()).toBe(0);
     expect(h.callerCalls()).toBe(0);
     expect(result.profile.profile.tier.model).toBe('m-deep-v1');
-  }, 30_000);
+  });
 
   test('the stored role\'s preset selects the axes, not the literal fallback', async () => {
     // PAIRED, because either half alone proves nothing. The two calls are
@@ -393,7 +393,7 @@ describe('a re-drive continues under the profile it started under', () => {
     // The preset carries its own width, and nothing in the call named a number:
     // `ideate` fans 5. A preset read off the stored role brings its caps with it.
     expect(result.caps.branches).toEqual({ value: 5, origin: 'preset' });
-  }, 60_000);
+  });
 
   test('the stored profile is readable before the claim, and only for a running row', () => {
     // The reader the preset derivation depends on. It has to answer BEFORE
@@ -490,7 +490,7 @@ describe('`models` routes each node to its own assigned model', () => {
     expect(h.callerCalls()).toBeGreaterThanOrEqual(2);
     expect(h.aCalls()).toBe(0);
     expect(h.bCalls()).toBe(0);
-  }, 30_000);
+  });
 
   test('a supplied list routes each node to its assigned resolved model, by slot', async () => {
     const h = perNodeHarness();
@@ -516,7 +516,7 @@ describe('`models` routes each node to its own assigned model', () => {
     const byModel = result.candidates.map((candidate) => candidate.artifact);
     expect(byModel.filter((text) => text.includes('m-alpha'))).toHaveLength(2);
     expect(byModel.filter((text) => text.includes('m-beta'))).toHaveLength(2);
-  }, 30_000);
+  });
 
   test('a list shorter than the wave wraps, and one longer than it truncates', async () => {
     // ONE spec names every node — the degenerate routed run, which must still be
@@ -547,7 +547,7 @@ describe('`models` routes each node to its own assigned model', () => {
     expect(long.resolvedSpecs).toEqual(['m-alpha', 'm-beta', 'm-default', 'm-alpha', 'm-beta']);
     expect(long.aCalls()).toBeGreaterThanOrEqual(1);
     expect(long.bCalls()).toBeGreaterThanOrEqual(1);
-  }, 30_000);
+  });
 
   test('an unresolvable spec is refused by name, before any node runs', async () => {
     const h = perNodeHarness();
@@ -564,7 +564,7 @@ describe('`models` routes each node to its own assigned model', () => {
     expect(h.bCalls()).toBe(0);
     expect(h.callerCalls()).toBe(0);
     expect(h.resolvedSpecs).toEqual(['m-alpha', 'm-ghost']);
-  }, 30_000);
+  });
 
   test('naming models and tier together is refused rather than resolved by precedence', async () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
@@ -576,7 +576,7 @@ describe('`models` routes each node to its own assigned model', () => {
     await expect(pending).rejects.toThrow('tier');
     await expect(pending).rejects.toThrow('models');
     await expect(pending).rejects.toThrow('ignored');
-  }, 30_000);
+  });
 
   test('the identity digest changes when the models change', () => {
     // TWO CALLS identical except the routing list, resolved through the real

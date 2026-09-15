@@ -687,7 +687,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     expect(result.report.floorMargin).toBeGreaterThan(0);
     expect(result.publication.state.kind).toBe('open');
     expect(result.publication.caveat).toBeNull();
-  }, 120_000);
+  });
 
   test('depth 1 is UNCHANGED: one wave, one level, and the flat report it always gave', async () => {
     // The regression that matters most. Enabling the tree must not move the depth that
@@ -705,7 +705,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     expect(result.report.expansions).toBe(3);
     // A full width came back with nothing left to select: settled, not truncated.
     expect(result.report.stop).toBe('settled');
-  }, 120_000);
+  });
 
   test('a REFUSED proposal names its reason, and the node still gets expanded', async () => {
     // Seven sub-questions against the arbiter's declared band of 2-4
@@ -733,7 +733,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     // Refused the BRANCH, not the node: the engine still expanded it under its own
     // policy, so a bad proposal costs the node its request and not its turn.
     expect(Math.max(...nodes.map((node) => node.depth))).toBe(2);
-  }, 120_000);
+  });
 
   test('an ACCEPTED proposal expands at the node, and its children stay inside the cap', async () => {
     const { logger, nodes, result } = await run({ depth: 3, branches: 2, proposeWidth: 3 });
@@ -758,7 +758,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     // the three: with proposals granted at a width the search did not choose, the tree
     // still lands inside the cap.
     expect(Math.max(...nodes.map((node) => node.depth))).toBeLessThanOrEqual(3);
-  }, 120_000);
+  });
 
   test('nothing a node asks for is dropped in silence — every proposal is answered', async () => {
     // The rule *Arbitration* states, as a count: a node that cannot tell refusal from
@@ -810,7 +810,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
         throw new Error(`node ${node.parent_id} was refused at the cap and still got a child`);
       }
     }
-  }, 120_000);
+  });
 
   test('the deepest level a branch could still be granted from is invited to propose', async () => {
     // THE BOUNDARY BELONGS TO `arbitrateBranch` ALONE, which refuses
@@ -833,7 +833,7 @@ describe('a swarm at depth 2 expands, and its tree is measured', () => {
     expect(invited).toHaveLength(oneBelowTheCap);
     // And the level AT the cap is not asked, so the count above is not "all of them".
     expect(invited.length).toBeLessThan(prompts.length);
-  }, 120_000);
+  });
 });
 
 /* ── `carry` admission is consulted at the settle barrier ─────────────────── */
@@ -874,7 +874,7 @@ describe('carry admission at the settle barrier', () => {
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
     expect(settled?.fields).toMatchObject({ carry: 'artifacts', admitted: 0 });
     expect(settled?.fields.refused).toBe(refused.length);
-  }, 120_000);
+  });
 
   test('a reachable threshold carries the candidates that clear it', async () => {
     const { logger, result } = await run({
@@ -890,7 +890,7 @@ describe('carry admission at the settle barrier', () => {
     expect(admitted.length).toBeGreaterThan(0);
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.carry_settled');
     expect(settled?.fields.admitted).toBe(admitted.length);
-  }, 120_000);
+  });
 });
 
 /* ── The records store: what one run reached, the next one starts from ────── */
@@ -1010,7 +1010,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     // prompt always carries.
     expect(first.prompts.some((sent) => sent.includes('An earlier run of this same objective')))
       .toBe(false);
-  }, 120_000);
+  });
 
   test('re-running the same search does not lower what the store holds', async () => {
     // The monotone rule through the real path. The model answers with the same optimum
@@ -1038,7 +1038,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     const after = recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR });
     expect(after).toHaveLength(before.length);
     expect(after[0]?.value).toBe(before[0]?.value ?? -1);
-  }, 120_000);
+  });
 
   test("`carry:'artifacts'` admissions reach persistence, and a refused one writes nothing", async () => {
     // Both publishing carries land in this store — `SWARM_CARRIES` says the store IS
@@ -1068,7 +1068,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     if ('reason' in misses.result) return;
     // Refused at the barrier, so the writer is never reached and nothing lands.
     expect(misses.result.report.records).toMatchObject({ written: 0, notBetter: 0 });
-  }, 120_000);
+  });
 
   test("a run whose `carry` writes nothing a later run reads neither writes nor reads", async () => {
     const { rt } = createTestRuntime();
@@ -1097,7 +1097,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     expect(isolated.result.report.records).toEqual({
       carriedIn: 0, carriedInBest: null, carriedInCells: 0, written: 0, notBetter: 0, tooClose: 0,
     });
-  }, 120_000);
+  });
 
   test('A BREACHED RUN WRITES NOTHING — the seal reaches the store', async () => {
     // *The publication seal* at this surface, through the real engine: the run measures a
@@ -1124,7 +1124,7 @@ describe('the records store: what one run reached, the next one starts from', ()
     // what the seal cost it.
     expect(breached.result.report.carrySuppressed?.carry).toBe('elites');
     expect(breached.result.report.carrySuppressed?.refused).toContain('records');
-  }, 120_000);
+  });
 });
 
 /* ── `score:'judge'` runs from the swarm path ─────────────────────────────── */
@@ -1161,7 +1161,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     // And no record is keyed by a judged run: it measured no objective, so it has no
     // identity, which is a different claim from writing zero rows.
     expect(result.report.records).toBeNull();
-  }, 120_000);
+  });
 
   test('the realised ensemble is PERSISTED, so a reader can state it once the call has returned', async () => {
     // A figure computed, disclosed in the settle report and written nowhere is one no
@@ -1203,7 +1203,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(entry.tree.length).toBeGreaterThan(0);
     expect(entry.run.hasNodeTranscripts).toBe(false);
     expect(entry.head).toBeNull();
-  }, 120_000);
+  });
 
   test('no clamp is disclosed, because none can bind', async () => {
     // The pool is sized from the requested ensemble, so the run emits no
@@ -1217,7 +1217,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect('reason' in result).toBe(false);
     expect(logger.emitted.filter((line) => line.event === 'swarm.judge_ensemble_clamped'))
       .toHaveLength(0);
-  }, 120_000);
+  });
 
   test('a judged tree BELOW the marginalisation floor is refused, by the in-process entry point too', async () => {
     // `swarmValidity` refuses this and `runSwarm` does not route through it, so without
@@ -1250,7 +1250,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
     expect(refusal.error).toContain('samples ≥ 20');
     // The refusal names the binding cap, because raising `samples` alone does nothing.
     expect(refusal.error).toContain('maxEvalLLMCalls');
-  }, 120_000);
+  });
 
   test('a FLAT judged run has no floor to clear — the bound is about trees', async () => {
     // `advance:'none'` has no selection step, so there is no scorer noise for a tree to
@@ -1276,7 +1276,7 @@ describe("score:'judge' reaches the ensemble the tree already owns", () => {
 
     if ('reason' in result) return;
     expect(result.report.judgeEnsemble).toEqual({ requested: 1, realised: 1 });
-  }, 120_000);
+  });
 });
 
 /* ── Merge-back is how the answer reaches the origin ──────────────────────── */
@@ -1320,7 +1320,7 @@ describe('merge-back at the settle barrier', () => {
     expect(settled?.fields).toMatchObject({
       policy: 'apply-winner', applied: 1, refused: 0, merge_nodes: 0, stopped_at: '',
     });
-  }, 120_000);
+  });
 
   // THE SIZE BOUND, LIVE. The padding is a comment, so the candidate still verifies and
   // still measures the optimal operation count — the only thing that changes is that it no
@@ -1352,7 +1352,7 @@ describe('merge-back at the settle barrier', () => {
     expect(logger.emitted.filter((line) => line.event === 'swarm.merge_applied')).toHaveLength(0);
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
     expect(settled?.fields).toMatchObject({ applied: 0, refused: 1 });
-  }, 120_000);
+  });
 });
 
 /* ── The DAG: `expand:'aggregate'` fans a level in ────────────────────────── */
@@ -1461,7 +1461,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const edges = String(vertex?.aggregated).split(',');
     expect(edges.length).toBe(3);
     expect(edges).toContain(String(vertex?.selection_parent));
-  }, 120_000);
+  });
 
   test('a merge order is a topological order: a vertex is held behind the parent it consumed', async () => {
     const { rt } = createTestRuntime();
@@ -1499,7 +1499,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     // NOT VACUOUS: the offered order really did put the dependent first, so this is a
     // reordering and not a list that happened to be right.
     expect(together[0]).not.toBe(node);
-  }, 120_000);
+  });
 
   test('parents that AGREE accumulate, and no node is burned deciding nothing', async () => {
     const { rt } = createTestRuntime();
@@ -1528,7 +1528,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
 
     if (!winner) return;
     expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(winner.artifact);
-  }, 120_000);
+  });
 
   test('a parent the tree retired is consumed anyway, and the report says how many', async () => {
     const { rt } = createTestRuntime();
@@ -1564,7 +1564,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       .flatMap((fields) => String(fields.order).split(','));
 
     expect(retired.some((id) => consumed.includes(id))).toBe(true);
-  }, 120_000);
+  });
 
   test('a parent the search could not score is not consumed, and the count says so', async () => {
     const { rt } = createTestRuntime();
@@ -1585,7 +1585,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     const [skipped] = fanInEvents(logger, 'swarm.aggregate_skipped');
     expect(skipped).toMatchObject({ reason: 'no-level', parents: 1 });
     expect(result.report.fanIn?.vertices).toEqual([]);
-  }, 120_000);
+  });
 
   test('the transaction bound is checked per member, before the fan-in applies one', async () => {
     const { rt } = createTestRuntime();
@@ -1609,7 +1609,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
       policy: 'sequential-rebase', bound: 'blobBytes', maximum: MAX_TX_BLOB_BYTES,
     });
     expect(result.report.fanIn?.merged).toBe(0);
-  }, 120_000);
+  });
 
   test("`expand:'sample'` fans in nothing, and says so rather than reporting a fan-in of zero", async () => {
     const { logger, result } = await run({ depth: 2, branches: 2, proposeWidth: null });
@@ -1622,7 +1622,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     // And its settle is the one it always was: one winner, one policy.
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
     expect(settled?.fields).toMatchObject({ policy: 'apply-winner', members: 1 });
-  }, 120_000);
+  });
 
   test('a composition where a fan-in could never happen is refused, naming what makes it impossible', async () => {
     const { rt } = createTestRuntime();
@@ -1642,7 +1642,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     expect(refusal.error).toContain('needs a level to consume');
     expect(refusal.error).toContain('Raise `depth`');
     expect(refusal.error).not.toContain('nothing here orders merges');
-  }, 120_000);
+  });
 });
 
 /* ── `advance:'archive'` runs: cells, admission, and what survives a run ───── */
@@ -1731,7 +1731,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     // the descriptors in the store cannot disagree.
     const written = logger.emitted.filter((line) => line.event === 'swarm.record_written');
     expect(written.map((line) => line.fields.cell).sort()).toEqual([OPTIMAL_CELL, THOROUGH_CELL]);
-  }, 120_000);
+  });
 
   test('A SECOND RUN READS THE OCCUPANTS, and reports the COVERAGE it started from', async () => {
     // `carry:'elites'` made concrete: elites ARE the archive's occupants, and the point of
@@ -1767,7 +1767,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
       .toBe(true);
     expect(first.prompts.some((sent) => sent.includes('An earlier run of this same objective')))
       .toBe(false);
-  }, 180_000);
+  });
 
   test('A NEAR-COPY OF AN OCCUPANT IS REFUSED, and the refusal NAMES the occupant', async () => {
     // The admission test through the real engine, across two runs — which is where it
@@ -1812,7 +1812,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     // The cell still holds ONE answer, and it is the one that got there first.
     expect(recordsFor(rt.storage.sql, rt.actor, { identity: identityOf(), floor: SUITE_FLOOR }))
       .toHaveLength(1);
-  }, 180_000);
+  });
 
   test('THE MONOTONE RULE HOLDS ACROSS RUNS, inside the cell', async () => {
     // A cell's best never falls, through the archive's own writer: the second run
@@ -1846,7 +1846,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
 
     expect(cell?.value).toBe(N - 1);
     expect(cell?.displacements).toBe(0);
-  }, 180_000);
+  });
 
   test('A BREACHED RUN WRITES NOTHING TO THE ARCHIVE, and says how many cells that cost', async () => {
     // *The publication seal* at this surface. The seal is checked at the barrier AND inside
@@ -1879,7 +1879,7 @@ describe("advance:'archive' bins a wave into cells, and the next run starts from
     const refused = breached.logger.emitted.filter((line) => line.event === 'swarm.carry_refused');
     expect(refused.length).toBeGreaterThan(0);
     expect(refused.every((line) => line.fields.cause === 'sealed')).toBe(true);
-  }, 120_000);
+  });
 });
 
 describe("the archive's own region, and the refusal `pareto` carries alone", () => {
@@ -1963,7 +1963,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     // Naming what it DOES report, because the caller's next move is to pick one.
     expect(result.error).toContain('candOps');
     expect(result.error).toContain('refOps');
-  }, 120_000);
+  });
 
   test("advance:'pareto' keeps a durable nondominated vector frontier", async () => {
     const scalar = objective();
@@ -2003,7 +2003,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     expect(result.best).toBeNull();
     expect(result.frontier?.length).toBe(4);
     expect(result.frontier?.every((candidate) => candidate.pareto !== null)).toBe(true);
-  }, 60_000);
+  });
 
   test("advance:'pareto' refuses an instanced measurement that omits an axis", async () => {
     const scalar = objective();
@@ -2044,7 +2044,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     if ('reason' in result) return;
     expect(result.candidates[0]?.unmeasurable).toContain('omitted declared axis');
     expect(result.frontier).toEqual([]);
-  }, 60_000);
+  });
 
   test("advance:'pareto' with nothing measured refuses instead of settling empty", async () => {
     // THE IN-PROCESS ENTRY POINT, which is the one `regionRefusal` says it exists
@@ -2089,7 +2089,7 @@ describe("the archive's own region, and the refusal `pareto` carries alone", () 
     expect(result.error).toContain('orders its frontier by the axes');
     // And it refuses BEFORE spending: no node was expanded, so no row was written.
     expect(rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0).toBe(0);
-  }, 60_000);
+  });
 });
 
 /* ── The direction a judged run ranks in ──────────────────────────────────── */
@@ -2260,5 +2260,5 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
       if (branch === WINNER) continue;
       expect(best.score ?? 0).toBeGreaterThan(score);
     }
-  }, 60_000);
+  });
 });
