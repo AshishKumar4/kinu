@@ -18,11 +18,12 @@
  * they are not followed.
  */
 
-import * as v from 'valibot';
 import { assertMeasured } from './gate-ratchet';
+import { moduleEdges, readAliases, readWorkspace, resolveSpecifier, walkModules } from './import-graph';
+import type { Alias, ModuleEdge } from './import-graph';
 import { isClientDocument, isManifest, readMatching, readRepositoryFile, readSources } from './sources';
-import { literalText, parse, walk } from './syntax';
-import type { Parsed, SyntaxNode } from './syntax';
+import { parse } from './syntax';
+import type { Parsed } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -70,202 +71,27 @@ function isForbidden(specifier: string): boolean {
     || specifier === 'bun:sqlite';
 }
 
-interface Edge {
-  readonly specifier: string;
-  readonly line: number;
-}
-
 /** Every runtime-carrying module reference in one file: value imports,
- *  value re-exports, and literal dynamic imports. */
-function runtimeEdges(parsed: Parsed): Edge[] {
-  const edges: Edge[] = [];
-  walk(parsed.root, (node: SyntaxNode) => {
-    const raw = node.raw;
-
-    if (raw.type === 'ImportDeclaration') {
-      if (raw.importKind === 'type') return;
-
-      // Markdown imported as text is data in Bun, esbuild and the Vite
-      // prompt-text transform, not an executable edge through its contents.
-      // An attribute on JavaScript or on a forbidden package is no exemption.
-      if (!isForbidden(raw.source.value) && raw.source.value.endsWith('.md')
-        && raw.attributes.some((attribute) => (attribute.key.type === 'Identifier'
-          ? attribute.key.name : attribute.key.value) === 'type' && attribute.value.value === 'text')) return;
-
-      edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start) });
-
-      return;
-    }
-
-    if (raw.type === 'ExportNamedDeclaration' || raw.type === 'ExportAllDeclaration') {
-      if (raw.exportKind === 'type' || raw.source === null || raw.source === undefined) return;
-      edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start) });
-
-      return;
-    }
-
-    if (raw.type === 'ImportExpression') {
-      const source = literalText(node.children.find((child) => child.raw.type === 'Literal') ?? node);
-
-      if (source !== undefined) edges.push({ specifier: source, line: parsed.lineAt(node.start) });
-    }
-  });
-
-  return edges;
+ *  value re-exports, and literal dynamic imports. `import type` and
+ *  `export type` are erased under `verbatimModuleSyntax` and carry no edge;
+ *  Markdown imported as text is data, not an executable edge through its
+ *  contents — but an attribute on a forbidden package is no exemption. */
+function runtimeEdges(parsed: Parsed): ModuleEdge[] {
+  return moduleEdges(parsed).edges
+    .filter((edge) => edge.kind === 'value' || (edge.kind === 'text' && isForbidden(edge.specifier)));
 }
 
-interface PackageDir {
-  readonly directory: string;
-  readonly exports: Readonly<Record<string, string>>;
-  readonly main: string | undefined;
-}
-
-const ManifestSchema = v.object({
-  name: v.optional(v.string()),
-  main: v.optional(v.string()),
-  exports: v.optional(v.record(v.string(), v.string()), {}),
-});
-
-/** Workspace package dirs by name, with the subpath maps that back them.
- *  Read from the manifests, never written down beside them: a renamed package
- *  or a repointed subpath repoints this gate instead of silently misreading.
- *  The vendored agent-core runtime is out — its exports map carries per-condition
- *  objects this string schema rejects, and it needs no resolution anyway: its
- *  specifiers are forbidden edges, never walk targets. */
-function readWorkspace(): ReadonlyMap<string, PackageDir> {
-  const out = new Map<string, PackageDir>();
-
-  for (const [file, text] of readMatching(isManifest)) {
-    const segments = file.split('/');
-
-    if (segments.length !== 3 || segments[0] !== 'packages' || !file.endsWith('/package.json')) continue;
-
-    if (file.startsWith('packages/agent-core/')) continue;
-    const parsed = v.parse(ManifestSchema, JSON.parse(text));
-
-    if (parsed.name === undefined || !parsed.name.startsWith('@')) continue;
-    out.set(parsed.name, { directory: file.slice(0, -'package.json'.length), exports: parsed.exports, main: parsed.main });
-  }
-
-  if (out.size === 0) throw new Error(`${GATE}: no workspace manifests in the corpus — a gate that resolves nothing cannot fail`);
-
-  return out;
-}
-
-const TsconfigSchema = v.object({
-  compilerOptions: v.optional(v.object({
-    paths: v.optional(v.record(v.string(), v.array(v.string()))),
-  })),
-});
-
-/** The `@/` prefix cf-backend's own tsconfig declares, read from that file so
+/** The `@/` alias cf-backend's own tsconfig declares, read from that file so
  *  a repointed alias repoints this gate instead of silently mis-resolving. */
-function readCfAlias(): string {
+function readCfAliases(): readonly Alias[] {
   const file = 'packages/cf-backend/tsconfig.json';
-  const parsed = v.parse(TsconfigSchema, JSON.parse(readRepositoryFile(root, file)));
-  const target = parsed.compilerOptions?.paths?.['@/*']?.[0];
+  const aliases = readAliases(new Map([[file, readRepositoryFile(root, file)]]));
 
-  if (target === undefined || !target.endsWith('/*')) {
+  if (!aliases.some((alias) => alias.prefix === '@/')) {
     throw new Error(`${GATE}: ${file} declares no @/* path — the client alias cannot be resolved`);
   }
 
-  return `packages/cf-backend/${target.slice(0, -1)}`;
-}
-
-const CANDIDATES: readonly string[] = ['', '.ts', '.tsx', '/index.ts', '/index.tsx'];
-
-/** A specifier this gate does not follow: third-party code, assets, and
- *  scheme-qualified runtimes are leaves — nothing past them is this tree. */
-type Resolved = { readonly kind: 'leaf' } | { readonly kind: 'file'; readonly path: string };
-
-function collapse(base: string): string {
-  return base.split('/').reduce((parts: string[], part) => {
-    if (part === '..') parts.pop();
-    else if (part !== '.' && part !== '') parts.push(part);
-
-    return parts;
-  }, []).join('/');
-}
-
-/** A relative-or-aliased base path to a corpus file, or undefined for a stylesheet,
- *  image, font, shader, or data asset — leaves with no runtime edge. A non-asset that
- *  resolves to nothing is FATAL rather than skipped: a dropped local edge
- *  shrinks the graph in silence, which is exactly how this defect class
- *  survived every gate. */
-function probe(base: string, from: string, specifier: string, universe: ReadonlySet<string>): string | undefined {
-  const collapsed = collapse(base);
-
-  if (collapsed.endsWith('.css') || collapsed.endsWith('.json') || collapsed.endsWith('.svg')
-    || collapsed.endsWith('.png') || collapsed.endsWith('.webp') || collapsed.endsWith('.woff2')
-    || collapsed.endsWith('.wgsl')) {
-    return undefined;
-  }
-
-  const candidate = CANDIDATES.map((suffix) => collapsed + suffix).find((path) => universe.has(path));
-
-  if (candidate === undefined) {
-    throw new Error(`${GATE}: ${from} names ${specifier}, which resolves to no parsed source`);
-  }
-
-  return candidate;
-}
-
-/** Resolve a specifier from one importing file. A LOCAL edge — relative, the
- *  `@/` alias, or a workspace package — that names no file in the corpus is
- *  FATAL rather than skipped: a dropped local edge shrinks the graph in
- *  silence, which is exactly how this defect class survived every gate. */
-function resolve(
-  specifier: string,
-  from: string,
-  universe: ReadonlySet<string>,
-  workspace: ReadonlyMap<string, PackageDir>,
-  cfAlias: string,
-): Resolved {
-  if (specifier.includes('?') || specifier.includes('#')) return { kind: 'leaf' };
-
-  if (specifier.includes('/node_modules/')) return { kind: 'leaf' };
-
-  // The `@/` alias BEFORE the workspace branch: it also starts with `@`, and
-  // treating it as a package name drops the whole aliased subgraph as leaves.
-  if (specifier.startsWith('@/')) {
-    const path = probe(cfAlias + specifier.slice(2), from, specifier, universe);
-
-    if (path === undefined) return { kind: 'leaf' };
-
-    return { kind: 'file', path };
-  }
-
-  if (specifier.startsWith('@') || specifier.startsWith('#')) {
-    // A scoped name is two segments (`@kinu.run/core`); an unscoped one is
-    // one. Splitting on the first slash turns the scope into the name and
-    // every workspace lookup misses — the gate goes green over the poison.
-    const segments = specifier.split('/');
-    const name = specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0] ?? specifier;
-    const rest = `.${specifier.slice(name.length)}`;
-    const pkg = workspace.get(name);
-
-    if (pkg === undefined) return { kind: 'leaf' };
-    const target = pkg.exports[rest] ?? (rest === '.' ? pkg.main : undefined);
-
-    if (target === undefined) {
-      throw new Error(`${GATE}: ${from} names ${specifier}, which is no subpath of ${name}`);
-    }
-
-    const candidate = `${pkg.directory}${target.startsWith('./') ? target.slice(2) : target}`;
-
-    if (!universe.has(candidate)) {
-      throw new Error(`${GATE}: ${from} names ${specifier}, which resolves to ${candidate} outside the corpus`);
-    }
-
-    return { kind: 'file', path: candidate };
-  }
-
-  if (!specifier.startsWith('.')) return { kind: 'leaf' };
-  const path = probe(`${from.slice(0, from.lastIndexOf('/') + 1)}/${specifier}`, from, specifier, universe);
-
-  if (path === undefined) return { kind: 'leaf' };
-
-  return { kind: 'file', path };
+  return aliases;
 }
 
 export interface Violation {
@@ -285,8 +111,10 @@ export function findViolations(sources: ReadonlyMap<string, string>, entries: re
   }
 
   const universe = new Set(sources.keys());
-  const workspace = readWorkspace();
-  const cfAlias = readCfAlias();
+  const workspace = readWorkspace(readMatching(isManifest));
+
+  if (workspace.size === 0) throw new Error(`${GATE}: no workspace manifests in the corpus — a gate that resolves nothing cannot fail`);
+  const aliases = readCfAliases();
   const parsed = new Map<string, Parsed>();
 
   const of = (file: string): Parsed => {
@@ -304,27 +132,29 @@ export function findViolations(sources: ReadonlyMap<string, string>, entries: re
   };
 
   const violations: Violation[] = [];
-  const seen = new Set<string>();
+  walkModules(entries, (file, chain) => {
+    const paths: { path: string; line: number }[] = [];
 
-  const visit = (file: string, chain: readonly string[]): void => {
     for (const edge of runtimeEdges(of(file))) {
       if (isForbidden(edge.specifier)) {
         violations.push({ chain: [...chain, `${file}:${edge.line}`], specifier: edge.specifier });
         continue;
       }
 
-      const next = resolve(edge.specifier, file, universe, workspace, cfAlias);
+      const next = resolveSpecifier(edge.specifier, file, universe, workspace, aliases);
 
-      if (next.kind === 'leaf' || seen.has(next.path)) continue;
-      seen.add(next.path);
-      visit(next.path, [...chain, `${file}:${edge.line}`]);
+      // A LOCAL edge that names no file is FATAL rather than skipped: a
+      // dropped local edge shrinks the graph in silence, which is exactly how
+      // this defect class survived every gate.
+      if (next.kind === 'unresolved') throw new Error(`${GATE}: ${next.why}`);
+
+      // A package the resolver cannot enter is the vendored runtime, and every
+      // specifier into it is forbidden above; an asset is data with no edge.
+      if (next.kind === 'file') paths.push({ path: next.path, line: edge.line });
     }
-  };
 
-  for (const entry of entries) {
-    seen.add(entry);
-    visit(entry, []);
-  }
+    return paths;
+  });
 
   return violations.sort((a, b) => a.specifier.localeCompare(b.specifier)
     || a.chain.join('').localeCompare(b.chain.join('')));
