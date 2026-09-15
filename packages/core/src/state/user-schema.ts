@@ -312,7 +312,12 @@ export function initUserTables(sql: SqlExec): void {
       -- Revocation found a command it could not confirm stopped. This owner-
       -- visible fact survives removal of its active in-flight row; reconnection
       -- cannot clear it because a revoked device never reconnects.
-      unstopped_at    INTEGER
+      unstopped_at    INTEGER,
+      -- The build the daemon reported on its last HELLO, and whether its owner
+      -- lets the hub push a newer one (updateCheck in the CLI config). NULL
+      -- version is a daemon too old to say; NULL update_check reads as yes.
+      version         TEXT,
+      update_check    INTEGER
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);

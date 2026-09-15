@@ -1199,7 +1199,9 @@
     "sandbox_gpu",
     "agent_root",
     "tier",
-    "unstopped_at"
+    "unstopped_at",
+    "version",
+    "update_check"
   ],
   "user_egress_secrets@packages/core/src/safety/egress-vault.ts": [
     "id",

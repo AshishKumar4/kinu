@@ -1075,6 +1075,12 @@ describe("CLI distribution artifacts", () => {
       expect(existsSync(artifact), `no artifact for ${platform}`).toBe(true);
       const entries = members(artifact);
       expect(entries.has("kinu/cli.js"), `${platform} artifact carries no cli.js`).toBe(true);
+
+      // The daemon and its stamp, for a daemon updating itself from this archive.
+      for (const name of ["pc-agent.js", "sandbox.js", "pty.js", "update.js", "pc-agent.version"]) {
+        expect(entries.has(`kinu/pc-agent/${name}`), `${platform} artifact carries no pc-agent/${name}`).toBe(true);
+      }
+
       // The native library is the whole reason this artifact is per platform.
       expect(
         [...entries].some((entry) => entry.startsWith(`kinu/node_modules/@opentui/core-${platform}/`)),
@@ -1161,6 +1167,15 @@ describe("CLI distribution artifacts", () => {
     // The stamp the assets advertise is the stamp the program reports. Two
     // stamping sites is how `kinu update` learns to chase a version nothing has.
     expect(decoder.decode(version.stdout).trim()).toBe(stamp.version);
+
+    // The shipped daemon, run the way a daemon updating itself runs it: it
+    // loads its siblings from the archive and reports the same stamp.
+    const daemon = Bun.spawnSync([process.execPath, join(root, "pc-agent", "pc-agent.js"), "--selftest"], {
+      cwd: root, env: { ...freshHome(directory), KINU_HOME: join(root, "pc-agent") }, stdout: "pipe", stderr: "pipe",
+    });
+
+    expect(daemon.exitCode, launchFailure(daemon)).toBe(0);
+    expect(decoder.decode(daemon.stdout).trim()).toBe(stamp.version);
 
     // What install.sh itself greps for before calling the install good.
     const help = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--help"], {

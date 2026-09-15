@@ -43,6 +43,12 @@ export const DEVICE_KEEPALIVE_PONG = 'pong';
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
+/** The close reason a replaced daemon socket receives. The daemon reads it
+ *  verbatim (`SOCKET_REPLACED_REASON` in packages/pc-agent): after starting
+ *  its successor, this close is the successor connecting and its cue to exit.
+ *  Shipped source keeps its own literal, as the keepalive words do. */
+const DEVICE_SOCKET_REPLACED_REASON = 'replaced by a new connection';
+
 /**
  * Deadline for the probe round-trip. Short on purpose: it runs on the path that
  * assembles a turn's device status, so a machine that is connected but too busy
@@ -138,7 +144,7 @@ export class DeviceSocketHub {
     for (const old of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (old.readyState !== WS_OPEN) continue;
       diagnostics.event('device.socket_replaced', { device: deviceId });
-      old.close(1000, 'replaced by a new connection');
+      old.close(1000, DEVICE_SOCKET_REPLACED_REASON);
     }
 
     this.ctx.acceptWebSocket(server, [deviceTag(deviceId)]);

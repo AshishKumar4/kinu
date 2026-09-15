@@ -19,20 +19,26 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describeGpuNodes } from '@kinu.run/core';
 import { DeviceRow } from '../src/pages/UserSettingsPage';
+import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
 import { DeviceConsentCard } from '../src/pages/WorkspacePage';
 import { listDevices, type UserDevice } from '../src/lib/user-api';
 import type { PendingConsent } from '@kinu.run/core';
 
 const AT = Date.UTC(2026, 8, 1, 9, 0, 0);
 
-function device(sandbox: UserDevice['sandbox'], label = 'workstation'): UserDevice {
+function device(sandbox: UserDevice['sandbox'], label = 'workstation', update: Pick<UserDevice, 'version' | 'servedVersion' | 'update'> = CURRENT): UserDevice {
   return {
     id: 'dev-1', label, os: 'linux', hostname: 'pc', connected: true,
     createdAt: AT, lastSeenAt: AT, expiresAt: AT + 864e5,
     lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
     sandbox,
+    ...update,
   };
 }
+
+const SERVED = '0.3.0+served';
+
+const CURRENT = { version: SERVED, servedVersion: SERVED, update: 'current' } as const;
 
 /** What a reader sees: the markup with its entity escapes resolved, so every
  *  assertion below can quote the product's own words. */
@@ -43,9 +49,9 @@ function readable(markup: string): string {
     .replaceAll('&amp;', '&');
 }
 
-function renderRow(sandbox: UserDevice['sandbox']): string {
+function renderRow(sandbox: UserDevice['sandbox'], update?: Pick<UserDevice, 'version' | 'servedVersion' | 'update'>): string {
   return readable(renderToStaticMarkup(createElement(DeviceRow, {
-    device: device(sandbox),
+    device: device(sandbox, 'workstation', update),
     grants: [],
     onDeviceChanged: () => {},
     onGrantsChanged: () => {},
@@ -136,6 +142,37 @@ describe('the bind card asks one question and offers one binding', () => {
   });
 });
 
+/** The update badge: the one `role="status"` in the row, read by its data
+ *  attribute and its text. */
+function updateBadge(markup: string): { state: string; text: string } | null {
+  const match = markup.match(/<span role="status" data-device-update="([a-z]+)"[^>]*>([^<]*)<\/span>/);
+
+  return match ? { state: match[1] ?? '', text: match[2] ?? '' } : null;
+}
+
+describe('the device row shows the machine\'s software state beside its link state', () => {
+  const sandboxed = { tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [] } as const;
+
+  test('behind the served build: a badge with the update-available copy', () => {
+    const html = renderRow(sandboxed, { version: '0.2.0+older', servedVersion: SERVED, update: 'behind' });
+    expect(updateBadge(html)).toEqual({ state: 'behind', text: DEVICE_UPDATE_COPY.behind });
+    // Beside the connected badge, not a new row: both sit in the header line.
+    const header = html.slice(0, html.indexOf('role="switch"'));
+    expect(header).toContain('>connected<');
+    expect(header).toContain('data-device-update="behind"');
+  });
+
+  test('opted out: a badge with the update-off copy', () => {
+    const html = renderRow(sandboxed, { version: '0.2.0+older', servedVersion: SERVED, update: 'off' });
+    expect(updateBadge(html)).toEqual({ state: 'off', text: DEVICE_UPDATE_COPY.off });
+  });
+
+  test('current, and a daemon that named no build: no badge', () => {
+    expect(updateBadge(renderRow(sandboxed))).toBeNull();
+    expect(updateBadge(renderRow(sandboxed, { version: null, servedVersion: SERVED, update: 'unreported' }))).toBeNull();
+  });
+});
+
 describe('a device row written before the registry recorded a sandbox', () => {
   const realFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = realFetch; });
@@ -159,5 +196,7 @@ describe('a device row written before the registry recorded a sandbox', () => {
       { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] },
       { tier: 'raw', capability: 'sandboxed', reason: null, detail: null, gpu: [] },
     ]);
+    // Nor a software state: such a row lists as a daemon that named no build.
+    expect(devices.map((row) => row.update)).toEqual(['unreported', 'unreported']);
   });
 });

@@ -12,7 +12,9 @@
  */
 import { VERSION } from './display';
 import { loadConfigFile, updateConfigFile, type KinuConfig } from './config';
+import { spawnBackgroundRefresh } from './self-update';
 import * as v from 'valibot';
+import { isSameBuild } from '@kinu.run/core';
 import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 
 const CLI_VERSION_PATH = '/downloads/kinu-version.json';
@@ -49,12 +51,6 @@ export interface ServedVersion {
 }
 
 type FetchVersion = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-/** Build metadata is significant here: 0.1.0+aaa and 0.1.0+bbb are different
- *  builds even though semver treats the suffix as ignorable. */
-export function isSameBuild(installed: string, served: string): boolean {
-  return installed.trim() === served.trim();
-}
 
 /**
  * Fetch the served build's version, or null when the origin could not be asked
@@ -124,23 +120,33 @@ function shouldCheckForUpdate(ctx: NoticeContext): boolean {
   return ctx.now - last >= CHECK_INTERVAL_MS;
 }
 
-/** The one muted line, or null when the installed build is current. */
+/** The one muted line: the served build is being installed by a child of this
+ *  process, and the next launch runs it. Null when the installed build is
+ *  current. */
 function updateNotice(installed: string, served: ServedVersion | null): string | null {
   if (!served || isSameBuild(installed, served.version)) return null;
 
-  return `A newer Kinu is available (${served.version}). Run: kinu update`;
+  return `Installing Kinu ${served.version} in the background; it applies on the next launch.`;
 }
 
 /**
- * Fire-and-forget startup check. Resolves to the notice line (already printed
- * by the caller's `log`) or null. Never throws. This is the one caller that
- * bounds its probe, and {@link STARTUP_PROBE_TIMEOUT_MS} says why.
+ * Fire-and-forget startup check: never awaited by the entrypoint, so a command
+ * that has printed its answer exits without waiting. Resolves to the notice
+ * line (already printed by the caller's `log`) or null. Never throws. This is
+ * the one caller that bounds its probe, and {@link STARTUP_PROBE_TIMEOUT_MS}
+ * says why.
+ *
+ * A newer served build starts the refresh through `spawnRefresh` — by default
+ * a detached `kinu update --background` — and prints the notice. The refresh
+ * itself downloads, verifies and swaps the tree; this process never waits on
+ * it, which is what keeps the swap off every command's exit path.
  */
 export async function runStartupUpdateCheck(opts: {
   log: (line: string) => void;
   isTTY?: boolean;
   now?: number;
   fetchImpl?: FetchVersion;
+  spawnRefresh?: () => void;
 } ): Promise<string | null> {
   try {
     const config = loadConfigFile();
@@ -164,7 +170,9 @@ export async function runStartupUpdateCheck(opts: {
 
     const notice = updateNotice(VERSION, served);
 
-    if (notice) opts.log(notice);
+    if (notice === null) return null;
+    (opts.spawnRefresh ?? spawnBackgroundRefresh)();
+    opts.log(notice);
 
     return notice;
   } catch (error) {
