@@ -104,9 +104,16 @@ import {
   ParityPreparedSchema,
   ParityRowsSchema,
   PreparedConversationSchema,
+  WakeDriveResultSchema,
+  WakeRowsSchema,
+  WAKE_MARKER,
+  type WakeDriveResult,
+  type WakeHoldPlacement,
+  type WakeRows,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
-import { ownerCaller } from '@kinu.run/core';
+import { ownerCaller, type WorkMode } from '@kinu.run/core';
+import type { ToolSet } from 'ai';
 
 // Re-exported under their production names so the auxiliary worker's
 // durableObjects bind the classes themselves — the same mechanism
@@ -136,7 +143,77 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'seedStaleDrainEvent');
     Reflect.deleteProperty(this, 'runEventWake');
     Reflect.deleteProperty(this, 'parityRows');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'submissionRows', 'inboxState', 'seedStaleDrainEvent', 'runEventWake', 'parityRows']);
+    Reflect.deleteProperty(this, 'wakeRows');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'submissionRows', 'inboxState', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows']);
+  }
+
+  /** The wake proof's hold on the SETTLE WINDOW: a turn-end extension is run
+   *  by the inline `turn_end_extensions` effect, between the answer's commit
+   *  and the pump's next item, so a hook that parks there holds the settle
+   *  open. Parks over `/wake/wait` while a settle-placed hold is armed. */
+  private _settleHoldInstalled = false;
+  private installSettleHold(): void {
+    if (this._settleHoldInstalled) return;
+    this._settleHoldInstalled = true;
+    this.extensions.register({
+      name: 'probe.settle-hold',
+      onTurnEnd: async () => {
+        await fetch('http://probe-control.invalid/wake/wait');
+      },
+    });
+  }
+
+  /** The `run` tool, for the wake proof: the command sleeps past the detach
+   *  window and prints the marker — no container, the same wrap. Only the
+   *  execute is the probe's; the schema, the wrap and the runner are the
+   *  product's, which is what the detach and the settle are proven on. */
+  protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
+    this.installSettleHold();
+    const tools = super.getRawToolsForWorkMode(mode, claimScope);
+    const run = tools.run;
+
+    if (run === undefined) return tools;
+
+    return {
+      ...tools,
+      run: {
+        ...run,
+        execute: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, WAKE_RUN_SLEEP_MS));
+
+          return `${WAKE_MARKER}\n`;
+        },
+      },
+    };
+  }
+
+  /** The durable rows the wake proof reads: the job, the runs, the answers. */
+  async wakeRows(): Promise<WakeRows> {
+    const sql = this.actorState.storage.sql;
+
+    return v.parse(WakeRowsSchema, {
+      jobs: sql.exec('SELECT id, kind, status, result, settled_at FROM background_jobs ORDER BY created_at').toArray()
+        .map((row) => ({
+          id: String(row.id), kind: String(row.kind), status: String(row.status),
+          result: row.result === null ? null : String(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
+        })),
+      runs: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid").toArray()
+        .reduce<Array<{ runId: string; userMessage: string; reason: string | null }>>((runs, row) => {
+          const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(String(row.payload)));
+
+          if (String(row.type) === 'run_start') runs.push({ runId: String(row.run_id), userMessage: payload.userMessage ?? '', reason: null });
+          else {
+            const run = runs.find((candidate) => candidate.runId === String(row.run_id));
+
+            if (run !== undefined) run.reason = payload.reason ?? null;
+          }
+
+          return runs;
+        }, []),
+      assistantTexts: sql.exec("SELECT content FROM assistant_messages WHERE role = 'assistant' ORDER BY rowid").toArray()
+        .map((row) => v.parse(v.object({ parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })) }), JSON.parse(String(row.content))).parts
+          .flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('')),
+    });
   }
 
   /** The request-owned input rows the real chat intake persisted, exactly as
@@ -440,7 +517,11 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
-  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'submissionRows' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows'>;
+  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'submissionRows' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
+
+/** How long the wake proof's command sleeps: past the interactive detach
+ *  window (30 s), so the call detaches and the job settles out of turn. */
+const WAKE_RUN_SLEEP_MS = 40_000;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
@@ -806,6 +887,116 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       socket?.close(1000, 'queue probe complete');
       unsubscribe();
       restore();
+    }
+  }
+
+  /**
+   * THE BACKGROUND WAKE, on the loop, with the settle window held.
+   *
+   * The owner asks for a command that sleeps past the detach window. The call
+   * detaches at 30 s and the turn goes on to its reply step. `where` says what
+   * is held while the job settles at 40 s: the reply step itself (the model
+   * call carrying the detach handle parks in the fake — the live incident's
+   * window, the turn still RUNNING when the job settles), or the settle (the
+   * probe's turn-end hook parks after the answer's commit). Either way the
+   * wake asks the loop for a turn while the interactive turn still owns it.
+   * The hold is released only after the job row says settled, and the drive
+   * then waits for the woken turn to reach its reply. On Think's queue this
+   * is the admission that parked forever; on the loop 'queued' means the pump
+   * runs it next.
+   */
+  async backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult> {
+    const workspace = `wake-workspace-${where}`;
+    const owner = `wake-owner-${where}`;
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Wake Probe');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-wake');
+    await target.setSoul('# Wake Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where }) });
+
+    let socket: WebSocket | null = null;
+
+    try {
+      const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+        headers: { Upgrade: 'websocket' },
+      }));
+
+      socket = response.webSocket;
+
+      if (response.status !== 101 || socket === null) throw new Error('wake probe did not receive a real WebSocket');
+      socket.accept();
+      socket.send(JSON.stringify({
+        type: 'cf_agent_use_chat_request', id: 'wake-ask',
+        init: { method: 'POST', body: JSON.stringify({
+          messages: [{ id: 'input-wake-ask', role: 'user', parts: [{ type: 'text', text: 'WAKE-RUN' }] }],
+          trigger: 'submit-message',
+        }) },
+      }));
+
+      // The job settles on its own clock; the title stays held until it has.
+      const began = Date.now();
+      let settledAt: number | null = null;
+
+      for (;;) {
+        const rows = await target.wakeRows();
+        const job = rows.jobs.find((candidate) => candidate.status !== 'running');
+
+        if (job?.settledAt !== null && job?.settledAt !== undefined) {
+          settledAt = job.settledAt;
+          break;
+        }
+
+        if (Date.now() - began > WAKE_RUN_SLEEP_MS + 30_000) {
+          const calls = await this.httpCalls();
+
+          throw new Error(`wake probe: the detached job never settled — rows ${JSON.stringify(rows)}; calls ${JSON.stringify(calls.map((call) => ({ model: call.model, users: call.users, toolCalls: call.toolCalls, toolResults: call.toolResults })))}`);
+        }
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+
+      // The window WAS held when the job settled: the held party arrived at
+      // the hold before now, and is released only here.
+      await fetch('http://probe-control.invalid/wake/arrived');
+      const releasedAt = Date.now();
+      await fetch('http://probe-control.invalid/wake/release', { method: 'POST' });
+
+      // The woken turn: a second run, started for the runner's own message,
+      // closed with a reply.
+      for (;;) {
+        const rows = await target.wakeRows();
+        const woken = rows.runs.filter((run) => run.userMessage.includes('Background run job'));
+
+        if (woken.length > 0 && woken.every((run) => run.reason !== null)) {
+          const calls = await this.httpCalls();
+
+          return v.parse(WakeDriveResultSchema, {
+            where, rows, releasedAt, settledAt,
+            calls: calls.filter((call) => call.model === 'probe-wake')
+              .map((call) => ({ model: call.model, users: call.users, toolResults: call.toolResults })),
+          });
+        }
+
+        if (Date.now() - releasedAt > 45_000) {
+          const calls = await this.httpCalls();
+
+          throw new Error(`wake probe: the woken turn never closed — rows ${JSON.stringify(rows)}; calls ${JSON.stringify(calls.map((call) => ({ model: call.model, users: call.users.map((line) => line.slice(0, 120)), toolCalls: call.toolCalls, toolResults: call.toolResults })))}`);
+        }
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+    } finally {
+      await fetch('http://probe-control.invalid/wake/release', { method: 'POST' });
+      socket?.close(1000, 'wake probe complete');
     }
   }
 

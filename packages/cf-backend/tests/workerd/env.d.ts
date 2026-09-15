@@ -26,7 +26,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   InputReceipt, PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
-  ParityCompleted, ParityPrepared,
+  ParityCompleted, ParityPrepared, WakeDriveResult, WakeHoldPlacement,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -78,6 +78,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; submissions: Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
+  backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
