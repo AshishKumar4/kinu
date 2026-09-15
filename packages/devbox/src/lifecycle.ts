@@ -635,6 +635,17 @@ export interface QuiesceDecision {
  * observed for the confirmation window before the answer flips to `quiesce`.
  * A single busy sample resets the stretch, which is why `quietSince` travels
  * out as well as in.
+ *
+ * A QUIET STRETCH CANNOT PREDATE THE LAST INTERACTION. The busy sample that
+ * resets the stretch is only taken when a beat runs, and a beat cannot run
+ * while a scheduled callback of the same object holds the one platform alarm:
+ * a checkpoint tick of two minutes starves every beat due inside it.
+ * Measured in run `20260914234711` (git/1/1): `quietSince` was stamped 1.5 s
+ * before a caller's exec, the caller's checkpoint then ran 72 s inside an
+ * alarm callback, and the first beat afterwards read a 73 s idle lease beside
+ * the 97 s old `quietSince` and stopped the box under the next segment. A
+ * stretch that began before the last interaction ended with it; the beat
+ * that missed the interaction starts the confirmation over.
  */
 export function quiesceStep(input: QuiesceInput): QuiesceDecision {
   if (!input.containerRunning) return { action: 'hold', quietSince: undefined };
@@ -643,7 +654,11 @@ export function quiesceStep(input: QuiesceInput): QuiesceDecision {
     && !input.backgroundWork;
 
   if (!idleEnough) return { action: 'hold', quietSince: undefined };
-  const quietSince = input.quietSince ?? input.now;
+
+  const quietSince = input.quietSince !== undefined && input.quietSince >= input.lastInteractionAt
+    ? input.quietSince
+    : input.now;
+
   const confirmed = input.now - quietSince >= input.quietConfirmMs;
 
   return { action: confirmed ? 'quiesce' : 'hold', quietSince };
