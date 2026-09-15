@@ -249,6 +249,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@kinu.run/core": "workspace:*",
+        "capnweb": "0.8.0",
       },
       "devDependencies": {
         "ai": "6.0.214",
