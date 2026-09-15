@@ -4,7 +4,7 @@ import type { ModelMessage, UIMessage } from 'ai';
 import { ActorClaimStore, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
 import { makeSql, SDK_SESSION_DDL } from '../../core/tests/helpers';
 import { bindChatInput } from '../src/chat-intake';
-import { orchestratorHarness, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const GENESIS = { role: 'user', content: 'Read your standing brief and ask what to do first.' } satisfies ModelMessage;
 
@@ -39,21 +39,14 @@ function capturedInput(harness: Harness, id: string, text: string) {
   };
 }
 
-function config(messages: ModelMessage[], body: JsonObject = {}, continuation = false) {
-  return { system: 'sys', messages, tools: {}, model: 'harness-model', continuation, body };
-}
-
 async function settle(harness: Harness, id: string, text: string): Promise<void> {
-  await harness.agent.onChatResponse({
-    message: { id, role: 'assistant', parts: [{ type: 'text', text }] },
-    requestId: `response-${id}`, continuation: false, status: 'completed',
-  });
+  await thinkTurns(harness.agent).settle({ messageId: id, text, requestId: `response-${id}` });
 }
 
 async function opening(): Promise<Harness> {
   const harness = orchestratorHarness();
   harness.db.run(SDK_SESSION_DDL);
-  await harness.agent.beforeTurn(config([GENESIS]));
+  await thinkTurns(harness.agent).prepare({ messages: [GENESIS] });
 
   return harness;
 }
