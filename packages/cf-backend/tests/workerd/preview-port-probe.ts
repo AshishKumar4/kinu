@@ -71,6 +71,15 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
     return { removed: !workspace.kernel.portRegistry.has(port) };
   }
 
+  /** A user-invoked program that outlives the 30 s wall-clock lifetime
+   *  Nimbus once imposed: its exit code is the program's own. */
+  async outlast(seconds: number): Promise<ShellProbeReport> {
+    const workspace = await this.workspace();
+    const result = await workspace.shell.execute(`sleep ${String(seconds)} && echo outlasted`, { cwd: '/home/user' });
+
+    return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
+  }
+
   async curlLoopback(port: number): Promise<ShellProbeReport> {
     const workspace = await this.workspace();
 
