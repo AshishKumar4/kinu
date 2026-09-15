@@ -322,7 +322,7 @@ describe('what the model is told', () => {
     const after = await snapshot();
     expect(after).not.toBe(first);
     expect(after).toContain('- mrwhite@rig (linux): registered, offline');
-    expect(after).toContain('- ashish@mac (darwin): connected, files at /pc,');
+    expect(after).toContain('- ashish@mac (darwin): connected, files at /pc/ashish@mac,');
     expect(after).toContain('One machine is connected');
     expect(await snapshot()).toBe(after);
     await fleet.end();

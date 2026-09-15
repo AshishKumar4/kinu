@@ -63,8 +63,8 @@ const DEVICE_HOME = '/home/dev';
 
 const DEVICE_FILE = `${DEVICE_HOME}/notes.md`;
 
-/** The same file as the file manager addresses it: the `/pc` mount point. */
-const PC_FILE = `/pc${DEVICE_FILE}`;
+/** The same file as the file manager addresses it: the `/pc/<name>` mount. */
+const PC_FILE = `/pc/ashish@studio${DEVICE_FILE}`;
 
 const WORKSPACE_FILE = '/home/user/report.bin';
 
@@ -313,7 +313,7 @@ async function bytesOf(response: Response): Promise<string> {
 
 /** Where a rename puts the device's file — the mount-relative path both the
  *  refused mutation and the allowed one name. */
-const MOVED = `/pc${DEVICE_HOME}/moved.md`;
+const MOVED = `/pc/ashish@studio${DEVICE_HOME}/moved.md`;
 
 describe('a workspace the caller does not hold', () => {
   test('a name outside the registry never reaches a file plane, in either direction', async () => {

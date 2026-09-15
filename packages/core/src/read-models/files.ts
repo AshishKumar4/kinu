@@ -341,7 +341,11 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
  * absence rather than reporting whatever broke while asking it for a home.
  */
 async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<string> {
-  const executor = MOUNT_EXECUTORS[dir];
+  // Bare /pc, or /pc/<name> with no rest, is the fleet root or a machine
+  // root — neither is a directory on any machine. Land on the machine's
+  // opening dir (consented root or reported home) the way homeDir does.
+  const bare = dir === '/pc' || /^\/pc\/[^/]+\/?$/.test(dir);
+  const executor = MOUNT_EXECUTORS[bare ? '/pc' : dir];
 
   if (executor === undefined) return dir;
   const provider = router.getProvider(executor);
