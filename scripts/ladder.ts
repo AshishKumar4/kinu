@@ -797,11 +797,14 @@ export const LADDER: readonly Gate[] = [
       + 'lock\'s reason strings, which is why each entry has to carry one.',
   },
   {
-    run: 'bun test scripts/ladder.test.ts',
+    run: 'bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts',
     tier: 'push',
+    // Measured 2026-09-16 on the 24-thread workstation: 0.3 s and 0.6 s solo.
     seconds: 1,
     catches: 'a gate that runs at only one tier by accident, a deploy gate CI silently '
-      + 'skips, and a test file no tier claims. The defect this whole file addresses.',
+      + 'skips, and a test file no tier claims. The defect this whole file addresses. Beside '
+      + 'it, the closure proof the cache will stand on: a closure that errs narrow refuses '
+      + 'rather than shrinks.',
     blind: 'whether any individual gate can actually fail. That is each gate\'s own '
       + 'self-test, and the seeded tier nobody has paid for yet.',
   },
@@ -1767,6 +1770,59 @@ export const SERIAL_GATES = {
     + 'cheapest proof the account answers at all, and a tree that has not been shown to '
     + 'compile should not spend model calls.',
 } satisfies Record<string, string>;
+
+/**
+ * How many hardware threads a gate occupies while it runs, for every gate
+ * that occupies more than one. The pre-publish wave is scheduled by this
+ * budget against the machine's thread count, not by a count of gates.
+ *
+ * Why. Measured 2026-09-16 on the 24-thread workstation: the eleven-suite UI
+ * row passes alone in 361 s and failed every deploy attempt at width 6 AND at
+ * width 4, each time a different puppeteer `waitForSelector` past its 30 s
+ * wall — the false-timeout mode deploy.sh recorded on 2026-08-23. The rows
+ * beside it were the two `--parallel=4` package suites. A width counts gates,
+ * and a gate is not a unit of load: sampled by process tree on the same day,
+ * one browser suite peaks at 4.3 threads (`bun test
+ * scripts/react-runtime-identity.test.ts`, 11 samples, mean 2.4), the
+ * cf-backend `--parallel=4` row at 10.5 (23 samples, mean 5.1), and
+ * `gate:dead-code` at 1.7 (37 samples, mean 0.9). Six of the first beside two
+ * of the second is forty threads on a box with twenty-four.
+ *
+ * The figures below are the measured PEAKS, rounded up, because a wall clock
+ * inside a gate is hit by the peak and not by the mean. A browser row weighs
+ * its one Chrome instance's peak; every `--parallel=4` row weighs the peak of
+ * four workers each running its own thread pool; `bun run test:cli` runs the
+ * same four workers through `scripts/test-cli.ts`. Everything not named here
+ * weighs one. `deploy.test.ts` holds deploy.sh's table equal to this one.
+ */
+export const GATE_WEIGHTS = {
+  'bun test --parallel=4 packages/cf-backend/': 11,
+  'bun test --parallel=4 packages/cli-backend/': 11,
+  'bun run test': 11,
+  'bun run test:cli': 11,
+  'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts': 5,
+  'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts': 5,
+  'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts': 5,
+  'bun test scripts/react-runtime-identity.test.ts': 5,
+  'bun test scripts/swarm-tree-geometry.test.ts': 5,
+  'bun test scripts/chat-scroll.test.ts': 5,
+  'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts': 5,
+} satisfies Readonly<Record<string, number>>;
+
+/** A gate's weight: its declared figure, or one. */
+export function gateWeight(run: string): number {
+  return Object.entries(GATE_WEIGHTS).find(([declared]) => declared === run)?.[1] ?? 1;
+}
+
+/** deploy.sh's weight table, parsed. The runner is bash and cannot import
+ *  {@link GATE_WEIGHTS}, so the two are written twice and asserted once. */
+export function deployWeights(
+  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
+): Record<string, number> {
+  return Object.fromEntries(
+    bashTable(source, 'GATE_WEIGHT').map(([run, weight]) => [run, Number.parseInt(weight, 10)]),
+  );
+}
 
 /**
  * Same-wave exclusions. Empty after the gallery harness moved to a
