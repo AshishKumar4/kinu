@@ -50,16 +50,9 @@ import { diagnostics, KinuError, tolerate, type Refusal } from '@kinu.run/core/o
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { composeFacetManager, type ComposedFacetManager, type WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
-import {
-  clearPortCapability,
-  readPortExposure,
-  readPortReservationByOwner,
-  releasePortReservation,
-  restoreReservedPortCapability,
-} from '@nimbus-sh/worker/port-capability';
+import { readPortExposure, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import { HOST_FABRIC_COMPOSITION, facetDiagnosticsHooks, nimbusProgrammatic, type ProgrammaticHost } from './nimbus-programmatic';
 import type { DurableApps } from '@kinu.run/core/slates';
 
@@ -203,6 +196,7 @@ export interface HostedWorkspaceDeps {
 interface HostComposition {
   readonly programmatic: ProgrammaticHost;
   readonly facets: ComposedFacetManager;
+  readonly ports: PortRegistry;
 }
 
 export interface HostedWorkspace {
@@ -228,18 +222,16 @@ export interface HostedWorkspace {
    */
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
   /**
-   * A resident process has bound its port. `owner` is the durable identity it
-   * serves; the reservation Nimbus holds for that owner is what decides
-   * whether the port's stored capability is re-adopted or retired.
-   */
-  registerPort(pid: number, port: number, target: RouteableFacetTarget, owner: string): Promise<void>;
-  unregisterPorts(pid: number): void;
-  /**
    * The facet manager composed over this object — the slate host's spawn
-   * and kill path. Composing it opens the workspace, exactly as the first
-   * file touch does.
+   * and kill path, and the one registrar of a resident's port: it binds the
+   * port a durable launch declared and decides, against the owner's
+   * reservation, whether the port's stored capability is re-adopted or
+   * retired. Composing it opens the workspace, exactly as the first file
+   * touch does.
    */
   facetManager(): Promise<ComposedFacetManager>;
+  /** The live listeners of this isolate, the registry the manager registers into. */
+  ports(): Promise<PortRegistry>;
   readonly apps: DurableApps;
   /**
    * Route a preview request whose signed hostname the edge has already
@@ -387,7 +379,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // facets through the composed fabric, and `npm install` streams in
         // process — one tarball entry at a time, never a buffered whole — so
         // neither exhausts this isolate.
-        return { programmatic: buildProgrammaticHost(session, portRegistry, deps, composed), facets: composed };
+        return { programmatic: buildProgrammaticHost(session, portRegistry, deps, composed), facets: composed, ports: portRegistry };
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
         // the whole actor isolate, and a cached rejection would poison every
@@ -420,24 +412,8 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
       return built;
     },
-    async registerPort(pid, port, target, owner) {
-      const occupied = portRegistry.get(port);
-
-      if (occupied !== undefined && occupied.pid !== pid) throw new KinuError('io', `Workspace port ${port} is already in use`);
-
-      portRegistry.bindFacetStub(pid, target);
-      portRegistry.register(port, pid);
-      // The capability is bound to identity, not to the port: the stored one
-      // is re-adopted only when the reservation names this owner. Any other
-      // occupant retires it, so a link handed out for the reservation's owner
-      // 404s rather than reaching a program it was never minted for — the
-      // owner's reservation itself survives.
-      const adopted = await restoreReservedPortCapability({ ctx: deps.ctx, portRegistry }, port, owner);
-
-      if (adopted === null) await clearPortCapability({ ctx: deps.ctx, portRegistry }, port);
-    },
-    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); },
     facetManager: async () => (await compose()).facets,
+    ports: async () => (await compose()).ports,
     apps: {
       async ensure({ owner, preferredPort }) {
         const { facets } = await compose();
