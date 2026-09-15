@@ -16,8 +16,11 @@
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
 import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
-import type { LanguageModel, ToolSet, UIMessage } from 'ai';
-import type { ChatResponseResult, TurnConfig, TurnContext } from '@cloudflare/think';
+import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
+import type { ChatResponseResult, PrepareStepContext, TurnConfig, TurnContext } from '@cloudflare/think';
+import type { TurnHarness } from './turn-harness';
 import type { UserCaller } from '@kinu.run/core';
 import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
@@ -930,6 +933,90 @@ export interface HostedActorHarness {
   /** The workspace that hosts it. Named because almost every assertion about a
    *  child is really an assertion about ONE database, and this is where it is. */
   readonly workspace: ActorHarness<HarnessOrchestratorAgent>;
+}
+
+const HARNESS_MODEL = 'harness-model';
+
+/** The model a hand-driven step names; never called. */
+const STEP_MODEL = new MockLanguageModelV3();
+
+/** What `beforeStep` may override for one step; only the messages are read.
+ *  `v.custom` keeps the element type without restating the SDK's message union. */
+const StepOverrideSchema = v.object({ messages: v.array(v.custom<ModelMessage>(() => true)) });
+
+/**
+ * The turn seam over a root that still runs Think's inference loop:
+ * `prepare` is `beforeTurn`, `settle` is `onChatResponse`, `open` is the
+ * checkpoint and `openInFlight` the checkpoint plus the in-flight flag — each
+ * the exact call the suites made by hand, composed here beside the bridges
+ * they reach.
+ */
+export function thinkTurns(agent: HarnessOrchestratorAgent): TurnHarness {
+  return {
+    async prepare(input) {
+      const config = await agent.beforeTurn({
+        system: 'sys',
+        messages: [...input.messages],
+        tools: input.tools ?? {},
+        model: HARNESS_MODEL,
+        continuation: input.continuation ?? false,
+        body: input.body ?? {},
+        ...(input.signal !== undefined && { signal: input.signal }),
+      });
+
+      return {
+        messages: config?.messages ?? [],
+        system: config?.system,
+        model: config?.model,
+        tools: config?.tools ?? {},
+        activeTools: config?.activeTools,
+        providerOptions: config?.providerOptions,
+      };
+    },
+
+    async step(stepNumber, messages) {
+      const context: PrepareStepContext = {
+        stepNumber, messages: [...messages], steps: [], model: STEP_MODEL, experimental_context: undefined,
+      };
+
+      const rewritten = v.safeParse(StepOverrideSchema, await agent.beforeStep(context));
+
+      return rewritten.success ? rewritten.output.messages : messages;
+    },
+
+    async settle(answer) {
+      if (answer.turnId !== undefined) agent.declareTurnCheckpoint(answer.turnId);
+
+      const message: UIMessage = {
+        id: answer.messageId,
+        role: 'assistant',
+        parts: answer.parts ?? (answer.text === undefined ? [] : [{ type: 'text', text: answer.text }]),
+      };
+
+      // Past the type on purpose: the SDK forbids the shape and that is the
+      // point of the arm that asks for it.
+      if (answer.unreadableRole !== undefined) Reflect.set(message, 'role', answer.unreadableRole);
+
+      const result: ChatResponseResult = {
+        message,
+        requestId: answer.requestId ?? `req-${answer.messageId}`,
+        continuation: answer.continuation ?? false,
+        status: answer.status ?? 'completed',
+        ...(answer.error !== undefined && { error: answer.error }),
+      };
+
+      await agent.onChatResponse(result);
+    },
+
+    open(turnId) {
+      agent.declareTurnCheckpoint(turnId);
+    },
+
+    openInFlight(turnId) {
+      agent.harnessBeginTurn(turnId);
+      agent.harnessMarkTurnInFlight();
+    },
+  };
 }
 
 export interface ActorHarness<T> {
