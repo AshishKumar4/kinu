@@ -486,6 +486,11 @@ export async function handleUserRequest(
     catch (e) { return err(500, renderThrownChain({ cause: e })); }
   }
 
+  if (path === '/mcp/presets' && method === 'GET') {
+    try { return json(await stub.userMcp_presets(await ownerCaller(env))); }
+    catch (e) { return err(500, renderThrownChain({ cause: e })); }
+  }
+
   if (path === '/mcp/servers' && method === 'POST') {
     const body = await safeJson(request, JsonValueSchema);
 

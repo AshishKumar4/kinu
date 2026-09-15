@@ -40,6 +40,12 @@ import {
   DurableObjectOAuthClientProvider,
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
+
+// Re-exported for tests: the provider subclass binds `agents/mcp/*` at load,
+// so a test that statically imported mcp.ts itself would arrive before the
+// stub lands and hold the real base class. user-do is only imported after it.
+export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+
 import {
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
@@ -142,15 +148,16 @@ import {
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
-  type McpPresetId,
+  type McpPresetId, mcpPresetById,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized,
-  storedMcpOptionsCarryCredential,
-  type McpServerSummary, type McpTransport,
+  storedMcpOptionsCarryCredential, mcpAppCredentials, listMcpPresetAvailability,
+  type McpPresetAvailability, type McpServerSummary, type McpTransport,
 } from './mcp';
+import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -274,6 +281,7 @@ interface McpHydrationRow extends SqlRow {
   server_url: string;
   transport: McpTransport;
   headers: string | null;
+  preset_id: string | null;
 }
 
 interface SqlRow extends Record<string, SqlStorageValue> {}
@@ -5081,7 +5089,7 @@ export class UserDO extends Agent<Env> {
     const mgr = this.userMcp();
 
     const rows = this.sqlx<McpHydrationRow>(
-      `SELECT id, name, server_url, transport, headers FROM user_mcp_servers`,
+      `SELECT id, name, server_url, transport, headers, preset_id FROM user_mcp_servers`,
     );
 
     const configured = new Set(rows.map((row) => row.id));
@@ -5174,14 +5182,28 @@ export class UserDO extends Agent<Env> {
             type: row.transport,
           };
 
+    // An `oauth-app` row restores with the registered-app provider, so sign-in
+    // and token refresh keep answering the env's client registration instead of
+    // falling back to a dynamic registration the vendor cannot accept.
+    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
+
+    const appCredentials = preset?.auth === 'oauth-app'
+      ? mcpAppCredentials(this.env, preset)
+      : null;
+
     if (callbackUrl) {
-      const authProvider = new DurableObjectOAuthClientProvider(
-        this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-      );
+      const authProvider = appCredentials
+        ? new RegisteredAppOAuthClientProvider(
+            this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+            appCredentials.clientId, appCredentials.clientSecret, preset?.scope,
+          )
+        : new DurableObjectOAuthClientProvider(
+            this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+          );
 
       authProvider.serverId = row.id;
 
-      if (stored?.client_id) authProvider.clientId = stored.client_id;
+      if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
       transport.authProvider = authProvider;
     }
 
@@ -5189,12 +5211,14 @@ export class UserDO extends Agent<Env> {
       url: row.server_url, name: row.name, callbackUrl, transport,
     };
 
-    if (stored?.client_id) options.clientId = stored.client_id;
+    // For an oauth-app row the env's client id is the authority even when the
+    // stored id predates an app rotation — a stale stored id on the provider
+    // would key its token rows under a client nothing else uses.
+    options.clientId = appCredentials?.clientId ?? stored?.client_id ?? undefined;
 
     if (stored?.auth_url) options.authUrl = stored.auth_url;
     await mgr.registerServer(row.id, options);
   }
-
   /** This server's current custom headers, opened for ONE request.
    *
    *  Read from SQL on every call rather than captured: a rotated header is then
@@ -5292,9 +5316,18 @@ export class UserDO extends Agent<Env> {
       };
     });
   }
+  /** The preset catalog's deploy-time availability: which presets can offer a
+   *  sign-in button (their OAuth app is configured) versus their token
+   *  fallback or nothing at all. Read beside `userMcp_list` — this is the
+   *  answer the cards need before the user has added anything. */
+  async userMcp_presets(caller: UserCaller): Promise<McpPresetAvailability[]> {
+    await this.requireTier(caller, 'mcp.manage');
+
+    return listMcpPresetAvailability(this.env);
+  }
 
   /** Add a new MCP server. `publicOrigin` is the user-facing origin the
-   *  Worker should redirect OAuth callbacks to (e.g. `https://kinu.example`).
+   *  server calls back to during OAuth — it determines the callback URL.
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
   async userMcp_add<McpInput>(
@@ -5308,6 +5341,25 @@ export class UserDO extends Agent<Env> {
     if (!/^https?:\/\//.test(publicOrigin)) {
       throw new Error('publicOrigin must be a full https?:// origin.');
     }
+
+    const preset = cfg.presetId === undefined ? undefined : mcpPresetById(cfg.presetId);
+
+    // A preset whose OAuth app is not configured has no sign-in to start;
+    // without a token it could only dead-end in the SDK's registration step,
+    // so the add is refused before the name claim — the claim is the row's
+    // identity, and a refused add must leave no row behind. (Both env names
+    // are set on every oauth-app preset, so `?? ''` only guards a malformed
+    // catalog.)
+    if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
+      throw new Error(
+        `'${preset.title}' needs either the deployment's ${preset.clientIdEnv ?? ''}/`
+        + `${preset.clientSecretEnv ?? ''} OAuth app or a token in \`headers\`.`,
+      );
+    }
+
+    const appCredentials = preset?.auth === 'oauth-app'
+      ? mcpAppCredentials(this.env, preset)
+      : null;
 
     const id = nanoid(8);
     const now = Date.now();
@@ -5330,9 +5382,14 @@ export class UserDO extends Agent<Env> {
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
-    const authProvider = new DurableObjectOAuthClientProvider(
-      this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-    );
+    const authProvider = appCredentials
+      ? new RegisteredAppOAuthClientProvider(
+          this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+          appCredentials.clientId, appCredentials.clientSecret, preset?.scope,
+        )
+      : new DurableObjectOAuthClientProvider(
+          this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+        );
 
     authProvider.serverId = id;
 
@@ -5350,6 +5407,9 @@ export class UserDO extends Agent<Env> {
         url: cfg.serverUrl,
         name: cfg.name,
         callbackUrl,
+        // The registered app's id lands on the SDK row so a restore after
+        // eviction keeps keying its token storage under the same client.
+        clientId: appCredentials?.clientId,
         transport: {
           ...credential,
           authProvider,

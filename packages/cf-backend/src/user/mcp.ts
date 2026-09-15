@@ -14,7 +14,7 @@ import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
   admitMcpDescriptors, McpToolSurfaceSchema,
-  mcpPresetById,
+  mcpPresetById, MCP_PRESETS,
   type JsonObject, type McpPreset, type McpPresetId,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
@@ -26,6 +26,7 @@ import * as v from 'valibot';
 
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
+
 
 /**
  * The orchestrator's per-activation MCP tool cache, keyed by the HASH OF THE
@@ -510,4 +511,49 @@ export function mapConnectionStatus(state: string | undefined): McpConnectionSta
     case 'failed':         return 'failed';
     default:               return 'unknown';
   }
+}
+
+/** One preset's deploy-time availability, as the cards need it. `appConfigured`
+ *  is only meaningful for `oauth-app` presets: it reports whether the env
+ *  carries the registered client's credentials (BOTH names), which is what
+ *  decides between a sign-in button and the preset's token fallback. The id
+ *  alone tells a token-or-DCR preset apart. */
+export interface McpPresetAvailability {
+  readonly id: McpPresetId;
+  readonly appConfigured: boolean;
+}
+
+/** The registered client's credentials for an `oauth-app` preset, or null
+ *  when the env does not carry them. The lookup is keyed on the preset's ID
+ *  rather than the catalog's `clientIdEnv`/`clientSecretEnv` strings: `Env`
+ *  is a typed interface, not a dictionary, so a name read through it keeps
+ *  the columns typed and a miss stays a miss. */
+export function mcpAppCredentials(
+  env: Env,
+  preset: McpPreset,
+): { clientId: string; clientSecret: string } | null {
+  if (preset.auth !== 'oauth-app') return null;
+
+  const pair =
+    preset.id === 'github' ? { id: env.MCP_GITHUB_CLIENT_ID, secret: env.MCP_GITHUB_CLIENT_SECRET }
+      : preset.id === 'google' ? { id: env.MCP_GOOGLE_CLIENT_ID, secret: env.MCP_GOOGLE_CLIENT_SECRET }
+        : undefined;
+
+  // An oauth-app preset the lookup cannot name — i.e. the catalog and this
+  // read fell out of step — is reported as unconfigured rather than signing
+  // in under nothing.
+  if (!pair?.id || !pair.secret) return null;
+
+  return { clientId: pair.id, clientSecret: pair.secret };
+}
+
+/** The catalog read for the cards: every preset and whether its registered
+ *  app is configured. `oauth-app` presets answer `appConfigured` off the env;
+ *  every other kind is answerable from the catalog alone, so it reports `true`
+ *  — there is nothing to configure. */
+export function listMcpPresetAvailability(env: Env): McpPresetAvailability[] {
+  return MCP_PRESETS.map((preset) => ({
+    id: preset.id,
+    appConfigured: preset.auth !== 'oauth-app' || mcpAppCredentials(env, preset) !== null,
+  }));
 }

@@ -776,7 +776,28 @@ export function mockAgentsSdk(): void {
       serverId = '';
       clientId: string | null = null;
       authUrl: string | null = pendingMcpAuthUrl;
-      constructor() { pendingMcpAuthUrl = null; }
+      /** The URL `auth()` checks for an interactive flow — the real one keeps
+       *  it off the constructor's third argument, so the stub does the same. */
+      readonly redirectUrl: string;
+      constructor(_storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
+        this.redirectUrl = baseRedirectUrl;
+        pendingMcpAuthUrl = null;
+      }
+
+      // The rest of the OAuthClientProvider surface, answered the way a
+      // storage with nothing written answers: no grant, no verifier, no
+      // registration. The subclass under test overrides the registration
+      // half; these exist so the REAL SDK auth flow runs against it.
+      get clientMetadata() { return {}; }
+      async clientInformation(): Promise<undefined> { return undefined; }
+      async saveClientInformation(): Promise<void> {}
+      async tokens(): Promise<undefined> { return undefined; }
+      async saveTokens(): Promise<void> {}
+      async codeVerifier(): Promise<string> { return 'test-code-verifier'; }
+      async saveCodeVerifier(): Promise<void> {}
+      async state(): Promise<string> { return `st.${this.serverId}`; }
+      redirectToAuthorization(url: URL): void { this.authUrl = url.toString(); }
+      async invalidateCredentials(): Promise<void> {}
     },
   }));
   // The DO layer reaches the runtime + codemode module graph (a head builds a
@@ -942,6 +963,17 @@ export function renderNativeSpanTree(): string {
  * (agents/dist/client-zqKcsyFa.js:1022-1035); the mock inspects none of them,
  * they exist so a test can assert what a row WOULD persist.
  */
+/** What a transport's `authProvider` is to this plane: the three fields the
+ *  fake's `connectToServer` and `seedMcpAuthContinuation` actually read or
+ *  write. The real providers — `DurableObjectOAuthClientProvider` and the
+ *  `oauth-app` subclass — satisfy it structurally, so a recorded transport
+ *  can carry either without the seam pretending they are the same object. */
+export interface RecordedMcpAuthProvider {
+  authUrl?: string | null;
+  clientId?: string | null;
+  serverId?: string;
+}
+
 export interface RecordedMcpTransport {
   fetch?: McpCredentialTransport['fetch'];
   type?: string;
@@ -953,7 +985,7 @@ export interface RecordedMcpTransport {
    *  `requestInit: { headers }`, and the credential-shaped half of it survives
    *  whatever that day's whitelist kept. */
   eventSourceInit?: { fetch?: McpCredentialTransport['fetch'] };
-  authProvider?: { authUrl?: string | null; clientId?: string | null; serverId?: string };
+  authProvider?: RecordedMcpAuthProvider;
   reconnectionOptions?: { maxRetries?: number };
   skipIssuerMetadataValidation?: boolean;
   onInsufficientScope?: () => void;
@@ -1164,11 +1196,17 @@ export function failNextMcpRemove(error: Error): void {
 /** Seed an SDK server row directly — the manager's own storage as some earlier
  *  activation left it. With no config row behind it that is an ORPHAN (what a
  *  failed rollback or a dropped name twin leaves); with `transport` it is
- *  whatever a previous build persisted there. */
-export function seedSdkMcpServer(id: string, transport: RecordedMcpTransport = {}): void {
+ *  whatever a previous build persisted there. `row` fills the columns a row
+ *  left mid-authorization actually carries — the callback URL that makes the
+ *  rewrite install an auth provider, and the client the sign-in ran under. */
+export function seedSdkMcpServer(
+  id: string,
+  transport: RecordedMcpTransport = {},
+  row: { callbackUrl?: string; clientId?: string | null } = {},
+): void {
   mcpServers.set(id, {
     id, name: id, url: `https://${id}.example/sse`,
-    callbackUrl: '', clientId: null, authUrl: null, transport,
+    callbackUrl: row.callbackUrl ?? '', clientId: row.clientId ?? null, authUrl: null, transport,
     server_options: encodeSdkServerOptions(transport),
   });
 }
@@ -1354,8 +1392,24 @@ class FakeMCPClientManager {
     return id;
   }
 
-  listServers(): RecordedMcpServer[] {
-    return [...mcpServers.values()];
+  /** The real `listServers` returns `cf_agents_mcp_servers` row shape —
+   *  snake_case columns, `callback_url`/`client_id`/`server_options` — not the
+   *  camelCase map `recordedMcpServers` exposes to assertions. A test that
+   *  wants the camelCase read uses `recordedMcpServers()`; this answers what
+   *  production code sees. */
+  listServers(): {
+    id: string; name: string; server_url: string; callback_url: string;
+    client_id: string | null; auth_url: string | null; server_options: string | null;
+  }[] {
+    return [...mcpServers.values()].map((row) => ({
+      id: row.id,
+      name: row.name,
+      server_url: row.url,
+      callback_url: row.callbackUrl,
+      client_id: row.clientId,
+      auth_url: row.authUrl,
+      server_options: row.server_options,
+    }));
   }
 
   async removeServer(id: string): Promise<void> {
