@@ -14,12 +14,16 @@ describe('needsOnboarding', () => {
     expect(needsOnboarding(null)).toBe(false);
   });
 
-  test('no stamp means the wizard', () => {
-    expect(needsOnboarding({ onboardedAt: null })).toBe(true);
+  test('a fresh account — no stamp, no workspace — lands on the wizard', () => {
+    expect(needsOnboarding({ onboardedAt: null, workspaceCount: 0 })).toBe(true);
   });
 
-  test('a stamped account is done', () => {
-    expect(needsOnboarding({ onboardedAt: 1_700_000_000_000 })).toBe(false);
+  test('an account that owns a workspace is established, stamp or not', () => {
+    expect(needsOnboarding({ onboardedAt: null, workspaceCount: 1 })).toBe(false);
+  });
+
+  test('a stamped account is done even with no workspace yet', () => {
+    expect(needsOnboarding({ onboardedAt: 1_700_000_000_000, workspaceCount: 0 })).toBe(false);
   });
 });
 

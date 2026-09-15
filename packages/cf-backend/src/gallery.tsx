@@ -198,6 +198,13 @@ const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 const NOW = Date.now();
 
+/** The account-fixture profile's two gate fields, decided once per frame:
+ *  `welcome` poses as a new account — no stamp and no workspace — and every
+ *  other frame sits on an established one. */
+const ACCOUNT_ONBOARDED_AT: number | null = frame === "welcome" ? null : NOW - 864e5;
+
+const ACCOUNT_WORKSPACE_COUNT = frame === "welcome" ? 0 : 1;
+
 /** `?roster=` selects the home page's account: `empty` is the first-run
  *  account, `evidence` is the two-workspace rig the card evidence pin shoots —
  *  anything else is the five-workspace stock roster. */
@@ -236,6 +243,15 @@ const STOCK_ROSTER = {
   total: 5,
 };
 
+// The roster the frame serves, selected once so the profile's workspaceCount
+// answers the same number the list endpoint does — the gate reads both, and a
+// fixture whose count disagreed with its roster would route frames no real
+// account ever takes.
+const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
+    ROSTER === "empty" ? { entries: [], total: 0 }
+  : ROSTER === "evidence" ? EVIDENCE_ROSTER
+  : STOCK_ROSTER;
+
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the CLIENT's own parse requires, `displayName` included. It was
   // absent, `UserProfileSchema` refused the body, and the sidebar rendered
@@ -244,15 +260,14 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
     createdAt: NOW - 90 * 864e5, lastSeenAt: NOW, onboardedAt: NOW - 90 * 864e5,
+    workspaceCount: GALLERY_ROSTER.total,
   },
   // The registry answers { entries, total }, the envelope `listWorkspaces`
   // validates; a bare array parses as nothing and HomePage photographs its
   // "couldn't load" state into every screenshot taken of this gallery.
   // `?frame=home&roster=empty` photographs the first-run account: the form
   // carries the whole page when no workspace has ever existed.
-  "/api/user/workspaces": ROSTER === "empty" ? { entries: [], total: 0 }
-    : ROSTER === "evidence" ? EVIDENCE_ROSTER
-    : STOCK_ROSTER,
+  "/api/user/workspaces": GALLERY_ROSTER,
   // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
@@ -346,14 +361,14 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     return fixtureJson({
       email: "owner@example.com", displayName,
       createdAt: NOW - 864e5, lastSeenAt: NOW,
-      onboardedAt: frame === "welcome" ? null : NOW - 864e5,
+      onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
   }
 
   if (path === "/api/user/profile") {
     return fixtureJson({
       email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
-      onboardedAt: frame === "welcome" ? null : NOW - 864e5,
+      onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
   }
 

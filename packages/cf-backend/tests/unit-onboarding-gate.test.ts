@@ -26,9 +26,11 @@ describe('the onboarding gate is mounted above the shell', () => {
     expect(layout).toBeGreaterThan(gate);
   });
 
-  test('the gate reads the shared profile and redirects both ways', () => {
+  test('the gate reads the shared profile and sends only a new account to the wizard', () => {
     expect(app).toContain('needsOnboarding');
     expect(app).toContain('Navigate to={APP_ROUTES.welcome}');
-    expect(app).toContain('Navigate to={APP_ROUTES.home}');
+    // /welcome stays reachable for anyone: no Navigate sends an established
+    // or onboarded account back home from it.
+    expect(app).not.toContain('Navigate to={APP_ROUTES.home}');
   });
 });
