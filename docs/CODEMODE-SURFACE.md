@@ -47,10 +47,12 @@ Unmeasured: whether a slate's `this.sql` survives eviction the way its files and
 
 MCP servers leave the native tool set. The eight standing tools (`unit-tools.test.ts` pins the count against `BUILTIN_TOOLS`) are the whole top level again, and `admitMcpDescriptors` with its per-turn budget is deleted with them. Inside `eval`:
 
-- `plugins.list()` returns each connected plugin with its one-line hint. Dynamic context carries the same line.
-- `plugins.search(query)` returns ranked method paths across every plugin, the shape `@cloudflare/codemode` gives `codemode.search`: `{ results: [{ path, connector, method, description, requiresApproval }], total, truncated }`.
-- `plugins.describe(path)` returns the TypeScript declaration for one plugin or one method, rendered with `jsonSchemaToTs` from the plugin's `SerializableToolDescriptor` rows.
-- `plugins.<plugin>.<tool>(args)` is callable whether or not the model searched. No plugin method is ever in the schema; the describe result lives in the transcript.
+- `plugins.list()` returns `Array<{ plugin, tools: Array<{ name, summary }>, more }>`: every connected plugin, one line per tool (first sentence, at most 100 characters), at most 40 tools per plugin and the count beyond. Dynamic context carries one line per plugin.
+- `plugins.search(query, { limit?, plugin? })` returns `{ results: Array<{ path, summary, input, requiresApproval }>, searched, weak }`. `summary` is the first sentence at most 120 characters; `input` is the input type rendered by `jsonSchemaToTs`, present on the first eight results so a hit is callable without a second call; `searched` is the number of tools considered; `weak` is true when no strong match exists, in which case the best-ranked hits are still returned. Search never returns empty while a plugin is connected.
+- `plugins.describe(path)` returns the full description and the input and output types for one plugin or one method.
+- `plugins.<plugin>.<tool>(args)` is callable whether or not the model searched. No plugin method is ever in the schema, and nothing is added to the schema after a search: the result lives in the transcript, so the cache prefix holds.
+
+Ranking reuses the memory retrieval path: FTS5 BM25 for the lexical side, the vector store's `Embedder` for the semantic side, `hybridSearch` for reciprocal rank fusion. Each tool is one document: plugin name, tool name split on case and underscores, title, first sentence, and parameter names. Compared on 2026-09-15: OpenSeal (`packages/agent-utils/src/tools/search.ts`) ranks with MiniSearch BM25 plus fuzzy and prefix and then activates discovered tools into the schema, which edits the prompt mid-conversation; `@cloudflare/codemode` 0.5.1 ranks lexically with a coverage gate that returns nothing when a two-word query has one unmatched word, and returns no signature. Kinu takes the hybrid ranking, the never-empty rule, and the transcript-only delivery.
 
 Plugins bind through Kinu's own `McpToolSurfaceCache` descriptors and `codemodeFunction`, not the package's `McpConnector` or its durable runtime: claims, admission, and approvals already exist here, and the package's snippets duplicate crafted tools. MCP stays the protocol's name in settings; the agent never sees it.
 
