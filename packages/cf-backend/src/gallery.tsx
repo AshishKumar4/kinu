@@ -433,6 +433,18 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   // a failure in the sidebar and the Recent section that a real page has
   // never shown.
   if (path === "/api/user/workspaces") {
+    if (EXTRA_WORKSPACE) {
+      const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
+
+      return fixtureJson({
+        entries: [...roster.entries, {
+          name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5,
+          lastVisited: NOW - 36e5, archivedAt: null,
+        }],
+        total: roster.entries.length + 1,
+      });
+    }
+
     return fixtureJson(STUB_DATA["/api/user/workspaces"]);
   }
 
@@ -607,6 +619,12 @@ const STOCK_OVERVIEWS = {
   },
 };
 
+/** `?frame=workspaces&extraWorkspace=1` adds a sixth roster entry the stock
+ *  five cannot show: under the one-headline rule a sealed error outranks
+ *  durable leftovers, so 'Unfinished' needs a workspace whose last run is
+ *  quiet. The home roster's pins keep it off the stock five. */
+const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace") === "1";
+
 const EVIDENCE_OVERVIEWS = {
   "ledger-keeper": {
     observedAt: NOW - 20e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
@@ -641,6 +659,13 @@ const overviewOutcomes = new Map<string, OverviewOutcome>(
 // gate does not have to race the mount reads to photograph "unavailable".
 for (const name of (new URLSearchParams(location.search).get("overviewErrors") ?? "").split(",")) {
   if (name.trim() !== "") overviewOutcomes.set(name.trim(), { kind: "status", status: 503 });
+}
+
+if (EXTRA_WORKSPACE) {
+  overviewOutcomes.set("audit-sweep", { kind: "body", body: {
+    observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" },
+  } });
 }
 
 const OVERFLOW_ROSTER = new URLSearchParams(location.search).get("overflowRoster") === "1";
@@ -738,6 +763,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
       total: roster.entries.length + 1,
     }));
   }
+
 
   const response = STUB.get(path);
 
