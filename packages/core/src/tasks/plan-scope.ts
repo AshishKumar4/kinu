@@ -23,10 +23,6 @@ export function taskPlanScope(sql: SqlExecutor): TaskPlanContext | undefined {
   return current?.sql.includes(sql) ? current : undefined;
 }
 
-export function runTaskPlan<Result>(context: TaskPlanContext | null, invoke: () => Result): Result {
-  return scope.run(context ?? undefined, invoke);
-}
-
 export function bindTaskPlan<Value, Result>(invoke: (...args: Value[]) => Result, context: TaskPlanContext | null = scope.getStore() ?? null): (...args: Value[]) => Result {
   return (...args) => scope.run(context ?? undefined, () => invoke(...args));
 }

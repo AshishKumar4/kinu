@@ -13,7 +13,7 @@ export function DisplayNameField({ value, onChange, saving }: {
   saving?: boolean;
 }) {
   return (
-    <Field label="Name" hint="How the app and your agents address you.">
+    <Field label="Name">
       <input
         aria-label="Your name"
         className={inputCls}

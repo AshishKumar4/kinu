@@ -15,8 +15,6 @@ import * as v from 'valibot';
 import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
   ensureProgrammaticReady,
   rpcExec,
@@ -25,6 +23,7 @@ import {
   type ProgrammaticExecOptions,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import { programmaticHostOver } from './helpers/programmatic-host';
 
 const databases: Database[] = [];
 
@@ -77,55 +76,7 @@ async function openWorkspace(): Promise<NimbusWorkspace> {
 }
 
 function workerHost(workspace: NimbusWorkspace): ProgrammaticHost {
-  const durableState = new Map<string, unknown>();
-
-  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
-    const entries = new Map<string, unknown>();
-
-    for (const [key, value] of durableState) {
-      if (key.startsWith(options.prefix)) entries.set(key, value);
-    }
-
-    // SAFETY: the storage list contract types each row by the caller's T,
-    // which the untyped stand-in rows cannot name; `never` keeps the Map
-    // assignable to every T.
-    return entries as Map<string, never>;
-  };
-
-  return {
-    _w1SessionDestroyed: false,
-    env: {},
-    ctx: {
-      storage: {
-        get: async (key) => durableState.get(key),
-        put: async (key, value) => { durableState.set(key, value); },
-        delete: async (key) => { durableState.delete(key); },
-        deleteAll: async () => { durableState.clear(); },
-        deleteAlarm: async () => undefined,
-        list: listDurable,
-        transaction: async (body) => body({
-          get: async (key) => durableState.get(key),
-          put: async (key, value) => { durableState.set(key, value); },
-          delete: async (key) => { durableState.delete(key); },
-          list: listDurable,
-        }),
-      },
-    },
-    shell: workspace.shell,
-    shellProcessPid: null,
-    sqliteFs: workspace.vfs,
-    processes: new SessionProcessSupervisor(),
-    portRegistry: new PortRegistry(),
-    facetManager: null,
-    viteDevServer: null,
-    cirrusReal: null,
-    _cpRegistry: workspace.registry,
-    _viteShimPid: null,
-    _viteShimPort: null,
-    ensureSqliteFs: () => undefined,
-    ensureFacetManager: () => undefined,
-    initSession: async () => { throw new Error('workspace is already composed'); },
-  };
+  return programmaticHostOver(workspace).host;
 }
 
 function sdkBox(host: ProgrammaticHost) {

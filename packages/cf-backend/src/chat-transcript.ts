@@ -16,8 +16,9 @@
  * rendered — {@link AssistantMessagesTranscript.answersFrom}.
  */
 import { AgentSessionProvider, type SessionMessage, type SqlProvider } from 'agents/experimental/memory/session';
+import * as v from 'valibot';
 import {
-  operatorMessageAdmitted, uiMessageText,
+  JsonObjectSchema, operatorMessageAdmitted, uiMessageText,
   type ActorReference, type JsonObject, type PromptFile, type SqlExecutor,
   type TranscriptRow, type TranscriptStore,
 } from '@kinu.run/core';
@@ -38,6 +39,7 @@ function userParts(text: string, files: ReadonlyArray<PromptFile> | undefined): 
 export class AssistantMessagesTranscript implements TranscriptStore {
   private readonly provider: AgentSessionProvider;
   private answered: ((id: string) => SessionMessage | null) | null = null;
+  private streamed: ((id: string) => SessionMessage | null) | null = null;
 
   constructor(
     agent: SqlProvider,
@@ -53,12 +55,32 @@ export class AssistantMessagesTranscript implements TranscriptStore {
 
   /** Where a finished answer's accumulated UIMessage comes from, by id — the
    *  transport that streamed it. Installed once, when both are built. */
-  answersFrom(source: (id: string) => SessionMessage | null): void {
-    this.answered = source;
+  answersFrom(source: { answer: (id: string) => SessionMessage | null; streamed: (id: string) => SessionMessage | null }): void {
+    this.answered = source.answer;
+    this.streamed = source.streamed;
+  }
+
+  /** The assistant row as it WILL be persisted under this id: the streamed
+   *  message when the transport accumulated one, else the text alone. The
+   *  roster records this very shape as the turn-end announcement's input, so
+   *  a replay reads what the row holds. */
+  recordedAssistant(id: string, text: string): SessionMessage {
+    return this.streamed?.(id) ?? { id, role: 'assistant', parts: [{ type: 'text', text }] };
   }
 
   has(id: string): boolean {
     return this.provider.getMessage(id) !== null;
+  }
+
+  /** The conversation as the client renders it: the path to the latest
+   *  leaf, oldest first — the SDK's own read. */
+  history(): SessionMessage[] {
+    return this.provider.getHistory();
+  }
+
+  /** Every row of this conversation, gone — the clear the client asked for. */
+  clear(): void {
+    this.provider.clearMessages();
   }
 
   appendUser(row: {
@@ -79,11 +101,26 @@ export class AssistantMessagesTranscript implements TranscriptStore {
   }
 
   appendAssistant(row: { readonly id: string; readonly parentId: string; readonly text: string }): void {
-    const streamed = this.answered?.(row.id) ?? null;
+    const recorded = this.recordedAssistant(row.id, row.text);
+    // Spent here: the transport keeps the streamed answer only until its row.
+    this.answered?.(row.id);
 
-    this.provider.appendMessage(streamed ?? {
-      id: row.id, role: 'assistant', parts: [{ type: 'text', text: row.text }],
-    }, row.parentId);
+    this.provider.appendMessage(recorded, row.parentId);
+  }
+
+  /** The metadata of the newest user row — the composer's mode, a signal's
+   *  stamp — for a reader with no turn to ask: the tool listing an idle actor
+   *  serves narrows its work mode off the last message, as Think's cache did. */
+  lastUserMetadata(): JsonObject | undefined {
+    const row = this.sql<{ content: string }>`
+      SELECT content FROM assistant_messages
+      WHERE session_id = ${ROOT_SESSION_ID} AND role = 'user'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`[0];
+
+    if (row === undefined) return undefined;
+    const parsed = v.safeParse(v.object({ metadata: v.optional(JsonObjectSchema) }), JSON.parse(row.content));
+
+    return parsed.success ? parsed.output.metadata : undefined;
   }
 
   newestFirst(): readonly TranscriptRow[] {

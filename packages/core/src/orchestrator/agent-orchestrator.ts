@@ -239,7 +239,7 @@ export class AgentOrchestrator {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.turnEvolutionEnabled = deps.engine.enabled;
-    this.inbox = new Inbox(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d), steers);
+    this.inbox = new Inbox(deps.host, (e, d) => this.logActivity(e, d), steers);
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
       (fn, ms) => deps.host.setTimer(fn, ms),
@@ -698,6 +698,12 @@ export class AgentOrchestrator {
       }
     })();
     this.inFlight.set(tracked, label);
+  }
+
+  /** The backend's activity line — the durable trace a loop decision is
+   *  written to beside its diagnostics event, when the backend keeps one. */
+  logActivity(event: string, detail?: string): void {
+    this.deps.sinks?.logActivity?.(event, detail);
   }
 
   /**

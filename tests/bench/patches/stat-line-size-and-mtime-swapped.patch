@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/execution/nimbus.ts b/packages/core/src/execution/nimbus.ts
-index 087ccc42e..3e143fbe2 100644
+index 7d69d8734..0ea6723aa 100644
 --- a/packages/core/src/execution/nimbus.ts
 +++ b/packages/core/src/execution/nimbus.ts
-@@ -1130,7 +1130,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
+@@ -1163,7 +1163,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
        if (!r.success || r.exitCode !== 0) return null;
        const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
  
 -      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: kind.join(' ') === 'directory' };
 +      return { size: Number(seconds), mtimeMs: Number(size) * 1_000, isDir: kind.join(' ') === 'directory' };
      },
-     async unlink(path) { await box.files.delete(workspacePath(path)); },
-     async removeRecursive(path) { await box.files.delete(workspacePath(path), { recursive: true }); },
+     async unlink(path) { await files.delete(workspacePath(path)); },
+     async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },

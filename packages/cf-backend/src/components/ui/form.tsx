@@ -11,13 +11,10 @@ export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outlin
   + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
   + " placeholder:p-text-3";
 
+/** One strip height both headers share, so the active underline lands on the
+ *  strip's own rule on both sides. */
+export const tabStripH = "h-[45px]";
 
-/**
- * Metrics for a tab in a surface strip. The look is `p-tab` (+ `p-tab-active`
- * on the current one) from index.css; this is only the box. Every strip in
- * the app uses the pair, so a tab reads the same above the chat as it does
- * above the work surfaces.
- */
 export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control";
 
 /**

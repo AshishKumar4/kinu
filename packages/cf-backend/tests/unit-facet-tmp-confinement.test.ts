@@ -17,8 +17,6 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, headAgentName, restoreAgentTmpConfinements,
@@ -29,6 +27,7 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import { credentialedSessionBox, programmaticHostOver } from './helpers/programmatic-host';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
@@ -82,55 +81,7 @@ async function openOwner(): Promise<OwnerFixture> {
     generation: 1,
   });
 
-  const durable = new Map<string, unknown>();
-
-  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
-    const entries = new Map<string, unknown>();
-
-    for (const [key, value] of durable) {
-      if (key.startsWith(options.prefix)) entries.set(key, value);
-    }
-
-    // SAFETY: the storage list contract types each row by the caller's T,
-    // which the untyped stand-in rows cannot name; `never` keeps the Map
-    // assignable to every T.
-    return entries as Map<string, never>;
-  };
-
-  const host: ProgrammaticHost = {
-    _w1SessionDestroyed: false,
-    env: {},
-    ctx: {
-      storage: {
-        get: async (key) => durable.get(key),
-        put: async (key, value) => { durable.set(key, value); },
-        delete: async (key) => { durable.delete(key); },
-        deleteAll: async () => { durable.clear(); },
-        deleteAlarm: async () => undefined,
-        list: listDurable,
-        transaction: async (body) => body({
-          get: async (key) => durable.get(key),
-          put: async (key, value) => { durable.set(key, value); },
-          delete: async (key) => { durable.delete(key); },
-          list: listDurable,
-        }),
-      },
-    },
-    shell: workspace.shell,
-    shellProcessPid: null,
-    sqliteFs: workspace.vfs,
-    processes: new SessionProcessSupervisor(),
-    portRegistry: new PortRegistry(),
-    facetManager: null,
-    viteDevServer: null,
-    cirrusReal: null,
-    _cpRegistry: workspace.registry,
-    _viteShimPid: null,
-    _viteShimPort: null,
-    ensureSqliteFs: () => undefined,
-    ensureFacetManager: () => undefined,
-    initSession: async () => { throw new Error('workspace is already composed'); },
-  };
+  const host = programmaticHostOver(workspace).host;
 
   await ensureProgrammaticReady(host);
 
@@ -170,31 +121,8 @@ async function openOwner(): Promise<OwnerFixture> {
 }
 
 /** The session addressed as one node, for the credentialed file plane. */
-function sessionBoxFor(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHandle {
-  return {
-    ready: async () => undefined,
-    exec: async (rawCommand, options) => {
-      const forwarded: Parameters<typeof rpcExec>[2] = { cred: options?.cred ?? cred };
-
-      if (options?.env !== undefined) forwarded.env = options.env;
-      const result = await rpcExec(host, rawCommand, forwarded);
-
-      return {
-        command: rawCommand,
-        success: result.exitCode === 0,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-      };
-    },
-    files: {
-      read: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      write: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      list: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      exists: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      delete: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-    },
-  };
+function sessionBoxFor(f: OwnerFixture, cred: VfsCred): NimbusSandboxHandle {
+  return credentialedSessionBox(f.workspace, f.host, cred);
 }
 
 function node(nodeId: string): NodeIdentity {
@@ -234,8 +162,8 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
-      const asA = nimbusSessionFiles(sessionBoxFor(f.host, a), a);
-      const asB = nimbusSessionFiles(sessionBoxFor(f.host, b), b);
+      const asA = nimbusSessionFiles(sessionBoxFor(f, a), a);
+      const asB = nimbusSessionFiles(sessionBoxFor(f, b), b);
 
       // The whole write path, including the stage-and-rename commit, which
       // resolves through the same rewrite as every other operation.

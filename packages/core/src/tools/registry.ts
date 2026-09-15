@@ -965,6 +965,14 @@ const SANDBOX_FACTS = {
     + 'The Node builtins, `require` and `fetch` are the machine\'s own; the `workspace` namespace is the durable workspace, which is not the machine\'s filesystem. `console.log` output comes back beside the result.',
 } satisfies Record<SandboxSubstrate, string>;
 
+/** The `code` field's own description on the `execute_tools` input schema.
+ *  Codemode's `createCodeTool` ships it as "JavaScript async arrow function to
+ *  execute" — a shape NEITHER sandbox accepts, since both run the body as a
+ *  script (the normalizer takes the bare body). Both backends read this one
+ *  constant through `executeToolsInputSchema` (sandbox-contract.ts), so the
+ *  field can never contradict the docstring again. */
+export const EXECUTE_TOOLS_CODE_DESCRIPTION = 'The JavaScript program: top-level statements, `await` allowed, `return` (or a trailing expression) hands back the result.';
+
 /**
  * The `execute_tools` docstring the model actually receives: this registry's
  * doctrine for the tool, the standing facts about the sandbox itself, then the

@@ -1,17 +1,14 @@
 import * as v from 'valibot';
-import { ContentRef } from '@agent-core/core';
-import type { ContentStore } from '@agent-core/core/content';
-import { processes, type ResidentFacetEnv } from '@nimbus-sh/fabric/workerd-facet-host.js';
-import { facetImagePath, facetImagePathDigest, type ProcessHostParams, type ResidentBootSpec } from '@nimbus-sh/fabric/process-fabric.js';
+import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
-import { CRED_KERNEL, type RouteableFacetTarget, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import slateVendor from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
-import { acquireDurableFacetSlot } from '../nimbus-programmatic';
 
 /** The bundle texts a booted slate serves — `client` and `shell` only when
  *  the slate declares a browser surface. */
@@ -33,13 +30,14 @@ export interface ResidentSlateProcess extends SlateProcess {
 }
 
 export interface ResidentSlateDeps {
-  readonly ctx: DurableObjectState;
-  readonly env: ResidentFacetEnv;
-  readonly workspace: string;
-  readonly content: ContentStore;
   session(): Promise<Pick<WorkspaceSession, 'vfs' | 'processes'>>;
-  registerPort(pid: number, port: number, target: RouteableFacetTarget, owner: string): Promise<void>;
-  unregisterPorts(pid: number): void;
+  /**
+   * The workspace's one facet manager: every resident spawn goes through its
+   * `spawnWorker`, which journals a durable application's launch, binds its
+   * reserved port and re-adopts the port's capability, and every end of life
+   * goes through its `kill`, the one owner of a resident's teardown.
+   */
+  facetManager(): Promise<ComposedFacetManager>;
 }
 
 export interface ResidentSlateBoot {
@@ -70,6 +68,12 @@ const RUNTIME_FILES = {
 } as const;
 
 const RUNTIME_DIR = '/usr/lib/kinu/slate';
+
+/** The dynamic worker's main module — `slateRunnerSource`'s text, booted by name. */
+const MAIN_MODULE = 'runner.js';
+
+/** The authored bundle's module, the other half of a durable launch's image. */
+const APPLICATION_MODULE = 'application.js';
 
 /** The ES module text of `runner.js`, the dynamic worker's main module. Its
  *  `vfsTextModules` siblings — `application.js`, `capnweb.js`, `server.js`,
@@ -217,9 +221,12 @@ export function slateRunnerSource(assets: readonly { readonly path: string; read
     // `__storage` is the runner's own handle on the reserved binding, never
     // part of the guest's binding map: the slate reaches it as `this.storage`.
     // `__host` is the process's channel back to its host — likewise reserved.
+    // `PORT` and `NIMBUS_APP` are the strings the facet manager stamps on a
+    // durable launch's env for a server that reads them; a slate binds no
+    // port of its own, so neither is a binding it declared.
     '    const env = {};',
     '    for (const [name, stub] of Object.entries(this.env)) {',
-    '      if (name === "__storage" || name === "__host") continue;',
+    '      if (name === "__storage" || name === "__host" || typeof stub !== "object") continue;',
     '      env[name] = bindingProxy(name, stub, true);',
     '    }',
     '    const slate = new Slate({',
@@ -405,7 +412,6 @@ function rewriteModuleSpecifiers(source: string): string {
 export class ResidentSlateProcesses {
   private readonly bundlers = new Map<string, EsbuildService>();
 
-
   constructor(private readonly deps: ResidentSlateDeps) {}
 
   async start(input: ResidentSlateBoot): Promise<ResidentSlateProcess> {
@@ -496,97 +502,93 @@ export class ResidentSlateProcesses {
     }
 
     const modules = {
-      'runner.js': slateRunnerSource(assets, shell),
+      [MAIN_MODULE]: slateRunnerSource(assets, shell),
       // The application bundle's surviving bare specifiers are rewritten onto
       // these module-map paths — the map's names must end `.js`.
-      'application.js': rewriteModuleSpecifiers(application.contents),
+      [APPLICATION_MODULE]: rewriteModuleSpecifiers(application.contents),
       'capnweb.js': slateVendor.capnwebWorkers,
       'server.js': SLATE_SERVER_MODULE,
       'react-stub.js': slateVendor.reactStub,
       'vendor.js': `export const react = ${JSON.stringify(slateVendor.react)};\nexport const capnweb = ${JSON.stringify(slateVendor.capnweb)};\nexport const slateClient = ${JSON.stringify(SLATE_CLIENT_MODULE)};\n`,
     };
 
+    // Every module but the main one travels by VFS path: the manager's own
+    // loader reads each as the kernel at the content-addressed path fabric
+    // names, verifying the bytes against the digest in the name. The texts
+    // are written here, kernel-owned, once per digest — a restart of the same
+    // source resolves to the images already there.
+    const images: Record<string, string> = {};
     const textModules: Record<string, string> = {};
+    kernelVfs.mkdir(`/${FACET_IMAGE_DIR}`, { recursive: true, mode: 0o755 });
 
     for (const [name, contents] of Object.entries(modules)) {
-      textModules[name] = facetImagePath((await this.deps.content.put(new TextEncoder().encode(contents))).ref.digest.value);
+      const digest = await facetImageDigest(contents);
+      const path = facetImagePath(digest);
+
+      if (!kernelVfs.exists(path)) kernelVfs.writeFile(path, contents, { mode: 0o644 });
+      images[name] = digest;
+
+      if (name !== MAIN_MODULE) textModules[name] = path;
     }
 
-    const entry = session.processes.spawn(main, [], input.root, { longRunning: true });
-    const writerId = crypto.randomUUID();
+    const manager = (await this.deps.facetManager()).manager;
 
-    const boot: ResidentBootSpec = {
-      kind: 'code',
-      code: {
-        compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'], mainModule: 'runner.js', modules: {},
-        vfsTextModules: textModules,
-        env: input.bindings,
-        globalOutbound: input.globalOutbound,
-      },
+    // A durable application's launch is journalled under its owner with the
+    // digests of the two images it was built from; the manager binds the
+    // reserved port and re-adopts the capability the URL carries. A private
+    // process is plain: no port, no journal, an ephemeral facet.
+    const launch: LongRunningWorkerSpawnOptions = {
+      mainModule: MAIN_MODULE,
+      compatibilityDate: '2025-12-01',
+      compatibilityFlags: ['nodejs_compat'],
+      vfsTextModules: textModules,
+      env: input.bindings,
+      globalOutbound: input.globalOutbound,
     };
 
-    const params: ProcessHostParams = { pid: entry.pid, workerKey: input.key, boot, writerId, startArgs: {} };
+    if (input.app !== null) {
+      // The two images a durable launch is journalled by: a slate without its
+      // runner or its application module has nothing to re-drive from.
+      const runner = images[MAIN_MODULE];
+      const application = images[APPLICATION_MODULE];
 
-    // The durable application's facet name is allocated out of this object's
-    // storage and pinned for the owner, so `this.sql` re-attaches to the same
-    // store on every launch; a released durable facet is aborted, never
-    // deleted. An ephemeral facet takes a reused slot and is wiped on release.
-    if (input.app !== null) params.facet = { name: await acquireDurableFacetSlot(this.deps.ctx, input.owner), durable: true };
+      if (runner === undefined) throw new KinuError('io', `Slate boot produced no ${MAIN_MODULE} image`);
 
-    const process = processes(this.deps.ctx, this.deps.env).spawn(
-      () => ({ readFile: async (path) => {
-        const digest = facetImagePathDigest(path);
-
-        if (digest === null) throw new KinuError('bad_input', `Invalid facet image path: ${path}`);
-
-        return this.deps.content.get(new ContentRef(`sha256:${digest}`));
-      } }),
-      { doId: this.deps.workspace, pid: entry.pid, writerId },
-      params,
-    );
-
-    let methods: readonly string[];
-
-    try {
-      // The runner reports the authored surface's contract violation as data,
-      // and on success publishes the callable method list the host pre-checks.
-      const started = await process.started;
-      const refusal = v.safeParse(StartedResult, started);
-      const surface = v.safeParse(StartedSurface, started);
-
-      if (refusal.success) {
-        throw new KinuError('bad_input', refusal.output.error);
-      }
-
-      if (!surface.success) throw new KinuError('io', 'Slate runner returned a boot result without a method list');
-
-      methods = surface.output.methods;
-    } catch (cause) {
-      session.processes.exit(entry.pid, 1);
-      this.deps.unregisterPorts(entry.pid);
-
-      try { await process.release(); }
-      catch (releaseCause) { throw new AggregateError([cause, releaseCause], 'Slate boot and process release failed', { cause: releaseCause }); }
-
-      throw cause;
+      if (application === undefined) throw new KinuError('io', `Slate boot produced no ${APPLICATION_MODULE} image`);
+      launch.port = input.app.port;
+      launch.durable = { owner: input.owner, image: { runner, application } };
     }
 
-    if (input.app !== null) await this.deps.registerPort(entry.pid, input.app.port, process, input.owner);
+    const spawned = await manager.spawnWorker(modules[MAIN_MODULE], `slate ${slateId}`, input.root, launch);
 
-    session.processes.setTerminator(entry.pid, () => {
-      // The one door a resident's registration leaves by: whoever ends the
-      // pid is on the stack here, which is what the event records.
+    const pid = spawned.pid;
+    // The runner reports the authored surface's contract violation as data,
+    // and on success publishes the callable method list the host pre-checks.
+    const refusal = v.safeParse(StartedResult, spawned.boot);
+    const surface = v.safeParse(StartedSurface, spawned.boot);
+
+    if (!surface.success) {
+      manager.kill(pid);
+
+      if (refusal.success) throw new KinuError('bad_input', refusal.output.error);
+      throw new KinuError('io', 'Slate runner returned a boot result without a method list');
+    }
+
+    const methods = surface.output.methods;
+
+    session.processes.setTerminator(pid, () => {
+      // The one door a resident leaves by: whoever ends the pid is on the
+      // stack here, which is what the event records. The teardown itself is
+      // the manager's, which released the process before terminating it.
       diagnostics.event('slate.resident.terminated', {
-        pid: entry.pid, owner: input.owner, port: input.app?.port ?? 0,
-        state: session.processes.get(entry.pid)?.state ?? 'absent',
+        pid, owner: input.owner, port: input.app?.port ?? 0,
+        state: session.processes.get(pid)?.state ?? 'absent',
         by: new Error('resident terminated').stack?.split('\n').slice(2, 8).map((line) => line.trim()).join(' < ') ?? '',
       });
-      this.deps.unregisterPorts(entry.pid);
-      this.deps.ctx.waitUntil(process.release());
     });
 
     // The bundle texts this boot serves, so callers can read the real bytes.
-    const artifacts: SlateBootArtifacts = { application: modules['application.js'] };
+    const artifacts: SlateBootArtifacts = { application: modules[APPLICATION_MODULE] };
     const clientBundle = assets.find((asset) => asset.path === '/__kinu/client.js');
 
     if (shell !== undefined && clientBundle !== undefined) {
@@ -595,15 +597,11 @@ export class ResidentSlateProcesses {
     }
 
     return {
-      id: String(entry.pid), port: input.app?.port ?? null, methods, artifacts,
-      request: (request) => process.handleHttpRequest(request),
-      connect: (request) => process.handleWebSocketRequest(request),
-      isRunning: async () => session.processes.get(entry.pid)?.state === 'running',
-      stop: async () => {
-        await process.release();
-        this.deps.unregisterPorts(entry.pid);
-        session.processes.exit(entry.pid, 0);
-      },
+      id: String(pid), port: input.app?.port ?? null, methods, artifacts,
+      request: (request) => spawned.facet.fetch(request),
+      connect: (request) => spawned.facet.connect(request),
+      isRunning: async () => session.processes.get(pid)?.state === 'running',
+      stop: async () => { manager.kill(pid); },
     };
   }
 

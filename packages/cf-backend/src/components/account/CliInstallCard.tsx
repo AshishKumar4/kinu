@@ -17,8 +17,7 @@ export function CliInstallCard() {
   useEffect(() => { getCliSetup().then(setCliSetup, () => setCliSetup(null)); }, []);
 
   return (
-    <Card title="Install" icon={TerminalIcon}
-      description="Install the CLI, sign in, and configure local execution with one command.">
+    <Card title="Install" icon={TerminalIcon}>
       <CommandCopy command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
     </Card>
   );

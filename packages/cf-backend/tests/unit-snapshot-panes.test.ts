@@ -109,7 +109,7 @@ describe('panes fed by the workspace snapshot', () => {
   test('the same failure never claims the agent has no tools', () => {
     const markup = render({ status: 'error', message: CONNECTION_LOST, last: null });
 
-    expect(markup).not.toContain('No tools discovered yet');
+    expect(markup).not.toContain('No tools yet');
     expect(markup).toContain('Could not load tools');
   });
 
@@ -123,7 +123,7 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'loading' });
 
     expect(markup).not.toContain('No memories yet');
-    expect(markup).not.toContain('No tools discovered yet');
+    expect(markup).not.toContain('No tools yet');
     expect(markup).not.toContain('Could not load');
   });
 
@@ -131,7 +131,7 @@ describe('panes fed by the workspace snapshot', () => {
     const markup = render({ status: 'ready', value: STATUS });
 
     expect(markup).toContain('No memories yet');
-    expect(markup).toContain('No tools discovered yet');
+    expect(markup).toContain('No tools yet');
     expect(markup).not.toContain('Could not load memory');
   });
 

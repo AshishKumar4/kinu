@@ -30,16 +30,11 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 
 /** How a consent prompt settled. `timeout` is NOT a decision — nobody made
- *  one. It is never remembered, and it never becomes a stored policy.
- *  `connected` is not one either: it is the hub's answer for a provisioning
- *  card whose condition — a machine actually connected — now holds, so the
- *  parked call re-asks liveness instead of reading the card's answer. */
-export type DeviceConsentDecision = 'once' | 'always' | 'deny' | 'timeout' | 'connected';
+ *  one. It is never remembered, and it never becomes a stored policy. */
+export type DeviceConsentDecision = 'once' | 'always' | 'deny' | 'timeout';
 
-/** What the owner can actually answer. `timeout` and `connected` are not
- *  among them: one is the lapse of the ask, the other the hub saying the
- *  condition the card asked for now holds. */
-export type DeviceConsentAnswer = Exclude<DeviceConsentDecision, 'timeout' | 'connected'>;
+/** What the owner can actually answer. `timeout` is not among them. */
+export type DeviceConsentAnswer = Exclude<DeviceConsentDecision, 'timeout'>;
 
 /** The owner said no. A policy decision: asking again immediately is noise. */
 export const DEVICE_CONSENT_DENIED =
@@ -52,29 +47,22 @@ export const DEVICE_CONSENT_UNANSWERED =
   'device use is still unapproved: the consent prompt expired with no answer, so nobody decided. '
   + 'Continue without the device and ask again later.';
 
-/** The pseudo-method a device request carries when there is no machine to
- *  act on yet — the card asks the owner to LINK one (the `kinu connect`
- *  flow) rather than to allow one action. Approval grants nothing by itself;
- *  execution stays impossible until a daemon is actually connected. */
-export const DEVICE_PROVISION_METHOD = 'connect';
 
 /**
  * What linking a machine means, in the words a person needs before they say
- * yes. Every connect surface states it BEFORE the daemon is installed: the
- * install is the moment an agent gains reach into that machine, and it must
- * never happen as a side effect of typing a command or clicking a button.
+ * yes — exactly three lines. Every connect surface states it BEFORE the
+ * daemon is installed: the install is the moment an agent gains reach into
+ * that machine, and it must never happen as a side effect of typing a
+ * command or clicking a button.
  *
  * It lives here because the CLI prints it and the web connect panel renders
  * it. Two copies of a consent disclosure is how the two of them start saying
  * different things about the same grant.
  */
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
-  'Connecting installs the Kinu daemon on this machine and links it to your account.',
-  'A workspace you approve runs commands in a sandbox: its own home plus folders you pick.',
-  'Your other files stay invisible to it.',
-  'You approve each workspace once. Revoke it under Account settings → Devices.',
-  'That page has one Sandbox switch per device. Off means this whole machine, as your user.',
-  'The daemon dials out and opens no inbound ports.',
+  'Kinu installs a small daemon here and links this machine to your account.',
+  'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
+  'The daemon only dials out. Revoke it any time under Account settings → Devices.',
 ];
 
 export interface DeviceActionSummary {
@@ -328,60 +316,6 @@ export class DeviceConsentRegistry {
     return promise;
   }
 
-  /** Raise the card and answer with the id its settle names — without
-   *  parking a decision-wait on it. The pair of {@link waitSettled}, for the
-   *  ask that carries NO decision back: a provisioning card is settled by
-   *  the connect it asked for, and the call parked on it re-reads liveness
-   *  rather than taking a card's word — so this waiter's job is only to know
-   *  the id the connect will name. An identical prompt already waiting joins
-   *  it and answers THAT card's id. */
-  raise(req: DeviceConsentRequest): string {
-    const already = this.deps.store.live(this.now()).find((pending) => sameRequest(pending, req));
-
-    if (already) {
-      // Parked anyway, so the joined card's lapse timer exists in this
-      // activation even if nobody ever waits on it.
-      this.parked(already);
-
-      return already.consentId;
-    }
-
-    const consentId = this.deps.newId();
-    const createdAt = this.now();
-    const view: PendingDeviceConsent = { ...req, consentId, createdAt };
-    const row: PendingConsentRow = { ...view, expiresAt: createdAt + this.timeoutMs };
-    this.deps.store.insert(row);
-    this.parked(row);
-    this.deps.announce({ kind: 'raised', consent: view });
-
-    return consentId;
-  }
-
-  /** Park until the card is GONE — answered, lapsed, or settled by the hub —
-   *  resolving as soon as no pending row by that id remains. This is the
-   *  provisioning wait: it carries no decision because the card's only real
-   *  answers are "a machine arrived" (the caller re-reads liveness) and
-   *  "nothing happened" (the caller reports no device). An id that is
-   *  already settled resolves at once; one never raised does too — nothing
-   *  is still open by it. */
-  waitSettled(consentId: string): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    const pending = this.deps.store.live(this.now()).find((row) => row.consentId === consentId);
-
-    if (!pending) {
-      resolve();
-
-      return promise;
-    }
-
-    // A settle observer parks in the same list as decision-waiters: the
-    // settle machinery calls each waiter with the decision, which a
-    // `resolve()` of no declared arity simply discards.
-    this.parked(pending).awaiting.push(() => { resolve(); });
-
-    return promise;
-  }
-
   /** The parked-callers entry for one card, minting one for a row this
    *  activation did not raise. The lapse timer arms off the ROW's deadline,
    *  not a fresh window from now: a prompt restored after an eviction keeps
@@ -426,41 +360,21 @@ export class DeviceConsentRegistry {
   /** The owner answered. False when the id is unknown — already settled, or
    *  never raised on this object's storage. */
   resolve(consentId: string, decision: DeviceConsentAnswer): boolean {
-    // Anything unrecognised is the weakest grant, never a stronger one.
-    const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
-    const pending = this.settleCard(consentId, effective);
+    const pending = this.deps.store.take(consentId, this.now());
 
     if (!pending) return false;
+    this.deps.announce({ kind: 'settled', consentId });
+    // Anything unrecognised is the weakest grant, never a stronger one.
+    const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
+    const entry = this.inflight.get(consentId);
+    this.inflight.delete(consentId);
+    entry?.settle(effective);
 
     if (effective === 'always') this.settleBoundByGrant(pending);
 
     return true;
   }
 
-  /** A non-owner settlement: the host declares the card answered by something
-   *  other than a click — the provisioning card's `connected`, from the hub
-   *  that watched the daemon accept. The decision reaches every waiter
-   *  verbatim; no narrowing, because nobody's consent is being inferred. The
-   *  same false as {@link resolve} when the id is already gone. */
-  settle(consentId: string, decision: DeviceConsentDecision): boolean {
-    return this.settleCard(consentId, decision) !== null;
-  }
-
-  /** The lapse of every settle: the row goes, surfaces hear `settled`, and
-   *  every parked caller resolves with the one decision. Returns what the
-   *  card said — `resolve` needs it for the always-grant fan-out — or null
-   *  when nothing by that id was still waiting. */
-  private settleCard(consentId: string, decision: DeviceConsentDecision): PendingConsentRow | null {
-    const pending = this.deps.store.take(consentId, this.now());
-
-    if (!pending) return null;
-    this.deps.announce({ kind: 'settled', consentId });
-    const entry = this.inflight.get(consentId);
-    this.inflight.delete(consentId);
-    entry?.settle(decision);
-
-    return pending;
-  }
 
   /**
    * An "always" answer is a binding, and a binding decides more than the card
@@ -476,9 +390,6 @@ export class DeviceConsentRegistry {
    * second one's card.
    */
   private settleBoundByGrant(granted: PendingDeviceConsent): void {
-    // The provisioning card names no machine and binds nothing.
-    if (!granted.deviceId) return;
-
     for (const pending of this.deps.store.live(this.now())) {
       if (pending.deviceId !== granted.deviceId) continue;
 

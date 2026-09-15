@@ -1,10 +1,10 @@
 import * as v from 'valibot';
 import { DurableObject, WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { MemoryContentStore } from '@agent-core/core/content';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
   initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateBindingCall, routeSlateStorageCall,
@@ -52,14 +52,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
+  private readonly facets = probeFacetManager({
+    ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs,
+  });
+
   private readonly resident = new ResidentSlateProcesses({
-    ctx: this.ctx, env: this.env, workspace: this.ctx.id.toString(), content: new MemoryContentStore(),
     session: async () => ({ vfs: this.vfs, processes: this.processes }),
-    registerPort: async (pid, port, target) => {
-      this.ports.bindFacetStub(pid, target);
-      this.ports.register(port, pid);
-    },
-    unregisterPorts: (pid) => { this.ports.unregisterByPid(pid); },
+    facetManager: async () => this.facets,
   });
 
   private process: ResidentSlateProcess | undefined;
@@ -139,8 +138,14 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     const storageStub = this.env.SLATE_PROCESS_PROBE.get(this.ctx.id);
 
+    const owner = JSON.stringify([this.ctx.id.toString(), root, cred]);
+
+    // A durable spawn starts only under a reservation its owner holds — the
+    // slate host reserves before it launches, and so does the probe.
+    if (app !== null) await probeDurableApps(this.facets).ensure({ owner, preferredPort: app.port });
+
     const boot = {
-      key: crypto.randomUUID(), owner: JSON.stringify([this.ctx.id.toString(), root, cred]), root, app, cred,
+      key: crypto.randomUUID(), owner, root, app, cred,
       globalOutbound: codemodeEgress(),
       project: parseSlateProject(project),
     };

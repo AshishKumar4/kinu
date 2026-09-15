@@ -1,13 +1,19 @@
-diff --git a/packages/core/src/scaffold/ui-stream.ts b/packages/core/src/scaffold/ui-stream.ts
-index a0f4f44ad..8fcb809f0 100644
---- a/packages/core/src/scaffold/ui-stream.ts
-+++ b/packages/core/src/scaffold/ui-stream.ts
-@@ -46,7 +46,7 @@ async function forwardedUIChunk(
-   if (validation === undefined || !validation.success) return undefined;
-   const chunk = validation.value;
+diff --git a/packages/core/src/scaffold/chat-transform.ts b/packages/core/src/scaffold/chat-transform.ts
+index e75a7790f..f595632a4 100644
+--- a/packages/core/src/scaffold/chat-transform.ts
++++ b/packages/core/src/scaffold/chat-transform.ts
+@@ -132,11 +132,11 @@ async function* scaffoldTurn(
+           responses.push(...inner.responseMessages);
  
--  if (chunk.type === 'start' || chunk.type === 'finish') return undefined;
-+  if (chunk.type === 'start' && chunk.type === 'finish') return undefined;
+           if (!text.trim()) text = inner.text;
+-        } else {
+-          if (inner.type === 'text-delta') text += inner.delta;
+-          yield inner;
+         }
  
-   const reasoning = chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta'
-     || chunk.type === 'reasoning-end';
++        if (inner.type === 'text-delta') text += inner.delta;
++        yield inner;
++
+         break;
+       }
+ 

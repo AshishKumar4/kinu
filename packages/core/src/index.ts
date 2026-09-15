@@ -136,7 +136,7 @@ export {
   planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  workspaceSlug, workspaceAddressRefusal,
+  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle,
   workspaceTitleFromMission,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
@@ -144,6 +144,8 @@ export {
   isWorkspaceName,
   validateWorkspaceName,
 } from './identity/naming';
+
+export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
 // Evolution engine (3-timescale auto-evolution)
 export {
@@ -605,7 +607,7 @@ export {
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
-  renderExecuteToolsDescription,
+  renderExecuteToolsDescription, EXECUTE_TOOLS_CODE_DESCRIPTION,
   // The reach axis — which surfaces each capability is projected onto, and the
   // codemode namespace it owns. Read by both surface builders and by the Tools
   // panel, so none of them has to guess it from ToolSet keys.
@@ -625,7 +627,7 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
+  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, executeToolsInputSchema,
   renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
@@ -1138,11 +1140,9 @@ export {
 
 export { pumpScaffoldEvents } from './scaffold/event-pump';
 
-export { scaffoldEventsToUIStream } from './scaffold/ui-stream';
 
 // The two backend inference seams: the DO's UI message stream and a local
 // turn's ChatEvent stream. Same decision, same delegation contract.
-export { scaffoldInferenceTransform, type InferenceStreamResult } from './scaffold/inference-transform';
 
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
@@ -1260,7 +1260,6 @@ export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
-  AGENT_FS_CHUNK_BYTES,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
@@ -1678,7 +1677,6 @@ export {
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONSENT_TIMEOUT_MS,
-  DEVICE_PROVISION_METHOD,
   DEVICE_CONNECT_DISCLOSURE,
   summarizeDeviceAction,
   type DeviceConsentDecision,
@@ -1791,7 +1789,7 @@ export {
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';
 
-export { withTaskPlan, bindTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
+export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
@@ -1807,7 +1805,7 @@ export {
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
-  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  ChatSession, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from './orchestrator/chat-session';
 
@@ -2180,9 +2178,9 @@ export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, overviewHeadline, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { RosterActivity, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -2310,7 +2308,7 @@ export {
 export { buildTree, explorationForkTree, type MctsRow } from './read-models/fork-tree-rows';
 
 export {
-  executorDescription, executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
+  executorLabel, executorSortKey, isActiveExecutionDevice, isExecutorActive,
   pickDefaultExecutor, releaseSubstrate, type ExecutorAvailability, type ReleaseSubstrate,
 } from './read-models/executors';
 
@@ -2356,6 +2354,11 @@ export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
   fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
+
+export {
+  DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
+  type DeviceUpdateFrame, type DeviceUpdateState,
+} from './http/device-update';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,
@@ -2692,3 +2695,5 @@ export {
 export {
   readAllOutcome,
 } from './utils/spawned-output';
+
+export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';

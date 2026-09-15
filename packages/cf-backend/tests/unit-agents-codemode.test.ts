@@ -25,7 +25,7 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import {
   decodeJsonValue,
-  BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_DESCRIPTIONS, EXECUTE_TOOLS_CODE_DESCRIPTION,
   createAgentsCodemodeProvider,
   parseJsonValue,
   type AgentsToolDeps,
@@ -87,7 +87,7 @@ function webSearchProvider(): WebSearchProvider {
  *  a craft store with nothing in it, no executors, and stub model/web seams.
  *  The native surface handed to `toolFor` is one `file` tool, so the `tools`
  *  declaration has a native member to assert on. */
-function executeToolsDescription(agents?: () => AgentsToolDeps): string {
+function buildExecuteTools(agents?: () => AgentsToolDeps) {
   const { rt, testSql } = createTestRuntime();
   initCraftedToolsTables(testSql.sql);
 
@@ -112,9 +112,13 @@ function executeToolsDescription(agents?: () => AgentsToolDeps): string {
     }),
   };
 
-  const built = agents
+  return agents
     ? createExecuteToolsFactory({ ...options, agents }).toolFor(native)
     : createExecuteToolsFactory(options).toolFor(native);
+}
+
+function executeToolsDescription(agents?: () => AgentsToolDeps): string {
+  const built = buildExecuteTools(agents);
 
   if (!built.description) throw new Error('execute_tools description is missing');
 
@@ -236,6 +240,24 @@ describe('the execute_tools docstring the model receives', () => {
     expect(description).toContain('search(query: string, opts?: { limit?: number })');
     expect(description).toContain('fetch(url: string)');
     expect(description).not.toContain('type SearchInput = unknown');
+  });
+
+  test('the code field is labelled as the script body it actually is', () => {
+    // createCodeTool ships `code` as "JavaScript async arrow function to
+    // execute" — a shape neither sandbox accepts. The built tool's inputSchema
+    // is core's (executeToolsInputSchema) so the field and the docstring above
+    // cannot disagree.
+    const built = buildExecuteTools();
+
+    const schema = v.parse(v.object({
+      jsonSchema: v.object({
+        properties: v.object({ code: v.object({ description: v.string() }) }),
+        required: v.array(v.string()),
+      }),
+    }), built.inputSchema).jsonSchema;
+
+    expect(schema.properties.code.description).toBe(EXECUTE_TOOLS_CODE_DESCRIPTION);
+    expect(schema.required).toEqual(['code']);
   });
 });
 

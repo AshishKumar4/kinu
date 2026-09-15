@@ -50,10 +50,10 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
         },
       });
     } catch (err) {
+      // The readiness failure already quotes the daemon's last output lines;
+      // this only closes the progress line the wait was drawing.
       if (waiting) process.stdout.write('\n');
       console.error(`${ERR('✗')} ${renderThrownChain({ cause: err })}`);
-      console.error(`${DIM('Daemon log tail')} (${DAEMON_LOG_PATH}):`);
-      console.error(daemonLogTail(15));
       process.exit(1);
     }
 
@@ -65,10 +65,10 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     }
 
     console.log('');
-    console.log(`${OK('✓')} Connected this machine as ${ACCENT(name)}`);
+    console.log(`${OK('✓')} Connected as ${ACCENT(result.label)}`);
 
     for (const line of describeDeviceSandbox(result.sandbox)) console.log(`  ${line}`);
-    console.log(`${DIM('Rename or revoke it under Account settings → Devices.')}`);
+    console.log(`${DIM('Manage it under Account settings → Devices.')}`);
     console.log(`${DIM('Daemon log:')} ${DAEMON_LOG_PATH}`);
     console.log('');
 
@@ -80,6 +80,8 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     console.log(`${DIM('Device config:')} ${status.deviceConfigPresent ? OK('present') : 'missing'} ${DIM(DEVICE_CONFIG_PATH)}`);
     console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
     console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);
+
+    if (status.restoredPreviousBuild) console.log(DIM('A self-update did not connect; the previous daemon build was restored and started.'));
 
     return;
   }
@@ -113,8 +115,8 @@ async function confirmConnect(label?: string): Promise<string | null> {
     );
   }
 
-  const name = label?.trim() || await ask('Name this device', defaultDeviceName());
-  const proceed = await confirm(`Link this machine as "${name}" and start the daemon?`, false);
+  const name = label?.trim() || await ask('Device name', defaultDeviceName());
+  const proceed = await confirm('Link and start the daemon?', true);
 
   return proceed ? name : null;
 }

@@ -75,7 +75,7 @@ cf-backend inventory, measured 2026-09-05 by listing
 `do-init-gate`, `do-retention`, `do-socket-attachment`, `do-spend-aggregate`,
 `do-terminal-effect-eviction`, `do-tool-effect-claim-eviction`,
 `do-transaction`, `egress-framing`, `files-eio`, `fork-transfer`,
-`instruction-digest`, `send-admission`, `steer-chain`, `step-cap`,
+`instruction-digest`, `steer-chain`, `step-cap`,
 `stream-lifecycle`, and `tracing-fallback`. These
 files run in workerd, not Bun. The UI command is
 It drives Chromium over the gallery. The UI-gates row in `scripts/ladder.ts`

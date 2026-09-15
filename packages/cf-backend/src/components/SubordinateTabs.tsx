@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
+import { tabCls, tabStripH } from "./ui/form";
 import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { Modal } from "./ui/Modal";
@@ -12,9 +13,9 @@ import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs"
  *  later. */
 const UNTITLED_AGENT_TITLE = "Untitled agent";
 
-/** The same state on a workspace. Separate string because the surfaces that
- *  show it say "workspace" in every neighbouring control. */
-const UNTITLED_WORKSPACE_TITLE = "Untitled workspace";
+/* A workspace's title is answered in core — `workspaceDisplayTitle` in
+ * read-models/workspace-title — because the slug stored as a title is the
+ * defect this file's callers all share; there is no local copy of the rule. */
 
 /** The plus button's label. An ACTION, not the untitled state above it — the
  *  two read alike, which is exactly why they are separate constants. */
@@ -26,14 +27,6 @@ const ADD_AGENT_LABEL = "New agent";
 export function agentTitle(displayName: string): string {
   return displayName.trim() === "" ? UNTITLED_AGENT_TITLE : displayName;
 }
-
-/** {@link agentTitle} for a workspace. The slug is NOT the fallback: it is the
- *  address in the URL bar, and showing it as a title is what put
- *  `handwrought-walnut-4166c321` in the workspace bar. */
-export function workspaceTitle(displayName: string | null | undefined): string {
-  return displayName?.trim() || UNTITLED_WORKSPACE_TITLE;
-}
-
 
 interface SubordinateTabsProps {
   workspace: string;
@@ -83,12 +76,12 @@ export function SubordinateTabs({
           it: the strip scrolls horizontally once the roster outgrows the
           column, and anything within it scrolls away with the tabs. They carry
           the same bottom rule so the two still read as one line. */}
-      <div className="flex shrink-0 items-stretch">
-        <nav aria-label="Workspace agents" className="p-tabstrip flex min-w-0 flex-1 items-stretch border-b p-border px-2">
+      <div className={`flex shrink-0 items-stretch ${tabStripH}`}>
+        <nav aria-label="Workspace agents" className={`p-tabstrip flex min-w-0 flex-1 items-center border-b p-border px-2 ${tabStripH}`}>
           <Link
             to={mainPath}
             aria-current={!activeName ? "page" : undefined}
-            className={`p-tab -mb-px flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition-colors ${!activeName ? "p-tab-active font-medium" : ""}`}
+            className={`${tabCls} px-3 ${!activeName ? "p-tab-active font-medium" : ""}`}
           >
             <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} />
             Main
@@ -103,7 +96,7 @@ export function SubordinateTabs({
                   to={`${mainPath}/agents/${subordinate.name}`}
                   aria-current={active ? "page" : undefined}
                   title={subordinate.currentTask ?? title}
-                  className={`p-tab -mb-px flex h-full max-w-52 items-center gap-2 py-2 pl-3 pr-8 text-xs transition-colors ${active ? "p-tab-active font-medium" : ""}`}
+                  className={`${tabCls} h-full max-w-52 pl-3 pr-8 ${active ? "p-tab-active font-medium" : ""}`}
                 >
                   <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
                   <StatusMark subordinate={subordinate} />

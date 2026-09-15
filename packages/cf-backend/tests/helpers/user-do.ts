@@ -100,9 +100,17 @@ export interface TestUserDO {
   /** Ids of the cards actually RAISED, in order. The registry mints one per
    *  distinct question, so an identical re-ask adds no entry here. */
   raisedConsentIds: string[];
+  /** Device-offline notices the UserDO fanned out, per workspace — the frames
+   *  a refused device call sends the workspace's own socket. */
+  unavailableNotices: Array<{ workspace: string; devices: Array<{ id: string; label: string; lastSeenAt: number | null }> }>;
+  /** Device-connect notices the UserDO fanned out, per workspace. */
+  availableNotices: Array<{ workspace: string; device: { id: string; label: string } }>;
   /** Device RPC frames that reached the socket — the observable difference
    *  between "consent let it through" and "consent stopped it". */
   deviceFrames: DeviceFrame[];
+  /** Frames the hub pushed to a device that are not calls: the UPDATE a
+   *  HELLO earns, with the device it went to. */
+  devicePushes: DevicePush[];
   /**
    * How a prompted workspace answers. Default: refuse.
    *
@@ -168,6 +176,11 @@ export interface TestUserDOOptions {
    *  device call short-circuits on "no device connected" before reaching the
    *  consent path, which would leave that path untested. */
   connectedDeviceId?: string;
+  /** What the deployment publishes under `/downloads/`: the build stamp and
+   *  the CLI artifacts' checksums, served through the `ASSETS` binding the
+   *  hub reads for a device's UPDATE decision. Absent means a deployment
+   *  that published no stamp — the hub then pushes nothing. */
+  servedBuild?: { version: string; checksums?: Record<string, string> };
   /** Answer device RPC frames the way the daemon does, so a call that PASSES
    *  consent completes instead of hanging on a socket nobody listens to. The
    *  difference between "the grant let it through" and "the grant did nothing"
@@ -200,11 +213,13 @@ export interface TestUserDOOptions {
    *  MISSED. Asked per call, so a test can strand a replica on the first push
    *  and let the reconciliation retry converge on the next. */
   capabilityPushMissed?: () => number;
+  /** Which `oauth-app` presets the deployment pretends to carry the
+   *  registered app for — preset ids (`'github'`, `'google'`), filled with
+   *  fixed test values under the keys `MCP_APP_ENV` names. Absent means no
+   *  preset app is configured. */
+  mcpAppCredentials?: readonly string[];
 }
 
-/** One machine of a fleet, faked: the socket the hub holds for it, the frames
- *  that reached it, and the two things a machine can do to the hub — speak
- *  and leave. */
 export interface FakeDaemon {
   readonly deviceId: string;
   /** Frames the hub sent to THIS machine, in order. */
@@ -241,9 +256,42 @@ const DeviceFrameSchema = v.object({
   deviceId: v.optional(v.string()),
 });
 
+/** A pushed frame: typed by its `type` word, the rest kept as sent. */
+const DevicePushSchema = v.looseObject({ type: v.string() });
+
+export interface DevicePush extends v.InferOutput<typeof DevicePushSchema> {
+  device: string | null;
+}
+
+/**
+ * The static-asset bundle as the UserDO's `ASSETS` binding reads it: the build
+ * stamp and the checksum files, or the SPA shell for anything else — which is
+ * what a deployment answers for a file it never published, and what the
+ * asset reader refuses.
+ */
+function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']): Response {
+  if (build && pathname === '/downloads/kinu-version.json') {
+    return Response.json({ version: build.version, sha: 'sha', builtAt: '2026-09-15T00:00:00Z' });
+  }
+
+  const checksum = build?.checksums?.[pathname.replace(/\.sha256$/, '')];
+
+  if (build && pathname.endsWith('.sha256') && checksum !== undefined) {
+    return new Response(`${checksum}  ${pathname.slice('/downloads/'.length, -'.sha256'.length)}\n`);
+  }
+
+  return new Response('<!doctype html><title>Kinu</title>', { status: 200, headers: { 'content-type': 'text/html' } });
+}
+
 interface TestUserEnvironment {
   CREDENTIAL_ENCRYPTION_KEY: string;
+  CLI_PUBLIC_ORIGIN?: string;
+  ASSETS?: { fetch(input: Request): Promise<Response> };
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+  MCP_GITHUB_CLIENT_ID?: string;
+  MCP_GITHUB_CLIENT_SECRET?: string;
+  MCP_GOOGLE_CLIENT_ID?: string;
+  MCP_GOOGLE_CLIENT_SECRET?: string;
   OrchestratorAgent: {
     idFromName(name: string): string;
     get(name: string): {
@@ -252,9 +300,8 @@ interface TestUserEnvironment {
       repushWorkspaceCapability(): Promise<{ missed: number }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
       awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
-      raiseDeviceConsent(request: DeviceConsentRequest): Promise<string>;
-      waitDeviceConsentSettled(consentId: string): Promise<void>;
-      settleDeviceConsent(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }>;
+      announceDeviceUnavailable(devices: Array<{ id: string; label: string; lastSeenAt: number | null }>): Promise<{ ok: boolean }>;
+      announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
     };
@@ -328,7 +375,21 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const capabilityRepushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
+  const unavailableNotices: TestUserDO['unavailableNotices'] = [];
+  const availableNotices: TestUserDO['availableNotices'] = [];
   const deviceFrames: DeviceFrame[] = [];
+  const devicePushes: DevicePush[] = [];
+
+  /** A frame the hub pushed that is not an RPC call — HELLO's answers such as
+   *  UPDATE — recorded with the socket it went to. */
+  const recordPush = (data: string, device: string | null): boolean => {
+    const push = v.safeParse(DevicePushSchema, JSON.parse(data));
+
+    if (!push.success) return false;
+    devicePushes.push({ ...push.output, device });
+
+    return true;
+  };
 
   // Bound after construction: the socket answers THROUGH the object that owns
   // it, exactly as the runtime's own message handler does.
@@ -347,6 +408,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     deserializeAttachment: () => ({ device: attached }),
     serializeAttachment: () => {},
     send: (data: string) => {
+      if (recordPush(data, attached)) return;
       const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
 
       if (!frame.success) return;
@@ -523,6 +585,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // The credential store refuses to operate without its key, so a harness
     // exercising the real methods has to supply one exactly as a deployment does.
     CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
+    CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
+    ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
@@ -553,14 +617,15 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         awaitDeviceConsent(request: DeviceConsentRequest) {
           return registryFor(name).request(request);
         },
-        raiseDeviceConsent(request: DeviceConsentRequest) {
-          return Promise.resolve(registryFor(name).raise(request));
+        async announceDeviceUnavailable(devices: TestUserDO['unavailableNotices'][number]['devices']) {
+          unavailableNotices.push({ workspace: name, devices });
+
+          return { ok: true };
         },
-        waitDeviceConsentSettled(consentId: string) {
-          return registryFor(name).waitSettled(consentId);
-        },
-        async settleDeviceConsent(consentId: string, decision: DeviceConsentDecision) {
-          return { ok: registryFor(name).settle(consentId, decision) };
+        async announceDeviceAvailable(device: { id: string; label: string }) {
+          availableNotices.push({ workspace: name, device });
+
+          return { ok: true };
         },
         async closeRevokedCliSockets(generation: number) {
           revokedSocketPushes.push(`${name}:${generation}`);
@@ -579,6 +644,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   if (options.credentialEncryptionKeyPrevious) {
     env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS = options.credentialEncryptionKeyPrevious;
   }
+
+  for (const preset of options.mcpAppCredentials ?? []) {
+    if (preset === 'github') {
+      env.MCP_GITHUB_CLIENT_ID = 'test-github-client-id';
+      env.MCP_GITHUB_CLIENT_SECRET = 'test-github-client-secret';
+    } else if (preset === 'google') {
+      env.MCP_GOOGLE_CLIENT_ID = 'test-google-client-id';
+      env.MCP_GOOGLE_CLIENT_SECRET = 'test-google-client-secret';
+    }
+  }
+
 
   const partialContext: Partial<AgentContext> = {};
   Object.assign(partialContext, ctx);
@@ -599,7 +675,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     revokedSessionPushes, capabilityRepushes,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
-    consentPrompts, raisedConsentIds, deviceFrames,
+    consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
     answerConsent: (answer) => {
@@ -630,6 +706,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         deserializeAttachment: () => attachment,
         serializeAttachment: (value: JsonValue) => { attachment = value; },
         send: (data: string) => {
+          if (recordPush(data, deviceId)) return;
           const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
 
           if (!frame.success) return;
