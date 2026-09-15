@@ -93,6 +93,9 @@ interface LiveStream {
   hasFlushedContent: boolean;
   /** The transcript spent this answer before `turn-end` closed the stream. */
   taken: boolean;
+  /** The relay broke before the stream ended: the parts accumulated so far
+   *  stop where it broke, so they are not the answer and no reader gets them. */
+  broken: boolean;
 }
 
 /**
@@ -156,7 +159,7 @@ export class ChatWireTransport implements ChatTransport {
   streamed(id: string): UIMessage | null {
     const live = this.live;
 
-    if (live !== null && live.accumulator.messageId === id && live.accumulator.parts.length > 0) return live.accumulator.toMessage();
+    if (live !== null && !live.broken && live.accumulator.messageId === id && live.accumulator.parts.length > 0) return live.accumulator.toMessage();
 
     return this.answers.get(id) ?? null;
   }
@@ -319,7 +322,7 @@ export class ChatWireTransport implements ChatTransport {
 
         const streamId = this.resumable.start(requestId, { messageId: event.messageId });
 
-        this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: event.messageId }), chunksSinceFlush: 0, hasFlushedContent: false, taken: false };
+        this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: event.messageId }), chunksSinceFlush: 0, hasFlushedContent: false, taken: false, broken: false };
 
         // The turn's opening row is on disk before this event: every tab
         // reads the transcript with the operator's message in it, under the id
@@ -339,7 +342,7 @@ export class ChatWireTransport implements ChatTransport {
         if (live === null) return;
         this.live = null;
 
-        if (!live.taken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
+        if (!live.taken && !live.broken && live.accumulator.parts.length > 0) this.answers.set(live.accumulator.messageId, live.accumulator.toMessage());
 
         this.resumable.complete(live.streamId);
         this.pendingResume.clear();
@@ -413,8 +416,18 @@ export class ChatWireTransport implements ChatTransport {
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
       }
     } catch (cause) {
+      // The turn goes on: the loop consumes its own copy of the stream and
+      // commits the answer from it. What broke is the RELAY, and three things
+      // read the relay as if it were the answer — the accumulator the
+      // transcript would persist, the chunk store a reconnect replays, and
+      // the tab watching the request — so each is told, here, that it is not.
       diagnostics.failure('chat.stream_observe_failed', toKinuError({
         doing: 'relaying the answer stream to the connected clients', cause, otherwise: 'io',
+      }));
+      live.broken = true;
+      this.resumable.markError(live.streamId);
+      this.wire.broadcast(JSON.stringify({
+        type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body: renderThrownChain({ cause }), done: false, error: true,
       }));
     }
   }

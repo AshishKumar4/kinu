@@ -236,6 +236,43 @@ describe('ChatWireTransport', () => {
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
+  test('a relay that breaks mid-stream tells the tab, keeps its partial out of the transcript, and the turn still closes', async () => {
+    const h = harness('turn');
+    const conn = h.connection('c1');
+    await h.transport.onMessage(conn, chatRequest('req-1', 'hello'));
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
+    h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+
+    // Two chunks reach the relay, then the stream fails under it — the loop's
+    // own copy is unaffected and commits the whole answer from its text.
+    const broken = new ReadableStream<UIMessageChunk>({
+      start(controller) {
+        controller.enqueue({ type: 'start' });
+        controller.enqueue({ type: 'text-start', id: 't' });
+        controller.enqueue({ type: 'text-delta', id: 't', delta: 'hel' });
+        controller.error(new Error('the socket under the relay closed'));
+      },
+    });
+
+    await h.transport.observe(broken);
+
+    // The tab is told the relay broke, under its own request, before the turn
+    // ends — not left with a message that simply stops.
+    expect(h.responses().at(-1)).toMatchObject({ id: 'req-1', done: false, error: true, body: expect.stringContaining('the socket under the relay closed') });
+    // The three parts that arrived are not the answer: the transcript must
+    // persist the loop's full text, so nothing offers the partial as the row.
+    expect(h.transport.streamed('msg-1')).toBeNull();
+    expect(h.transport.answer('msg-1')).toBeNull();
+
+    h.transport.deliver({ type: 'turn-end', turn: { userMessage: 'hello', assistantResponse: 'hello', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' } });
+
+    // The request still closes at the turn's own end, and the partial is not
+    // kept as a finished answer for a late reader either.
+    expect(h.responses().at(-1)).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
+    expect(h.transport.answer('msg-1')).toBeNull();
+    expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
+  });
+
   test('a reconnecting client is told what is resuming and gets the stored chunks replayed', async () => {
     const h = harness('turn');
     const first = h.connection('c1');
