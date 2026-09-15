@@ -11,9 +11,10 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { claims, LADDER, gatesFor, deployGates } from './ladder';
+import { auditClosure } from './ladder-audit';
 import { CACHE_BLIND_SPOTS, keyFor, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
 import type { Plan, Store, ToolVersions } from './ladder-cache';
-import { repoAt } from './ladder-closure';
+import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs, Repo } from './ladder-closure';
 
 const DERIVED: Inputs = { kind: 'derived', reads: [], env: [] };
@@ -255,6 +256,33 @@ describe('ladder-cache — red in every direction it claims', () => {
     // The same command, declared derived, is cacheable: the declaration decided, not the name.
     expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('miss');
     expect(runGate(fx, 'bun scripts/a.ts').plan.kind).toBe('hit');
+  });
+});
+
+describe('ladder-cache — the audit sees what the walker cannot', () => {
+  // A `reads` declaration is a claim; strace is the measurement. The same
+  // gate is a HOLE with the read undeclared and clean with it declared, so
+  // the audit is red in the direction that matters and the declaration is
+  // what turns it green — never an exclusion.
+  test('a tracked file read by path is a hole until the row declares it', () => {
+    const fx = fixture({
+      'scripts/a.ts': `import { readFileSync } from 'node:fs';\nexport const a = readFileSync('fixtures/data.txt', 'utf8');\n${GREEN}`,
+      'fixtures/data.txt': 'data',
+    });
+
+    const repo = fx.repo();
+    const argv = ['bun', 'scripts/a.ts'];
+
+    const undeclared = deriveClosure('bun scripts/a.ts', { kind: 'derived', reads: [] }, repo);
+
+    if (undeclared.kind !== 'derived') throw new Error(undeclared.why);
+    expect(auditClosure(argv, fx.root, undeclared).undeclared).toEqual(['fixtures/data.txt']);
+    const declared = deriveClosure('bun scripts/a.ts', { kind: 'derived', reads: ['fixtures/data.txt'] }, repo);
+
+    if (declared.kind !== 'derived') throw new Error(declared.why);
+    const audit = auditClosure(argv, fx.root, declared);
+    expect(audit.undeclared).toEqual([]);
+    expect(audit.covered).toBeGreaterThan(0);
   });
 });
 
