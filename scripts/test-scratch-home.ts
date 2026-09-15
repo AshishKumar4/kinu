@@ -65,7 +65,11 @@ process.env.KINU_INFLIGHT_ROOT = join(home, 'inflight');
 // It says so rather than doing it quietly — a developer whose shell is signed in
 // should not have to infer why their credential is not in play.
 if (process.env.KINU_EVAL_LIVE !== '1') {
-  const ignored = stripAmbientCredentials(process.env);
+  // By name, never `process.env` as a value: see `EnvByName`.
+  const ignored = stripAmbientCredentials({
+    has: (name) => process.env[name] !== undefined,
+    remove: (name) => { delete process.env[name]; },
+  });
 
   if (ignored.length > 0) {
     console.warn(`[test-preload] ignoring ambient ${ignored.join(', ')} — a signed-in shell is `

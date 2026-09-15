@@ -72,27 +72,47 @@ export const AMBIENT_CREDENTIAL_ENV: readonly string[] = Object.values(LIVE_MODE
  */
 export const AMBIENT_DECORATION_ENV: readonly string[] = ['FORCE_COLOR', 'CLICOLOR_FORCE', 'CLICOLOR', 'NO_COLOR'];
 
+/** An environment as two operations by NAME. The strip never receives the
+ *  environment as an object: the ladder's input-closure walker
+ *  (`scripts/ladder-closure.ts`) can bound a read it can see the name of and
+ *  cannot bound an object handed over whole, so `strip(process.env)` made every
+ *  `bun test` gate uncacheable through the preload alone. */
+export interface EnvByName {
+  readonly has: (name: string) => boolean;
+  readonly remove: (name: string) => void;
+}
+
 /**
- * Remove the ambient credentials and decoration vars from `env`, and return the
- * names that were actually there.
+ * Remove the ambient credentials and decoration vars, and return the names
+ * that were actually there.
  *
- * Mutates, because the only caller that matters mutates `process.env` before
- * any test file loads — every child process a suite spawns inherits from it, so
- * one strip at the top covers both the in-process reads and the spawn helpers
- * that pass `{ ...process.env }`.
+ * Mutates through `remove`, because the only caller that matters mutates
+ * `process.env` before any test file loads — every child process a suite
+ * spawns inherits from it, so one strip at the top covers both the in-process
+ * reads and the spawn helpers that pass `{ ...process.env }`.
  *
  * The returned names are what makes the strip say something rather than being
  * silent: a developer whose shell is signed in should be told their credential
  * is not in play, not left to infer it.
  */
-export function stripAmbientCredentials(env: Record<string, string | undefined>): readonly string[] {
+export function stripAmbientCredentials(env: EnvByName): readonly string[] {
   const removed: string[] = [];
 
   for (const name of [...AMBIENT_CREDENTIAL_ENV, ...AMBIENT_DECORATION_ENV]) {
-    if (!(name in env)) continue;
+    if (!env.has(name)) continue;
     removed.push(name);
-    delete env[name];
+    env.remove(name);
   }
 
   return removed;
+}
+
+/** A plain object as {@link EnvByName}. Presence is the test, never
+ *  truthiness: `KINU_BASE_URL=` is what someone trying to CLEAR the variable
+ *  produces, and an empty string is not absence. */
+export function envObject(env: Record<string, string | undefined>): EnvByName {
+  return {
+    has: (name) => name in env,
+    remove: (name) => { delete env[name]; },
+  };
 }
