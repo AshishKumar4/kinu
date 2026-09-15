@@ -684,14 +684,8 @@ export default function WorkspacePage() {
   }, [createAndOpenAgent]);
 
   /* The workbench reads at the compact scale index.css gates on
-     `html[data-workbench]`: the rail and drawer live outside this route's
-     subtree, so the flag sits on the root. A layout effect sets it before the
-     first paint, so the page never flashes at the default scale. */
-  useLayoutEffect(() => {
-    document.documentElement.dataset.workbench = "";
-
-    return () => { delete document.documentElement.dataset.workbench; };
-  }, []);
+     `[data-workbench]`: the flag sits on this route's content root (line 1157),
+     so the rail, the drawer, and portaled chrome keep the default scale. */
 
   // The picker awaits its own write. `setModel` records the failure on
   // `state.error` and rolls the picker back to the stored spec before it
@@ -1154,7 +1148,7 @@ export default function WorkspacePage() {
 
   return (
     <SlateInlineContext.Provider value={slateInline}>
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-workbench>
       {/* Non-destructive disconnect banner. The chat panel below stays
           mounted so the in-flight assistant turn is preserved through
           partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
