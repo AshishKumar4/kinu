@@ -15,7 +15,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { makeSqlExec } from '../../../core/tests/helpers';
-import type { AgentContext, FiberRecoveryContext, FiberRecoveryResult } from 'agents';
+import type { AgentContext, Connection, FiberRecoveryContext, FiberRecoveryResult, WSMessage } from 'agents';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
@@ -354,6 +354,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    * Think's, the same reach `ensureActorSchema` takes below.
    */
   activateActor(): Promise<void> { return Promise.resolve(super.onStart()); }
+  /** The installed chat protocol gate, for suites that speak the hook's own
+   *  frames: Think ran its `onStart` above and reached this actor's, which
+   *  installed the gate over `onMessage`. */
+  harnessChatGate(): (connection: Connection, message: WSMessage) => Promise<void> {
+    const gate = this.onMessage.bind(this);
+
+    return (connection, message) => Promise.resolve(gate(connection, message));
+  }
   /** The parent-side roster the facet gate consults. Exposed rather than
    *  wrapped: the production store IS the API a test seeds a subordinate
    *  through, and a hand-written INSERT would be a second copy of its
@@ -452,26 +460,34 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     const id = `u-msg-${crypto.randomUUID().slice(0, 8)}`;
     const stamped = metadata !== undefined && Object.keys(metadata).some((key) => key !== 'kinuMode');
 
-    // A signal-driven message is the queue's row, written when the turn is
-    // admitted; a client's is persisted before the loop is asked, exactly as
-    // the transport admits one, so an idle read finds it too.
-    if (!stamped) this.chatTranscript.admitClientMessage({ id, role: 'user', parts: [{ type: 'text', text }], ...(metadata !== undefined && { metadata }) });
+    // Nothing durable yet: the loop is the one writer of a user row, and it
+    // writes this one when the driver admits the turn — a signal's as the
+    // queue's row, a client's as the turn's opening row under this id.
     this._drivingMessage = { id, text, metadata, stamped };
   }
   /** The user message the next admitted turn runs FOR, when a suite stated
    *  one: the driver admits it under this id and metadata, the way the
-   *  transport admits a client's message or a signal queues its own. */
+   *  transport sends a client's message or a signal queues its own. */
   private _drivingMessage: { id: string; text: string; metadata: JsonObject | undefined; stamped: boolean } | null = null;
   harnessTakeDrivingMessage(turnId: string | undefined): { id: string; text: string; metadata: JsonObject | undefined; stamped: boolean } | null {
     const message = this._drivingMessage;
     this._drivingMessage = null;
 
     if (message === null || turnId === undefined || turnId === message.id || message.stamped) return message;
+
     // The suite named the turn after stating its message: the client's row IS
     // the turn's row, so it takes the name the turn runs under.
-    void this.sql`UPDATE assistant_messages SET id = ${turnId} WHERE id = ${message.id}`;
-
     return { ...message, id: turnId };
+  }
+  /** A stated message no turn has taken yet stands in, on an idle read, for
+   *  the composer's last message — the mode the suite declared, as the loop
+   *  will admit it. Production's idle read narrows off the last durable row,
+   *  which the loop writes when the turn opens; a suite that lists tools
+   *  BEFORE driving the turn reads the same mode off the statement. */
+  protected override turnUserMetadata(): JsonObject | undefined {
+    const stated = this._drivingMessage;
+
+    return stated !== null && stated.metadata !== undefined ? stated.metadata : super.turnUserMetadata();
   }
   /** The tools the loop assembled for the last prepared turn — the executable
    *  set the model was handed, which the request's descriptors are not — and
@@ -568,6 +584,28 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessBeginTurn(turnId: string): void {
     this.declareTurnCheckpoint(turnId);
     this.orch.inbox.beginTurn(false);
+  }
+  /** The model the next turns run on, scripted: the one override point a
+   *  suite that runs a turn end to end scripts, instead of the platform's
+   *  provider. Held, not consumed by one turn. */
+  harnessSupplyTurnModel(model: LanguageModel): void {
+    const factory = () => model;
+    Object.defineProperty(this, 'modelFactory', { configurable: true, value: factory });
+    const turn = () => model;
+    Object.defineProperty(this, 'turnModel', { configurable: true, value: turn });
+  }
+  /** The title the operator chose, so the turn's auto-title effect plans
+   *  nothing: persisting it stamps `name_origin`, which stops the naming
+   *  policy from matching. For suites that pin the turn, not the title. */
+  harnessNameWorkspace(displayName: string): void {
+    this.config.setDisplayName(displayName);
+    this.config.setDisplayNameOrigin(displayName, 'user');
+  }
+  /** The live turn's step boundary, for a suite that splices the loop's own
+   *  admission into it: the extension host production composes, so a steer's
+   *  drain commits the row a real step landing would. */
+  async harnessStepInto(stepNumber: number, messages: readonly ModelMessage[]): Promise<ModelMessage[]> {
+    return this.harnessStep(stepNumber, messages);
   }
 
   /**

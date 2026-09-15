@@ -513,7 +513,12 @@ export class ChatSession {
         ...(input.files !== undefined && { files: input.files }),
         metadata: input.metadata,
         rerun: true,
-        turnId: crypto.randomUUID(),
+        // The opening row keeps the id the FIRST merged message already
+        // carries: the surface that rendered that message finds its row under
+        // the name it holds, and a transport that answers a client's request
+        // by the turn's id resolves it. Only a rerun of nothing named — no
+        // steer ids at all — mints one.
+        turnId: input.steerIds?.[0] ?? crypto.randomUUID(),
         // The pending rows this rerun merges are spent by ITS durable row —
         // retired with it in the same transaction, so a restart cannot
         // re-deliver steers the rerun already carries.
@@ -1006,20 +1011,15 @@ export class ChatSession {
     // A re-opened turn keeps the id it was streaming under: the client that
     // reconnects holds that message, and the answer is one row either way.
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
-    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId });
-
-    const startedAt = Date.now();
-    // Open this turn's run in the durable event log (core turn-lifecycle).
-    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
-    // one names its trigger. A re-opened turn continues the run it was left
-    // in; only a new turn opens a run.
-    this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
 
     // A USER turn's opening row is durable at admission, not at commit — a
     // steer landed mid-turn is written when the drain sees it (before the
     // turn's commit could exist), so the row it parents to must already be on
     // disk, and a turn the process kills leaves the question it was asked
-    // rather than an answer-less steer. A PROGRAMMATIC turn writes at commit
+    // rather than an answer-less steer. Written BEFORE `turn-start` goes out:
+    // the loop is the ONE writer of a user row, so a transport that tells its
+    // clients the transcript at the turn's opening reads the row from here and
+    // never writes one of its own. A PROGRAMMATIC turn writes at commit
     // exactly as before: `announcementOnDisk` is its dedup — an admitted-but-
     // unfinished gate turn must read as not-yet-said so the retry re-queues it.
     if (item.kind === 'user') {
@@ -1031,6 +1031,15 @@ export class ChatSession {
         metadata: { ...item.metadata, [TURN_AUTHOR_METADATA_KEY]: 'operator' },
       });
     }
+
+    this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event, workMode: mode, turnId: this.turnId, messageId: this.messageId });
+
+    const startedAt = Date.now();
+    // Open this turn's run in the durable event log (core turn-lifecycle).
+    // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
+    // one names its trigger. A re-opened turn continues the run it was left
+    // in; only a new turn opens a run.
+    this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
 
     const lease = this.actorSession.beginTurn(
       { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,

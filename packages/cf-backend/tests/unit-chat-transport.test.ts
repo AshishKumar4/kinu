@@ -3,12 +3,13 @@
  * (`ResumableStream` on bun:sqlite, `ResumeHandshake`, `StreamAccumulator`,
  * `parseProtocolMessage`, `reconcileMessages`).
  *
- * What these cases pin is the wire the React hook reads: a chat request
- * persists its user message before the loop hears of it and answers with the
- * done frame the hook waits on; a turn's chunks reach every connection under
- * the request that started it and are stored for resume; a reconnecting
- * client is told what is resuming and gets the stored chunks replayed; the
- * accumulated answer is what the transcript persists.
+ * What these cases pin is the wire the React hook reads: a chat request is
+ * handed to the loop under the client's own id — the transport writes no row,
+ * the loop does when it opens the turn or lands the splice — and is answered
+ * with the done frame the hook waits on; a turn's chunks reach every
+ * connection under the request that started it and are stored for resume; a
+ * reconnecting client is told what is resuming and gets the stored chunks
+ * replayed; the accumulated answer is what the transcript persists.
  */
 import { describe, expect, test } from 'bun:test';
 import type { UIMessage, UIMessageChunk } from 'ai';
@@ -20,10 +21,22 @@ import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
 
 const FrameSchema = v.looseObject({ type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()), replay: v.optional(v.boolean()) });
 
-function harness(landing: SendLanding = 'turn') {
+/** The loop's side of the wire, as a fixture: a send lands where the harness
+ *  says, and what the loop holds — the rows a turn wrote, the reservations a
+ *  splice keeps — is what `admitted` answers from. A send the loop refuses
+ *  rejects, as the real loop's does. */
+interface HarnessRefusal { readonly refuse: string; }
+
+function isRefusal(landing: SendLanding | HarnessRefusal): landing is HarnessRefusal {
+  return v.is(v.object({ refuse: v.string() }), landing);
+}
+
+function harness(landing: SendLanding | HarnessRefusal = 'turn') {
   const { sql, db } = createTestSql();
   const broadcasts: Array<{ frame: v.InferOutput<typeof FrameSchema>; exclude: string[] | undefined }> = [];
   const history: UIMessage[] = [];
+  /** The ids the loop holds a reservation for: every send accepted mid-turn. */
+  const reserved = new Set<string>();
   const sent: Array<{ text: string; files: readonly { url: string }[]; id: string; mode: string }> = [];
   let interrupts = 0;
   let clears = 0;
@@ -50,9 +63,12 @@ function harness(landing: SendLanding = 'turn') {
     broadcast: (message, exclude) => { broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude }); },
     getConnection: (id) => connections.get(id),
     history: () => [...history],
-    admitMessage: (message) => { history.push(message); },
+    admitted: (id) => history.some((row) => row.id === id) || reserved.has(id),
     send: (input) => {
+      if (isRefusal(landing)) return Promise.reject(new Error(landing.refuse));
       sent.push(input);
+
+      if (landing === 'mid-turn') reserved.add(input.id);
 
       return Promise.resolve(landing);
     },
@@ -70,7 +86,7 @@ function harness(landing: SendLanding = 'turn') {
   const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_ai_chat_stream_chunks ORDER BY chunk_index').all().map((row) => row.body);
 
   return {
-    transport, broadcasts, history, sent, connection, chunkRows, db,
+    transport, broadcasts, history, reserved, sent, connection, chunkRows, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
@@ -97,23 +113,33 @@ const turnStart = (turnId: string, messageId: string): SessionEvent =>
   ({ type: 'turn-start', kind: 'user', text: 'x', workMode: 'build', turnId, messageId });
 
 describe('ChatWireTransport', () => {
-  test('a chat request persists the user message before the loop is asked, and a splice answers at once', async () => {
+  test('a chat request hands the message to the loop under its own id and writes no row; a splice answers at once', async () => {
     const h = harness('mid-turn');
     const conn = h.connection('c1');
     const file = { url: 'data:text/plain;base64,aGk=', mediaType: 'text/plain', filename: 'note.txt' };
 
     expect(await h.transport.onMessage(conn, chatRequest('req-1', 'hello', file))).toBe(true);
-    expect(h.history.map((m) => m.id)).toEqual(['input-req-1']);
+    // The loop was asked, with the id the client renders the message by; the
+    // transcript holds nothing the transport wrote — the loop's drain writes
+    // the row when the splice lands, with the stamps that say where.
     expect(h.sent).toEqual([{ text: 'hello', files: [file], id: 'input-req-1', mode: 'plan' }]);
-    // The transcript broadcast reaches every OTHER tab; the sender's own hook
-    // already holds the message it sent.
-    expect(h.broadcasts[0]?.frame.type).toBe('cf_agent_chat_messages');
-    expect(h.broadcasts[0]?.exclude).toEqual(['c1']);
-    expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true, landed: 'mid-turn' }]);
-    // A replay of the same request carries nothing new.
+    expect(h.history).toEqual([]);
+    expect(h.broadcasts).toEqual([{ frame: { type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true, landed: 'mid-turn' }, exclude: undefined }]);
+    // A replay of the same request — the reservation the loop holds is what
+    // says the message was taken — carries nothing new and asks for no turn.
     await h.transport.onMessage(conn, chatRequest('req-1', 'hello', file));
     expect(h.sent).toHaveLength(1);
     expect(h.responses()).toHaveLength(2);
+  });
+
+  test('a send the loop refuses closes the request with the refusal, and nothing is written', async () => {
+    const h = harness({ refuse: 'send requires the message text' });
+    const conn = h.connection('c1');
+
+    await h.transport.onMessage(conn, chatRequest('req-1', '   '));
+    expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: 'send requires the message text', done: true, error: true }]);
+    expect(h.history).toEqual([]);
+    expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
   });
 
   test("a client's claim to another request's input is never accepted: the message is admitted under its own id", async () => {
@@ -132,7 +158,6 @@ describe('ChatWireTransport', () => {
 
     await h.transport.onMessage(conn, forged);
 
-    expect(h.history.map((m) => m.id)).toEqual(['input-mine']);
     expect(h.sent).toEqual([{ text: 'mine', files: [], id: 'input-mine', mode: 'build' }]);
   });
 
@@ -144,15 +169,15 @@ describe('ChatWireTransport', () => {
     const b = h.transport.onMessage(conn, chatRequest('req-b', 'b'));
     await Promise.all([a, b]);
 
-    expect(h.history.map((m) => m.id)).toEqual(['input-req-a', 'input-req-b']);
     expect(h.sent.map((input) => [input.id, input.text])).toEqual([['input-req-a', 'a'], ['input-req-b', 'b']]);
   });
 
-  test('a full browser history admits only what is new: neither a stored row nor a message already admitted, however alike the text', async () => {
-    const h = harness('turn');
+  test('a full browser history admits only what is new: neither a stored row nor a message the loop still holds, however alike the text', async () => {
+    const h = harness('mid-turn');
     const conn = h.connection('c1');
     // A row the transcript already holds, and a message an earlier request
-    // admitted with the same text as the new one.
+    // sent — accepted into a running turn, its row not yet landed — with the
+    // same text as the new one.
     h.history.push({ id: 'old', role: 'user', parts: [{ type: 'text', text: 'old' }] });
     await h.transport.onMessage(conn, JSON.stringify({
       type: 'cf_agent_use_chat_request', id: 'req-pending',
@@ -173,7 +198,6 @@ describe('ChatWireTransport', () => {
       }) },
     }));
 
-    expect(h.history.map((m) => m.id)).toEqual(['old', 'pending', 'new']);
     expect(h.sent.map((input) => input.id)).toEqual(['pending', 'new']);
   });
 
@@ -183,7 +207,11 @@ describe('ChatWireTransport', () => {
     await h.transport.onMessage(conn, chatRequest('req-1', 'hello'));
     expect(h.responses()).toEqual([]);
 
+    // The loop wrote the opening row and opened the turn: every tab reads the
+    // transcript with the operator's message in it.
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
     h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'input-req-1' }] }, exclude: undefined });
     await h.transport.observe(chunks([
       { type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
       { type: 'text-delta', id: 't', delta: 'hel' }, { type: 'text-delta', id: 't', delta: 'lo' },
