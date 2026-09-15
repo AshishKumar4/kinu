@@ -34,9 +34,9 @@ requirements:
       - Kinu.Agent.TurnQueue.complete_increments
       - Kinu.Agent.TurnQueue.enqueue_increases_total
     tsRefs:
-      - packages/cli-backend/src/local-session.ts#LocalAgentSession.enqueueTurn
-      - packages/cli-backend/src/local-session.ts#LocalAgentSession.pump
-      - packages/cli-backend/src/local-session.ts#LocalAgentSession.processTurn
+      - packages/core/src/orchestrator/chat-session.ts#ChatSession.enqueueTurn
+      - packages/core/src/orchestrator/chat-session.ts#ChatSession.pump
+      - packages/core/src/orchestrator/chat-session.ts#ChatSession.processTurn
     remainingEvidence:
       - The Cloudflare TurnQueue implementation is external to this repository and has no model refinement test
       - The local queue keeps its pumping flag set across a full drain rather than clearing it after one modeled item
