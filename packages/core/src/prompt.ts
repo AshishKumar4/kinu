@@ -271,6 +271,7 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
     executorLines: lines.join('\n'),
     workspaceRoot: WORKSPACE_ROOT,
     hasDevices: devices.length > 0,
+    hasSandbox: devices.some((exec) => exec.name === 'sandbox'),
     deviceNamespaces: devices.map((exec) => `\`${exec.name}.*\``).join(', '),
     hasPreview: previewExecutors.length > 0,
     // A slate previews on the workspace's OWN preview origin, so the slate
