@@ -17,23 +17,21 @@ test('a turn sleeping out a provider wait says who it is waiting on, not working
     await page.goto(`${origin}/gallery.html?frame=providerwait`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('.p-workbench');
 
-    // The one identity row the workspace shares. `providerwait` is the only
-    // frame that passes a wait, so the word exists nowhere else to be found.
-    const indicator = await page.$eval(
-      '.p-workbench main > div > div:first-child',
-      (el) => el.textContent ?? '',
-    );
+    // The one state chip the workspace header carries. `providerwait` is the
+    // only frame that passes a wait, so the word exists nowhere else to be
+    // found — and its own title answers when the retry is due, which the word
+    // alone cannot.
+    const chip = await page.waitForSelector('.p-workbench [title^="Retry in"]');
+
+    if (chip === null) throw new Error("no provider-wait chip in the workspace header");
+
+    const indicator = await chip.evaluate((el) => el.textContent ?? '');
 
     expect(indicator).toContain('waiting on anthropic');
     expect(indicator).toContain('45s');
     expect(indicator).not.toContain('working');
 
-    // The chip also carries its own title: a hover answers when the retry is
-    // due, which the word alone cannot.
-    const chipTitle = await page.$eval(
-      '.p-workbench [title^="Retry in"]',
-      (el) => el.getAttribute('title'),
-    );
+    const chipTitle = await chip.evaluate((el) => el.getAttribute('title'));
 
     expect(chipTitle).toBe('Retry in 45s');
 
