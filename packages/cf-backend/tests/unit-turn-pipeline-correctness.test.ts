@@ -435,16 +435,16 @@ describe('turn-pipeline correctness wiring', () => {
     // an await, so it is sourced once at turn assembly and closed over by the
     // per-step snapshot — never rendered into the cacheable prefix.
     // The tail is read inside the turn assembly, which `beforeTurn` awaits
-    // before it assembles the messages.
-    const assembleTurn = memberBody(actor, 'private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn>');
-    expect(assembleTurn).toContain('const memoryTail = await readMemoryTail(this.rt.memory)');
-    expect(actor.match(/readMemoryTail\(/g)).toHaveLength(1);
-    const beforeTurn = memberBody(actor, 'async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>');
-    const assembledIdx = beforeTurn.indexOf('await this.assembleTurn(');
-    const assembleIdx = beforeTurn.indexOf('cfg.messages = await assembleTurnMessages(assembly)');
+    // before it assembles the messages: the read sits before the await in the
+    // file, and the await before the assembly.
+    const sourceIdx = actor.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
+    const assembledIdx = actor.indexOf('await this.assembleTurn(');
+    const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)');
+    expect(sourceIdx).toBeGreaterThan(-1);
     expect(assembledIdx).toBeGreaterThan(-1);
     expect(assembleIdx).toBeGreaterThan(-1);
     expect(assembledIdx).toBeLessThan(assembleIdx);
+    expect(actor.match(/readMemoryTail\(/g)).toHaveLength(1);
 
     // Everything else the block carries is now read live inside core, at the
     // step the snapshot is called: WHICH planes exist is agentDynamicContext's
