@@ -523,73 +523,80 @@ async function parityControl(pathname: string, request: Request): Promise<Respon
   throw new Error(`probe-control: unhandled ${request.method} ${pathname}`);
 }
 
+/**
+ * The probe's own control host: the holds a drive arms, the call log, and the
+ * reset between drives. Separate from the model routes below so each reads as
+ * one list, and so the fake's own complexity stays in the lane it belongs to.
+ */
+async function probeControl(url: URL, request: Request): Promise<Response> {
+  if (url.pathname === '/queue/hold' && request.method === 'POST') {
+    const raw = await request.text();
+    const spec = v.parse(v.looseObject({ from: v.optional(v.number()) }), raw === '' ? {} : JSON.parse(raw));
+    heldRequest = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1 };
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/queue/arrived' && request.method === 'GET') {
+    if (heldRequest === null) throw new Error('queue model hold was not armed');
+    await heldRequest.gate.arrived.promise;
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/queue/release' && request.method === 'POST') {
+    heldRequest?.gate.release.resolve();
+    heldRequest = null;
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname.startsWith('/parity/')) return parityControl(url.pathname, request);
+
+  if (url.pathname === '/wake/hold' && request.method === 'POST') {
+    const { where } = v.parse(v.object({ where: WakeHoldPlacementSchema }), JSON.parse(await request.text()));
+    wakeHold = { where, gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() } };
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/wake/arrived' && request.method === 'GET') {
+    if (wakeHold === null) throw new Error('wake hold was not armed');
+    await wakeHold.gate.arrived.promise;
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/wake/wait' && request.method === 'GET') {
+    await holdWakeWindow('settle');
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/wake/release' && request.method === 'POST') {
+    wakeHold?.gate.release.resolve();
+    wakeHold = null;
+
+    return Response.json({ ok: true });
+  }
+
+  if (url.pathname === '/log' && request.method === 'GET') {
+    return Response.json({ calls: [...log] });
+  }
+
+  if (url.pathname === '/reset' && request.method === 'POST') {
+    log.length = 0;
+
+    return Response.json({ ok: true });
+  }
+
+  throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
+}
+
 export async function probeOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
-  if (url.host === 'probe-control.invalid') {
-    if (url.pathname === '/queue/hold' && request.method === 'POST') {
-      const raw = await request.text();
-      const spec = v.parse(v.looseObject({ from: v.optional(v.number()) }), raw === '' ? {} : JSON.parse(raw));
-      heldRequest = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1 };
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/queue/arrived' && request.method === 'GET') {
-      if (heldRequest === null) throw new Error('queue model hold was not armed');
-      await heldRequest.gate.arrived.promise;
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/queue/release' && request.method === 'POST') {
-      heldRequest?.gate.release.resolve();
-      heldRequest = null;
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname.startsWith('/parity/')) return parityControl(url.pathname, request);
-
-    if (url.pathname === '/wake/hold' && request.method === 'POST') {
-      const { where } = v.parse(v.object({ where: WakeHoldPlacementSchema }), JSON.parse(await request.text()));
-      wakeHold = { where, gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() } };
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/wake/arrived' && request.method === 'GET') {
-      if (wakeHold === null) throw new Error('wake hold was not armed');
-      await wakeHold.gate.arrived.promise;
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/wake/wait' && request.method === 'GET') {
-      await holdWakeWindow('settle');
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/wake/release' && request.method === 'POST') {
-      wakeHold?.gate.release.resolve();
-      wakeHold = null;
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/log' && request.method === 'GET') {
-      return Response.json({ calls: [...log] });
-    }
-
-    if (url.pathname === '/reset' && request.method === 'POST') {
-      log.length = 0;
-
-      return Response.json({ ok: true });
-    }
-
-    throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
-  }
+  if (url.host === 'probe-control.invalid') return probeControl(url, request);
 
   if (url.host === 'fake-models.invalid') {
     if (url.pathname === '/v1/models' && request.method === 'GET') {

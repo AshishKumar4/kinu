@@ -1,5 +1,5 @@
 {
-  "measured": "6d0abe762: 1066 test files, 953 runnable suites, 12589 tests, 36 runners, 81 non-public product members",
+  "measured": "e030a00de: 1070 test files, 956 runnable suites, 12600 tests, 36 runners, 81 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -462,11 +462,15 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: a fresh workspace whose first wake has the table and no rows yet wakes :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: a fresh workspace wakes with the table and no rows yet :: harness bridge to a non-public member",
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: an activation with no Think session is the harness shape, not a moved store, and wakes :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: an activation whose store is gone throws, naming the table :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: the store the guard reads is the one every turn writes :: harness bridge to a non-public member",
       "count": 1
     },
     {

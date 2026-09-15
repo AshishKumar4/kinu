@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-15",
-  "files": 2336,
-  "functions": 57734,
+  "files": 2362,
+  "functions": 58454,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -223,6 +223,10 @@
     },
     {
       "key": "packages/cf-backend/src/server.ts#route",
+      "complexity": 36
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat>callModel",
       "complexity": 36
     },
     {
