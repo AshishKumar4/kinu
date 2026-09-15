@@ -396,6 +396,11 @@ export interface ChatSessionPorts {
    *  item at dequeue and before a drain binds rows; a refusal settles the item
    *  to its producer rather than running it. Null when nothing coordinates. */
   driverGate(): Refusal | null;
+  /** Arm the durable wake that re-drives owed work when the isolate dies
+   *  inside this turn. Called at the turn's synchronous open — an isolate
+   *  killed mid-turn with nothing else owed would otherwise sleep until an
+   *  external event. Soonest-wins: free when a wake already rides. */
+  armTurnWake(): Promise<void>;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
   /** Why a programmatic PLAN turn cannot be admitted here, or null when it
@@ -1103,6 +1108,12 @@ export class ChatSession {
         ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
       },
     });
+
+    // The turn's own wake, armed at its synchronous open: a kill inside the
+    // turn leaves the run row and the wake that re-drives it, rather than the
+    // row alone with nothing scheduled to notice it. Soonest-wins, so this is
+    // free when another wake already rides.
+    await this.ports.armTurnWake();
 
     try {
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
