@@ -147,7 +147,7 @@ import { APP_ROUTES } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import type { SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
-import { MessageView, SteerBubble } from "@/components/MessageView";
+import { DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
@@ -190,7 +190,7 @@ import type {
 } from "@kinu.run/core";
 import type { ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
 import * as v from "valibot";
-import { serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -370,6 +370,16 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   }
 
   if (path === "/api/user/profile") {
+    // The wizard's profile step renders only when the profile has no display
+    // name: `&noname=1` on the welcome frame answers the new account, whose
+    // OAuth login seeded no name.
+    if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
+      return fixtureJson({
+        email: "new@example.com", displayName: "", createdAt: NOW, lastSeenAt: NOW,
+        onboardedAt: null, workspaceCount: 0,
+      });
+    }
+
     return fixtureJson({
       email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
       onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
@@ -1363,22 +1373,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listSlates: () => ({ slates: [], problems: [] }),
   getActivePlanReview: () => galleryAgentPlan,
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
-  // `?consent=provision` hangs the workspace frame's provisioning card: the
-  // agent asked for a machine and none is connected. The wording mirrors
-  // UserDO.raiseProvisioningRequest, whose string is what the card renders.
-  listPendingConsents: () => (
-    new URLSearchParams(location.search).get("consent") === "provision"
-      ? [{
-        consentId: "cons-gallery-1",
-        deviceId: "",
-        deviceLabel: "this computer",
-        method: "connect",
-        command: "Connect this computer so \"checkout-fixes\" can run commands on it — you will be walked through `kinu connect`.",
-        workspaceName: "checkout-fixes",
-        createdAt: NOW,
-      }]
-      : []
-  ),
+  listPendingConsents: () => [],
 }));
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -2846,6 +2841,7 @@ function ChatMessages() {
         }}
         onResolve={() => {}}
       />
+      <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-laptop", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
       {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
           answers a resume ACK with exactly this body today, from a turn that
@@ -6215,6 +6211,29 @@ function explore(node: React.ReactNode, entries: string[], frame: string) {
 }
 
 
+/** `&devices=offline|offline-many|none` puts the refused-call notice up on a
+ *  mounted `workspacepage` frame: the socket push is the only way the row
+ *  exists, and the page's connection is the stub's, so the server-side half
+ *  is a pushed frame delivered on a delay the page mounts inside. */
+function scheduleDeviceNotice(devices: string | null): void {
+  const offline = devices === "offline"
+    ? [{ id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 }]
+    : devices === "offline-many"
+      ? [
+          { id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 },
+          { id: "dev-2", label: "ashish@tower", lastSeenAt: 1_768_999_000_000 },
+        ]
+      : devices === "none"
+        ? []
+        : null;
+
+  if (offline === null) return;
+
+  setTimeout(() => {
+    galleryServerPush(JSON.stringify({ type: "device_unavailable", devices: offline }));
+  }, 300);
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -6456,6 +6475,7 @@ async function mount() {
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
     entries = ["/workspace/checkout-fixes"];
+    scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
     // Both app routes, exactly as App.tsx keys them: creating an agent
     // navigates to its conversation, and the frame must be able to land there.
     node = (

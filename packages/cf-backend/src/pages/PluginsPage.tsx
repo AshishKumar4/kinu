@@ -90,9 +90,6 @@ export default function PluginsPage() {
           <PuzzlePieceIcon size={22} className="mt-1 shrink-0 p-text-3" />
           <div>
             <h1 className="p-display text-2xl">Plugins</h1>
-            <p className="mt-1 text-xs p-text-3">
-              What your agents can reach beyond their built-in tools: servers, tools they crafted, skills, and your machines.
-            </p>
           </div>
         </header>
 
@@ -118,7 +115,6 @@ export default function PluginsPage() {
           <div className="flex items-center justify-between gap-3 px-1">
             <h2 className="p-eyebrow">Skills</h2>
           </div>
-          <p className="px-1 p-meta p-text-3">Skills a workspace writes for itself live in that workspace.</p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {BUILTIN_SKILL_HEADERS.map((skill) => (
               <PluginCard key={skill.name} icon={BookOpenIcon} name={skill.name} line={skill.description}

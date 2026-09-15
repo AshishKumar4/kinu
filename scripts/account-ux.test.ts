@@ -186,7 +186,7 @@ describe('account panels', () => {
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
-          for (const step of [0, 1, 2, 3] as const) {
+          for (const step of [0, 1, 2] as const) {
             const page = await freshPage(gallery, `welcome&step=${String(step)}`, theme, viewport);
 
             try {
@@ -194,11 +194,6 @@ describe('account panels', () => {
               // so the honest read of "this step is showing" is the panel that
               // is neither hidden nor inert.
               await page.waitForSelector('h1', { timeout: 10_000 });
-              // Step 1's providers read the account fixture: the sibling gate
-              // arms Codex failed and the gateway held, so heal and release
-              // them before the settled screenshot means anything.
-
-              if (step === 1) await settleAccountFixture(page);
 
               const body = await page.evaluate(() => document.body.innerText);
               expect(body).toContain("Let's set up your account");
@@ -214,12 +209,12 @@ describe('account panels', () => {
               if (step === 0) {
                 expect(await page.$('[aria-label="Your name"]')).not.toBeNull();
                 expect(active).toContain('Your name');
+                // SAFETY: the selector is the name field's own input, so the
+                // element carrying the value is that input.
+                const field = await page.$eval('[aria-label="Your name"]', (el) => (el as HTMLInputElement).value);
+                expect(field).toBe('Owner');
               } else if (step === 1) {
-                expect(active).toContain('Model tiers');
                 expect(active).toContain('API keys');
-              } else if (step === 2) {
-                expect(active).toContain('Add MCP server');
-                expect(active).toContain('kinu setup');
               } else {
                 // The three showcase cards fade in staggered; a capture taken
                 // mid-transition photographs the last one translucent.
@@ -243,7 +238,7 @@ describe('account panels', () => {
         }
       }
 
-      expect(shots.length).toBe(16);
+      expect(shots.length).toBe(12);
       process.stdout.write(`account-ux welcome: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
   }, 240_000);

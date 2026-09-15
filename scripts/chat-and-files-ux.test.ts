@@ -115,13 +115,11 @@ interface Observed {
   readonly filesAfterDelete: string[];
   /** Rows visible while the filter says "credo". */
   readonly filesFiltered: string[];
-  /** The stated-absence row for a disconnected device, on &offline=laptop. */
+  /** The stated-absence row a disconnected device leaves on the drive. */
   readonly filesOfflineRow: string;
-  /** The Environment tab, reworked: cards, and NO capability doctrine. */
-  readonly envCards: Array<{ name: string; status: string; durability: string }>;
+  readonly envCards: Array<{ name: string; kind: string; status: string; mount: string }>;
   readonly envCapabilityChips: number;
   readonly envCapabilityAbsences: number;
-  /** An Environment card's Files action lands the Files surface. */
   readonly envFilesJumpLandsOnDrive: boolean;
   /** The line terminal's rendered rows after one typed command and one pasted
    *  two-line command. Rows, not a string: the defect was which row a
@@ -563,8 +561,9 @@ async function run(): Promise<Observed> {
 
     const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
       name: card.querySelector('.font-medium')?.textContent ?? '',
+      kind: [...card.querySelectorAll('.p-meta')].map((el) => el.textContent ?? '').join('|'),
       status: card.querySelector('[data-env-status]')?.textContent ?? '',
-      durability: card.querySelector('[data-env-durability]')?.textContent ?? '',
+      mount: card.querySelector('[data-env-mount]')?.textContent ?? '',
     })));
 
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
@@ -843,13 +842,13 @@ describe('the drive, browsing the one composite plane', () => {
 });
 
 describe('the Environment tab, as a user reads it', () => {
-  test('one card per environment: status, durability, and the device wears its own name', () => {
+  test('one card per environment: status, mount path, and the device wears its own name', () => {
     const byName = Object.fromEntries(observed.envCards.map((card) => [card.name, card]));
     expect(byName["Ashish's MacBook"]?.status).toBe('active');
-    // 33056d3d8 cut the live-shared hint to "Files stay on your machine."
-    expect(byName["Ashish's MacBook"]?.durability).toContain('Files stay on your machine');
-    expect(byName['Workspace']?.durability).toContain('Durable');
-    expect(byName['Sandbox']?.durability).toContain('Ephemeral');
+    expect(byName["Ashish's MacBook"]?.kind).toContain('Your PC');
+    expect(byName["Ashish's MacBook"]?.mount).toBe('/pc');
+    expect(byName['Workspace']?.mount).toBe('/');
+    expect(byName['Sandbox']?.mount).toBe('/sandbox');
   });
 
   test('capability doctrine is model-facing and renders NOWHERE in user UI', () => {

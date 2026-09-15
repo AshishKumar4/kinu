@@ -10,7 +10,7 @@ import {
   ClockCounterClockwiseIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
 import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, DEVICE_PROVISION_METHOD,
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
@@ -30,7 +30,7 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId } from "@kinu.run/core";
@@ -133,52 +133,17 @@ export function ConversationSkeleton() {
 }
 
 /**
- * Device card. Two shapes, one rail:
- *   - a device is connected and this workspace has no binding on it yet, so
- *     the agent's action is waiting on the owner. One question: use this
- *     machine for this workspace? "Use <device>" IS the binding, per
- *     workspace, revocable under Account settings → Devices. The card names
- *     no tier, because a binding has none: what a command may reach is the
- *     machine's own Sandbox setting, set on the device row.
- *   - no device is connected at all (`DEVICE_PROVISION_METHOD`), so the agent
- *     is asking for one to exist. Approving cannot bind anything by itself —
- *     it points the owner at the connect flow, which states its own terms.
+ * Device card. A device is connected and this workspace has no binding on it
+ * yet, so the agent's action is waiting on the owner. One question: use this
+ * machine for this workspace? "Use <device>" IS the binding, per
+ * workspace, revocable under Account settings → Devices. The card names
+ * no tier, because a binding has none: what a command may reach is the
+ * machine's own Sandbox setting, set on the device row.
  */
 export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
-  if (consent.method === DEVICE_PROVISION_METHOD) {
-    const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
-
-    return (
-      <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
-        <div className="flex items-start gap-2">
-          <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
-          <div className="min-w-0 flex-1">
-            <div className="text-xs p-text">
-              {asking} needs a computer of yours and none is connected.
-            </div>
-            <div className="mt-1 p-row-text p-text-2">{consent.command}</div>
-            <Link to="/user/settings#devices"
-              className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md p-accent-bg p-accent p-t-control hover:opacity-90">
-              Connect a device
-            </Link>
-            <div className="mt-1 p-meta p-text-3">
-              You will review the access before anything runs.
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 mt-2.5 justify-end">
-          <button onClick={() => onResolve(consent.consentId, "deny")}
-            className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>
-          <button onClick={() => onResolve(consent.consentId, "once")}
-            className="px-2.5 py-1 p-t-control rounded-md p-card p-card-hover p-text-2">Dismiss</button>
-        </div>
-      </div>
-    );
-  }
-
   const forWhom = consent.workspaceName ? `“${consent.workspaceName}”` : "this workspace";
 
   return (
@@ -1338,6 +1303,7 @@ export default function WorkspacePage() {
               {state.subordinateEvents.map((event) => (
                 <SubordinateEventCard key={event.id} event={event} workspace={agentId} />
               ))}
+              <DeviceOfflineRow devices={state.unavailableDevices} />
               {state.chatError && (
                 <ChatErrorCard
                   message={state.chatError.body}

@@ -100,6 +100,11 @@ export interface TestUserDO {
   /** Ids of the cards actually RAISED, in order. The registry mints one per
    *  distinct question, so an identical re-ask adds no entry here. */
   raisedConsentIds: string[];
+  /** Device-offline notices the UserDO fanned out, per workspace — the frames
+   *  a refused device call sends the workspace's own socket. */
+  unavailableNotices: Array<{ workspace: string; devices: Array<{ id: string; label: string; lastSeenAt: number | null }> }>;
+  /** Device-connect notices the UserDO fanned out, per workspace. */
+  availableNotices: Array<{ workspace: string; device: { id: string; label: string } }>;
   /** Device RPC frames that reached the socket — the observable difference
    *  between "consent let it through" and "consent stopped it". */
   deviceFrames: DeviceFrame[];
@@ -252,9 +257,8 @@ interface TestUserEnvironment {
       repushWorkspaceCapability(): Promise<{ missed: number }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
       awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
-      raiseDeviceConsent(request: DeviceConsentRequest): Promise<string>;
-      waitDeviceConsentSettled(consentId: string): Promise<void>;
-      settleDeviceConsent(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }>;
+      announceDeviceUnavailable(devices: Array<{ id: string; label: string; lastSeenAt: number | null }>): Promise<{ ok: boolean }>;
+      announceDeviceAvailable(device: { id: string; label: string }): Promise<{ ok: boolean }>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
     };
@@ -328,6 +332,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const capabilityRepushes: string[] = [];
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
+  const unavailableNotices: TestUserDO['unavailableNotices'] = [];
+  const availableNotices: TestUserDO['availableNotices'] = [];
   const deviceFrames: DeviceFrame[] = [];
 
   // Bound after construction: the socket answers THROUGH the object that owns
@@ -553,14 +559,15 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         awaitDeviceConsent(request: DeviceConsentRequest) {
           return registryFor(name).request(request);
         },
-        raiseDeviceConsent(request: DeviceConsentRequest) {
-          return Promise.resolve(registryFor(name).raise(request));
+        async announceDeviceUnavailable(devices: TestUserDO['unavailableNotices'][number]['devices']) {
+          unavailableNotices.push({ workspace: name, devices });
+
+          return { ok: true };
         },
-        waitDeviceConsentSettled(consentId: string) {
-          return registryFor(name).waitSettled(consentId);
-        },
-        async settleDeviceConsent(consentId: string, decision: DeviceConsentDecision) {
-          return { ok: registryFor(name).settle(consentId, decision) };
+        async announceDeviceAvailable(device: { id: string; label: string }) {
+          availableNotices.push({ workspace: name, device });
+
+          return { ok: true };
         },
         async closeRevokedCliSockets(generation: number) {
           revokedSocketPushes.push(`${name}:${generation}`);
@@ -599,7 +606,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     revokedSessionPushes, capabilityRepushes,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
-    consentPrompts, raisedConsentIds, deviceFrames,
+    consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
     answerConsent: (answer) => {

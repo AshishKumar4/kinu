@@ -27,7 +27,7 @@
  * roster — a section switch mounts its reads fresh rather than re-reading an
  * account that has not changed.
  */
-import { startTransition, useState, useCallback, type ReactNode } from "react";
+import { startTransition, useState, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
@@ -54,7 +54,7 @@ import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
-import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix, type DeviceMode } from "@kinu.run/core";
+import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The Profile card's editable half: the shared DisplayNameField plus the
@@ -184,8 +184,7 @@ export default function UserSettingsPage() {
           <>
             <ProvidersPanel returnTo="/user/settings" />
 
-            <Card title="MCP servers" icon={PlugsConnectedIcon}
-              description="Connect an MCP server once. Every agent you own can use its tools.">
+            <Card title="MCP servers" icon={PlugsConnectedIcon}>
               <Link
                 to="/user/settings/mcp"
                 className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2.5 text-xs"
@@ -201,20 +200,6 @@ export default function UserSettingsPage() {
       </div>
     </div>
   );
-}
-
-// ── Devices — user-level PC/laptop tunnel registration ──────────────
-
-/** Device links renew themselves on every connect, so the only ones worth
- *  mentioning are the ones close enough to lapsing that the owner may need to
- *  go and start the daemon. Anything further out would be noise. */
-const DEVICE_LAPSE_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
-
-function lapsingDevices(devices: readonly UserDevice[]): UserDevice[] {
-  const soon = Date.now() + DEVICE_LAPSE_NOTICE_MS;
-
-  return devices.filter((device) =>
-    device.revokedAt === null && device.expiresAt !== null && device.expiresAt <= soon);
 }
 
 /** Grants ride the SAME cadence as the roster: revoking one changes both what
@@ -289,14 +274,11 @@ function DevicesCard() {
     }
   }, [reloadDevices]);
 
-  const lapsing = lapsingDevices(devices);
-
   return (
     <>
       {/* What a link MEANS is stated once, by the connect panel below, in the
           words `kinu connect` prints. This card is about the list. */}
-      <Card title="Linked machines" icon={DesktopTowerIcon}
-        description="Your linked machines, and which workspaces can use them. Revoke a workspace's access from the machine's row.">
+      <Card title="Linked machines" icon={DesktopTowerIcon}>
         {devices.length > 0 ? (
           <div className="p-group text-xs">
             {devices.map((d) => (
@@ -314,25 +296,13 @@ function DevicesCard() {
             ))}
           </div>
         ) : roster.resource.status === "ready" && (
-          <p className="p-row-text p-text-3">No machine is linked yet. Connect one below.</p>
+          <span className="p-row-text p-text-3">No machine is linked yet.</span>
         )}
         {roster.resource.status === "error" && (
           <LoadFailure what="your devices" message={roster.resource.message} onRetry={reloadDevices} />
         )}
         {grantRoster.resource.status === "error" && (
           <LoadFailure what="the device grants" message={grantRoster.resource.message} onRetry={grantRoster.reload} />
-        )}
-        {devices.some((device) => device.revokedAt === null)
-          && !devices.some((device) => device.revokedAt === null && device.connected) && (
-          <p className="p-meta p-text-3">
-            Offline. Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on that machine.
-          </p>
-        )}
-        {lapsing.length > 0 && (
-          <p className="p-meta p-text-3">
-            {lapsing.map((d) => d.label).join(", ")} {lapsing.length > 1 ? "links lapse" : "link lapses"} soon.
-            Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on {lapsing.length > 1 ? "those machines" : "that machine"} to renew {lapsing.length > 1 ? "them" : "it"}.
-          </p>
         )}
         {err && <p className="text-xs p-danger">{err}</p>}
       </Card>
@@ -348,32 +318,11 @@ function DevicesCard() {
  *  mode; the hub enforces the same function, so the row explains exactly what
  *  the hub will do. The first two are the owner's own words. */
 const SANDBOX_MODE_COPY = {
-  sandboxed: "Commands can use the agent home, selected folders, GPU, and network. Other files stay hidden.",
-  raw: "Off. The agent runs as you with full access.",
-  files_only: "No sandbox. Nothing runs here.",
+  sandboxed: "Sandboxed.",
+  raw: "Off.",
+  files_only: "Files only.",
 } satisfies Record<DeviceMode, string>;
 
-/** A fix from core carries its commands in backticks, as `kinu connect` prints
- *  them. On this page a command is a `<code>` — the treatment this card already
- *  gives `kinu connect` in its offline hint. */
-function withCodeSpans(text: string): ReactNode[] {
-  return text.split("`").map((segment, index) =>
-    index % 2 === 1 ? <code key={index} className="font-mono">{segment}</code> : segment);
-}
-
-/**
- * One linked machine: its name (editable — this is the name every surface
- * shows, from the agent's executor row to a bind card), its platform, its
- * liveness, its Sandbox switch, and the workspaces bound to it.
- *
- * The switch is the owner's one decision about what a command may reach on
- * this machine, and it is owner-only: the server answers 403 to anyone else.
- * On by default. Turning it off asks first, because off means the agent runs
- * as the owner. A machine that cannot sandbox is never quietly run unconfined
- * — with the switch on it runs no commands, and the row says so with the fix.
- *
- * Exported for the gallery, which photographs the three modes side by side.
- */
 export function DeviceRow({
   device, grants, onDeviceChanged, onGrantsChanged, onError, onRevoke,
   unstoppedCommands, onAcknowledge,
@@ -532,14 +481,9 @@ export function DeviceRow({
         {cannotSandbox && <span className="p-badge-warning px-1.5 py-0.5">Cannot sandbox</span>}
         {mode === "sandboxed" && <span className="p-text-3">GPU: {describeGpuNodes(sandbox.gpu)}</span>}
       </div>
-      <p className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode}>
+      <span className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode}>
         {SANDBOX_MODE_COPY[mode]}
-        {/* The daemon's own line first, when it sent one. For a probe that
-            failed in words nobody classified, that line is what the fix
-            sentence tells the owner to act on. */}
-        {cannotSandbox && sandbox.detail !== null && <> The daemon said: <code className="font-mono">{sandbox.detail}</code>.</>}
-        {cannotSandbox && <> {withCodeSpans(sandboxReasonFix(sandbox.reason))}</>}
-      </p>
+      </span>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
         {grants.length === 0 ? (
           <span>No workspace uses it yet.</span>
@@ -555,15 +499,6 @@ export function DeviceRow({
               </span>
             ))}
           </>
-        )}
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
-        {device.lastIp && <span>Last connected from <code className="font-mono">{device.lastIp}</code></span>}
-        {device.replacedAt !== null && (
-          <span className="p-danger">
-            Another connection replaced this device on {new Date(device.replacedAt).toLocaleString()}.
-            If that was not you, revoke it and run <code className="font-mono">kinu connect</code> again.
-          </span>
         )}
       </div>
     </div>

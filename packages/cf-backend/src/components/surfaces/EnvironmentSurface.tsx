@@ -26,31 +26,20 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
 import {
   CircleIcon, FolderOpenIcon, LockSimpleIcon, PlugIcon, TerminalIcon,
 } from "@phosphor-icons/react";
 import { EXECUTOR_MOUNTS, type MountInfo } from "@kinu.run/core";
 import type { ExecutorCommandResult, Rpc } from "@kinu.run/core";
 import {
-  executorDescription, executorLabel, isExecutorActive,
+  executorLabel, isExecutorActive,
   pickDefaultExecutor,
   type ExecutorInfo,
 } from "@kinu.run/core";
 import type { ExecutorOutput } from "@/hooks/use-kinu";
 import { TerminalPane } from "@/components/TerminalPane";
-import type { UserDevice } from "@/lib/user-api";
-import { useDeviceRoster } from "@/hooks/use-device-roster";
-import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { EmptyState } from "./shared";
-
-/** Durability, in the words a user decides with. */
-const CONSISTENCY_HINT = {
-  durable: "Durable. Survives restarts.",
-  ephemeral: "Ephemeral. Ends with the container.",
-  "live-shared": "Files stay on your machine.",
-} satisfies Record<MountInfo["policy"]["consistency"], string>;
+import { LoadFailure } from "@/components/ui/LoadFailure";
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
@@ -214,8 +203,10 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
   const executor = mount.name;
   const status = statusOf(mount, exec);
   const filesRoot = filesRootFor(executor);
-  // The device's own name where the user gave one; the generic label elsewhere.
-  const title = executor === "laptop" && exec?.label ? exec.label : executorLabel(executor);
+  // The row is named by the machine: the device's own label where one is
+  // bound, the executor kind elsewhere. Each bound device is its own row.
+  const title = exec?.label ?? executorLabel(executor);
+  const kindTag = exec?.label ? executorLabel(executor) : null;
 
   return (
     <div
@@ -228,20 +219,17 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
       <div className="flex items-center gap-1.5 min-w-0">
         <CircleIcon size={7} weight="fill" className={`shrink-0 ${status.dotClass}`} />
         <span className={`p-row-text font-medium truncate ${mount.live ? "p-text" : "p-text-3"}`}>{title}</span>
-        {executor === "laptop" && exec?.label && (
-          <span className="p-meta p-text-4 shrink-0">{executorLabel("laptop")}</span>
+        {kindTag !== null && (
+          <span className="p-meta p-text-4 shrink-0">{kindTag}</span>
         )}
         {mount.policy.readOnly && (
           <span title="read-only" className="shrink-0 flex"><LockSimpleIcon size={11} className="p-text-3" /></span>
         )}
         <span data-env-status className="ml-auto p-t-status p-text-3 shrink-0">{status.word}</span>
       </div>
-      <div data-env-durability className="p-meta p-text-3">
-        {mount.live ? CONSISTENCY_HINT[mount.policy.consistency] : mount.reason ?? exec?.reason ?? "not available on this deployment"}
+      <div data-env-mount className="p-meta p-text-3">
+        {filesRoot ?? "no files here"}
       </div>
-      <p className="p-meta p-text-2">
-        {executorDescription(executor)}
-      </p>
       <div className="flex items-center gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
         {mount.live && filesRoot !== null && (
           <button
@@ -324,46 +312,17 @@ function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   );
 }
 
-/** The laptop executor's connect call-to-action. It reads the roster to say
- *  the honest thing — daemon offline versus no device registered — and opens
- *  the connect panel here rather than sending the owner to another page. */
+/** The laptop executor's connect call-to-action: one button. */
 function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
-  const { resource, reload } = useDeviceRoster();
-  const devices: UserDevice[] | null = lastValue(resource);
-
-  if (devices === null && resource.status === "loading") {
-    return <div className="h-full flex items-center justify-center"><Loader size="base" /></div>;
-  }
-
-  const live = (devices ?? []).filter((device) => device.revokedAt === null);
-  const registered = live.length > 0;
-  const labels = live.map((d) => d.label).join(", ");
-
   return (
     <div className="h-full flex items-center justify-center overflow-y-auto p-6">
-      <div className="max-w-md w-full space-y-3">
-        {resource.status === "error" && (
-          <LoadFailure what="your devices" message={resource.message} onRetry={reload} />
-        )}
-        <EmptyState
-          icon={<PlugIcon size={26} />}
-          title={registered ? "Device offline" : "Connect your PC"}
-          hint={registered
-            ? <>
-                {labels} {live.length > 1 ? "are" : "is"} offline. Run
-                <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on {live.length > 1 ? "those machines" : "that machine"}.
-              </>
-            : "Connect a laptop or PC. Every agent can use it after you approve workspace access."}
-        >
-          <button
-            data-env-connect-cta
-            onClick={onConnectDevice}
-            className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
-            <PlugIcon size={13} />
-            {registered ? "Connect another machine" : "Connect a machine"}
-          </button>
-        </EmptyState>
-      </div>
+      <button
+        data-env-connect-cta
+        onClick={onConnectDevice}
+        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">
+        <PlugIcon size={13} />
+        Connect a computer
+      </button>
     </div>
   );
 }

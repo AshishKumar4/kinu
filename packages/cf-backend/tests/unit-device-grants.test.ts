@@ -15,7 +15,8 @@
  *
  * Plus the two halves the grant model needs to be usable: an agent can SEE
  * the machine by name before it may touch it, and when there is no machine at
- * all its request raises a provisioning card instead of a dead end.
+ * all its request fails with a notice naming the registered machines instead
+ * of a dead end.
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -30,7 +31,7 @@ import type { UserCaller } from '@kinu.run/core';
 import { DeviceSocketHub } from '@kinu.run/core';
 import { USER_DO_RPC_SURFACE } from '../src/rpc-surface';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED, DEVICE_PROVISION_METHOD,
+  DEVICE_CONNECT_PATH, DEVICE_CONSENT_DENIED,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, JsonValueSchema, nextDeviceRequestId,
   NO_DEVICE_CONNECTED, type JsonValue,
@@ -943,7 +944,25 @@ describe('a device is visible before it is usable', () => {
 });
 
 describe('asking for a machine when there is none', () => {
-  test('the call raises a provisioning card and still refuses, by name', async () => {
+  test('the call refuses and names the registered machines on the workspace rail', async () => {
+    const harness = createTestUserDO();
+    const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+
+    await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+
+    expect(harness.consentPrompts).toEqual([]);
+    expect(harness.unavailableNotices).toEqual([{
+      workspace: WORKSPACE,
+      devices: [{ id: deviceId, label: 'studio tower', lastSeenAt: null }],
+    }]);
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('no registered machine: the notice carries no devices', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
@@ -951,25 +970,15 @@ describe('asking for a machine when there is none', () => {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
 
-    expect(harness.consentPrompts).toEqual([{
-      workspace: WORKSPACE,
-      method: DEVICE_PROVISION_METHOD,
-      command: expect.stringContaining('Connect this computer'),
-      workspaceName: WORKSPACE,
-    }]);
+    expect(harness.consentPrompts).toEqual([]);
+    expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
     await harness.joinFibers();
     harness.close();
   });
 
-  test('a card still waiting is not raised twice by a retrying agent', async () => {
-    // The dedupe is the REGISTRY's, not the caller's: an identical still-waiting
-    // request joins the card already up. A caller-side read of
-    // listPendingConsents and skip is check-then-act across two RPCs that races
-    // itself, and covers only the method that remembers to do it — so this
-    // drives two identical asks and reads what the authority actually did.
+  test('a retrying agent sends one notice per refused call, and no card', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    harness.consentDecision = 'hold';
 
     const first = harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
       agentName: WORKSPACE,
@@ -979,132 +988,47 @@ describe('asking for a machine when there is none', () => {
       agentName: WORKSPACE,
     });
 
-    const settled = Promise.allSettled([first, retry]);
+    const outcomes = await Promise.allSettled([first, retry]);
 
-    // Await the CONDITION, never a duration: yield to the scheduler until the
-    // card is actually up. Both calls are already in flight, so the second
-    // reaches the registry during the same yielding and meets the first's card.
-    for (let turn = 0; turn < 100 && harness.consentPrompts.length === 0; turn += 1) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-    }
-
-    // ONE card, one id: the provisioning question is identical both times.
-    expect(harness.consentPrompts).toEqual([{
-      workspace: WORKSPACE,
-      method: DEVICE_PROVISION_METHOD,
-      command: expect.stringContaining('Connect this computer'),
-      workspaceName: WORKSPACE,
-    }]);
-    expect(harness.raisedConsentIds).toEqual(['cons-1']);
-
-    // And BOTH callers are parked on that one card — neither was answered by a
-    // second prompt nobody raised, and neither ran ahead without one.
-    const pending = Symbol('pending');
-    expect(await Promise.race([settled, Promise.resolve(pending)])).toBe(pending);
-
-    // One answer settles every caller waiting on it. Both still refuse, because
-    // approving the card provisions nothing — no daemon is linked yet.
-    harness.answerConsent('once');
-    const outcomes = await settled;
     expect(outcomes.map((o) => o.status)).toEqual(['rejected', 'rejected']);
 
     for (const outcome of outcomes) {
       expect(String(outcome.status === 'rejected' ? outcome.reason : '')).toContain(NO_DEVICE_CONNECTED);
     }
 
-    // And answering did not raise a second card on the way out.
-    expect(harness.raisedConsentIds).toEqual(['cons-1']);
-    await harness.joinFibers();
-    harness.close();
-  });
-
-  test('a card up across an activation still takes its answer', async () => {
-    // The prompt a deploy or eviction cannot take down: the pending ask is a
-    // row on the workspace object's storage, so the activation that answers
-    // it need not be the one that raised it. A fresh UserDO over the same
-    // storage is that next activation; the registry it hands the RPC is the
-    // real one, over the same per-workspace store.
-    const harness = createTestUserDO();
-    const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    harness.consentDecision = 'hold';
-
-    // Parked past the test's end: the caller's own promise dies with its
-    // activation and is not the thing under test. Raced against an already-
-    // resolved null so the test moves on, while the call stays subscribed —
-    // a late settlement still has its handler and can never surface as an
-    // unhandled rejection.
-    await Promise.race([
-      harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
-        agentName: WORKSPACE,
-      }),
-      Promise.resolve(null),
+    expect(harness.consentPrompts).toEqual([]);
+    expect(harness.unavailableNotices).toEqual([
+      { workspace: WORKSPACE, devices: [] },
+      { workspace: WORKSPACE, devices: [] },
     ]);
-
-    for (let turn = 0; turn < 100 && harness.raisedConsentIds.length === 0; turn += 1) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-    }
-
-    expect(harness.raisedConsentIds).toEqual(['cons-1']);
-
-    const revived = createTestUserDO({ storage: harness.db });
-    revived.consentDecision = 'hold';
-    const pending = revived.pendingConsents(WORKSPACE);
-    expect(pending.map((card) => card.consentId)).toEqual(['cons-1']);
-    expect(revived.resolveConsent(WORKSPACE, 'cons-1', 'once')).toEqual({ ok: true });
-    expect(revived.pendingConsents(WORKSPACE)).toEqual([]);
-
-    // The identical ask now JOINS nothing: the row is settled, so the next
-    // call mints its own card rather than inheriting a settled one.
-    const retry = revived.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
-      agentName: WORKSPACE,
-    });
-
-    // Settled from the start, as the sibling hold test does: the denial below
-    // rejects the call while this test is still yielding, and a rejection
-    // nobody has handled yet is noise the suite must not make.
-    const settled = Promise.allSettled([retry]);
-
-    for (let turn = 0; turn < 100 && revived.raisedConsentIds.length === 0; turn += 1) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-    }
-
-    expect(revived.raisedConsentIds).toEqual(['cons-1']);
-    expect(revived.pendingConsents(WORKSPACE).map((card) => card.consentId)).toEqual(['cons-1']);
-    expect(revived.resolveConsent(WORKSPACE, 'cons-1', 'deny')).toEqual({ ok: true });
-
-    const [outcome] = await settled;
-    expect(outcome?.status).toBe('rejected');
-
-    if (outcome?.status === 'rejected') expect(String(outcome.reason)).toContain(NO_DEVICE_CONNECTED);
-
-    await revived.joinFibers();
-    revived.close();
     await harness.joinFibers();
     harness.close();
   });
 
-  test('the round trip completes: request, approve, connect, grant, execute', async () => {
+  test('the round trip completes: request, connect, grant, execute', async () => {
     // ONE hub throughout, because that is the shape of the real flow: the
     // workspace, the device registry and the socket are all the same user's.
     const harness = createTestUserDO({ deviceResponder: daemon });
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
     const caller: UserCaller = { workspaceToken: token };
 
-    // 1. The agent reaches for a machine and there is none: a card is raised.
+    // 1. The agent reaches for a machine and there is none: a notice names
+    //    the registered machines, and the call refuses.
     await expect(harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE }))
       .rejects.toThrow(NO_DEVICE_CONNECTED);
-    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
+    expect(harness.consentPrompts).toEqual([]);
+    expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
     expect(harness.deviceFrames).toEqual([]);
 
-    // 2. The owner approved the card and ran `kinu connect`, naming the machine.
-    //    Its daemon says what it proved on connect, which is what makes the
-    //    machine usable: one that proves nothing runs no commands.
-    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    // 2. The owner ran `kinu connect`, naming the machine. Its daemon says
+    //    what it proved on connect, which is what makes the machine usable:
+    //    one that proves nothing runs no commands.
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
     harness.attachDevice(deviceId);
     await harness.sendDeviceHello(CAPABLE_HELLO);
     // The agent can now SEE it — by name — while still holding no grant.
     const seen = await harness.userDO.deviceRuntimeStatus(caller);
-    expect(seen.devices?.map((d) => d.name)).toEqual(['ashish@studio']);
+    expect(seen.devices?.map((d) => d.name)).toEqual(['studio']);
     expect(seen.workspaceGranted).toBe(false);
 
     // 3. The next call asks for THIS workspace's access, and the owner grants it.
@@ -1122,36 +1046,16 @@ describe('asking for a machine when there is none', () => {
     await harness.joinFibers();
     harness.close();
   });
-  test('a daemon connecting while the card is up settles the call waiting on it', async () => {
-    // The keepalive gap reproduced as a flow: the call is parked on the
-    // provisioning card when the machine's socket lands, and that accept IS
-    // the card's answer — the waiting call re-reads liveness, reaches the
-    // per-workspace grant card, and runs when the owner binds it.
+
+  test('a daemon connecting announces the machine where the notice went', async () => {
     const harness = createTestUserDO();
     const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
-    const caller: UserCaller = { workspaceToken: token };
-    harness.consentDecision = 'hold';
 
-    const openRows = () => harness.db.prepare<{ n: number }, []>(
-      'SELECT count(*) AS n FROM device_provision_pending',
-    ).get()!.n;
+    await expect(harness.userDO.deviceRpc({ workspaceToken: token }, 'exec', ['make build'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
 
-    const call = harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE });
-    const settled = Promise.allSettled([call]);
-
-    for (let turn = 0; turn < 100 && harness.consentPrompts.length === 0; turn += 1) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-    }
-
-    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
-    expect(harness.pendingConsents(WORKSPACE).map((c) => c.consentId)).toEqual(['cons-1']);
-    // The hub's half of the card, durable: which workspace waits on which id —
-    // the row an accept reads to know whose card the connect answers.
-    expect(openRows()).toBe(1);
-
-    // The machine links and its daemon dials in — the real accept path, not
-    // attachDevice: the settle lives on it.
-    const { deviceId, token: deviceToken } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const { deviceId, token: deviceToken } = await harness.userDO.registerDevice(await testOwner(), 'studio');
     const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), deviceToken);
 
     if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
@@ -1165,52 +1069,46 @@ describe('asking for a machine when there is none', () => {
     const device = harness.acceptedSockets.at(-1);
 
     if (!device) throw new Error('the device upgrade produced no socket');
-    // A daemon says what it proved on connect; without the HELLO this machine
-    // stays files_only and the exec is refused on the sandbox switch, which
-    // is not the seam under test.
     await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
 
-    // The call that was parked on the provisioning card did not fail — it
-    // went on to ask the workspace's binding for the machine that just
-    // arrived. What a client re-renders now is THAT card, up on the same
-    // workspace: the ask moved forward rather than repeating itself.
-    for (let turn = 0; turn < 100 && harness.consentPrompts.length < 2; turn += 1) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-    }
+    expect(harness.availableNotices).toEqual([{
+      workspace: WORKSPACE, device: { id: deviceId, label: 'studio' },
+    }]);
 
-    expect(harness.consentPrompts[1]).toMatchObject({
-      workspace: WORKSPACE, method: 'exec', command: 'make build', workspaceName: WORKSPACE,
-    });
-    expect(harness.pendingConsents(WORKSPACE).map((c) => c.consentId)).toEqual(['cons-2']);
-    expect(harness.consentPrompts.filter((p) => p.method === DEVICE_PROVISION_METHOD)).toHaveLength(1);
+    await harness.joinFibers();
+    harness.close();
+  });
 
-    // The card's question is answered by the connect itself: its row went
-    // with the settle, and the table holds nothing still waiting.
-    expect(openRows()).toBe(0);
+  test('a connect clears the notice on the told workspace only', async () => {
+    const harness = createTestUserDO();
+    const first = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+    await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
+    const owner = await testOwner();
+    await harness.userDO.registerDevice(owner, 'studio-tower');
 
-    // The owner binds the workspace to the machine; the command runs.
-    harness.answerConsent('always');
+    await expect(harness.userDO.deviceRpc({ workspaceToken: first }, 'exec', ['make build'], {
+      agentName: WORKSPACE,
+    })).rejects.toThrow(NO_DEVICE_CONNECTED);
+    expect(harness.unavailableNotices.map((n) => n.workspace)).toEqual([WORKSPACE]);
 
-    for (let turn = 0; turn < 100; turn += 1) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-      const execRaw = device.sent.find((raw) => raw.includes('"method":"exec"'));
+    // SAFETY: the table this commit adds carries exactly (agent_name); the
+    // SELECT names that one column, so every row has it.
+    const pending = harness.db.query('SELECT agent_name FROM device_notice_pending ORDER BY agent_name ASC').all() as Array<{ agent_name: string }>;
+    expect(pending.map((row) => row.agent_name)).toEqual([WORKSPACE]);
+    const { token: deviceToken } = await harness.userDO.registerDevice(owner, 'studio');
 
-      if (execRaw) {
-        const execId = v.parse(v.object({ id: v.string() }), JSON.parse(execRaw)).id;
-        await harness.userDO.webSocketMessage(device.ws, JSON.stringify({
-          id: execId, result: { stdout: 'ok', stderr: '', exitCode: 0 },
-        }));
-        break;
-      }
-    }
+    const issued = await harness.userDO.issueDeviceConnectTicket(owner, deviceToken);
 
-    const [outcome] = await settled;
-    expect(outcome?.status).toBe('fulfilled');
-    // The command left the hub on the machine's own socket.
-    expect(device.sent.some((raw) => raw.includes('"method":"exec"'))).toBe(true);
-    expect((await harness.userDO.listDeviceConsents(await testOwner()))).toEqual([
-      expect.objectContaining({ agentName: WORKSPACE, deviceId, policy: 'allow' }),
-    ]);
+    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
+
+    const upgrade = await harness.userDO.fetch(new Request(`https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`, { headers: { Upgrade: 'websocket' } }));
+    expect(upgrade.status).toBe(101);
+    const device = harness.acceptedSockets.at(-1);
+
+    if (!device) throw new Error('the device upgrade produced no socket');
+    await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
+    expect(harness.availableNotices.map((n) => n.workspace)).toEqual([WORKSPACE]);
+    expect(harness.db.query('SELECT agent_name FROM device_notice_pending').all()).toEqual([]);
 
     await harness.joinFibers();
     harness.close();
@@ -1219,16 +1117,12 @@ describe('asking for a machine when there is none', () => {
 });
 
 /**
- * The owner's own sequence, reproduced as one flow: a machine connects and
  * shows online, the workspace holds no grant, and the agent asks for the
- * device. What he saw was the PROVISIONING card — "needs a computer of yours
- * and none is connected" — on a machine that was connected. The routing that
- * raises it keys on hub liveness only, so if this ever passes while the
- * machine is live and ungranted, the defect has moved somewhere this suite
- * has not reached: keep looking, do not declare the Env half fixed.
+ * device. The grant card names the machine and this workspace; no offline
+ * notice goes out beside it, because the machine is live.
  */
 describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask', () => {
-  test('a connected device raises the GRANT card, never the provisioning card', async () => {
+  test('a connected device raises the GRANT card, never the offline notice', async () => {
     const harness = await deviceHarness();
     harness.consentDecision = 'deny';
 
@@ -1243,30 +1137,28 @@ describe('the owner\'s sequence: a live machine, an ungranted workspace, one ask
       command: 'ls',
       workspaceName: WORKSPACE,
     }]);
-    // And no provisioning card was raised beside it: the machine was live, so
-    // "none is connected" is the wrong question to have asked.
-    expect(harness.consentPrompts.some((p) => p.method === DEVICE_PROVISION_METHOD)).toBe(false);
+    expect(harness.unavailableNotices).toEqual([]);
     await harness.closeDeviceHarness();
   });
 });
 
 /**
- * One ask, four worlds — what the owner sees on the card and what the Env
- * view says about the machine. The card half lives in the hub chokepoint; the
- * Env half rides `deviceRuntimeStatus`, the read the executor row and the
+ * One ask, four worlds — what the owner reads in the notice and what the Env
+ * view says about the machine. The notice half lives in the hub chokepoint;
+ * the Env half rides `deviceRuntimeStatus`, the read the executor row and the
  * surfaces both consume. A machine the workspace cannot use is OFFLINE in the
  * Env grid until the owner answers for it, because that is what a row that
  * says otherwise told him.
  */
 describe('the machine the agent asked for, as the owner reads it', () => {
-  test('no device: the provisioning card, and no laptop row to render', async () => {
+  test('no device: the offline notice, and no laptop row to render', async () => {
     const harness = createTestUserDO();
     const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
 
     await expect(harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
-    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
+    expect(harness.unavailableNotices).toEqual([{ workspace: WORKSPACE, devices: [] }]);
 
     const status = await harness.userDO.deviceRuntimeStatus({ workspaceToken: workspace });
     expect(status.connected).toBe(false);
@@ -1275,7 +1167,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     harness.close();
   });
 
-  test('device offline: the provisioning card, and an offline row', async () => {
+  test('device offline: the offline notice, and an offline row', async () => {
     const harness = await deviceHarness();
     // The daemon's socket closes — the machine is registered but gone.
     harness.attachDevice(null);
@@ -1283,7 +1175,9 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(NO_DEVICE_CONNECTED);
-    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
+    expect(harness.unavailableNotices).toHaveLength(1);
+    expect(harness.unavailableNotices[0]?.workspace).toBe(WORKSPACE);
+    expect(harness.unavailableNotices[0]?.devices.map((d) => d.label)).toEqual(['ashish@studio']);
 
     const status = await harness.userDO.deviceRuntimeStatus(harness.workspace);
     expect(status.connected).toBe(false);
@@ -1299,7 +1193,7 @@ describe('the machine the agent asked for, as the owner reads it', () => {
     await expect(harness.userDO.deviceRpc(harness.workspace, 'exec', ['make'], {
       agentName: WORKSPACE,
     })).rejects.toThrow(DEVICE_CONSENT_DENIED);
-    // The grant card, by name, for this workspace — not the provisioning one.
+    // The grant card, by name, for this workspace.
     expect(harness.consentPrompts).toEqual([{
       workspace: WORKSPACE,
       method: 'exec',
