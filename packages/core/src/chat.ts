@@ -539,6 +539,41 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     let responseSoFar: readonly ModelMessage[] = [];
     const pendingStepEvents: PendingStepEvent[] = [];
 
+  /** The subset of `tools` the model may CALL, when the caller narrowed one:
+   *  the rest stay wired for execution but are not offered. One decision per
+   *  turn, not per provider call.
+   *
+   *  SAFETY: the names come from the caller that built `tools`; the SDK
+   *  ignores a name the set does not carry, which is the narrowing a caller
+   *  asked for and not a fault. */
+  const offeredTools = opts.activeTools === undefined
+    ? {}
+    : { activeTools: [...opts.activeTools] as Array<keyof ToolSet> };
+
+
+  /** One finished step, as the accumulator reads it: how it ended, what it
+   *  produced, and what it cost. `text`, `toolCalls` and `toolResults` are
+   *  read off the SDK step here because they are getter-backed on its
+   *  prototype, which a spread would drop. The dispatched-call bookkeeping
+   *  rides along: a call the model has now answered is no longer outstanding.
+   */
+  const recordStepFinish = async (step: StepResult<ToolSet>): Promise<void> => {
+    stepCount++;
+    responseSoFar = [...step.response.messages];
+
+    for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
+    const usage = normalizeUsage(step.usage);
+
+    pendingStepEvents.push({
+      stepIndex: stepCount, responseMessages: responseSoFar,
+      finishReason: step.finishReason, text: step.text,
+      toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
+      ...(usageReported(usage) && { usage }),
+    });
+    await opts.onStep?.(step);
+  };
+
+
     const result = streamText({
       model: opts.model,
       system: cache.system,
@@ -548,10 +583,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       maxRetries: PROVIDER_SDK_RETRIES,
       messages: [...request],
       tools,
-      // SAFETY: the names come from the caller that built `tools`; the SDK
-      // ignores a name the set does not carry, which is the narrowing a
-      // caller asked for and not a fault.
-      ...(opts.activeTools !== undefined && { activeTools: [...opts.activeTools] as Array<keyof typeof tools> }),
+      ...offeredTools,
       // NO STEP CAP. The agentic loop runs until the model stops calling tools;
       // what bounds it lives entirely inside this file and the budget governor —
       // see UNBOUNDED_STEPS.
@@ -595,23 +627,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           meter: opts.meter,
           context: opts.stepContext,
         }, { stepNumber: stepOffset + stepNumber, messages, steps }),
-      onStepFinish: async (step) => {
-        stepCount++;
-        const usage = normalizeUsage(step.usage);
-        responseSoFar = [...step.response.messages];
-
-        for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
-
-        const event: PendingStepEvent = {
-          stepIndex: stepCount, responseMessages: responseSoFar,
-          finishReason: step.finishReason, text: step.text,
-          toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
-        };
-
-        if (usageReported(usage)) event.usage = usage;
-        pendingStepEvents.push(event);
-        await opts.onStep?.(step);
-      },
+      onStepFinish: recordStepFinish,
     });
 
     // A call that never finishes a step — the provider failed before one, or the
