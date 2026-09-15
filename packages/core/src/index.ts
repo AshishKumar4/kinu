@@ -136,7 +136,7 @@ export {
   planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
-  workspaceSlug, workspaceAddressRefusal,
+  workspaceSlug, workspaceAddressRefusal, isPlaceholderWorkspaceTitle,
   workspaceTitleFromMission,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
@@ -144,6 +144,8 @@ export {
   isWorkspaceName,
   validateWorkspaceName,
 } from './identity/naming';
+
+export { workspaceDisplayTitle, workspaceTitleDraft } from './read-models/workspace-title';
 
 // Evolution engine (3-timescale auto-evolution)
 export {

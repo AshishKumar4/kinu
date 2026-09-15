@@ -24,6 +24,7 @@ import {
   type ReconcileReport,
 } from '../lib/control-api';
 import { METRICS_WINDOWS } from '@kinu.run/core/control-plane';
+import { workspaceDisplayTitle } from '@kinu.run/core';
 import {
   bytes, Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
@@ -259,8 +260,7 @@ function UserDetailView(
                 key: `${w.userId}/${w.name}`,
                 onClick: () => onOpenWorkspace(w.name),
                 cells: [
-                  <span className="font-mono text-xs">{w.name}</span>,
-                  w.displayName, when(w.createdAt), when(w.lastSeenAt),
+                  workspaceDisplayTitle(w), when(w.createdAt), when(w.lastSeenAt),
                   w.removedAt === null
                     ? <span className="p-success p-t-status">live</span>
                     : <span className="p-text-3 p-t-status">removed {when(w.removedAt)}</span>,
@@ -323,8 +323,7 @@ function WorkspacesView(
                 onClick: () => onOpen(w.name, w.userId),
                 cells: [
                   <span className="font-mono text-xs">{w.name}</span>,
-                  w.email.length > 0 ? w.email : <span className="p-text-3">unknown</span>,
-                  w.displayName, when(w.lastSeenAt),
+                  workspaceDisplayTitle(w), when(w.lastSeenAt),
                   w.removedAt === null
                     ? <span className="p-success p-t-status">live</span>
                     : <span className="p-text-3 p-t-status">removed</span>,

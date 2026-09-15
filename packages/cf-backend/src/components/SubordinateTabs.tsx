@@ -13,9 +13,9 @@ import { diagnostics, toKinuError, renderThrownChain } from "@kinu.run/core/obs"
  *  later. */
 const UNTITLED_AGENT_TITLE = "Untitled agent";
 
-/** The same state on a workspace. Separate string because the surfaces that
- *  show it say "workspace" in every neighbouring control. */
-const UNTITLED_WORKSPACE_TITLE = "Untitled workspace";
+/* A workspace's title is answered in core — `workspaceDisplayTitle` in
+ * read-models/workspace-title — because the slug stored as a title is the
+ * defect this file's callers all share; there is no local copy of the rule. */
 
 /** The plus button's label. An ACTION, not the untitled state above it — the
  *  two read alike, which is exactly why they are separate constants. */
@@ -27,14 +27,6 @@ const ADD_AGENT_LABEL = "New agent";
 export function agentTitle(displayName: string): string {
   return displayName.trim() === "" ? UNTITLED_AGENT_TITLE : displayName;
 }
-
-/** {@link agentTitle} for a workspace. The slug is NOT the fallback: it is the
- *  address in the URL bar, and showing it as a title is what put
- *  `handwrought-walnut-4166c321` in the workspace bar. */
-export function workspaceTitle(displayName: string | null | undefined): string {
-  return displayName?.trim() || UNTITLED_WORKSPACE_TITLE;
-}
-
 
 interface SubordinateTabsProps {
   workspace: string;
