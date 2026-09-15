@@ -142,7 +142,62 @@ research to a researcher task hire, general work to a task hire; coupled,
 dependent or single-context work stays with the root. Subordinates keep their
 role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`.
 
+## Deploy ladder
+
+L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
+heavy gate declares the threads it occupies at peak (`GATE_WEIGHTS`, held
+equal to deploy.sh's table by `deploy.test.ts`) and a gate launches only while
+the running weight fits `nproc`. Decided 2026-09-15, commit 19f9c6666.
+Measured: under a six-gate width the eleven-suite UI row failed every deploy
+on a puppeteer wall beside two `--parallel=4` rows and passed alone in 361 s;
+process-tree sampling read one Chrome suite at 4.3 threads peak and a
+`--parallel=4` row at 10.5. Under the budget the pre-publish tier ran 66/66
+green with the UI row inside it, twice (390 s on 19f9c6666, 602 s including
+the account gate on 1c82aee60).
+
+L2. A green gate is skipped only on a content-hash proof of its input closure.
+The closure is derived from the module graph (`scripts/import-graph.ts`, the
+walker `client-graph` already used) plus declared `reads` and `env`, the
+preload, configs on the path, `bun.lock` and `patches/`, and the toolchain;
+a graph that reads the environment whole, imports by a computed specifier,
+reaches an untracked file, or opens the tree by an undeclared path is never
+cached, and a `live` row never is. Decided 2026-09-15, commits 99bbb74ca,
+c54800545, 8a151ec0d. Measured on the push tier at 8a151ec0d, 24-thread
+workstation, load 0.6 at start:
+
+| run | hits | recorded | never cached | wall |
+| --- | --- | --- | --- | --- |
+| cold (store emptied) | 0 | 32 | 15 | 429.6 s |
+| warm (same tree) | 32 | 0 | 15 | 301.3 s |
+
+The 15 never-cached rows hold the tier's heaviest work (`bun run check`,
+`bun run test`, `packages/devbox/`, `deploy.test.ts`) and each names one
+cause: a computed `import()` in `anti-slop/rules.test.ts`,
+`egress-interception.ts`, `gates.test.ts`, `mutation-exploration-policy`
+and `unit-codemode-sandbox`; the environment passed whole in
+`deploy.test.ts`, `sources.test.ts`, `delta-shell-parity`, `ambient-env.test`
+and `mutation-fences.ts`; undeclared path reads in `patch-parity.ts`; and the
+cache module's own by-name reader on the census row. Each is a declaration
+or a seam, never a cache change. `--audit-closure` ran every derivable
+push-tier gate under strace on 2026-09-15: 32 audited, 0 undeclared reads,
+after its first pass caught `gate:scanner-bundle` reading two files off its
+graph.
+
+L3. A deploy wave stops launching at its first red and lets running gates
+finish; `--all` audits the whole wave. Decided 2026-09-15, commit a924a3fb2,
+proved at budget 1 in both directions.
+
+L4. The connectome's cost pins are ratios against an in-process calibration
+unit measured in the same cheapest-of-N loop, never absolute CPU time. Decided
+2026-09-15, commit e965315d0. Measured quiet: canvas 0.75 units, mesh 5.2;
+under twelve busy threads the absolute mesh frame doubled (0.61 to 1.13 ms,
+the wave's red) while the ratio read 3.9 to 5.2. Proved red at ten steps per
+frame. A wall-clock pin is a latency contract and stays wall-clock.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching.
+
+O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
+budget other than `nproc` is chosen.

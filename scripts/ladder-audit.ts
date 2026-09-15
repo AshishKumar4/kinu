@@ -69,7 +69,16 @@ export function auditClosure(argv: readonly string[], root: string, closure: Der
 
       const file = relative(root, opened);
 
-      if (file.startsWith('node_modules/') || file.includes('/node_modules/') || file.startsWith('.git/')) continue;
+      // Not findings: `node_modules` (the lock and the patches stand for it),
+      // the repository itself (`.git` is a FILE in a worktree — the gitdir
+      // pointer — and a directory in the primary; the enumeration opens it
+      // to ask git, and git's answer is the corpus already in the closure),
+      // and CPython bytecode caches, which are gitignored derivatives of the
+      // `.py` sources the closure holds and which CPython invalidates against
+      // the source's own size and mtime.
+      if (file === '.git' || file.startsWith('.git/') || file.startsWith('node_modules/') || file.includes('/node_modules/')) continue;
+
+      if (file.includes('/__pycache__/') && file.endsWith('.pyc')) continue;
 
       if (held.has(file)) {
         covered += 1;

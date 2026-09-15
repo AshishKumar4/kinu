@@ -88,7 +88,17 @@ A declared `reads` is a claim. `bun scripts/ladder.ts --audit-closure
 and reports every file under the tree the gate opened that its closure does
 not carry. That audit is how a `reads` declaration is written, and it is the
 red direction of the cache proof: an undeclared read is a finding, never a
-warning.
+warning. Run on the push tier on 2026-09-15: 32 gates audited, 0 undeclared
+reads, after its first pass caught `gate:scanner-bundle` reading two files
+off its graph.
+
+## Measured
+
+Push tier at 8a151ec0d on the 24-thread workstation, 2026-09-15, load 0.6
+at start: cold (store emptied) 0 hits, 32 recorded, 15 never cached,
+429.6 s; warm on the same tree 32 hits, 0 recorded, 15 never cached,
+301.3 s. The never-cached rows and the one cause each names are in
+`docs/ARCHITECTURE-DECISIONS.md` L2.
 
 ## The soundness gate
 
@@ -155,7 +165,11 @@ both conditions), proved red at ten steps per frame.
 - An environment variable read through a computed key or a spread is not an
   input the key sees; only literal names and declared names are hashed.
 - A file read by a path the walker cannot see and the audit has not been run
-  against is a hole until `--audit-closure` has been run on that gate.
+  against is a hole until `--audit-closure` has been run on that gate. The
+  audit itself does not judge `.git`, `node_modules` or `__pycache__`
+  bytecode: the first is how the corpus is asked, the second stands behind
+  the lock, the third is a gitignored derivative of a source the closure
+  holds.
 - Reads outside the tree (`$HOME` state, `/etc`) are not inputs. Tests run
   with a scratch `KINU_HOME`, which is why this is tolerable rather than
   safe.

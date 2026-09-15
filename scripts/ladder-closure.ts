@@ -50,6 +50,7 @@ import * as v from 'valibot';
 import { moduleEdges, readAliases, readWorkspace, resolveSpecifier, walkModules } from './import-graph';
 import type { Alias, PackageDir } from './import-graph';
 import { enumerateRepository, isManifest, isParseable, isTypescriptConfig, readRepositoryFile } from './sources';
+import type { Node } from 'oxc-parser';
 import { literalString, parse, walk } from './syntax';
 import type { SyntaxNode } from './syntax';
 
@@ -169,19 +170,10 @@ interface Scan {
   readonly envComputed: boolean;
 }
 
-/** One file's runtime markers: whether it reads by path, and how it reads the
- *  environment. `process.env.NAME` is a literal read that enters the key;
- *  `process.env[expr]` is computed; `process.env` used as a value anywhere
- *  else — `{ ...process.env }`, `Object.entries(process.env)`, `f(process.env)`
- *  — is an enumeration the walker cannot bound. */
-function scanMarkers(root: SyntaxNode, edges: readonly string[]): Scan {
-  let readsByPath = edges.some((specifier) => specifier in READS_BY_PATH);
-  let envComputed = false;
-  let envEnumerated = false;
-  const env: string[] = [];
-  // `const NAME = 'LITERAL'` at module scope, so `process.env[NAME]` in the
-  // same file is a read by literal. A binding from another file is not
-  // followed: the row declares it.
+/** `const NAME = 'LITERAL'` at module scope, so `process.env[NAME]` in the
+ *  same file is a read by literal. A binding from another file is not
+ *  followed: the row declares it. */
+function moduleStringConstants(root: SyntaxNode): ReadonlyMap<string, string> {
   const constants = new Map<string, string>();
 
   for (const statement of root.children) {
@@ -196,67 +188,94 @@ function scanMarkers(root: SyntaxNode, edges: readonly string[]): Scan {
     }
   }
 
+  return constants;
+}
+
+/** Whether `raw` is `Bun.<member>` for a member that opens the tree by path. */
+function isBunPathRead(raw: Node): boolean {
+  return raw.type === 'MemberExpression' && !raw.computed
+    && raw.object.type === 'Identifier' && raw.object.name === 'Bun'
+    && raw.property.type === 'Identifier' && raw.property.name in BUN_READS_BY_PATH;
+}
+
+/** Whether `raw` is `process.env` or `Bun.env` itself. */
+function isEnvObject(raw: Node): boolean {
+  return raw.type === 'MemberExpression' && !raw.computed
+    && raw.object.type === 'Identifier' && (raw.object.name === 'process' || raw.object.name === 'Bun')
+    && raw.property.type === 'Identifier' && raw.property.name === 'env';
+}
+
+/** The names `const { A, B } = process.env` reads, or none when a rest
+ *  element or a computed key reads the object whole. */
+function destructuredNames(pattern: Node): readonly string[] {
+  if (pattern.type !== 'ObjectPattern') return [];
+  const names: string[] = [];
+
+  for (const property of pattern.properties) {
+    if (property.type !== 'Property' || property.computed || property.key.type !== 'Identifier') return [];
+    names.push(property.key.name);
+  }
+
+  return names;
+}
+
+/** How one `process.env` occurrence is used, classified from its parents. */
+type EnvUse =
+  | { readonly kind: 'read'; readonly names: readonly string[] }
+  | { readonly kind: 'write' }
+  | { readonly kind: 'computed' }
+  | { readonly kind: 'enumerated' };
+
+function classifyEnvUse(node: SyntaxNode, constants: ReadonlyMap<string, string>): EnvUse {
+  const { raw } = node;
+  const parent = node.parent?.raw;
+
+  if (parent?.type === 'VariableDeclarator' && parent.init === raw) {
+    const names = destructuredNames(parent.id);
+
+    if (names.length > 0) return { kind: 'read', names };
+  }
+
+  if (parent?.type !== 'MemberExpression' || parent.object !== raw) return { kind: 'enumerated' };
+  const above = node.parent?.parent?.raw;
+
+  // The target of an assignment or a `delete` is a write and reads nothing.
+  if ((above?.type === 'AssignmentExpression' && above.left === parent)
+    || (above?.type === 'UnaryExpression' && above.operator === 'delete')) return { kind: 'write' };
+
+  if (!parent.computed && parent.property.type === 'Identifier') return { kind: 'read', names: [parent.property.name] };
+
+  const literal = literalString(parent.property)
+    ?? (parent.property.type === 'Identifier' ? constants.get(parent.property.name) : undefined);
+
+  return literal === undefined ? { kind: 'computed' } : { kind: 'read', names: [literal] };
+}
+
+/** One file's runtime markers: whether it reads by path, and how it reads the
+ *  environment. `process.env.NAME` is a literal read that enters the key;
+ *  `process.env[expr]` is computed; `process.env` used as a value anywhere
+ *  else — `{ ...process.env }`, `Object.entries(process.env)`, `f(process.env)`
+ *  — is an enumeration the walker cannot bound. */
+function scanMarkers(root: SyntaxNode, edges: readonly string[]): Scan {
+  let readsByPath = edges.some((specifier) => specifier in READS_BY_PATH);
+  let envComputed = false;
+  let envEnumerated = false;
+  const env: string[] = [];
+  const constants = moduleStringConstants(root);
+
   walk(root, (node) => {
-    const { raw } = node;
-
-    if (raw.type !== 'MemberExpression') return;
-    const { object, property } = raw;
-
-    if (object.type === 'Identifier' && object.name === 'Bun' && !raw.computed
-      && property.type === 'Identifier' && property.name in BUN_READS_BY_PATH) {
+    if (isBunPathRead(node.raw)) {
       readsByPath = true;
 
       return;
     }
 
-    const isEnvObject = object.type === 'Identifier' && (object.name === 'process' || object.name === 'Bun')
-      && !raw.computed && property.type === 'Identifier' && property.name === 'env';
+    if (!isEnvObject(node.raw)) return;
+    const use = classifyEnvUse(node, constants);
 
-    if (!isEnvObject) return;
-    const parent = node.parent?.raw;
-
-    // `const { A, B } = process.env` reads exactly A and B. A rest element or
-    // a computed key reads the object whole, and falls through to enumeration.
-    if (parent?.type === 'VariableDeclarator' && parent.init === raw && parent.id.type === 'ObjectPattern') {
-      const names: string[] = [];
-
-      for (const property of parent.id.properties) {
-        if (property.type !== 'Property' || property.computed || property.key.type !== 'Identifier') {
-          names.length = 0;
-          break;
-        }
-
-        names.push(property.key.name);
-      }
-
-      if (names.length > 0) {
-        env.push(...names);
-
-        return;
-      }
-    }
-
-    // The parent is a member access ON this env object: a named or computed
-    // read — unless it is the target of an assignment or a `delete`, which
-    // is a write and reads nothing.
-    if (parent?.type === 'MemberExpression' && parent.object === raw) {
-      const above = node.parent?.parent?.raw;
-
-      if ((above?.type === 'AssignmentExpression' && above.left === parent)
-        || (above?.type === 'UnaryExpression' && above.operator === 'delete')) return;
-
-      const literal = parent.computed
-        ? literalString(parent.property) ?? (parent.property.type === 'Identifier' ? constants.get(parent.property.name) : undefined)
-        : undefined;
-
-      if (!parent.computed && parent.property.type === 'Identifier') env.push(parent.property.name);
-      else if (literal !== undefined) env.push(literal);
-      else envComputed = true;
-
-      return;
-    }
-
-    envEnumerated = true;
+    if (use.kind === 'read') env.push(...use.names);
+    else if (use.kind === 'computed') envComputed = true;
+    else if (use.kind === 'enumerated') envEnumerated = true;
   });
 
   return { readsByPath, env, envEnumerated, envComputed };
