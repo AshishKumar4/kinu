@@ -273,16 +273,41 @@ describe('the workspace keeps exactly one wake row', () => {
     const nowSec = Math.floor(Date.now() / 1000);
     await workspace.agent._kinuTerminalRetryTick();
 
-    // Under arm-first the tick wrote its pessimistic next-lap row BEFORE the
-    // drain, and the job's own resume arm collapsed into it — soonest-wins.
-    // The registry therefore holds the EARLIER wake: a future row strictly
-    // before the job's instant, kept because the job is owed work — which is
-    // what re-runs the sweep until the instant arrives rather than losing the
-    // chain the moment the immediate wake was spent.
+    // The immediate wake is spent, the drain found the job not-yet-due, and
+    // the registry holds exactly the instant that job owes — one row at its
+    // own time, armed by the sweep that knows what it is waiting for, not by
+    // a guess about laps. The job's wake and the retry's wake are the same
+    // row, by collapse.
     const restored = await wakes();
-    expect(restored).toHaveLength(1);
+    expect(restored.map((row) => row.time)).toEqual([owedAt]);
     expect(restored[0]?.time).toBeGreaterThan(nowSec);
-    expect(restored[0]?.time).toBeLessThan(owedAt);
+  });
+
+  test('a deferred job costs one wake at its instant, not a climbing chain', async () => {
+    // The pace regression arm-first would otherwise buy: the pessimistic
+    // next-lap row collapses a deferred instant away, and owedWorkExists
+    // keeps it, so a workspace waiting sixty seconds wakes at two, four,
+    // eight, sixteen, thirty-two doing nothing — where the pre-arm shape woke
+    // once, at the instant. A FINISHED pass re-arms at the soonest timed owed
+    // instant instead, which is what the row below must show.
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    const now = Date.now();
+    const resumeAt = now + 60_000;
+    db.prepare(
+      `INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, resume_after, created_at)
+       VALUES (?, 'job-deferred', 'agents', 'build', 'running', '{}', ?, ?)`,
+    ).run(harnessActorId(db), resumeAt, now);
+
+    await agent._kinuTerminalRetryTick();
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick')
+      .map((row) => row.time);
+
+    expect(armed).toEqual([Math.ceil(resumeAt / 1000)]);
   });
 
   test('a failed re-arm leaves the previous wake row in place', async () => {

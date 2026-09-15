@@ -1017,6 +1017,14 @@ export class BackgroundJobRunner {
       .filter((job): job is BackgroundJob => job !== null && job !== undefined);
   }
 
+  /** The earliest instant a deferred resume is owed, or null when no job is
+   *  waiting — the same MIN `recoverDueResumes` reads, exposed so a wake
+   *  frame that has just finished can arm at the real instant instead of
+   *  pacing a pessimistic chain toward it. */
+  nextResumeAt(): number | null {
+    return this.deps.store.nextResumeAtInWorkspace();
+  }
+
   /**
    * The wake's entry point: re-enter recovery when a deferred attempt has come
    * due, and cost one read when none has.

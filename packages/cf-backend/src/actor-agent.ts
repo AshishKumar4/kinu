@@ -1920,10 +1920,16 @@ export abstract class ActorAgent extends Think<Env> {
     } else {
       this.#maintenanceLaps = 0;
 
-      // Nothing unfinished and nothing owed anywhere: the pessimistic arm was
-      // the cost of safety, not a wake anything is waiting on, so the tick
-      // releases exactly the row it wrote and the workspace sleeps empty.
-      if (!this.owedWorkExists()) await this.cancelSchedule(armedRowId);
+      // The pass is finished, so the pessimistic row's insurance has paid
+      // out. What it owes next is decided by the ledgers, not by the laps:
+      // a timed obligation waits for its own instant (a lone deferred job
+      // costs ONE wake at the instant, not a chain that arrives early and
+      // does nothing), and nothing owed at all sleeps empty — either way
+      // the row this tick wrote is released, never kept on suspicion.
+      const nextOwed = this.nextOwedAt();
+      await this.cancelSchedule(armedRowId);
+
+      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     }
   }
 
@@ -1968,6 +1974,16 @@ export abstract class ActorAgent extends Think<Env> {
    *  never a flattened copy of the roster, for its end-of-tick cancel. */
   protected owedWorkExists(): boolean {
     return false;
+  }
+
+  /** The earliest instant anything timed owes this actor a wake, or null
+   *  when only untimed work — or nothing — remains. A finished tick arms at
+   *  this instant instead of keeping its pessimistic next-lap row, so a lone
+   *  deferred obligation costs one wake at its own instant rather than a
+   *  chain of laps that arrive early and do nothing. The base times nothing,
+   *  so it answers null; the subclass that owns the ledgers overrides. */
+  protected nextOwedAt(): number | null {
+    return null;
   }
 
   /**
