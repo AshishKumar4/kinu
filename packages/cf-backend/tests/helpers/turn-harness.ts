@@ -27,7 +27,13 @@ import type { JsonObject } from '@kinu.run/core';
 
 /** What the loop was about to send the model for one admitted turn. */
 export interface PreparedRequest {
+  /** The ids the loop gave the admitted turn. */
+  readonly identity: SettledTurn;
+  /** The conversation the turn was assembled over, as the loop was handed it. */
   readonly messages: readonly ModelMessage[];
+  /** What the model was actually called with at the first step — the
+   *  history plus what the step pipeline spliced in. */
+  readonly prompt: readonly ModelMessage[];
   readonly system: string | undefined;
   readonly model: LanguageModel | string | undefined;
   readonly tools: ToolSet;
@@ -51,6 +57,13 @@ export interface ScriptedAnswer {
    *  SDK's own type forbids. Production never writes one; recovery can meet
    *  one, and the suite that pins that arm needs it. */
   readonly unreadableRole?: 'tool';
+  /** How the model's step ended: `length` is an answer the provider cut at
+   *  its output limit, which the loop continues once and the roster then
+   *  reads off the last step. Stop by default. */
+  readonly finishReason?: 'stop' | 'length';
+  /** The answer row cannot be written: the commit fails, so the turn leaves no
+   *  durable answer, and the settle rejects with that failure. */
+  readonly persistFails?: true;
 }
 
 /** How a suite admits a turn: the conversation as the loop sees it, the raw
@@ -63,6 +76,12 @@ export interface TurnInput {
   /** An admission a suite cuts short: the loop refuses a prepared turn whose
    *  signal is already aborted. */
   readonly signal?: AbortSignal;
+}
+
+/** The identity a settled turn's rows carry. */
+export interface SettledTurn {
+  readonly turnId: string;
+  readonly messageId: string;
 }
 
 /** How a whole turn ended, as a suite reads it: the loop's verdict and the
@@ -87,12 +106,18 @@ export interface TurnHarness {
   runQueuedMessage(): Promise<void>;
   /** Admit a turn and read the request the loop assembled for it. */
   prepare(input: TurnInput): Promise<PreparedRequest>;
+  /** Resume the loop on a fresh activation — the turn the last process died
+   *  inside continues, the sends it acknowledged rerun — and read the request
+   *  the first resumed turn was assembled with, parked at its model call. */
+  resume(): Promise<PreparedRequest>;
   /** The request the loop composes for step `stepNumber` of the prepared
    *  turn, over `messages` — the per-step weave (dynamic context, cache
    *  breakpoints, pruning) a suite pins on the array the model receives. */
   step(stepNumber: number, messages: readonly ModelMessage[]): Promise<readonly ModelMessage[]>;
-  /** Settle a turn with a scripted answer, through the production spine. */
-  settle(answer: ScriptedAnswer): Promise<void>;
+  /** Settle a turn with a scripted answer, through the production spine, and
+   *  answer the ids the loop gave it: the opening row's and the answer's —
+   *  the keys every durable row of the turn is written under. */
+  settle(answer: ScriptedAnswer): Promise<SettledTurn>;
   /** Name the durable turn the next settle belongs to — the identity the
    *  terminal transition claims against. */
   open(turnId: string): void;
