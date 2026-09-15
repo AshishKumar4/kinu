@@ -1,0 +1,207 @@
+/**
+ * The living background behind the signed-in shell: a connectome, fixed
+ * behind the rail and the page, that breathes while nothing runs, fires
+ * toward one lobe while a workspace is working, and flashes a lobe once
+ * when a decision arrives. Its whole input is the overview read model of the
+ * recent workspaces, watched through `useRosterActivity`; nothing in it is a
+ * decoration loop disconnected from the product.
+ *
+ * It mounts through the hero's living canvas: WebGPU where there is an
+ * adapter, Canvas2D otherwise or after a GPU fault, one evolved still under
+ * `prefers-reduced-motion` and on a phone, the tab hidden or the host off
+ * screen means no work at all. It is lightly blurred, and a mask keeps it
+ * faintest over the page's column and whole at the edges, on top of the
+ * tissue's own falloff to nothing across the middle. The copy
+ * itself never has tissue under it: every run of text on the ground
+ * (`ground-text.ts`) is a keep-out box the picture fades under, re-read
+ * when the page's contents change, scroll or resize.
+ *
+ * It shows only on surfaces with nothing to read through it: the home,
+ * account settings, MCP servers, the shared library and a workspace's
+ * settings. The chat, the explorer and the control plane never mount it.
+ */
+import { useEffect, useRef, type ReactElement } from 'react';
+import { useLocation } from 'react-router-dom';
+
+import { APP_ROUTES, routeTemplateOf, type ReportedRoute } from '@kinu.run/core';
+import type { ArtFrame, KeepOut } from '@kinu.run/core/web/art';
+import { CANVAS_SEGMENTS, Connectome, type ConnectomeActivity, type ConnectomeMode, MESH_SEGMENTS } from '@kinu.run/core/web/connectome';
+import { groundTextElements } from '@kinu.run/core/web/ground-text';
+import { useMediaQuery } from '@/hooks/use-media-query';
+import { useRosterActivity } from '@/hooks/use-workspace-overviews';
+import { mountLivingCanvas, type LivingCanvas, type RendererKind } from './landing/search-tree/living-canvas';
+import { keepOutOf, type FrameTimes } from './landing/search-tree/stage';
+
+/** Seeded apart from the landing hero's on purpose: the two artworks never rhyme. */
+const BACKGROUND_SEED = 1729;
+
+/** The still a visitor without motion sees: the tissue this far in, mid-breath, a signal or two in flight. */
+const STILL_SECONDS = 7;
+
+const STILL_STEP = 1 / 30;
+
+/** Physical pixels per CSS pixel as a share of the device's own: the rim
+ *  draws at the device's own resolution, as the hero does, with a light
+ *  blur on top; the copy never has tissue under it, so nothing sharp sits
+ *  behind text either way. */
+const RESOLUTION = 1;
+
+/** Tailwind's `md`: the width at which the shell shows its rail
+ *  (`md:block` on the aside in layout.tsx). Narrower is a phone, and a phone
+ *  gets the still, the hero's rule. */
+const RAIL_QUERY = '(min-width: 48rem)';
+
+/** The surfaces the tissue shows under: none of them holds a transcript, a
+ *  code pane or a slate frame. */
+const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
+  [APP_ROUTES.home]: true,
+  [APP_ROUTES.userSettings]: true,
+  [APP_ROUTES.userMcp]: true,
+  [APP_ROUTES.shared]: true,
+  [APP_ROUTES.agentSettings]: true,
+};
+
+/** What a gate can read off the live background: which renderer took the
+ *  canvas, the last frames' cost, the picture's clock, and what the tissue
+ *  is doing. */
+export interface AppBackgroundHandle {
+  renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
+  frameTimes(): FrameTimes;
+  time(): number;
+  mode(): ConnectomeMode;
+}
+
+declare global {
+  interface Window {
+    __kinuAppBackground?: AppBackgroundHandle;
+  }
+}
+
+/** `known` outlives the tissue: it is what the shell last saw, carried
+ *  across the routes that hide the canvas, so a decision that arrived while
+ *  the chat was open flashes on the way back and one seen before does not. */
+function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }): ReactElement {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const wide = useMediaQuery(RAIL_QUERY);
+  const { working, decisions } = useRosterActivity();
+  const living = useRef<LivingCanvas<ArtFrame, Connectome> | null>(null);
+
+  useEffect(() => {
+    known.current = { working, decisions };
+    living.current?.art().setActivity(known.current);
+  }, [known, working, decisions]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    const shell = host?.parentElement ?? null;
+
+    if (host === null || shell === null) return;
+    let picture: Connectome | null = null;
+    let copy: Element[] = [];
+    let stale = true;
+    let scheduled = 0;
+
+    /** The copy's boxes in the host's view units, re-listing the elements only after the page changed. */
+    const keepOut = (): KeepOut[] => {
+      if (stale) {
+        copy = groundTextElements(shell, host);
+        stale = false;
+      }
+
+      const box = host.getBoundingClientRect();
+      const boxes: KeepOut[] = [];
+
+      for (const element of copy) {
+        const rect = element.getBoundingClientRect();
+        const kept = rect.width > 0 && rect.height > 0 ? keepOutOf(box, rect) : null;
+
+        if (kept !== null) boxes.push(kept);
+      }
+
+      return boxes;
+    };
+
+    // The full mat for the GPU half; Canvas2D — the fallback and every
+    // still — strokes a sparser one from the same seed, and a GPU fault
+    // mid-run hands the sparser one over rather than stroking the full mat.
+    const mat = (aspect: number, renderer: RendererKind): Connectome => {
+      picture = new Connectome({ seed: BACKGROUND_SEED, aspect, segments: renderer === 'webgpu' ? MESH_SEGMENTS : CANVAS_SEGMENTS, activity: known.current });
+
+      return picture;
+    };
+
+    const mounted = mountLivingCanvas(host, {
+      create: mat,
+      rebind: (_art, aspect) => mat(aspect, 'canvas'),
+      still: { seconds: STILL_SECONDS, step: STILL_STEP },
+      holdStill: () => !wide,
+      resolution: RESOLUTION,
+      fit: (art) => art.setKeepOut(keepOut()),
+      shown: (_frame, canvas) => {
+        const mode = picture?.mode() ?? 'idle';
+
+        if (canvas.dataset.mode !== mode) canvas.dataset.mode = mode;
+      },
+      events: { failed: 'app.background_webgpu_failed', faulted: 'app.background_webgpu_faulted', fallbackFailed: 'app.background_fallback_failed' },
+      canvasClassName: 'absolute inset-0 size-full',
+    });
+
+    // The copy moves when the page scrolls, and changes when it renders; one
+    // frame later the picture learns the new boxes. A scroll re-reads boxes
+    // only; a mutation re-lists the elements too.
+    const align = (): void => {
+      scheduled = 0;
+      mounted.align();
+    };
+
+    const onScroll = (): void => {
+      if (scheduled === 0) scheduled = requestAnimationFrame(align);
+    };
+
+    const onMutation = (): void => {
+      stale = true;
+      onScroll();
+    };
+
+    const changes = new MutationObserver(onMutation);
+    changes.observe(shell, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+    shell.addEventListener('scroll', onScroll, { capture: true, passive: true });
+
+    const handle: AppBackgroundHandle = {
+      renderer: () => mounted.renderer(),
+      frameTimes: () => mounted.frameTimes(),
+      time: () => mounted.time(),
+      mode: () => mounted.art().mode(),
+    };
+
+    living.current = mounted;
+    window.__kinuAppBackground = handle;
+
+    return () => {
+      changes.disconnect();
+      shell.removeEventListener('scroll', onScroll, { capture: true });
+
+      if (scheduled !== 0) cancelAnimationFrame(scheduled);
+      mounted.dispose();
+      living.current = null;
+
+      if (window.__kinuAppBackground === handle) delete window.__kinuAppBackground;
+    };
+  }, [known, wide]);
+
+  return (
+    <div
+      ref={hostRef}
+      data-app-background
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-0 -z-10 [filter:blur(.6px)] [mask-image:radial-gradient(ellipse_55%_55%_at_58%_50%,rgba(0,0,0,.7),black_100%)]"
+    />
+  );
+}
+
+export function AppBackground(): ReactElement | null {
+  const { pathname } = useLocation();
+  const known = useRef<ConnectomeActivity>({ working: false, decisions: 0 });
+
+  return SHOWN_ROUTES[routeTemplateOf(pathname)] === true ? <Tissue known={known} /> : null;
+}

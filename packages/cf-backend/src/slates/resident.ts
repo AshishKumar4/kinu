@@ -7,7 +7,7 @@ import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
 import { CRED_KERNEL, type RouteableFacetTarget, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import slateVendor from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
@@ -85,7 +85,15 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     'import { DurableObject } from "cloudflare:workers";',
     'import { newWorkersRpcResponse, newWebSocketRpcSession, RpcTarget } from "./capnweb.js";',
     'import { react, capnweb, slateClient } from "./vendor.js";',
-    'import * as slateModule from "./application.js";',
+    'function describeExport(value) {',
+    '  if (value === undefined) return "nothing";',
+    '  if (typeof value === "function") {',
+    '    if (value.prototype?.[Symbol.for("kinu.slate")] === true) return "a class extending SlateObject under the wrong export name";',
+    '    return Function.prototype.toString.call(value).trimStart().startsWith("class") ? "a class that does not extend SlateObject" : "a function";',
+    '  }',
+    '  if (typeof value === "object" && value !== null) return "an object, not a class";',
+    '  return "a " + typeof value;',
+    '}',
     'const METHOD_RE = new RegExp(' + JSON.stringify(SLATE_METHOD_NAME_SOURCE) + ');',
     'class SlateRefusal extends Error {',
     '  constructor(result) {',
@@ -160,11 +168,29 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '  #forwarder;',
     '  constructor(ctx, env) { super(ctx, env); }',
     '  async startProcess() {',
-    '    const Slate = slateModule.Slate;',
+    '    // The authored module is imported here, not at the top: a static import',
+    '    // evaluates during worker boot, where a throw in authored source (say a',
+    '    // missing SlateObject import) surfaces as an io fault instead of the',
+    '    // bad_input refusal startProcess is built to return.',
+    '    let slateModule;',
+    '    try {',
+    '      slateModule = await import("./application.js");',
+    '    }',
+    '    catch (cause) {',
+    '      return { ok: false, error: "package.json main threw at evaluation: " + errorText(cause) };',
+    '    }',
+    '    // Either export shape satisfies the contract: the named Slate the skill',
+    '    // documents, or the class carried as the module\'s default export.',
+    '    const Slate = typeof slateModule.Slate === "function" && slateModule.Slate.prototype?.[Symbol.for("kinu.slate")] === true',
+    '      ? slateModule.Slate',
+    '      : slateModule.default;',
     '    // The contract check is authored-input refusal, not a fault: it crosses',
     '    // as data so the promise never logs as an uncaught rejection.',
     '    if (typeof Slate !== "function" || Slate.prototype?.[Symbol.for("kinu.slate")] !== true) {',
-    '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate" };',
+    '      const found = Object.keys(slateModule)',
+    '        .map((name) => name + ": " + describeExport(slateModule[name]))',
+    '        .join(", ");',
+    '      return { ok: false, error: "package.json main must export class Slate extends SlateObject from kinu:slate (the Slate export or the default export); found " + (found === "" ? "no exports at all" : found) };',
     '    }',
     // `__storage` is the runner's own handle on the reserved binding, never
     // part of the guest's binding map: the slate reaches it as `this.storage`.
@@ -252,7 +278,10 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '      }});',
     '    }',
     '    const slate = this.#slate;',
-    '    if (slate === undefined || typeof slate.fetch !== "function") return new Response("Not found", { status: 404 });',
+    '    // The header names this refusal as the runner\'s own: the host\'s route',
+    '    // answers the same bare body when nothing listens, and the two must',
+    '    // be told apart from outside.',
+    '    if (slate === undefined || typeof slate.fetch !== "function") return new Response("Not found", { status: 404, headers: { "x-slate-runner": slate === undefined ? "unstarted" : "no-fetch" } });',
     '    return invocations.run(request.headers.get("x-slate-call"), () => slate.fetch(request));',
     '  }',
     '}',
@@ -518,6 +547,13 @@ export class ResidentSlateProcesses {
     if (input.app !== null) await this.deps.registerPort(entry.pid, input.app.port, process, input.owner);
 
     session.processes.setTerminator(entry.pid, () => {
+      // The one door a resident's registration leaves by: whoever ends the
+      // pid is on the stack here, which is what the event records.
+      diagnostics.event('slate.resident.terminated', {
+        pid: entry.pid, owner: input.owner, port: input.app?.port ?? 0,
+        state: session.processes.get(entry.pid)?.state ?? 'absent',
+        by: new Error('resident terminated').stack?.split('\n').slice(2, 8).map((line) => line.trim()).join(' < ') ?? '',
+      });
       this.deps.unregisterPorts(entry.pid);
       this.deps.ctx.waitUntil(process.release());
     });

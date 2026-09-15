@@ -224,7 +224,9 @@ function inheritedDescriptor<Instance extends object>(instance: Instance, name: 
  */
 const USER_DO_METHODS = [
   'createReleaseChange',
+  'completeOnboarding',
   'decideReleaseApproval',
+  'deleteAccount',
   'deleteCredential',
   'deviceRpc',
   'deviceRuntimeStatus',
@@ -295,6 +297,7 @@ const USER_DO_METHODS = [
   'setConfig',
   'setCredential',
   'setDeviceTier',
+  'setDisplayName',
   'setWorkspaceDisplayName',
   'startCodexDeviceFlow',
   'touchWorkspace',
@@ -321,6 +324,7 @@ const USER_DO_METHODS = [
   'revokeAllCliTokens',
   'getCredentialsRevision',
   'sharesReceived_add',
+  'sharesReceived_forget',
   'sharesReceived_list',
 ] as const satisfies readonly (keyof UserDO)[];
 

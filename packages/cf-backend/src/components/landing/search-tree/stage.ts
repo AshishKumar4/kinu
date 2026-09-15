@@ -1,5 +1,5 @@
 import { useMediaQuery } from '@/hooks/use-media-query';
-import type { HeroPalette, KeepOut, Rgb } from '@kinu.run/core/web/hero-art';
+import type { ArtPalette, KeepOut, Rgb } from '@kinu.run/core/web/art';
 
 function cssRgb(name: string): Rgb {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -19,7 +19,7 @@ function cssRgb(name: string): Rgb {
     : [red, green, blue];
 }
 
-export function readPalette(): HeroPalette {
+export function readPalette(): ArtPalette {
   return {
     mode: document.documentElement.dataset.mode === 'light' ? 'light' : 'dark',
     accent: cssRgb('--c-accent'),

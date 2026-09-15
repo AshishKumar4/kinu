@@ -407,6 +407,7 @@ export {
   findPublishable,
   runExperienceAction,
   EXPERIENCE_ACTIONS,
+  EXPERIENCE_KINDS,
   type ExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,
@@ -1804,6 +1805,13 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
+export {
+  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+} from './orchestrator/chat-session';
+
+export { ActorMessagesTranscript, type TranscriptStore, type TranscriptRow } from './orchestrator/transcript-store';
+
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
 
 export {
@@ -2171,9 +2179,9 @@ export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
 
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, rosterActivity, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
-export type { WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
+export type { RosterActivity, WorkspaceOverview, WorkspaceOverviewFact, WorkspaceOverviewStatus } from './read-models/workspace-overview';
 
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -2566,6 +2574,15 @@ export {
   REPORTED_ROUTES,
   routeTemplateOf,
 } from './read-models/app-routes';
+
+export {
+  type AccountOnboarding,
+  needsOnboarding,
+  ONBOARDING_STEPS,
+  type OnboardingStepId,
+} from './read-models/account';
+
+export { DISPLAY_NAME_MAX, confirmsAccountDelete, displayNameProblem } from './read-models/account';
 
 export {
   CLIENT_ERROR_ENDPOINT,

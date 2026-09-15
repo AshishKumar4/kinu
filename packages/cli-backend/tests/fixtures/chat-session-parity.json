@@ -1,0 +1,969 @@
+{
+  "afterTwo": {
+    "actorMessages": [
+      {
+        "id": "<uuid#1>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "one",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#2>",
+        "sessionId": "default",
+        "parentId": "<uuid#1>",
+        "role": "assistant",
+        "content": "answer one",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#3>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "two",
+        "metadata": null
+      },
+      {
+        "id": "<steer#4>",
+        "sessionId": "default",
+        "parentId": "<uuid#3>",
+        "role": "user",
+        "content": "two-steer",
+        "metadata": {
+          "kinuSteer": true,
+          "kinuSteerAtStep": 1
+        }
+      },
+      {
+        "id": "<uuid#5>",
+        "sessionId": "default",
+        "parentId": "<steer#4>",
+        "role": "assistant",
+        "content": "answer two",
+        "metadata": null
+      }
+    ],
+    "pendingSteers": [],
+    "pendingSteerFiles": [],
+    "agentLog": [],
+    "terminalEffects": [
+      {
+        "sequenceId": "<uuid#3>/<uuid#5>",
+        "effectKey": "v1:takes:<uuid#5>",
+        "effectName": "takes",
+        "scope": "<uuid#5>",
+        "seq": 0,
+        "input": {
+          "credited": "<uuid#5>",
+          "startedAt": "<clock>",
+          "takeIds": []
+        },
+        "lane": "inline",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#3>/<uuid#5>",
+        "effectKey": "v1:turn_record:<uuid#5>",
+        "effectName": "turn_record",
+        "scope": "<uuid#5>",
+        "seq": 1,
+        "input": {
+          "messageId": "<uuid#5>",
+          "status": "completed",
+          "turn": {
+            "userMessage": "two",
+            "assistantResponse": "answer two",
+            "toolCalls": [
+              {
+                "toolCallId": "call-1",
+                "name": "fact",
+                "args": {
+                  "action": "recall",
+                  "key": "probe"
+                },
+                "result": {
+                  "error": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+                },
+                "outcome": {
+                  "success": false,
+                  "reason": null
+                }
+              }
+            ],
+            "craftedToolsUsed": [],
+            "steps": 2,
+            "durationMs": "<clock>",
+            "feedback": null,
+            "hadError": true,
+            "sessionId": "default",
+            "origin": "user",
+            "turnId": "<uuid#5>",
+            "usage": {
+              "input": 10,
+              "output": 14
+            }
+          },
+          "continuity": "conversation",
+          "workMode": "build",
+          "recordedAt": "<clock>",
+          "autoEvolve": false
+        },
+        "lane": "inline",
+        "status": "completed",
+        "outcome": "the turn was produced with auto-evolution off",
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#3>/<uuid#5>",
+        "effectKey": "v1:event_drain:<uuid#5>",
+        "effectName": "event_drain",
+        "scope": "<uuid#5>",
+        "seq": 2,
+        "input": {},
+        "lane": "inline",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#3>/<uuid#5>",
+        "effectKey": "v1:improvement_lanes:<uuid#5>",
+        "effectName": "improvement_lanes",
+        "scope": "<uuid#5>",
+        "seq": 3,
+        "input": {
+          "status": "completed",
+          "turn": {
+            "userMessage": "two",
+            "assistantResponse": "answer two",
+            "toolCalls": [
+              {
+                "toolCallId": "call-1",
+                "name": "fact",
+                "args": {
+                  "action": "recall",
+                  "key": "probe"
+                },
+                "result": {
+                  "error": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+                },
+                "outcome": {
+                  "success": false,
+                  "reason": null
+                }
+              }
+            ],
+            "craftedToolsUsed": [],
+            "steps": 2,
+            "durationMs": "<clock>",
+            "feedback": null,
+            "hadError": true,
+            "sessionId": "default",
+            "origin": "user",
+            "turnId": "<uuid#5>",
+            "usage": {
+              "input": 10,
+              "output": 14
+            }
+          },
+          "workMode": "build",
+          "advisor": {
+            "turn": {
+              "userMessage": "two",
+              "assistantResponse": "answer two",
+              "toolCalls": [
+                {
+                  "toolCallId": "call-1",
+                  "name": "fact",
+                  "args": {
+                    "action": "recall",
+                    "key": "probe"
+                  },
+                  "result": {
+                    "error": "Model tried to call unavailable tool 'fact'. Available tools: execute_tools, run, file, memory, tasks, web, agents."
+                  },
+                  "outcome": {
+                    "success": false,
+                    "reason": null
+                  }
+                }
+              ],
+              "craftedToolsUsed": [],
+              "steps": 2,
+              "durationMs": "<clock>",
+              "feedback": null,
+              "hadError": true,
+              "sessionId": "default",
+              "origin": "user",
+              "turnId": "<uuid#5>",
+              "usage": {
+                "input": 10,
+                "output": 14
+              }
+            },
+            "reachable": [
+              "execute_tools",
+              "run",
+              "file",
+              "memory",
+              "tasks",
+              "web",
+              "agents"
+            ],
+            "recent": [],
+            "minSeverity": "concern",
+            "gateOpen": false
+          }
+        },
+        "lane": "inline",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#3>/<uuid#5>",
+        "effectKey": "v1:auto_title:<uuid#5>",
+        "effectName": "auto_title",
+        "scope": "<uuid#5>",
+        "seq": 4,
+        "input": {
+          "subject": "two"
+        },
+        "lane": "detached",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      }
+    ]
+  },
+  "beforeRestart": {
+    "actorMessages": [
+      {
+        "id": "<uuid#1>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "one",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#2>",
+        "sessionId": "default",
+        "parentId": "<uuid#1>",
+        "role": "assistant",
+        "content": "answer one",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#3>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "two",
+        "metadata": null
+      },
+      {
+        "id": "<steer#4>",
+        "sessionId": "default",
+        "parentId": "<uuid#3>",
+        "role": "user",
+        "content": "two-steer",
+        "metadata": {
+          "kinuSteer": true,
+          "kinuSteerAtStep": 1
+        }
+      },
+      {
+        "id": "<uuid#5>",
+        "sessionId": "default",
+        "parentId": "<steer#4>",
+        "role": "assistant",
+        "content": "answer two",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#6>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "three",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#7>",
+        "sessionId": "default",
+        "parentId": "<uuid#6>",
+        "role": "assistant",
+        "content": "answer three",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#8>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "four",
+        "metadata": null
+      }
+    ],
+    "pendingSteers": [
+      {
+        "id": "<steer#9>",
+        "turnId": null,
+        "mode": "build",
+        "text": "four"
+      },
+      {
+        "id": "<steer#10>",
+        "turnId": "<uuid#8>",
+        "mode": "build",
+        "text": "four-steer"
+      }
+    ],
+    "pendingSteerFiles": [
+      {
+        "steerId": "<steer#10>",
+        "filename": "note.txt",
+        "mediaType": "text/plain",
+        "url": "data:text/plain;base64,aGVsbG8="
+      }
+    ],
+    "agentLog": [],
+    "terminalEffects": []
+  },
+  "end": {
+    "actorMessages": [
+      {
+        "id": "<uuid#1>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "one",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#2>",
+        "sessionId": "default",
+        "parentId": "<uuid#1>",
+        "role": "assistant",
+        "content": "answer one",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#3>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "two",
+        "metadata": null
+      },
+      {
+        "id": "<steer#4>",
+        "sessionId": "default",
+        "parentId": "<uuid#3>",
+        "role": "user",
+        "content": "two-steer",
+        "metadata": {
+          "kinuSteer": true,
+          "kinuSteerAtStep": 1
+        }
+      },
+      {
+        "id": "<uuid#5>",
+        "sessionId": "default",
+        "parentId": "<steer#4>",
+        "role": "assistant",
+        "content": "answer two",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#6>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "three",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#7>",
+        "sessionId": "default",
+        "parentId": "<uuid#6>",
+        "role": "assistant",
+        "content": "answer three",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#8>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "four",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#11>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "four",
+        "metadata": null
+      },
+      {
+        "id": "<steer#10>",
+        "sessionId": "default",
+        "parentId": "<uuid#11>",
+        "role": "user",
+        "content": "four-steer",
+        "metadata": {
+          "kinuSteer": true,
+          "kinuSteerAtStep": 0
+        }
+      },
+      {
+        "id": "<uuid#12>",
+        "sessionId": "default",
+        "parentId": "<steer#10>",
+        "role": "assistant",
+        "content": "answer four again",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#13>",
+        "sessionId": "default",
+        "parentId": null,
+        "role": "user",
+        "content": "five",
+        "metadata": null
+      },
+      {
+        "id": "<uuid#14>",
+        "sessionId": "default",
+        "parentId": "<uuid#13>",
+        "role": "assistant",
+        "content": "answer five",
+        "metadata": null
+      }
+    ],
+    "pendingSteers": [],
+    "pendingSteerFiles": [],
+    "agentLog": [],
+    "terminalEffects": [
+      {
+        "sequenceId": "<uuid#13>/<uuid#14>",
+        "effectKey": "v1:takes:<uuid#14>",
+        "effectName": "takes",
+        "scope": "<uuid#14>",
+        "seq": 0,
+        "input": {
+          "credited": "<uuid#14>",
+          "startedAt": "<clock>",
+          "takeIds": []
+        },
+        "lane": "inline",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#13>/<uuid#14>",
+        "effectKey": "v1:turn_record:<uuid#14>",
+        "effectName": "turn_record",
+        "scope": "<uuid#14>",
+        "seq": 1,
+        "input": {
+          "messageId": "<uuid#14>",
+          "status": "completed",
+          "turn": {
+            "userMessage": "five",
+            "assistantResponse": "answer five",
+            "toolCalls": [],
+            "craftedToolsUsed": [],
+            "steps": 1,
+            "durationMs": "<clock>",
+            "feedback": null,
+            "hadError": false,
+            "sessionId": "default",
+            "origin": "user",
+            "turnId": "<uuid#14>",
+            "usage": {
+              "input": 5,
+              "output": 7
+            }
+          },
+          "continuity": "conversation",
+          "workMode": "build",
+          "recordedAt": "<clock>",
+          "autoEvolve": false
+        },
+        "lane": "inline",
+        "status": "completed",
+        "outcome": "the turn was produced with auto-evolution off",
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#13>/<uuid#14>",
+        "effectKey": "v1:event_drain:<uuid#14>",
+        "effectName": "event_drain",
+        "scope": "<uuid#14>",
+        "seq": 2,
+        "input": {},
+        "lane": "inline",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#13>/<uuid#14>",
+        "effectKey": "v1:improvement_lanes:<uuid#14>",
+        "effectName": "improvement_lanes",
+        "scope": "<uuid#14>",
+        "seq": 3,
+        "input": {
+          "status": "completed",
+          "turn": {
+            "userMessage": "five",
+            "assistantResponse": "answer five",
+            "toolCalls": [],
+            "craftedToolsUsed": [],
+            "steps": 1,
+            "durationMs": "<clock>",
+            "feedback": null,
+            "hadError": false,
+            "sessionId": "default",
+            "origin": "user",
+            "turnId": "<uuid#14>",
+            "usage": {
+              "input": 5,
+              "output": 7
+            }
+          },
+          "workMode": "build",
+          "advisor": {
+            "turn": {
+              "userMessage": "five",
+              "assistantResponse": "answer five",
+              "toolCalls": [],
+              "craftedToolsUsed": [],
+              "steps": 1,
+              "durationMs": "<clock>",
+              "feedback": null,
+              "hadError": false,
+              "sessionId": "default",
+              "origin": "user",
+              "turnId": "<uuid#14>",
+              "usage": {
+                "input": 5,
+                "output": 7
+              }
+            },
+            "reachable": [
+              "execute_tools",
+              "run",
+              "file",
+              "memory",
+              "tasks",
+              "web",
+              "agents"
+            ],
+            "recent": [],
+            "minSeverity": "concern",
+            "gateOpen": false
+          }
+        },
+        "lane": "inline",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      },
+      {
+        "sequenceId": "<uuid#13>/<uuid#14>",
+        "effectKey": "v1:auto_title:<uuid#14>",
+        "effectName": "auto_title",
+        "scope": "<uuid#14>",
+        "seq": 4,
+        "input": {
+          "subject": "five"
+        },
+        "lane": "detached",
+        "status": "completed",
+        "outcome": null,
+        "attempts": 1,
+        "settled": true
+      }
+    ]
+  },
+  "events": [
+    [
+      {
+        "type": "turn-start",
+        "kind": "user",
+        "text": "one",
+        "workMode": "build"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "text-delta",
+        "delta": "answe"
+      },
+      {
+        "type": "text-delta",
+        "delta": "r one"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      },
+      {
+        "type": "turn-end",
+        "origin": "user",
+        "userMessage": "one",
+        "assistantResponse": "answer one",
+        "toolCalls": 0
+      },
+      {
+        "type": "turn-start",
+        "kind": "user",
+        "text": "two",
+        "workMode": "build"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "tool-call",
+        "toolName": "fact",
+        "toolCallId": "call-1"
+      },
+      {
+        "type": "run-event",
+        "event": "tool_call_end"
+      },
+      {
+        "type": "tool-result",
+        "toolName": "fact",
+        "toolCallId": "call-1",
+        "success": false
+      },
+      {
+        "type": "broadcast",
+        "event": "steer_status"
+      },
+      {
+        "type": "broadcast",
+        "event": "steer_status"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "text-delta",
+        "delta": "answer two"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      },
+      {
+        "type": "turn-end",
+        "origin": "user",
+        "userMessage": "two",
+        "assistantResponse": "answer two",
+        "toolCalls": 1
+      },
+      {
+        "type": "turn-start",
+        "kind": "user",
+        "text": "three",
+        "workMode": "build"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "text-delta",
+        "delta": "answer three"
+      },
+      {
+        "type": "broadcast",
+        "event": "steer_status"
+      },
+      {
+        "type": "broadcast",
+        "event": "steer_status"
+      },
+      {
+        "type": "error",
+        "message": "The turn was interrupted before it finished."
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      },
+      {
+        "type": "turn-end",
+        "origin": "user",
+        "userMessage": "three",
+        "assistantResponse": "answer three",
+        "toolCalls": 0
+      },
+      {
+        "type": "turn-start",
+        "kind": "user",
+        "text": "four",
+        "workMode": "build"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "tool-call",
+        "toolName": "fact",
+        "toolCallId": "call-1"
+      },
+      {
+        "type": "run-event",
+        "event": "tool_call_end"
+      },
+      {
+        "type": "tool-result",
+        "toolName": "fact",
+        "toolCallId": "call-1",
+        "success": false
+      },
+      {
+        "type": "broadcast",
+        "event": "steer_status"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      }
+    ],
+    [
+      {
+        "type": "background",
+        "event": "pending_sends_restored",
+        "message": "restored 2 acknowledged sends the last process left"
+      },
+      {
+        "type": "turn-start",
+        "kind": "user",
+        "text": "four",
+        "workMode": "build"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "broadcast",
+        "event": "steer_status"
+      },
+      {
+        "type": "text-delta",
+        "delta": "answer f"
+      },
+      {
+        "type": "text-delta",
+        "delta": "our again"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      },
+      {
+        "type": "turn-end",
+        "origin": "user",
+        "userMessage": "four",
+        "assistantResponse": "answer four again",
+        "toolCalls": 0
+      },
+      {
+        "type": "turn-start",
+        "kind": "user",
+        "text": "five",
+        "workMode": "build"
+      },
+      {
+        "type": "run-event",
+        "event": "run_start"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_start"
+      },
+      {
+        "type": "run-event",
+        "event": "profile_resolution"
+      },
+      {
+        "type": "text-delta",
+        "delta": "answe"
+      },
+      {
+        "type": "text-delta",
+        "delta": "r five"
+      },
+      {
+        "type": "run-event",
+        "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "turn_end"
+      },
+      {
+        "type": "run-event",
+        "event": "run_end"
+      },
+      {
+        "type": "turn-end",
+        "origin": "user",
+        "userMessage": "five",
+        "assistantResponse": "answer five",
+        "toolCalls": 0
+      }
+    ]
+  ],
+  "landings": {
+    "landingTwo": "mid-turn",
+    "landingThree": "mid-turn",
+    "returned": [
+      "three-steer"
+    ],
+    "landingFour": "mid-turn",
+    "landingFive": "turn"
+  }
+}
