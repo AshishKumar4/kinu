@@ -159,6 +159,15 @@ const twoTurnProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const accountResetProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/account-reset-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/account-reset-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022', keepNames: true,
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 const slateDurabilityProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-durability-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-durability-probe.js', import.meta.url)),
@@ -318,6 +327,25 @@ export default defineConfig({
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
             UserDO: { className: 'UserDO', useSQLite: true },
           },
+        }, {
+          // Account deletion end to end: the production UserDO (as the probe
+          // subclass, sealed through the production seal) tearing down the
+          // production OrchestratorAgent objects it registered, then itself.
+          // No model plane and no network: nothing here runs a turn.
+          name: 'account-reset-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: accountResetProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          outboundService: async (request) => {
+            throw new Error('Unmatched test egress is disabled: ' + request.url);
+          },
+          durableObjects: {
+            ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
         }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -350,6 +378,7 @@ export default defineConfig({
           TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
           DEVBOX_NOT_READY_PROBE: { className: 'DevboxNotReadyProbeDO', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
+          ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
         },
       },
     }),

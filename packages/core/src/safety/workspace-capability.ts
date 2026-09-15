@@ -127,6 +127,10 @@ const WORKSPACE_CAPABILITY_TIERS = {
   /** The owner's profile — their verified email is what outbound notifications
    *  and inbound email trust are keyed on. */
   'profile': 'workspace',
+  /** The account itself — marking onboarding done, renaming the owner,
+   *  deleting everything. Owner-only because a workspace that could reset
+   *  the account could erase every sibling workspace. */
+  'account': 'owner_only',
   /** Account role/tier catalog needed to resolve this workspace's next turn. */
   'profile.resolve': 'workspace',
   /** User-level defaults (default model, strategy, gateway selection). */

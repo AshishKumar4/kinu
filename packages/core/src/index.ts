@@ -389,6 +389,7 @@ export {
   findPublishable,
   runExperienceAction,
   EXPERIENCE_ACTIONS,
+  EXPERIENCE_KINDS,
   type ExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,
@@ -2551,6 +2552,15 @@ export {
   REPORTED_ROUTES,
   routeTemplateOf,
 } from './read-models/app-routes';
+
+export {
+  type AccountOnboarding,
+  needsOnboarding,
+  ONBOARDING_STEPS,
+  type OnboardingStepId,
+} from './read-models/account';
+
+export { DISPLAY_NAME_MAX, confirmsAccountDelete, displayNameProblem } from './read-models/account';
 
 export {
   CLIENT_ERROR_ENDPOINT,

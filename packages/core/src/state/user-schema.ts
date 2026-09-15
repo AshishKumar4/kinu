@@ -35,6 +35,18 @@ export function initUserTables(sql: SqlExec): void {
       last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
   `);
+  // Onboarding is a table of its own rather than a `user_profile` column: the
+  // genesis lock (scripts/schema-drift.ts) refuses a new column on a shipped
+  // table, and `CREATE TABLE IF NOT EXISTS` is a no-op on storage that already
+  // has `user_profile`. A one-row table reaches every existing account on its
+  // next activation, and an absent row is the "not onboarded" answer, so a
+  // reset account (storage wiped) starts over by construction.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_onboarding (
+      id           INTEGER PRIMARY KEY CHECK (id = 1),
+      completed_at INTEGER NOT NULL
+    )
+  `);
 
   // Workspaces this user has created (each 1:1 with an OrchestratorAgent DO
   // that hosts the workspace + its default agent). UserDO is the source of

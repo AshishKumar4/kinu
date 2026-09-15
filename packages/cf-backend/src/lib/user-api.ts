@@ -4,7 +4,8 @@
  * is synthesized server-side), so these fetches are bare.
  */
 import {
-  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS,
+  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, EXPERIENCE_KINDS,
+  type ExperienceKind,
   ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
@@ -23,6 +24,8 @@ export interface UserProfile {
   displayName: string | null;
   createdAt: number;
   lastSeenAt: number;
+  /** First-run setup's completion stamp: `null` until the wizard's finish. */
+  onboardedAt: number | null;
   /** True when this session's email is on the control-plane operator list.
    *  Decided server-side by the same function that guards `/api/control/*`, so
    *  it drives the nav entry's visibility and nothing else — the gate answers
@@ -83,6 +86,7 @@ const OkSchema = v.object({ ok: v.boolean() });
 
 const UserProfileSchema = v.nullable(v.object({
   email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
+  onboardedAt: v.nullable(v.number()),
   /** Whether this session may reach the admin control plane. Optional so a
    *  client running against an older Worker reads `undefined` and hides the nav
    *  entry, rather than failing to parse a profile it otherwise understands. */
@@ -167,6 +171,28 @@ async function api<Schema extends v.GenericSchema, Body>(
 
 // ── Profile ────────────────────────────────────────────────────────
 export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
+
+export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }), 'POST', '/onboarding/complete');
+
+// ── Experience library ─────────────────────────────────────────────
+/** One published entry as the plugins surface reads it: the payload is loose
+ *  because only a craft's description is shown, and every other kind still
+ *  has to parse. */
+const ExperienceSummarySchema = v.object({
+  id: v.string(), kind: v.picklist(EXPERIENCE_KINDS), key: v.string(), title: v.string(),
+  sourceWorkspace: v.string(), publishedAt: v.number(), evidence: v.string(),
+  payload: v.looseObject({ kind: v.string(), description: v.optional(v.string()) }),
+});
+
+export const listExperience = (kind: ExperienceKind) =>
+  api(v.array(ExperienceSummarySchema), 'GET', `/experience?kind=${kind}&limit=50`);
+
+export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
+
+/** The one write that deletes the account itself — the confirmation phrase is
+ *  the account's own email, checked again server-side. */
+export const deleteAccount = (confirm: string) =>
+  api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm });
 
 export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 

@@ -1187,12 +1187,13 @@ export const LADDER: readonly Gate[] = [
       + 'independent instrument bugs cost us to learn.',
   },
   {
-    run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts',
     tier: 'ci',
-    // Measured 2026-09-14 after the app-background UX self-test joined this
-    // row: 293.62s over one run on the 24-thread workstation (was 265.76s
-    // before it joined, same day).
-    seconds: 315,
+    // Measured 2026-09-14 with both the app-background and the account-ux
+    // self-tests in this row: 347.00s over one run on the 24-thread
+    // workstation (293.62s with app-background alone, declared 315; 324.74s
+    // with account-ux alone, declared 350; 265.76s before either joined).
+    seconds: 375,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1239,7 +1240,13 @@ export const LADDER: readonly Gate[] = [
       + 'workspace route, and follows the overview read model through idle, '
       + 'working and attention. The '
       + 'drive costs nothing measurable: 55.8s before and '
-      + '55.6s after for chat-and-files-ux alone, 2026-09-01.',
+      + '55.6s after for chat-and-files-ux alone, 2026-09-01. The account surfaces '
+      + 'join here: the setup modal over the home chrome, the settings providers '
+      + 'section, the onboarding wizard at each of its four steps with only the '
+      + 'active panel reachable, the account section whose delete button wakes '
+      + 'only on the typed email, and the primary nav with the workspaces (list '
+      + 'and tiled, searched), plugins and four-list shared pages behind it — all '
+      + 'read through the shared account fixture at both widths in both themes.',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '

@@ -58,6 +58,7 @@ export const LANDING_PROFILE: UserProfile = {
   displayName: 'Ashish',
   createdAt: NOW - 90 * 864e5,
   lastSeenAt: NOW,
+  onboardedAt: NOW - 90 * 864e5,
 };
 
 /* ── The checkout workspace: a Build turn, mid-fix ─────────────────────── */

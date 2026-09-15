@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useParams } from "react-router-dom";
 import { Suspense } from "react";
 import Layout from "./components/layout";
 import HomePage from "./pages/HomePage";
@@ -6,10 +6,15 @@ import WorkspacePage from "./pages/WorkspacePage";
 import SettingsPage from "./pages/SettingsPage";
 import UserSettingsPage from "./pages/UserSettingsPage";
 import UserMcpPage from "./pages/UserMcpPage";
+import WelcomePage from "./pages/WelcomePage";
 import SharedPage from "./pages/SharedPage";
+import WorkspacesPage from "./pages/WorkspacesPage";
+import PluginsPage from "./pages/PluginsPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { APP_ROUTES } from "@kinu.run/core";
+import { APP_ROUTES, needsOnboarding } from "@kinu.run/core";
+import { AccountProvider, useAccount } from "@/hooks/use-account";
+import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
 import { Loader } from "@cloudflare/kumo";
 
@@ -71,6 +76,28 @@ function TriggersRedirect() {
   return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
 }
 
+// An account that has never finished setup lands on the wizard no matter
+// which URL it arrived at, and an onboarded account that wanders to
+// `/welcome` comes home — the two redirect halves live on one route element
+// so they can never both fire. A profile that failed to read gates nothing:
+// the read may be wrong, but the account's data is still there.
+function OnboardingGate() {
+  const { profile } = useAccount();
+  const at = useLocation().pathname;
+
+  if (profile.status === "loading") return <LazyFallback />;
+
+  const gate = needsOnboarding(lastValue(profile));
+
+  if (at === APP_ROUTES.welcome) {
+    if (!gate) return <Navigate to={APP_ROUTES.home} replace />;
+  } else if (gate) {
+    return <Navigate to={APP_ROUTES.welcome} replace />;
+  }
+
+  return <Outlet />;
+}
+
 // Every `path` below is read from `APP_ROUTES` rather than spelled here, so the
 // router and a render-failure report's route field cannot drift: a path this file
 // routes and that table does not know reports as `/unmatched`, which is a finding
@@ -79,29 +106,34 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.userSettings} element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.userMcp} element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.shared} element={<ErrorBoundary label="shared"><SharedPage /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.explore} element={
-            <ErrorBoundary label="mcts-explorer">
-              <Suspense fallback={<LazyFallback />}>
-                <MCTSExplorer />
-              </Suspense>
-            </ErrorBoundary>
-          } />
-          <Route path={APP_ROUTES.control} element={
-            <ErrorBoundary label="control-plane">
-              <Suspense fallback={<LazyFallback />}>
-                <ControlPage />
-              </Suspense>
-            </ErrorBoundary>
-          } />
-          <Route path={APP_ROUTES.agentSettings} element={<ErrorBoundary label="agent-settings"><KeyedSettings /></ErrorBoundary>} />
-          <Route path={APP_ROUTES.triggers} element={<TriggersRedirect />} />
+        <Route element={<AccountProvider><OnboardingGate /></AccountProvider>}>
+          <Route path={APP_ROUTES.welcome} element={<ErrorBoundary label="welcome"><WelcomePage /></ErrorBoundary>} />
+          <Route element={<Layout />}>
+            <Route index element={<ErrorBoundary label="home"><HomePage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.userSettings} element={<ErrorBoundary label="user-settings"><UserSettingsPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.userMcp} element={<ErrorBoundary label="user-mcp"><UserMcpPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.shared} element={<ErrorBoundary label="shared"><SharedPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.workspaces} element={<ErrorBoundary label="workspaces"><WorkspacesPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.plugins} element={<ErrorBoundary label="plugins"><PluginsPage /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.workspace} element={<ErrorBoundary label="workspace"><KeyedWorkspace /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.workspaceAgent} element={<ErrorBoundary label="workspace-agent"><KeyedWorkspace /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.explore} element={
+              <ErrorBoundary label="mcts-explorer">
+                <Suspense fallback={<LazyFallback />}>
+                  <MCTSExplorer />
+                </Suspense>
+              </ErrorBoundary>
+            } />
+            <Route path={APP_ROUTES.control} element={
+              <ErrorBoundary label="control-plane">
+                <Suspense fallback={<LazyFallback />}>
+                  <ControlPage />
+                </Suspense>
+              </ErrorBoundary>
+            } />
+            <Route path={APP_ROUTES.agentSettings} element={<ErrorBoundary label="agent-settings"><KeyedSettings /></ErrorBoundary>} />
+            <Route path={APP_ROUTES.triggers} element={<TriggersRedirect />} />
+          </Route>
         </Route>
         {/* Outside the shell: a viewer without a session sees this page and nothing else. */}
         <Route path={APP_ROUTES.sharedBlueprint} element={<ErrorBoundary label="blueprint"><BlueprintPage /></ErrorBoundary>} />

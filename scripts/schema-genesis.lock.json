@@ -1200,6 +1200,10 @@
     "created_at",
     "updated_at"
   ],
+  "user_onboarding@packages/core/src/state/user-schema.ts": [
+    "id",
+    "completed_at"
+  ],
   "user_peer_grants@packages/core/src/state/user-schema.ts": [
     "sender_user_id",
     "sender_agent_name",
