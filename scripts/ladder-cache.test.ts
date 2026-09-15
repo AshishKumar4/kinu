@@ -225,8 +225,13 @@ describe('ladder-cache — red in every direction it claims', () => {
     expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ ALPHA: '' }))).not.toBe(base);
     expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ UNRELATED: 'x' }))).toBe(base);
 
+    // A declared name the graph never reads is a key input once declared:
+    // with it, a value for BETA moves the key away from the base; without it,
+    // the same value leaves the base untouched.
     const declared = { ...plan.closure, env: ['ALPHA', 'BETA'] };
-    expect(keyFor('bun scripts/a.ts', declared, fx.tools, repo, reader({ BETA: 'y' }))).not.toBe(keyFor('bun scripts/a.ts', declared, fx.tools, repo, reader({})));
+    expect(keyFor('bun scripts/a.ts', plan.closure, fx.tools, repo, reader({ BETA: 'y' }))).toBe(base);
+    expect(keyFor('bun scripts/a.ts', declared, fx.tools, repo, reader({}))).not.toBe(base);
+    expect(keyFor('bun scripts/a.ts', declared, fx.tools, repo, reader({ BETA: 'y' }))).not.toBe(base);
   });
 
   test('a closure that changes while the gate runs is not recorded', () => {

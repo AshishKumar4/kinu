@@ -199,6 +199,8 @@ interface DeployRun {
   readonly environment?: string;
   readonly tmpdir?: string;
   readonly option?: string;
+  /** Further options after `option`, for the combinations the script accepts. */
+  readonly options?: readonly string[];
   readonly ambientPhase?: string;
   /** The thread budget the wave schedules against; the box's count when absent. */
   readonly threads?: number;
@@ -210,6 +212,7 @@ function runDeploy({
   dirty = false,
   tmpdir: temporaryRoot,
   option,
+  options = [],
   ambientPhase = "",
   threads,
 }: DeployRun = {}) {
@@ -259,6 +262,7 @@ exit 87
   const argv = ["/usr/bin/bash", "scripts/deploy.sh"];
 
   if (option !== undefined) argv.push(option);
+  argv.push(...options);
   const budget: Record<string, string> = {};
 
   if (threads !== undefined) budget.KINU_DEPLOY_THREADS = String(threads);
@@ -672,12 +676,38 @@ describe("deploy gate", () => {
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.infraPhase).toBeNull();
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap|--gates-only]");
+    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap] [--gates-only] [--all]");
   });
 
   // The rehearsal path: every pre-publish gate, no build, no upload. It is how
   // the wave's wall time is measured for the width figures in scripts/ladder.ts,
   // so it has to run exactly the gates a deploy runs and touch nothing after.
+  // FAIL FAST, WITH A FULL AUDIT ON REQUEST. The default wave stops launching
+  // at its first red and lets what is running finish; `--all` keeps launching
+  // so one run reports every red. Proved at budget 1 so the order is
+  // deterministic and the difference is exactly "the gates after the red".
+  test("the first red stops new launches by default, and --all runs every gate anyway", () => {
+    const second = REQUIRED_GATES[2];
+
+    if (second === undefined) throw new Error("no third gate");
+    const stopped = runDeploy({ failingGate: second, threads: 1 });
+    expect(stopped.status).not.toBe(0);
+    expect(stopped.events).toEqual(REQUIRED_GATES.slice(0, 3));
+    expect(stopped.stdout).toContain("stopping new launches at the first failure");
+
+    // The WHOLE WAVE, and only the wave: a red wave still ends the pipeline
+    // before the next barrier, so the hammer and the account gate never run.
+    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
+    const audited = runDeploy({ failingGate: second, threads: 1, option: "--gates-only", options: ["--all"] });
+    expect(audited.status).not.toBe(0);
+    // By POSITION, as the wave test above does: deploy.sh spells one gate with
+    // a glob and REQUIRED_GATES carries its expansion.
+    const prePublish = (waves[0]?.length ?? 0) + (waves[1]?.length ?? 0);
+    expect(audited.events).toEqual(REQUIRED_GATES.slice(0, prePublish));
+    expect(audited.stdout).toContain("every gate regardless of failures (--all)");
+    expect(audited.events.some((event) => event.startsWith("MUTATE ")), "--all published on a red").toBe(false);
+  }, 60_000);
+
   test("gates-only runs every pre-publish gate and mutates nothing", () => {
     const run = runDeploy({ option: "--gates-only" });
 
