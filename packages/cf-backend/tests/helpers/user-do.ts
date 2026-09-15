@@ -206,8 +206,8 @@ export interface TestUserDOOptions {
    *  and let the reconciliation retry converge on the next. */
   capabilityPushMissed?: () => number;
   /** Which `oauth-app` presets the deployment pretends to carry the
-   *  registered app for — the same names `clientIdEnv`/`clientSecretEnv` in
-   *  `MCP_PRESETS` name, filled with fixed test values. Absent means no
+   *  registered app for — preset ids (`'github'`, `'google'`), filled with
+   *  fixed test values under the keys `MCP_APP_ENV` names. Absent means no
    *  preset app is configured. */
   mcpAppCredentials?: readonly string[];
 }

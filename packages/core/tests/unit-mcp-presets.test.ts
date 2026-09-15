@@ -31,6 +31,21 @@ describe('MCP_PRESETS', () => {
     }
   });
 
+  test('an oauth-app preset answers its deploy fallback and its scope', () => {
+    // Core owns the catalog shape, never the env names — those are typed keys
+    // on `Env`, which cf-backend's MCP_APP_ENV maps each oauth-app id onto.
+    const oauthApps = MCP_PRESETS.filter((preset) => preset.auth === 'oauth-app');
+
+    for (const preset of oauthApps) {
+      expect(preset.scope).toBeTruthy();
+    }
+
+    // GitHub carries a token fallback so the card works without the app;
+    // Gmail has none — the card renders only when the app is configured.
+    expect(oauthApps.find((p) => p.id === 'github')?.tokenFallback).toBeTruthy();
+    expect(oauthApps.find((p) => p.id === 'google')?.tokenFallback).toBeUndefined();
+  });
+
   test('titles are distinct — each is the name its row claims', () => {
     expect(new Set(MCP_PRESETS.map((preset) => preset.title)).size).toBe(MCP_PRESETS.length);
   });
