@@ -114,17 +114,6 @@ export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
 
 export type QueueProbeMode = 'chat' | 'peer' | 'signal' | 'yield' | 'cold' | 'attach' | 'attach-cold' | 'evt';
 
-/** One durable input row `actor_turn_inputs` persisted — the request-owned
- *  admission ledger the cold test reads across a reset. */
-export const InputReceiptSchema = v.object({
-  actorId: v.string(),
-  requestId: v.string(),
-  messageIds: v.array(v.string()),
-  settled: v.boolean(),
-});
-
-export type InputReceipt = v.InferOutput<typeof InputReceiptSchema>;
-
 /** A durable `pending_steers` row — the reservation a mid-turn send writes:
  *  the client's own message id bound to the turn it will land in. */
 export const PendingSteerSchema = v.object({
@@ -156,7 +145,6 @@ export const PreparedConversationSchema = v.object({
   bFrame: v.string(),
   cFrame: v.string(),
   /** Every durable input row at prepare time (idle-path admissions only). */
-  receipts: v.array(InputReceiptSchema),
   /** The durable mid-turn reservations at prepare time — B's in-flight send and
    *  C's queued send, each bound to the turn it will land in. */
   steers: v.array(PendingSteerSchema),
