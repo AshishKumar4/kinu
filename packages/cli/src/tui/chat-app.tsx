@@ -1309,10 +1309,22 @@ function ChatScene({
         return;
       }
 
-      case 'run-event':
+      case 'run-event': {
+        // A `provider_wait` row is the turn saying "the model endpoint told me
+        // to wait" — the difference between a quiet stream that is thinking
+        // and one that is rate-limited. The next phase-setting event
+        // (text-delta, tool-call, step-finish) replaces it as soon as the wait
+        // is over; until then the phase line names the wait honestly.
+        if (event.event.type === 'provider_wait') {
+          const notice = event.event;
+
+          setTurnPhase(`waiting on ${notice.provider} (retry in ${Math.ceil(notice.waitMs / 1000)}s)`);
+        }
+
         return;
+      }
     }
-  }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, stream]);
+  }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, setTurnPhase, stream]);
 
   // Connect once per client: event subscription, startup resources, initial
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.

@@ -138,6 +138,29 @@ export interface ProviderEnv {
   DEV_USER_EMAIL?: string;
 }
 
+/** What a wait imposed by the provider (or the lane sharing it) looks like
+ *  to a surface. Emitted through {@link ProviderDeps.onProviderWait} the moment
+ *  a request is told to sleep, so a turn that is waiting reads as waiting —
+ *  the alternative is a stream that is simply silent while the retry layer
+ *  holds it.
+ *
+ *  `source` says WHO mandated the wait: the provider's own `Retry-After`
+ *  (`header`), this layer's backoff when no header arrived (`backoff`), or the
+ *  shared pacer's join onto a cooldown a sibling already declared (`cooldown`).
+ *  `status` is the upstream status that caused it when a response exists —
+ *  absent on a `cooldown` join, which has no response of its own. */
+export interface ProviderWaitInfo {
+  readonly provider: string;
+  readonly modelId?: string;
+  /** How long the request will sleep, in ms. */
+  readonly waitMs: number;
+  /** Which attempt (1-based) was refused — 0 when the wait precedes any
+   *  request of its own, as a `cooldown` join does. */
+  readonly attempt: number;
+  readonly status?: number;
+  readonly source: 'header' | 'backoff' | 'cooldown';
+}
+
 export interface ProviderDeps {
   env: ProviderEnv;
   /** Returns auth headers + baseURL for `key`, or null if not configured. */
@@ -151,6 +174,12 @@ export interface ProviderDeps {
    *  dynamic source lists nothing (resolution still works). */
   listCredentialKeys?: () => Promise<string[]>;
   fetch?: typeof fetch;
+  /** Called the moment a request is about to sleep on a provider-mandated or
+   *  backoff wait (rate-limit-retry), including joins onto a sibling's
+   *  declared cooldown. Optional — a deps object without it reports waits
+   *  nowhere, which is what leaves a rate-limited turn looking like a
+   *  thinking one. */
+  onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
 export interface ModelProvider {

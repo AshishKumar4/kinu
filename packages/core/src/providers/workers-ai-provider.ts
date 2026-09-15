@@ -45,7 +45,11 @@ export function createWorkersAIProvider(
           name: 'workers-ai',
           baseURL: 'https://kinu-direct-workers-ai.invalid',
           headers: requestHeaders,
-          fetch: createDirectWorkersAIFetch(developmentBinding),
+          fetch: createDirectWorkersAIFetch(developmentBinding, {
+            provider: 'workers-ai',
+            modelId,
+            ...(deps.onProviderWait !== undefined && { onWait: deps.onProviderWait }),
+          }),
         }).chatModel(modelId);
       }
 
@@ -55,6 +59,9 @@ export function createWorkersAIProvider(
         credKey: CLOUDFLARE_OAUTH_CRED_KEY,
         getAuth: deps.getAuth,
         fetch: deps.fetch,
+        provider: 'workers-ai',
+        modelId,
+        onProviderWait: deps.onProviderWait,
         placeholder,
         missingCredentialMessage: 'Cloudflare login is required before using Workers AI models.',
         // Replica pinning for the server-side prefix cache — without this

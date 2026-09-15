@@ -447,6 +447,31 @@ describe('ChatApp terminal interaction', () => {
     expect(alpha.state.closed).toBe(1);
   });
 
+test('a turn waiting on a rate limit names the provider, not thinking', async () => {
+  const agent = fakeClient({ name: 'wait-visible' });
+
+  const screen = await mountChat(agent.client, { kittyKeyboard: true });
+  agent.emit({ type: 'turn-start', kind: 'user', text: 'fix the coupon' });
+  await screen.waitFor('the turn thinking', () => screen.frame().includes('thinking'));
+  agent.emit({
+    type: 'run-event',
+    event: {
+      type: 'provider_wait',
+      eventIndex: 3,
+      runId: 'run-1',
+      timestamp: new Date().toISOString(),
+      provider: 'anthropic',
+      waitMs: 30_000,
+      attempt: 1,
+      status: 429,
+      source: 'header',
+    },
+  });
+  await screen.waitFor('the phase line to name the wait', () =>
+    screen.frame().includes('waiting on anthropic (retry in 30s)'));
+  expect(screen.frame()).not.toContain('thinking');
+});
+
   const HUB_FIXTURE: TuiHubData = {
     agents: [{
       id: 'agent-main', label: 'Checkout', kind: 'main', status: 'idle',

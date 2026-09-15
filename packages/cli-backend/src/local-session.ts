@@ -914,6 +914,27 @@ export class LocalAgentSession implements BackendHost {
         }),
       },
     });
+    // The resolver outlives the session that consumes it — it was built before
+    // this session existed — so the wait sink is installed rather than
+    // configured. Every notice lands in the run-event ledger as
+    // `provider_wait`; the recorder's observe() forwards it to the surface the
+    // same instant, which is how a rate-limited turn reads "waiting on …"
+    // instead of just falling silent. `recordRunEvent` contains its own
+    // failures, so a ledger fault cannot reach the sleeping request.
+    this.modelResolver?.setProviderWaitSink?.((info) => {
+      this.recordRunEvent(
+        {
+          type: 'provider_wait',
+          provider: info.provider,
+          waitMs: info.waitMs,
+          attempt: info.attempt,
+          source: info.source,
+          ...(info.modelId !== undefined && { modelId: info.modelId }),
+          ...(info.status !== undefined && { status: info.status }),
+        },
+        currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID,
+      );
+    });
     this.compactionExtension = createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
@@ -2425,6 +2446,10 @@ export class LocalAgentSession implements BackendHost {
       transformTrigger: measured.trigger,
       cache,
       budget: this.budget,
+      // The turn's own calls' lifecycle rows: a `model_operation` pair per
+      // provider call, so a call that never returned names itself in the
+      // durable log (the run was mid-request, not mid-step).
+      operations: this.modelOperations,
     };
 
     if (measured.providerReportedTokens !== undefined) {
