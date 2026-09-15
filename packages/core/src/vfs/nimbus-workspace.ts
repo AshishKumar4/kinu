@@ -50,7 +50,7 @@ import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { diagnostics, toKinuError } from '../obs/index';
-import { isVfsError, makeVfsError } from './errno';
+import { isVfsError } from './errno';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
 
@@ -133,33 +133,11 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
     async mkdir(path, opts) { await (await fs()).mkdir(workspacePath(path), opts); },
     async exists(path) { return (await fs()).exists(workspacePath(path)); },
 
-    /**
-     * Depth-first, rather than `SandboxFs.rm(..., { recursive: true })`.
-     *
-     * That one resolves the tree it is about to delete through the kernel's own
-     * in-memory nodes (@nimbus-sh/core kernel/vfs/VFS.ts `resolveNode`), which
-     * do not cover a provider-backed mount — so it raises ENOENT on a directory
-     * that demonstrably exists. Removing the entries one at a time goes through
-     * the mount provider, which handles both an unlink and an empty-directory
-     * removal correctly.
-     */
-    async removeRecursive(path) {
-      const handle = await fs();
-
-      const remove = async (target: string): Promise<void> => {
-        const st = await self.stat(target);
-
-        if (!st) throw makeVfsError('ENOENT', 'no such file or directory', target);
-
-        if (st.isDir) {
-          for (const name of await self.readdir(target)) await remove(`${target}/${name}`);
-        }
-
-        await handle.rm(workspacePath(target));
-      };
-
-      await remove(path);
-    },
+    // One native removal: the kernel's `rmdirRecursive` dispatches on the
+    // mount table (core 0.9), so a provider-backed tree is walked through its
+    // own provider rather than the in-memory nodes that once answered ENOENT
+    // for a directory that demonstrably existed.
+    async removeRecursive(path) { await (await fs()).rm(workspacePath(path), { recursive: true }); },
 
     async rename(oldPath, newPath) {
       await (await fs()).rename(workspacePath(oldPath), workspacePath(newPath));
