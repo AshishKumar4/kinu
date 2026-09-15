@@ -20,19 +20,10 @@ import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OUTPUT_LIMIT_REACHED,
   type AgentSignal,
 } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
 /** One settled assistant response, as Think reports it. */
-function settledResponse(messageId: string, text = 'the answer so far'): Parameters<
-  HarnessOrchestratorAgent['onChatResponse']
->[0] {
-  return {
-    message: { id: messageId, role: 'assistant', parts: [{ type: 'text', text }] },
-    requestId: `req-${messageId}`, continuation: false, status: 'completed',
-  };
-}
-
 /**
  * The turn's last step, recorded exactly as Think's `onStepFinish` records it:
  * the actor's hook maps the SDK step onto this call, and `lastFinishReason` is
@@ -54,8 +45,7 @@ async function settle(
 
     return 'queued';
   });
-  harness.agent.declareTurnCheckpoint(turnId);
-  await harness.agent.onChatResponse(settledResponse(messageId));
+  await thinkTurns(harness.agent).settle({ turnId, messageId, text: 'the answer so far' });
   await harness.agent.harnessTerminalReported();
   await joinHarnessFibers();
 
