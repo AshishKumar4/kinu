@@ -65,7 +65,10 @@ For a `bun test <files>` gate the closure is:
 - `bun.lock` and `patches/`, standing in for `node_modules`;
 - the whole tracked corpus when `scripts/sources.ts` is in the graph, since
   every corpus gate reads the tree through it;
-- the row's declared `reads`, expanded against the tracked corpus;
+- the row's declared `reads`, expanded against the tracked corpus, or the
+  whole corpus when the row declares `corpus: true` because the audit shows
+  the suite scanning the tree by path (a `reads` list there would be a
+  hand-kept allowlist over the corpus);
 - the values of every environment variable the graph names as a literal
   (`process.env.NAME`) plus the row's declared `env` names;
 - the toolchain: bun, node, typescript, oxlint, wrangler, vitest versions and

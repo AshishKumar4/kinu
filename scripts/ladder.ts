@@ -993,9 +993,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'both backend composition roots, and every subprocess path. It also covers only '
       + 'core — see ROOT_TEST_OMISSIONS in ladder.test.ts, which pins every other package by '
       + 'equality with the gate that runs it.',
-    // `mutation-exploration-policy.test.ts` imports a mutated copy of
-    // `strategy/archive.ts` it wrote to scratch; the bytes derive from these sources.
-    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/strategy/', 'packages/core/src/execution/codemode-node-shim.ts'] },
+    // Measured by `--audit-closure` 2026-09-15: the suite opens hundreds of
+    // tracked sources by path (it scans the tree), so its closure is the corpus.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/core/src/strategy/', 'packages/core/src/execution/codemode-node-shim.ts'] },
   },
   {
     run: 'bun run test:spine',
@@ -1049,7 +1049,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything that needs a real container: the mounts themselves, the object store, '
       + 'and the platform lifecycle. Those are the bench app under `packages/devbox/bench` '
       + 'and an ephemeral deployed Worker, not this gate.',
-    inputs: AMBIENT_BY_NAME,
+    // Measured by `--audit-closure` 2026-09-15: the suite opens manifests, the
+    // worker source and its bench sources by path, so its closure is the corpus.
+    inputs: { ...AMBIENT_BY_NAME, corpus: true },
   },
   {
     run: 'bun test packages/test-utils/',

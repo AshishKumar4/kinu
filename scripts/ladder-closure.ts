@@ -71,6 +71,11 @@ export type Inputs =
      *  walker cannot follow the string, so `--audit-closure` is what checks
      *  the declaration against the file the process really loaded. */
     readonly imports?: readonly string[];
+    /** The gate reads the tree: every tracked file is an input, as for a
+     *  graph that reaches `scripts/sources.ts`. Declared when the audit shows
+     *  a suite scanning sources by path, where a `reads` list would be a
+     *  hand-kept allowlist over the corpus. */
+    readonly corpus?: true;
   }
   | {
     /** Never cached: the gate touches a network, a deployed build, a live
@@ -528,7 +533,7 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   const walked = walkGraph(form.entries, repo);
 
   if (walked.failure !== undefined) return { kind: 'uncomputable', why: `${run}: ${walked.failure}` };
-  const corpus = form.corpus || walked.corpus;
+  const corpus = form.corpus || walked.corpus || inputs.corpus === true;
   const refused = refusal(run, walked, inputs, corpus);
 
   if (refused !== undefined) return { kind: 'uncomputable', why: refused };
@@ -543,7 +548,9 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     for (const file of repo.files) files.add(file);
     notes.push(walked.corpus
       ? `reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`
-      : 'reads the whole corpus: every tracked file is an input');
+      : inputs.corpus === true
+        ? 'the row declares it reads the tree: every tracked file is an input'
+        : 'reads the whole corpus: every tracked file is an input');
   }
 
   for (const prefix of [...form.reads, ...(inputs.reads ?? []), ...(inputs.imports ?? [])]) {
