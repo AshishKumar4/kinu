@@ -29,11 +29,11 @@ import * as v from 'valibot';
 
 import {
   DEFAULT_DEVBOX_POLICY, parseRecoveryRow, type DevboxPolicy, type RecoveryRow,
-  type RecoveryStage,
+  type RecoveryStage, type StartClock,
 } from '../src/lifecycle';
 import type { StoredValue } from '../src/storage';
 import {
-  Devbox, FakeSandbox, gate, harness, SandboxFailure, STAMP_COMMAND,
+  Devbox, FakeSandbox, gate, harness, manualStartClock, SandboxFailure, STAMP_COMMAND,
   type FakeStorage, type Harness, type StartFault,
 } from './support/devbox-harness';
 
@@ -85,8 +85,16 @@ const TIGHT_POLICY: DevboxPolicy = {
 
 
 class TightBox extends Devbox<unknown> {
+  /** The budget's clock, advanced by the test: a 20 ms budget is a fact of
+   *  arithmetic here, not a race against the machine. */
+  readonly clock = manualStartClock();
+
   protected override get policy(): DevboxPolicy {
     return TIGHT_POLICY;
+  }
+
+  protected override get startClock(): StartClock {
+    return this.clock;
   }
 
   protected override get previewHost(): string | undefined {
@@ -1146,7 +1154,9 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       container.startGate = slow;
       const attempt = box.devboxStartup();
       await slow.reached;
-      // The allowance expires while the start is still parked.
+      // The process start's allowance expires while it is still parked: the
+      // earliest armed timer is that step's, not the whole hook's.
+      box.clock.tick();
       await attempt;
 
       expect(container.destroys).toBe(0);
@@ -1199,11 +1209,42 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       container.exposeGate = slow;
       const attempt = box.devboxStartup();
       await slow.reached;
+      // The exposure's own allowance expires and nothing else does: the hook
+      // budget stays armed, so what is reported is the exposure, not the hook.
+      box.clock.tick();
       await attempt;
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
       expect(state.ready).toBe(false);
       expect(state.unready).toContain('port 3000');
+      expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
+      slow.release();
+    });
+
+  test('the exposure verdict does not depend on how slowly the container answers',
+    async () => {
+      // The deploy wave's shape, made deterministic: every command takes longer
+      // in real time than the whole 20 ms budget. On a wall-clock budget the
+      // restore outran the hook before the exposure was reached and the box
+      // settled as `[deadline → repair]` (main `bea156897`, 2026-09-15). On the
+      // test's own clock only the exposure's allowance elapses.
+      const harnessed = harness(TightBox);
+    const { box, container, rows } = harnessed;
+      port(rows, 3000, 'tok3000');
+      container.listening.add(3000);
+      container.execDelayMs = 25;
+      const slow = gate();
+      container.exposeGate = slow;
+      const attempt = box.devboxStartup();
+      await slow.reached;
+      box.clock.tick();
+      await attempt;
+      expect(container.destroys).toBe(0);
+      const state = await box.devboxState();
+      // The exposure's own report, not the hook's: `[deadline → repair]` would
+      // name the budget and file its incident at the `process` stage.
+      expect(state.unready).toContain('port 3000');
+      expect(state.unready).not.toContain('hook budget');
       expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
       slow.release();
     });
@@ -1217,9 +1258,13 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const slow = gate();
       container.stampGate = slow;
       const attempt = box.devboxStartup();
-      const rejected = expect(attempt).rejects.toThrow('[abandoned → replace]');
       await slow.reached;
-      await rejected;
+      // The whole hook budget elapses with the stamp still parked. The
+      // rejection is asserted AFTER the clock moves: bun's `expect(promise)
+      // .rejects` blocks the test until the promise settles, and nothing can
+      // advance a test-driven clock while it does.
+      box.clock.advance(TIGHT_POLICY.attachBudgetMs);
+      await expect(attempt).rejects.toThrow('[abandoned → replace]');
       expect(container.destroys).toBe(0);
       const state = await box.devboxState();
       expect(state.ready).toBe(false);
