@@ -11,7 +11,7 @@
  *   /gallery.html?frame=workspaces[&view=tiled] and ?frame=plugins
  *     → the two primary-nav pages behind the shipped chrome (sidebar + page).
  *
- *   /gallery.html?frame=welcome&step=0..3
+ *   /gallery.html?frame=welcome&step=0..2
  *     → the onboarding wizard itself: full-screen, no chrome, stepped to the
  *       requested panel. The profile fixture answers `onboardedAt: null` for
  *       this frame, which is what makes the account a new one.
@@ -60,7 +60,7 @@ export function PluginsFrame() {
 
 const AccountPanelParam = v.picklist(ACCOUNT_PANELS);
 
-const WelcomeStepParam = v.picklist(["0", "1", "2", "3"]);
+const WelcomeStepParam = v.picklist(["0", "1", "2"]);
 
 /** The wizard alone: `mount` wraps every frame in the account provider, so
  *  the frame supplies nothing but the page — no sidebar, no chrome the wizard
