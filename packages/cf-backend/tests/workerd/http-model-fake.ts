@@ -1,4 +1,5 @@
 import * as v from 'valibot';
+import { WAKE_MARKER, WakeHoldPlacementSchema, type WakeHoldPlacement } from './two-turn-shapes';
 /**
  * The Node-side outbound handler for the two-turn HTTP-seam probe — the same
  * fail-and-record pattern the in-tree `slate-egress-probe` worker already
@@ -70,6 +71,25 @@ let parityHold: { readonly gate: HeldGate; readonly parkAt: 'first' | 'partial' 
 /** The gate a parity call is parked on right now — kept apart from the armed
  *  hold so `/parity/release` still reaches it after the call consumed the arm. */
 let parityParked: HeldGate | null = null;
+
+/** The window the wake proof holds open while the detached job settles,
+ *  armed by `/wake/hold` with the placement and released by `/wake/release`:
+ *
+ *   - `reply`: the interactive turn's REPLY step — the model call carrying the
+ *     detach handle — parks in this fake, so the job settles while the turn
+ *     is still running. This is the live incident's window (kinu-logs/
+ *     bgjob-wake: the process exited one second before the reply step).
+ *   - `settle`: the probe's turn-end extension — run by the inline
+ *     turn_end_extensions effect, after the answer's commit — parks over
+ *     `/wake/wait`, so the job settles inside the just-closed turn's settle. */
+let wakeHold: { readonly where: WakeHoldPlacement; readonly gate: HeldGate } | null = null;
+
+/** Park the caller while a hold of this placement is armed; no hold, no park. */
+async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {
+  if (wakeHold === null || wakeHold.where !== where) return;
+  wakeHold.gate.arrived.resolve();
+  await wakeHold.gate.release.promise;
+}
 
 const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
@@ -200,6 +220,57 @@ function sseResponse(chunks: readonly string[]): Response {
   );
 }
 
+
+/**
+ * The background-wake conversation's model. One lane, keyed on the request
+ * shape, so the whole scripted exchange runs on one pin:
+ *
+ *   - the opening request answers with a real `run` tool call — the command
+ *     that sleeps past the detach window and prints the marker;
+ *   - the request carrying that call's result (the detach handle) answers
+ *     `echo:detached`, which ends the turn — the settle then owes the title;
+ *   - the WOKEN turn's request — its typed line is the runner's own wake
+ *     message, naming the job — answers with an `execute_tools` call that reads
+ *     the job's result through the one seam the wake message names;
+ *   - the request carrying that result answers with the result's text, which
+ *     is how the reply carries the job's output.
+ */
+async function wakeBody(body: OutboundBody): Promise<Response> {
+  const messages = body.messages ?? [];
+  const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
+  const toolResults = messages.filter((m) => m.role === 'tool').map((m) => textOf(m.content));
+  // The runner's wake message is a user line among the runtime's own context
+  // lines; the turn it opens is told apart by that line, wherever it sits.
+  const woken = users.map((line) => /Background run job (\S+) completed/.exec(line)).find((match) => match !== null) ?? null;
+
+  const answer = (content: string): Response => sseResponse([
+    sseChunk({ content }), sseChunk({ role: 'assistant' }, 'stop'), sseDone(),
+  ]);
+
+  const call = (id: string, name: string, args: Record<string, string>): Response => sseResponse([
+    sseChunk({ tool_calls: [{ index: 0, id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }),
+    sseChunk({ role: 'assistant' }, 'tool_calls'),
+    sseDone(),
+  ]);
+
+  if (woken !== null) {
+    const read = toolResults.find((result) => result.includes(WAKE_MARKER));
+
+    if (read !== undefined) return answer(`echo:${read}`);
+
+    return call('call_wake_read_1', 'execute_tools', { code: `return await agent.jobResult(${JSON.stringify(woken[1])});` });
+  }
+
+  if (toolResults.length > 0) {
+    // The reply step: the call carrying the detach handle. Held here when the
+    // proof's window is the running turn.
+    await holdWakeWindow('reply');
+
+    return answer('echo:detached');
+  }
+
+  return call('call_wake_run_1', 'run', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
+}
 
 async function echoBody(body: OutboundBody): Promise<Response> {
   const users = (body.messages ?? []).filter((m) => m.role === 'user').map((m) => textOf(m.content));
@@ -411,6 +482,7 @@ async function modelsBody(): Promise<Response> {
       { id: 'probe-error' },
       { id: 'probe-queue' },
       { id: 'probe-parity' },
+      { id: 'probe-wake' },
     ],
   });
 }
@@ -479,6 +551,33 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
     if (url.pathname.startsWith('/parity/')) return parityControl(url.pathname, request);
 
+    if (url.pathname === '/wake/hold' && request.method === 'POST') {
+      const { where } = v.parse(v.object({ where: WakeHoldPlacementSchema }), JSON.parse(await request.text()));
+      wakeHold = { where, gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() } };
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/wake/arrived' && request.method === 'GET') {
+      if (wakeHold === null) throw new Error('wake hold was not armed');
+      await wakeHold.gate.arrived.promise;
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/wake/wait' && request.method === 'GET') {
+      await holdWakeWindow('settle');
+
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === '/wake/release' && request.method === 'POST') {
+      wakeHold?.gate.release.resolve();
+      wakeHold = null;
+
+      return Response.json({ ok: true });
+    }
+
     if (url.pathname === '/log' && request.method === 'GET') {
       return Response.json({ calls: [...log] });
     }
@@ -520,6 +619,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
 
         case 'probe': return echoBody(body);
         case 'probe-parity': return parityBody(body);
+        case 'probe-wake': return wakeBody(body);
         case 'probe-early-done': return earlyDoneBody();
         case 'probe-tools': return toolBody(body, 'call_probe_1', 'I will read that fixture file.');
         case 'probe-tools-only': return toolBody(body, 'call_probe_only_1');
