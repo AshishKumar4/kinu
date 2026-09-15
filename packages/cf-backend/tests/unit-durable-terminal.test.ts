@@ -28,15 +28,8 @@ import {
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { TurnHarness } from './helpers/turn-harness';
 import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
-import { createChatFiberSnapshot, wrapChatFiberSnapshot } from 'agents/chat';
 
-// The envelope Think's chat-turn snapshot rides in. Spelled here rather than
-// imported: fiber-recovery.ts keeps the same mirror for its read, and the SDK
-// exports the string nowhere — think.js `_runChatRecoveryFiber` hands this
-// literal to `wrapChatFiberSnapshot` at each call site.
-const CHAT_TURN_ENVELOPE_KEY = '__cfThinkChatFiberSnapshot';
-
-import { projectJsonValue, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
+import { openTurnRun, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 
 /** One settled assistant response, as Think reports it. */
 /** The one way this suite runs a turn: the turn seam over the harness root. */
@@ -1061,21 +1054,18 @@ describe('a turn releases its tool claims only when no response can still run', 
   * row's NAME is decoration — the read matches on the snapshot — and is spelled
   * as Think spells it so the fixture reads true.
    */
-  function chatTurnFiber(
-    harness: ActorHarness<HarnessOrchestratorAgent>, requestId: string, turnId: string,
-  ): void {
-    const snapshot = createChatFiberSnapshot({
-      kind: 'think-chat-turn',
-      requestId,
-      recoveryRootRequestId: requestId,
-      continuation: true,
-      messages: [{ id: turnId, role: 'user' }],
+  /** The defect's durable shape on the loop: an open run the isolate died
+   *  inside — a response that started and has not finished. The restart
+   *  re-opens it as a continuation, so the turn's claims survive the close of
+   *  the earlier response. */
+  function openRun(harness: ActorHarness<HarnessOrchestratorAgent>, runId: string, turnId: string): void {
+    openTurnRun(harness.agent.harnessEventRecorder, runId, {
+      agentId: harness.agent.observeRuntime().actor.actorId,
+      causedBy: 'chat',
+      userMessage: 'the message the turn answers',
+      turnIndex: 1,
+      turn: { turnId, messageId: 'a-first', kind: 'user', text: 'the message the turn answers' },
     });
-
-    harness.agent.harnessSeedOrphanFiber(
-      `__cf_internal_chat_turn:${requestId}`,
-      projectJsonValue({ value: wrapChatFiberSnapshot(CHAT_TURN_ENVELOPE_KEY, snapshot, null) }),
-    );
   }
 
   test('a settled response with nothing else running releases them', async () => {
@@ -1098,7 +1088,6 @@ describe('a turn releases its tool claims only when no response can still run', 
     const harness = orchestratorHarness();
     turns(harness).open('u-self');
     harness.agent.harnessClaimTool('u-self', 'call_send_1');
-    chatTurnFiber(harness, 'req-a-self', 'u-self');
 
     await settleResponse(harness, 'a-self');
 
@@ -1118,7 +1107,7 @@ describe('a turn releases its tool claims only when no response can still run', 
     harness.agent.harnessClaimTool('u-cont', 'call_send_1');
     // The earlier response: claimed, interrupted, and now being recovered.
     expect(harness.agent.harnessBeginTerminalTransition('u-cont', 'a-first')).toBe('first');
-    chatTurnFiber(harness, 'req-a-cont', 'u-cont');
+    openRun(harness, 'run-a-cont', 'u-cont');
 
     const restarted = await reactivateOrchestratorHarness(harness.db);
     await restarted.agent.harnessResumeTerminalTransitions();
@@ -1135,7 +1124,7 @@ describe('a turn releases its tool claims only when no response can still run', 
     harness.agent.harnessPersistActiveTurn('u-gone');
     harness.agent.harnessClaimTool('u-gone', 'call_send_1');
     expect(harness.agent.harnessBeginTerminalTransition('u-gone', 'a-first')).toBe('first');
-    chatTurnFiber(harness, 'req-other-turn', 'u-other');
+    openRun(harness, 'run-other-turn', 'u-other');
 
     const restarted = await reactivateOrchestratorHarness(harness.db);
     await restarted.agent.harnessResumeTerminalTransitions();
