@@ -27,9 +27,9 @@
  * assertion here reads from the same handful of frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser, Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 
-import { withGallery } from './gallery-harness';
+import { withGallery, type Gallery } from './gallery-harness';
 
 /** One label, and the room the column it sits in actually leaves it. */
 interface LabelFit {
@@ -250,9 +250,6 @@ const LIVE_STAGES = 5;
  */
 const PUSH_BUDGET_MS = 1_500;
 
-/** `WORKING_MS` in the component is 2.5s. */
-const DECAY_WAIT_MS = 3_200;
-
 function key(frame: string, width: number, mode: string): string {
   return `${frame}@${width}/${mode}`;
 }
@@ -288,13 +285,13 @@ async function settled(page: Page): Promise<void> {
   });
 }
 
-async function readGeometryFrames(browser: Browser, origin: string): Promise<Geometry> {
+async function readGeometryFrames(newPage: Gallery['newPage'], origin: string): Promise<Geometry> {
   const observed: Geometry = {};
 
   for (const frame of FRAMES) {
     for (const width of WIDTHS) {
       for (const mode of MODES) {
-        const page = await browser.newPage();
+        const page = await newPage();
 
         try {
           await page.setViewport({ width, height: 1238 });
@@ -304,10 +301,10 @@ async function readGeometryFrames(browser: Browser, origin: string): Promise<Geo
           // resolves `networkidle0` with an empty body, which is exactly the
           // state this file exists to stop being green.
           await page.waitForSelector('g.mcts-band');
-          await page.waitForSelector('[data-tree-legend]', { timeout: 20_000 });
+          await page.waitForSelector('[data-tree-legend]');
 
           if (frame === 'forkmerge') {
-            await page.waitForSelector('[data-tree-card]', { timeout: 20_000 });
+            await page.waitForSelector('[data-tree-card]');
           }
 
           await settled(page);
@@ -329,13 +326,13 @@ async function readGeometryFrames(browser: Browser, origin: string): Promise<Geo
  * the owner actually asked for — that the surface grows without being reloaded —
  * and it can only be answered by holding one page open across two moments.
  */
-async function readLiveness(browser: Browser, origin: string): Promise<Liveness> {
+async function readLiveness(newPage: Gallery['newPage'], origin: string): Promise<Liveness> {
   const pinned: Beat[] = [];
   let workingOnArrival = 0;
   let workingAfterDecay = 0;
 
   for (let stage = 0; stage < LIVE_STAGES; stage += 1) {
-    const page = await browser.newPage();
+    const page = await newPage();
 
     try {
       await page.setViewport({ width: 1280, height: 1238 });
@@ -355,7 +352,6 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
         workingOnArrival = (await readBeat(page)).working;
         await page.waitForFunction(
           () => document.querySelectorAll('g.mcts-node[data-working]').length === 0,
-          { timeout: DECAY_WAIT_MS * 3 },
         );
         workingAfterDecay = (await readBeat(page)).working;
       }
@@ -364,7 +360,7 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
     }
   }
 
-  const page = await browser.newPage();
+  const page = await newPage();
   const watched: Beat[] = [];
   let navigations = 0;
   let rowAppearedMs = Number.POSITIVE_INFINITY;
@@ -380,10 +376,9 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
     await page.waitForSelector('[data-live-stage="0"]');
     await page.waitForFunction(
       () => document.querySelector('[data-live-stage="0"]') === null,
-      { timeout: 20_000 },
     );
     const advanced = Date.now();
-    await page.waitForSelector('[data-fork-run]', { timeout: 20_000 });
+    await page.waitForSelector('[data-fork-run]');
     rowAppearedMs = Date.now() - advanced;
 
     // Watched by the CONDITION, not by a clock: read a beat each time the node
@@ -392,7 +387,7 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
       const before = watched.at(-1)?.nodes ?? 0;
       await page.waitForFunction(
         (previous: number) => document.querySelectorAll('g.mcts-node').length !== previous,
-        { timeout: 20_000 },
+        {},
         before,
       );
       watched.push(await readBeat(page));
@@ -417,9 +412,9 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
  * passes for the wrong reason, `Expand`'s own refit having already fitted the
  * scene.
  */
-async function readControls(browser: Browser, origin: string): Promise<ControlEffect> {
+async function readControls(newPage: Gallery['newPage'], origin: string): Promise<ControlEffect> {
   const effects: ControlEffect = {};
-  const page = await browser.newPage();
+  const page = await newPage();
 
   try {
     await page.setViewport({ width: 1280, height: 1238 });
@@ -468,16 +463,16 @@ async function readControls(browser: Browser, origin: string): Promise<ControlEf
 }
 
 async function run(): Promise<Observed> {
-  return withGallery(async ({ browser, origin }) => ({
-    geometry: await readGeometryFrames(browser, origin),
-    live: await readLiveness(browser, origin),
-    controls: await readControls(browser, origin),
+  return withGallery(async ({ newPage, origin }) => ({
+    geometry: await readGeometryFrames(newPage, origin),
+    live: await readLiveness(newPage, origin),
+    controls: await readControls(newPage, origin),
   }));
 }
 
 let observed: Observed;
 
-beforeAll(async () => { observed = await run(); }, 240_000);
+beforeAll(async () => { observed = await run(); });
 
 const every = (): [string, FrameGeometry][] => Object.entries(observed.geometry);
 

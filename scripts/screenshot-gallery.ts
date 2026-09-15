@@ -15,9 +15,8 @@
 
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Browser } from 'puppeteer';
 
-import { withGallery } from './gallery-harness';
+import { withGallery, type Gallery } from './gallery-harness';
 
 const REPO = join(import.meta.dir, '..');
 
@@ -68,13 +67,13 @@ const WIDTHS = args.includes('--widths')
 if (WIDTHS.length === 0) throw new Error('--widths names at least one width');
 
 async function shoot(
-  browser: Browser,
+  newPage: Gallery['newPage'],
   origin: string,
   frame: string,
   theme: { mode: 'dark' | 'light' },
   size: (typeof WIDTHS)[number],
 ): Promise<string> {
-  const page = await browser.newPage();
+  const page = await newPage();
   await page.setViewport({ width: size.width, height: size.height, deviceScaleFactor: 2 });
   await page.evaluateOnNewDocument((t: { mode: string }) => {
     localStorage.setItem('theme', t.mode);
@@ -154,11 +153,11 @@ async function shoot(
 
 mkdirSync(outDir, { recursive: true });
 
-await withGallery(async ({ browser, origin }) => {
+await withGallery(async ({ newPage, origin }) => {
   for (const frame of frames) {
     for (const size of WIDTHS) {
       for (const mode of ['dark', 'light'] as const) {
-        console.log(`wrote ${await shoot(browser, origin, frame, { mode }, size)}`);
+        console.log(`wrote ${await shoot(newPage, origin, frame, { mode }, size)}`);
       }
     }
   }

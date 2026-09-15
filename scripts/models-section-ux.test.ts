@@ -9,14 +9,13 @@
  * names fails here, and one that drops a control outright fails here too.
  */
 import { describe, expect, test } from 'bun:test';
-import type { Browser } from 'puppeteer';
 
 import { withGallery } from './gallery-harness';
 
 describe('the models section keeps every control reachable by name', () => {
   test('tier rows and the role editor expose their controls by accessible name', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 1100 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="New tier id"]');
@@ -43,5 +42,5 @@ describe('the models section keeps every control reachable by name', () => {
       expect(await named('Skills: audit-implementation')).toBe(true);
       await page.close();
     });
-  }, 120_000);
+  });
 });

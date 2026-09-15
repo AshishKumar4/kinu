@@ -27,7 +27,7 @@ mkdirSync(SHOTS, { recursive: true });
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
-  const page = await gallery.browser.newPage();
+  const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
   await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'networkidle0' });
@@ -50,7 +50,7 @@ const presetStatus = (page: Page, id: string): Promise<string> =>
  *  it as JSON; the caller's valibot schema is what shapes the field it needs. */
 async function lastMcpAdd(page: Page): Promise<JsonValue> {
   await page.waitForFunction(
-    () => localStorage.getItem('gallery-mcp-add') !== null, { timeout: 10_000 },
+    () => localStorage.getItem('gallery-mcp-add') !== null,
   );
 
   return page.evaluate(() => {
@@ -66,10 +66,9 @@ describe('MCP presets', () => {
       const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[data-mcp-preset="github"]', { timeout: 10_000 });
+        await page.waitForSelector('[data-mcp-preset="github"]');
         await page.waitForFunction(
           () => document.querySelector('[data-mcp-preset-status="cloudflare"]')?.textContent === 'Not added',
-          { timeout: 10_000 },
         );
 
         expect(await presetStatus(page, 'github')).toBe('Not added');
@@ -99,7 +98,6 @@ describe('MCP presets', () => {
 
         await page.waitForFunction(
           () => localStorage.getItem('gallery-mcp-opened') !== '',
-          { timeout: 10_000 },
         );
 
         const opened = v.parse(
@@ -112,7 +110,6 @@ describe('MCP presets', () => {
         // The status the next list read reports — the same poll the panel runs.
         await page.waitForFunction(
           () => document.querySelector('[data-mcp-preset-status="cloudflare"]')?.textContent === 'Needs sign-in',
-          { timeout: 10_000 },
         );
         expect(await presetStatus(page, 'cloudflare')).toBe('Needs sign-in');
 
@@ -123,7 +120,7 @@ describe('MCP presets', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('a token preset opens one field and posts it as the bearer header', async () => {
     await withGallery(async (gallery) => {
@@ -132,14 +129,13 @@ describe('MCP presets', () => {
       const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=google', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[data-mcp-preset="github"]', { timeout: 10_000 });
+        await page.waitForSelector('[data-mcp-preset="github"]');
         await page.waitForFunction(
           () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Not added',
-          { timeout: 10_000 },
         );
 
         await page.click('[data-mcp-preset="github"] button');
-        await page.waitForSelector('[aria-label="Personal access token"]', { timeout: 10_000 });
+        await page.waitForSelector('[aria-label="Personal access token"]');
         await page.type('[aria-label="Personal access token"]', 'ghp_fixture');
 
         const card = await page.$('[data-mcp-preset="github"]');
@@ -155,7 +151,6 @@ describe('MCP presets', () => {
 
         await page.waitForFunction(
           () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Connected',
-          { timeout: 10_000 },
         );
         expect(await presetStatus(page, 'github')).toBe('Connected');
         expect(await page.$eval('[data-plugin="GitHub"]', (el) => el.textContent ?? ''))
@@ -164,7 +159,7 @@ describe('MCP presets', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('an oauth-app card signs in under its app, and hides when it has neither app nor fallback', async () => {
     await withGallery(async (gallery) => {
@@ -173,10 +168,9 @@ describe('MCP presets', () => {
       const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=github', 'dark', 'desktop');
 
       try {
-        await page.waitForSelector('[data-mcp-preset="github"]', { timeout: 10_000 });
+        await page.waitForSelector('[data-mcp-preset="github"]');
         await page.waitForFunction(
           () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Not added',
-          { timeout: 10_000 },
         );
 
         expect(await page.$('[data-mcp-preset="google"]')).toBeNull();
@@ -204,7 +198,6 @@ describe('MCP presets', () => {
 
         await page.waitForFunction(
           () => localStorage.getItem('gallery-mcp-opened') !== '',
-          { timeout: 10_000 },
         );
 
         const opened = v.parse(
@@ -216,13 +209,12 @@ describe('MCP presets', () => {
 
         await page.waitForFunction(
           () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Needs sign-in',
-          { timeout: 10_000 },
         );
       } finally {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('the preset row renders in the account modal and on the plugins page at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
@@ -233,10 +225,9 @@ describe('MCP presets', () => {
           const modal = await freshPage(gallery, 'setupmodal&panel=mcp&mcp-preset=connected', theme, viewport);
 
           try {
-            await modal.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            await modal.waitForSelector('[role="dialog"]');
             await modal.waitForFunction(
               () => document.querySelector('[data-mcp-preset-status="cloudflare"]')?.textContent === 'Needs sign-in',
-              { timeout: 10_000 },
             );
 
             const text = await modal.$eval('[role="dialog"]', (el) => el.textContent ?? '');
@@ -253,10 +244,9 @@ describe('MCP presets', () => {
           const plugins = await freshPage(gallery, 'plugins&mcp-preset=connected', theme, viewport);
 
           try {
-            await plugins.waitForSelector('[data-mcp-preset="github"]', { timeout: 10_000 });
+            await plugins.waitForSelector('[data-mcp-preset="github"]');
             await plugins.waitForFunction(
               () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Connected',
-              { timeout: 10_000 },
             );
             shots.push(await shoot(plugins, `plugins-mcp-${viewport}-${theme}`));
           } finally {
@@ -267,5 +257,5 @@ describe('MCP presets', () => {
 
       expect(shots.length).toBe(8);
     });
-  }, 120_000);
+  });
 });
