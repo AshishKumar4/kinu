@@ -143,6 +143,9 @@ export interface StartBudget {
    *  alongside: a refusal has to name the budget it spent, and a second copy of
    *  that number at the call site is a second authority on it. */
   readonly budgetMs: number;
+  /** The clock this budget is measured on; every race under it arms its
+   *  timer on the same clock. */
+  readonly clock: StartClock;
   /** Milliseconds left before the deadline, never negative. */
   remainingMs(): number;
   /** Add to the work this budget must still cover. */
@@ -151,13 +154,42 @@ export interface StartBudget {
   nextAllowanceMs(): number;
 }
 
-export function openStartBudget(budgetMs: number): StartBudget {
-  const openedAt = Date.now();
+/**
+ * The clock a start budget and its races are measured on.
+ *
+ * ONE CLOCK FOR THE BUDGET AND ITS TIMERS, handed in rather than read from
+ * the platform, so a test can prove a budget property by advancing time
+ * instead of by outrunning a real timer. `tests/lifecycle-generation.test.ts`
+ * measured its 20 ms `TightBox` budget on the wall clock; under the deploy
+ * wave's load the whole restore outran the hook budget before the exposure
+ * it was parking was even reached, and the box settled as `[deadline →
+ * repair]` instead of as the exposure that outran its own allowance
+ * (2026-09-15, main `bea156897`). The box's production clock is
+ * {@link REAL_START_CLOCK}.
+ */
+export interface StartClock {
+  now(): number;
+  /** Arm `fire` after `ms`; the answer disarms it. */
+  after(ms: number, fire: () => void): () => void;
+}
+
+export const REAL_START_CLOCK: StartClock = {
+  now: () => Date.now(),
+  after: (ms, fire) => {
+    const timer = setTimeout(fire, ms);
+
+    return () => clearTimeout(timer);
+  },
+};
+
+export function openStartBudget(budgetMs: number, clock: StartClock = REAL_START_CLOCK): StartBudget {
+  const openedAt = clock.now();
   let declared = 0;
-  const remainingMs = (): number => Math.max(0, budgetMs - (Date.now() - openedAt));
+  const remainingMs = (): number => Math.max(0, budgetMs - (clock.now() - openedAt));
 
   return {
     budgetMs,
+    clock,
     remainingMs,
     declare: (steps) => { declared += Math.max(0, steps); },
     nextAllowanceMs: () => {
@@ -197,13 +229,14 @@ export async function runRestoreStep<T>(
   allowanceMs: number,
   work: () => Promise<T>,
   onLate: (failure: LateStartFailure) => void,
+  clock: StartClock = REAL_START_CLOCK,
 ): Promise<StepOutcome<T>> {
   // A THROWN step is a value here too. Every caller wants a reason to report and
   // a walk that continues, so handing the failure back is the contract rather
   // than a convenience — and a caught binding is not a parameter, so nothing
   // untyped travels through a `.catch` at each call site.
   try {
-    return await raceAllowance(allowanceMs, work, onLate);
+    return await raceAllowance(allowanceMs, work, onLate, clock);
   } catch (cause) {
     return { kind: 'failed', cause };
   }
@@ -220,6 +253,7 @@ async function raceAllowance<T>(
   allowanceMs: number,
   work: () => Promise<T>,
   onLate: (failure: LateStartFailure) => void,
+  clock: StartClock,
 ): Promise<StepOutcome<T>> {
   let late = false;
 
@@ -241,15 +275,15 @@ async function raceAllowance<T>(
 
   const { promise: expiry, resolve } = Promise.withResolvers<StepOutcome<T>>();
 
-  const timer = setTimeout(() => {
+  const disarm = clock.after(allowanceMs, () => {
     late = true;
     resolve({ kind: 'late' });
-  }, allowanceMs);
+  });
 
   try {
     return await Promise.race([started, expiry]);
   } finally {
-    clearTimeout(timer);
+    disarm();
   }
 }
 
@@ -280,7 +314,7 @@ async function withContainerStartDeadline<T>(
   onOverrun: (failure: LateStartFailure) => void,
 ): Promise<T> {
   const budgetMs = budget.remainingMs();
-  const raced = await raceAllowance(budgetMs, work, onOverrun);
+  const raced = await raceAllowance(budgetMs, work, onOverrun, budget.clock);
 
   if (raced.kind === 'late') throw new ContainerStartOverrun(label, budgetMs);
 
@@ -326,7 +360,7 @@ export interface RestoreSteps {
  *  whose mount it left half-built. */
 export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
   return {
-    run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate),
+    run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate, budget.clock),
     attach: async (work, onOverrun) =>
       await withContainerStartDeadline('Devbox.attach', budget, work, onOverrun),
     declare: (steps) => budget.declare(steps),

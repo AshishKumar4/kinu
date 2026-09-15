@@ -648,6 +648,51 @@ lists no Worker, application or bucket of this run. Artifacts:
 `kinu-logs/devbox-settle/run-20260915065240.log`.
 
 
+D19. A start budget and its races are measured on one clock the box is
+handed, not on the wall clock (2026-09-15). `openStartBudget` measured
+`remainingMs` with `Date.now()` and `raceAllowance` armed a real
+`setTimeout`, so a test budget was a race against the machine.
+`tests/lifecycle-generation.test.ts`'s `TightBox` holds a 20 ms budget so
+one step can be exhausted without sleeping; under the deploy wave on main
+`bea156897` the whole restore outran that budget before the parked
+exposure was reached, and "an exposure that outruns its allowance is
+reported, not exposed and not replaced" received `[deadline → repair]
+restoration did not settle inside the 20ms hook budget` in place of `port
+3000`, while passing 3 of 3 alone.
+
+The change: `StartClock` (`now`, `after`) in `packages/devbox/src/
+lifecycle.ts`; `openStartBudget(budgetMs, clock)` carries it and every race
+under the budget arms its timer on it; `runRestoreStep` takes the clock;
+`Devbox.startClock` answers `REAL_START_CLOCK` in the product and the
+hook, the repair and their races read it. The 20 ms policy value is
+unchanged; the request-join hold (`requestJoinMs`) is a caller's wait, not
+a start budget, and stays on real timers. `manualStartClock()` in
+`tests/support/devbox-harness.ts` fires armed timers only when a test moves
+it: `tick()` fires the earliest timer alone, `advance(ms)` every timer due
+on the way. `TightBox` measures its budget on one; the exposure and
+slow-server tests `tick()` so the parked step's own allowance elapses and
+the hook's does not, and the boot-stamp test `advance(20)` so the hook's
+does. A budget property is now the arithmetic of the budget: which timer
+is earliest, never how fast the runner reached the parked step. One
+finding on the way: bun's `expect(promise).rejects` blocks the test until
+the promise settles, so under a test-driven clock the assertion must
+follow the advance.
+
+Measured 2026-09-15 on this branch. The failing test and the new control
+"the exposure verdict does not depend on how slowly the container answers"
+(every command 25 real ms, longer than the whole budget) pass 3 of 3 alone,
+and 3 of 3 with `bun test --parallel=4 packages/cf-backend` and a 24-way CPU
+burner running beside them, one-minute load average 13.80 on 24 cores. The
+control is red 3 of 3 on main `bea156897`, where the same scenario answers
+`[abandoned → replace] Devbox.onStart exceeded its 20ms budget`; main's
+original test did not go red under load 13.80 in 3 runs, so the deploy
+wave's exact load was not reproduced here and the fix rests on the control,
+not on a re-run of the wave. The whole `lifecycle-generation` file passes
+3 of 3 (56 tests); the devbox package passes 484 bun tests and 7 workerd
+tests; `gate:do-init` is unchanged. No timeout, budget or window was
+raised and no test retries.
+
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
