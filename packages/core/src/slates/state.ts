@@ -8,6 +8,11 @@ import type { SlateBindingRequest } from './bindings';
  *  host answers it from the workspace object's own `slate_state` table. */
 export const SLATE_STORAGE_BINDING = '__storage';
 
+/** The other reserved binding name: the process's channel back to its host,
+ *  minted beside `__storage` and answered by `bindingCall`'s `__host` arm —
+ *  today the one call `release`, which retires a socket-held invocation. */
+export const SLATE_HOST_BINDING = '__host';
+
 const Key = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
 
 /**

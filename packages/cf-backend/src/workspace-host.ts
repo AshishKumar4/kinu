@@ -197,8 +197,10 @@ export interface HostedWorkspaceDeps {
    */
   ensureSlate?(owner: string): Promise<Refusal | null>;
   /** Mint the app invocation a preview request runs under, so a slate cannot
-   *  keep its bindings and replay them as an unnamed root lineage. */
-  slateInvocation?(port: number): { readonly value: string; release: () => void } | null;
+   *  keep its bindings and replay them as an unnamed root lineage. `socket`
+   *  marks the invocation for the WebSocket case: it must outlive the routed
+   *  response, which a 101 only opens. */
+  slateInvocation?(port: number, socket: boolean): { readonly value: string; release: () => void } | null;
 }
 
 export interface HostedWorkspace {
@@ -468,7 +470,8 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       // request's invocation. A preview entry is a root lineage, and naming it
       // is what stops retained preview bindings standing in for a deeper one.
       publicRequest.headers.delete('x-slate-call');
-      const invocation = deps.slateInvocation?.(port) ?? null;
+      const upgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+      const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
 
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
       const self = await host();
@@ -478,14 +481,22 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       // upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
-      try {
-        if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
-          return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, exposure.capability, publicRequest, pathname);
-        }
+      const programmatic = await nimbusProgrammatic();
 
-        return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, exposure.capability, publicRequest, pathname);
-      } finally {
+      try {
+        const response = upgrade
+          ? await programmatic.routeCapabilityPort(self, port, exposure.capability, publicRequest, pathname)
+          : await programmatic.rpcRouteCapabilityPort(self, port, exposure.capability, publicRequest, pathname);
+
+        // A 101 only OPENS the socket session: the invocation stays minted
+        // for its life, released by the process's close listener — releasing
+        // here would retire it before the first frame arrives.
+        if (response.status !== 101) invocation?.release();
+
+        return response;
+      } catch (cause) {
         invocation?.release();
+        throw cause;
       }
     },
     destroy: () => bundle.destroy(),

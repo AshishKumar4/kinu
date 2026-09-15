@@ -32,6 +32,11 @@ export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
  *  page and short-lived; still a cookie this app writes. */
 export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
 
+/** The viewer cookie a share origin sets after a ticket exchange. It names a
+ *  viewer of one slate on one origin — `__Host-` so no other origin can plant
+ *  it — and the sanitizer strips it before guest code sees it. */
+export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';
+
 /**
  * Every cookie this app sets, and the one place that says so.
  *
@@ -46,6 +51,7 @@ export const KINU_COOKIE_NAMES: readonly string[] = [
   SESSION_COOKIE_NAME,
   OAUTH_STATE_COOKIE_NAME,
   CLI_APPROVAL_CSRF_COOKIE_NAME,
+  VIEWER_COOKIE_NAME,
 ];
 
 export interface AuthIdentity {

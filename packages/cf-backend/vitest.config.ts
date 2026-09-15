@@ -132,6 +132,16 @@ const slateActorProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const slateShareProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-share-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-share-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'],
+  target: 'es2022',
+  alias: { 'virtual:kinu-slate-vendor': slateVendorModulePath, ...Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])) },
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 const planAnnounceProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/plan-announce-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/plan-announce-probe.js', import.meta.url)),
@@ -328,6 +338,23 @@ export default defineConfig({
             UserDO: { className: 'UserDO', useSQLite: true },
           },
         }, {
+          // The share rail's DO side: a real SlateHost over its own SQLite,
+          // isolated from the runner's bindings exactly the way
+          // `slate-actor-probe` isolates the decorated actor. The slate's
+          // FILES binding is a `SlateBinding` worker entrypoint that resolves
+          // `workspaceOwner(env, workspace)` — `env.OrchestratorAgent` — so the
+          // probe class is bound under that name too: same className, same
+          // scriptName, one object per name.
+          name: 'slate-share-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
+          modules: slateShareProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: {
+            SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', useSQLite: true },
+            OrchestratorAgent: { className: 'SlateShareProbeDO', useSQLite: true },
+          },
+        }, {
           // Account deletion end to end: the production UserDO (as the probe
           // subclass, sealed through the production seal) tearing down the
           // production OrchestratorAgent objects it registered, then itself.
@@ -370,6 +397,7 @@ export default defineConfig({
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
+          SLATE_SHARE_PROBE: { className: 'SlateShareProbeDO', scriptName: 'slate-share-probe', useSQLite: true },
           SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', scriptName: 'slate-actor-probe', useSQLite: true },
           PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
           USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },

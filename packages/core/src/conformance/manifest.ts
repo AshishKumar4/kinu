@@ -474,6 +474,13 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // owner-only surface the workspace does.
     slate_shares: EVERYWHERE,
     slate_share_users: EVERYWHERE,
+    // Live shares — the grant-bearing rows a `live` share mints, the named
+    // viewers a `users` share admits, and the per-request audit the viewer
+    // traffic writes. Same shared-schema rule as the blueprint tables above:
+    // every root can host a shared slate, so every root carries the rows.
+    slate_live_shares: EVERYWHERE,
+    slate_live_share_users: EVERYWHERE,
+    slate_viewer_requests: EVERYWHERE,
     // Which workspace instruction bytes the owner approved for system placement
     // (KINU-N028). EVERYWHERE for the same reason prompt_section_versions is:
     // the prompt builder classifies AGENTS.md and skills on every turn on every

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { SlateBindingRequestSchema, resolveSlateChain, routeSlateBindingCall, type SlateInvocation } from '../src/slates/bindings';
+import { issuedSlateInvocation, routeSlateBindingCall, routeViewerBindingCall, SlateBindingRequestSchema, type SlateInvocation, type SlateViewer } from '../src/slates/bindings';
+import type { ShareGrant } from '../src/slates/sharing';
 import { parseSlateProject } from '../src/slates/project';
 import type { JsonValue } from '../src/utils/json';
 import { isSlateMethodName } from '../src/slates/rpc';
@@ -58,7 +59,7 @@ test('a lineage comes from the host record, never from the caller', () => {
     ['other-slate', { id: 'shelf', chain: [] }],
   ]);
 
-  const resolve = (invocation: string | null) => resolveSlateChain({ invocations, id: 'notes', invocation });
+  const resolve = (invocation: string | null) => issuedSlateInvocation({ invocations, id: 'notes', invocation })?.chain ?? [];
   // A request the host issued no invocation for is the root, which is a preview
   // hit rather than a hop.
   expect(resolve(null)).toEqual([]);
@@ -128,5 +129,85 @@ test('a path-scoped workspace binding offers only file members inside its prefix
   expect(() => route('FILES', 'readFile', ['relative/path'])).toThrow('outside its prefixes');
   expect(() => route('FILES', 'readFile', [42])).toThrow('outside its prefixes');
   expect(() => route('FILES', 'readFile', [])).toThrow('outside its prefixes');
+});
+
+const viewerProject = parseSlateProject({
+  main: 'server.js',
+  slate: {
+    bindings: {
+      FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
+      GH: { kind: 'mcp', server: 'github', tools: ['read_issue', 'create_issue'] },
+      INBOX: { kind: 'agent' },
+      PEER: { kind: 'app', id: 'digest' },
+      SHY: { kind: 'app', id: 'elsewhere' },
+    },
+  },
+});
+
+const viewer: SlateViewer = { share: 's1', subject: 'user:u7', request: 41 };
+
+const viewerGrant: ShareGrant = {
+  slates: ['issues', 'digest'],
+  members: [
+    { slate: 'issues', binding: 'FILES', member: 'readFile', effect: 'read' },
+    { slate: 'issues', binding: 'GH', member: 'read_issue', effect: 'read' },
+    { slate: 'issues', binding: 'INBOX', member: 'send', effect: 'mutate' },
+    { slate: 'digest', binding: 'D', member: 'readFile', effect: 'read' },
+  ],
+};
+
+const viewerCall = (name: string, member: string, args: JsonValue[] = []) => routeViewerBindingCall({
+  id: 'issues', project: viewerProject, name,
+  request: { member, args, invocation: null },
+  chain: [], viewer, grant: viewerGrant,
+});
+
+test('a viewer call refuses what the owner call refuses, then what the grant does not name', () => {
+  // Undeclared bindings refuse byte-identically to the owner's own call.
+  expect(() => viewerCall('NOPE', 'readFile', ['/a'])).toThrow('Slate issues no longer declares binding NOPE');
+  // Declared but outside the grant.
+  expect(() => viewerCall('FILES', 'writeFile', ['/a', 'x'])).toThrow('Slate issues does not grant FILES.writeFile to viewers');
+  // A member the binding does not offer at all still refuses its own way.
+  expect(() => viewerCall('FILES', 'exec', ['/a'])).toThrow('does not offer workspace.exec');
+});
+
+test('a granted member routes with the effect the grant admits', () => {
+  expect(viewerCall('FILES', 'readFile', ['/a'])).toEqual({
+    route: { kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/a'] },
+    member: 'readFile', effect: 'read',
+  });
+  // Granted as read: the route is marked readOnly so the mcp lane enforces it.
+  expect(viewerCall('GH', 'read_issue', [{ n: 1 }])).toEqual({
+    route: { kind: 'mcp', server: 'github', tool: 'read_issue', args: { n: 1 }, readOnly: true },
+    member: 'read_issue', effect: 'read',
+  });
+  expect(() => viewerCall('GH', 'create_issue', [{}])).toThrow('does not grant GH.create_issue to viewers');
+  // The agent binding passes the viewer's subject through on the message.
+  expect(viewerCall('INBOX', 'send', [{ text: 'hi' }])).toEqual({
+    route: { kind: 'agent', slate: 'issues', text: 'hi', viewer: 'user:u7' },
+    member: 'send', effect: 'mutate',
+  });
+});
+
+test('an app hop admits only slates the grant walks', () => {
+  // digest is in grant.slates but grants only read members: the hop routes and
+  // reports read.
+  expect(viewerCall('PEER', 'count')).toEqual({
+    route: { kind: 'app', id: 'digest', method: 'count', args: [], chain: ['issues'] },
+    member: 'count', effect: 'read',
+  });
+  expect(() => viewerCall('SHY', 'count')).toThrow('does not grant SHY.count to viewers');
+});
+
+test('issuedSlateInvocation returns the viewer the host recorded', () => {
+  const invocations = new Map<string, SlateInvocation>([
+    ['shared', { id: 'issues', chain: ['root'], viewer }],
+    ['plain', { id: 'issues', chain: ['root'] }],
+  ]);
+
+  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'shared' }))
+    .toEqual({ id: 'issues', chain: ['root'], viewer });
+  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: 'plain' })).toEqual({ id: 'issues', chain: ['root'] });
+  expect(issuedSlateInvocation({ invocations, id: 'issues', invocation: null })).toBeNull();
 });
 

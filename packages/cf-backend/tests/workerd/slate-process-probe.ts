@@ -7,7 +7,7 @@ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-proces
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
-  initSlateStateTable, parseSlateProject, resolveSlateChain, routeSlateBindingCall, routeSlateStorageCall,
+  initSlateStateTable, parseSlateProject, issuedSlateInvocation, routeSlateBindingCall, routeSlateStorageCall,
   type JsonValue, type SlateCallResult, type SlateInvocation,
 } from '@kinu.run/core';
 import { SqliteSlateStateStore, type SlateStorageOp } from '@kinu.run/core/slates';
@@ -19,14 +19,14 @@ import { codemodeEgress } from '../../src/codemode-egress';
 /**
  * Stands in for the host's binding entrypoint, using the host's OWN resolution
  * so this probe cannot pass while `SlateHost` would refuse: it holds the same
- * `invocation -> { id, chain }` record and calls `resolveSlateChain`.
+ * `invocation -> { id, chain }` record and calls `issuedSlateInvocation`.
  */
 export class SlateChainProbe extends WorkerEntrypoint {
   async call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const project = parseSlateProject({ main: 'server.ts', slate: { bindings: { PEER: { kind: 'app', id: 'peer' } } } });
 
     try {
-      const chain = resolveSlateChain({ invocations: SlateProcessProbeDO.invocations, id: 'probe', invocation });
+      const chain = issuedSlateInvocation({ invocations: SlateProcessProbeDO.invocations, id: 'probe', invocation })?.chain ?? [];
       const route = routeSlateBindingCall({ id: 'probe', project, name: 'PEER', request: { member, args, invocation }, chain });
 
       if (route.kind !== 'app') throw new Error('Expected app route');

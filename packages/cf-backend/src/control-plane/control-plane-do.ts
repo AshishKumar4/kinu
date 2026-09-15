@@ -16,6 +16,10 @@
  * Every admin ACTION proxies an existing `@callable` on the object that owns the
  * state it changes (`actions.ts`); none is reimplemented here.
  *
+ * The public share index (`core/control-plane/public-shares.ts`) lives here for
+ * the same reason: "what is public" is fleet-wide, and the row is a projection
+ * every reader verifies against the owner's workspace object.
+ *
  * Not an `Agent` subclass, for the same reason MonitorDO is not: no chat, no
  * tools, no websockets, so it inherits none of the SDK surface `rpc-surface.ts`
  * exists to seal. Its reachable surface is exactly the methods declared here, and
@@ -47,6 +51,7 @@ import type {
 } from '@kinu.run/core/control-plane';
 import * as store from '@kinu.run/core/control-plane';
 import type { ControlFeedbackRow } from '@kinu.run/core/control-plane';
+import { forgetPublicShare, indexPublicShare, listPublicShares, type PublicShareKey, type PublicShareRow } from '@kinu.run/core/control-plane';
 
 
 export type {
@@ -119,6 +124,24 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'feedback.write');
 
     return store.recordFeedback(this.store, row);
+  }
+
+  /* ── The public share index (grade: ingest) ────────────────────────────── */
+
+  async publicShares_put(caller: PresentedCaller, row: PublicShareRow): Promise<void> {
+    await this.gate(caller, 'shares.index');
+    indexPublicShare(this.store, row);
+  }
+
+  async publicShares_forget(caller: PresentedCaller, key: PublicShareKey): Promise<void> {
+    await this.gate(caller, 'shares.index');
+    forgetPublicShare(this.store, key);
+  }
+
+  async publicShares_list(caller: PresentedCaller): Promise<PublicShareRow[]> {
+    await this.gate(caller, 'shares.index');
+
+    return listPublicShares(this.store);
   }
 
   /* ── Reconciliation (grade: admin) ─────────────────────────────────────── */

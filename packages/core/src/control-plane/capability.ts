@@ -53,6 +53,9 @@ const CONTROL_PLANE_CAPABILITIES = {
   'index.workspace': 'ingest',
   'index.forget': 'ingest',
   'feedback.write': 'ingest',
+  // The public share index: a signed-in owner's own share writes it and any
+  // signed-in reader lists it, so both are the ingest grade.
+  'shares.index': 'ingest',
   // Reads across users. Operators only.
   'overview.read': 'admin',
   'users.read': 'admin',
