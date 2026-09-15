@@ -219,7 +219,9 @@ describe('scaffoldChatTransform', () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
     const events = await collect(scaffoldChatTransform({ chat, ...await selected(1, 'this is not javascript {') }));
 
-    expect(events.some((e) => e.type === 'error')).toBe(true);
+    // ONE: the run reports its own failure as it returns, and the transform
+    // adds nothing for the same failure — a client used to see it twice.
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
     expect(events.at(-1)?.type).toBe('done');
   });
 });

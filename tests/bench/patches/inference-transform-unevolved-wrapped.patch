@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/scaffold/inference-transform.ts b/packages/core/src/scaffold/inference-transform.ts
-index d515df34f..943a148fe 100644
---- a/packages/core/src/scaffold/inference-transform.ts
-+++ b/packages/core/src/scaffold/inference-transform.ts
-@@ -61,7 +61,7 @@ export function scaffoldInferenceTransform(opts: {
- }): InferenceStreamResult {
-   const { program, result, run } = opts;
+diff --git a/packages/core/src/scaffold/chat-transform.ts b/packages/core/src/scaffold/chat-transform.ts
+index e75a7790f..d23be0e7c 100644
+--- a/packages/core/src/scaffold/chat-transform.ts
++++ b/packages/core/src/scaffold/chat-transform.ts
+@@ -89,7 +89,7 @@ export function scaffoldChatTransform(opts: {
+   chat: AsyncIterable<ChatEvent>;
+   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'>;
+ }): AsyncIterable<ChatEvent> {
+-  if (opts.program.kind === 'builtin' || (opts.run.workMode ?? currentWorkMode()) === 'plan') return opts.chat;
++  if (opts.program.version < 0 || (opts.run.workMode ?? currentWorkMode()) === 'plan') return opts.chat;
  
--  if (program.kind === 'builtin' || (run.workMode ?? currentWorkMode()) === 'plan') return result;
-+  if (program.version < 0 || (run.workMode ?? currentWorkMode()) === 'plan') return result;
- 
-   let delegated = false;
- 
+   return scaffoldTurn(opts.chat, { ...opts.run, scaffoldCodeOverride: opts.program.source });
+ }
