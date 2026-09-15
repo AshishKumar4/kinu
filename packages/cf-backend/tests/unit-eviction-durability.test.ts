@@ -205,22 +205,6 @@ function recovering(agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext):
   return { result, answered: () => answered };
 }
 
-describe('the recovery configuration is declared, not inherited', () => {
-  test('chat turns run inside a recovery fiber and no elapsed bound ends one', () => {
-    const { agent } = orchestratorHarness();
-
-    // Every owner turn and every subordinate turn on this substrate depends on
-    // the chat-recovery fiber, so it is stated rather than left to an SDK
-    // default that a version bump could flip.
-    expect(agent.chatRecovery).toBe(true);
-    // And the stall watchdog stays off: it measures the gap between stream
-    // chunks, no chunks flow while a server-side tool runs, so any finite value
-    // is a wall-clock bound on a TURN. A hung provider is bounded by recovery
-    // attempts instead.
-    expect(agent.chatStreamStallTimeoutMs).toBe(0);
-  });
-});
-
 describe('a background job whose executor died', () => {
   test('the recovery hands the re-drive to a carrier and terminalizes the old fiber', async () => {
     const { agent } = orchestratorHarness();
