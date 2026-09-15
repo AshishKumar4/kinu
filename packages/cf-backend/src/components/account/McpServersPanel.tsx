@@ -22,6 +22,7 @@ import {
   listMcpServers, addMcpServer, removeMcpServer,
   type McpServerSummary, type McpTransport,
 } from "@/lib/user-api";
+import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
@@ -104,10 +105,14 @@ export function McpServersPanel() {
 
   return (
     <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <McpPresetCards servers={servers} onChanged={refresh} />
+      </div>
+
       <div className="flex justify-end">
         <Button size="sm" variant="secondary" icon={<PlusIcon size={12} />}
           onClick={() => setShowAdd((v) => !v)}>
-          Add MCP server
+          Add custom server
         </Button>
       </div>
 
