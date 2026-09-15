@@ -246,10 +246,16 @@ describe('ChatWireTransport', () => {
     expect(h.chunkRows().length).toBeGreaterThan(0);
 
     const second = h.connection('c2');
+    h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
     h.transport.onConnect(second);
+    // Resuming first, then the transcript as it is now — the live turn's
+    // opening row, which the loop wrote when the turn started.
     expect(JSON.parse(h.connectionFrames('c2')[0] ?? '{}')).toEqual({ type: 'cf_agent_stream_resuming', id: 'req-1' });
+    expect(v.parse(v.looseObject({ type: v.string(), messages: v.array(v.object({ id: v.string() })) }), JSON.parse(h.connectionFrames('c2')[1] ?? '{}'))).toMatchObject({
+      type: 'cf_agent_chat_messages', messages: [{ id: 'input-req-1' }],
+    });
     await h.transport.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
-    const replayed = h.connectionFrames('c2').slice(1).map((frame) => v.parse(FrameSchema, JSON.parse(frame)));
+    const replayed = h.connectionFrames('c2').slice(2).map((frame) => v.parse(FrameSchema, JSON.parse(frame)));
     expect(replayed.slice(0, 3).map((f) => [JSON.parse(f.body ?? '{}').type, f.replay])).toEqual([['start', true], ['text-start', true], ['text-delta', true]]);
     expect(replayed.at(-1)).toMatchObject({ done: false, replay: true });
   });

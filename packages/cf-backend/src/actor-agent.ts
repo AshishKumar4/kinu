@@ -1455,7 +1455,21 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
+    // The vendor base's connection hooks, captured before Think's `onStart`
+    // rebinds them around its own chat handshake: Think's connect serves its
+    // in-memory message cache, which this backend no longer keeps fresh —
+    // the transcript store writes straight through the SDK provider — so the
+    // gate below reaches the base directly and the transport serves the
+    // durable rows. Captured here because the base installs its own wrappers
+    // in ITS constructor, which ran before this line.
+    this.baseOnConnect = this.onConnect;
+    this.baseOnClose = this.onClose;
   }
+  /** The vendor base's connection hooks, before Think's `onStart` rebinds
+   *  them: see the constructor. Null until it runs, which is before any
+   *  socket arrives. */
+  private baseOnConnect: ActorAgent['onConnect'] | null = null;
+  private baseOnClose: ActorAgent['onClose'] | null = null;
   /** Think installs protocol dispatch before the actor onStart callback. */
   protected installClientMessageGate(): void {
     const dispatchMessage = this.onMessage;
@@ -1500,6 +1514,45 @@ export abstract class ActorAgent extends Think<Env> {
       if (v.is(v.string(), message) && await this.chatTransport.onMessage(connection, message)) return;
 
       return await dispatchMessage.call(this, connection, message);
+    };
+
+    // The connect and close the transport was built for: a socket that opens
+    // mid-turn is told what is resuming and reads the transcript as it is
+    // NOW — the loop's durable rows, not the vendor cache Think's own
+    // handshake would serve. Reached past Think's wrappers (see the
+    // constructor): a chat connection never sees Think's handshake, a
+    // sub-agent connection never sees ours.
+    const baseOnConnect = this.baseOnConnect;
+    const baseOnClose = this.baseOnClose;
+
+    this.onConnect = async (connection, ctx) => {
+      if (await this.refuseRevokedSocketAuthority(connection, '')) return;
+
+      if (this._cf_requestTargetsSubAgent(ctx.request)) return await baseOnConnect?.call(this, connection, ctx);
+
+      await baseOnConnect?.call(this, connection, ctx);
+      this.chatTransport.onConnect(connection);
+    };
+
+    this.onClose = async (connection, code, reason, wasClean) => {
+      this.chatTransport.onClose(connection);
+      await baseOnClose?.call(this, connection, code, reason, wasClean);
+    };
+
+    // The transcript seed the hook fetches: Think's route serves its
+    // in-memory cache, stale since the store moved beneath it, so the gate
+    // answers this one path from the durable rows instead.
+    const dispatchRequest = this.onRequest;
+
+
+    this.onRequest = async (request) => {
+      const url = new URL(request.url);
+
+      if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
+        return Response.json(this.chatTranscript.history());
+      }
+
+      return await dispatchRequest.call(this, request);
     };
   }
   /**

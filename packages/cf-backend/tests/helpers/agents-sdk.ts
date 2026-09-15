@@ -259,6 +259,9 @@ export function mockAgentsSdk(): void {
       onRequest(_request: Request): Response {
         return new Response('Not implemented', { status: 404 });
       }
+      /** No sub-agent facet exists under bun: every socket is this agent's
+       *  own, so the chat side of the connection gate always runs. */
+      protected _cf_requestTargetsSubAgent(_request: Request): boolean { return false; }
 
       /** The SDK's DO heartbeat. Production uses it for work that outlives the
        *  call that started it (the drain timer, the genesis turn), so the stand-in
