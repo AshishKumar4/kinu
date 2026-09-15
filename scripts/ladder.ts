@@ -158,7 +158,9 @@ export const LADDER: readonly Gate[] = [
     catches: `type errors and the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across all 11 `
       + 'projects. The largest defect class by volume and the only total one — every file, every line.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
-    inputs: { kind: 'derived' },
+    // `anti-slop/rules.test.ts` imports every rule suite it discovers through
+    // `sources.ts`; the suites are tracked under this directory.
+    inputs: { kind: 'derived', imports: ['tools/oxlint/anti-slop/rules/'] },
   },
   {
     run: 'bun run gate:do-init',
@@ -971,7 +973,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'both backend composition roots, and every subprocess path. It also covers '
       + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
       + 'which pins the other 5 by equality with the gate that does run each.',
-    inputs: AMBIENT_BY_NAME,
+    // `mutation-exploration-policy.test.ts` imports a mutated copy of
+    // `strategy/archive.ts` it wrote to scratch; the bytes derive from these sources.
+    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/strategy/', 'packages/core/src/execution/codemode-node-shim.ts'] },
   },
   {
     run: 'bun run gate:python-suites',
@@ -1039,7 +1043,9 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything needing a Workers runtime rather than a composition root — every '
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
-    inputs: AMBIENT_BY_NAME,
+    // `unit-codemode-sandbox.test.ts` imports the node shim it wrote to scratch
+    // from `KINU_NODE_MODULE_SOURCE`, whose bytes are this file's.
+    inputs: { ...AMBIENT_BY_NAME, imports: ['packages/core/src/execution/codemode-node-shim.ts'] },
   },
 
   {
