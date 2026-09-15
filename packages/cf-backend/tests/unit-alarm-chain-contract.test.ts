@@ -112,7 +112,7 @@ describe('the Kinu timer rides the SDK scheduler', () => {
     expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.armTimer(at))');
     expect(orchestrator).not.toContain('scheduleTimerAt');
     expect(orchestrator).not.toContain('this.ctx.waitUntil(');
-    expect(orchestrator).toContain('return this.armWakeRow(KINU_TIMER_CALLBACK, atMs)');
+    expect(orchestrator).toContain('await this.armWakeRow(KINU_TIMER_CALLBACK, atMs)');
     expect(orchestrator).toContain("const KINU_TIMER_CALLBACK = '_kinuTimerTick'");
     expect(orchestrator).toContain('async _kinuTimerTick(): Promise<void>');
   });

@@ -266,19 +266,23 @@ describe('the workspace keeps exactly one wake row', () => {
     expect(wake.time).not.toBe(owedAt);
 
     // One delivery, in the platform's own order: a one-shot `scheduled` row is
-    // CONSUMED when its alarm fires and the callback runs after. The order is
-    // load-bearing — the armer is soonest-wins, so a tick re-arming while its
-    // own immediate row is still armed would change nothing and this case would
-    // pass over a workspace that had lost the instant. The alarm itself is
-    // workerd's (tests/workerd/do-alarm.test.ts fires a real one); the row
-    // bookkeeping around it is what this file drives.
+    // CONSUMED when its alarm fires and the callback runs after. The alarm
+    // itself is workerd's (tests/workerd/do-alarm.test.ts fires a real one);
+    // the row bookkeeping around it is what this file drives.
     await workspace.agent.cancelSchedule(wake.id);
+    const nowSec = Math.floor(Date.now() / 1000);
     await workspace.agent._kinuTerminalRetryTick();
 
-    // Restored: the child's own instant, from a workspace-wide read the root
-    // performed. Without the re-arm the registry is EMPTY here — the immediate
-    // wake is spent, the attempt was not yet due, and nothing else ever looks.
-    expect((await wakes()).map((row) => row.time)).toEqual([owedAt]);
+    // Under arm-first the tick wrote its pessimistic next-lap row BEFORE the
+    // drain, and the job's own resume arm collapsed into it — soonest-wins.
+    // The registry therefore holds the EARLIER wake: a future row strictly
+    // before the job's instant, kept because the job is owed work — which is
+    // what re-runs the sweep until the instant arrives rather than losing the
+    // chain the moment the immediate wake was spent.
+    const restored = await wakes();
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.time).toBeGreaterThan(nowSec);
+    expect(restored[0]?.time).toBeLessThan(owedAt);
   });
 
   test('a failed re-arm leaves the previous wake row in place', async () => {
@@ -458,6 +462,44 @@ describe('the workspace keeps exactly one wake row', () => {
     // instead of pacing forever.
     expect(await fireArmedTick()).toBeGreaterThan(second);
     expect(await fireArmedTick()).toBe(0);
+  });
+
+  test('a tick killed after its arm and before its drain still leaves the wake', async () => {
+    // The arm-first ordering is the durability point: the pessimistic next-lap
+    // row is durable BEFORE any pass runs, so the one failure this test
+    // manufactures — the first sweep dying mid-tick — is a row left behind,
+    // not a chain that ends. On the old shape the same throw propagated with
+    // nothing armed at all.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+
+    Object.defineProperty(agent, 'maintenanceSweeps', {
+      configurable: true,
+      value: (): boolean => { throw new Error('sweep died mid-tick'); },
+    });
+
+    await expect(agent._kinuTerminalRetryTick()).rejects.toThrow('sweep died mid-tick');
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick' && row.time > Math.floor(Date.now() / 1000));
+
+    expect(armed).toHaveLength(1);
+  });
+
+  test('a tick with nothing owed releases the row it armed', async () => {
+    // The other half of arm-first: the pessimistic row was insurance, not work
+    // anybody is waiting on, so a pass that ends with nothing unfinished and
+    // nothing owed deletes exactly the row it wrote — the registry sleeps
+    // empty rather than holding a wake that fires to find nothing.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    await agent._kinuTerminalRetryTick();
+
+    expect(await agent.listSchedules()).toEqual([]);
   });
 
   test('a tick that cannot re-arm fails, so the runtime redelivers it', async () => {
