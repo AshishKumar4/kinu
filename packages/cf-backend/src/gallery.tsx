@@ -3093,6 +3093,64 @@ function ChatSteerFrame() {
   );
 }
 
+/* Code fences in chat, the way an answer actually carries them: one ts block,
+   one bash, one json — the three languages a fix reply names most. This is
+   the frame the highlighting change photographs: a fence that renders flat
+   here is the defect. */
+const CODE_THREAD: UIMessage[] = [
+  msg({
+    id: "cu1", role: "user", createdAt: NOW - 4 * 60e3,
+    parts: [{ type: "text", text: "Show me the fix for the SAVE20 coupon, how to run it, and the shape it returns." }],
+  }),
+  msg({
+    id: "ca1", role: "assistant", createdAt: NOW - 3 * 60e3,
+    parts: [
+      { type: "text", text: [
+        "The patch keeps percentage coupons on the branch the migration left null:",
+        "",
+        "```ts",
+        "interface CouponRule { kind: 'fixed' | 'percent'; value: number }",
+        "const rule: CouponRule = rules[coupon.kind ?? inferKind(coupon)];",
+        "export function applyCoupon(cart: Cart, coupon: Coupon): Cart {",
+        "  return rule.kind === 'percent' ? cart.scale(rule.value) : cart.subtract(rule.value);",
+        "}",
+        "```",
+        "",
+        "Run the suite from the package root:",
+        "",
+        "```bash",
+        "bun test packages/checkout --filter coupon-kind",
+        "git diff --stat migrations/0042_coupon_kind.sql",
+        "```",
+        "",
+        "and the handler now answers:",
+        "",
+        "```json",
+        "{ \"code\": \"SAVE20\", \"kind\": \"percent\", \"applied\": true, \"total\": 84.00 }",
+        "```",
+      ].join("\n") },
+    ],
+  }),
+];
+
+function ChatCodeFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs />
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
+          {CODE_THREAD.map((m, i) => (
+            <div key={m.id} data-chat-row={m.id}>
+              <MessageView message={m} isLast={i === CODE_THREAD.length - 1} isStreaming={false} onFork={() => {}} />
+            </div>
+          ))}
+        </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+
 /* What every new workspace opens on. The mission is shown as the standing
    brief it is — it is deliberately NOT sent as an opening message, so this
    state is the first thing anyone sees after creating a workspace. */
@@ -6305,6 +6363,8 @@ async function mount() {
     // The two primary-nav pages behind the shipped chrome; `&view=tiled`
     // seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
+    // Chat with ts/bash/json fences — the frame the highlighting test shoots.
+    ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
   ]);
 
