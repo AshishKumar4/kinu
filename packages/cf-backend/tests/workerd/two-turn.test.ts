@@ -113,7 +113,7 @@ describe('two real turns over the HTTP model seam', () => {
     ]);
 
     // The durable-token proof for a mid-turn send lives in the cold arm — under
-    // send a busy socket input reserves pending_steers (not actor_turn_inputs),
+    // send a busy socket input reserves pending_steers,
     // and the row drains once the turn settles, so nothing durable remains here.
   });
 
@@ -188,12 +188,14 @@ describe('two real turns over the HTTP model seam', () => {
 
     expect(spliced).toBeDefined();
 
-    // Each admitted send settles exactly once under its own receipt — the
-    // reservation survived the reset and the replay did not re-mint a send.
+    // Each admitted send landed exactly once under its own id — the
+    // reservation survived the reset, the replay re-bound it rather than
+    // minting a second, and the drain that landed it retired it: one
+    // transcript row per client id, and nothing left reserved.
+    expect(done.steers).toHaveLength(0);
+
     for (const id of ['input-QUEUE-B', 'input-QUEUE-C']) {
-      const rows = done.receipts.filter((row) => row.messageIds.includes(id));
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.settled).toBe(true);
+      expect(done.transcript.filter((row) => row.role === 'user' && row.id === id)).toHaveLength(1);
     }
   });
 
@@ -296,9 +298,10 @@ describe('two real turns over the HTTP model seam', () => {
     const out = await root.firstChat();
     const calls = v.parse(HttpSchema, out.http).filter((call) => call.model === 'probe-queue');
 
-    // The admission itself is durable evidence: the first chat writes its own
-    // input receipt, and the model call proves the intake became a turn.
-    expect(out.receipts.length).toBeGreaterThanOrEqual(1);
+    // The admission itself is durable evidence: the loop writes the first
+    // chat's opening row under the client's own id, and the model call proves
+    // the intake became a turn.
+    expect(out.transcript.some((row) => row.role === 'user' && row.id === 'input-FIRST-CHAT')).toBe(true);
     expect(calls.length).toBe(1);
     expect(out.factsCompressed).toBe(1);
   });

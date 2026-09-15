@@ -1,15 +1,15 @@
 import { expect, test } from 'bun:test';
-import { jsonSchema, tool, uiMessageChunkSchema } from 'ai';
-import type { ModelMessage, UIMessageChunk } from 'ai';
+import { jsonSchema, tool } from 'ai';
+import type { ModelMessage } from 'ai';
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import {
-  startActorTurn, prepareActorProgram, scaffoldChatTransform, scaffoldInferenceTransform,
+  startActorTurn, prepareActorProgram, scaffoldChatTransform,
   createScaffoldLLMStream, runHeadInference, HeadCapture, withHeadCaptureRecording,
   initActorStateSchema,
 } from '@kinu.run/core';
 import { defaultLoopOrigin } from '@kinu.run/core';
 import { headLoopSeams } from './actor-fixture';
-import type { ChatEvent, HeadInput, InferenceStreamResult } from '@kinu.run/core';
+import type { ChatEvent, HeadInput } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createSandboxedExecutor } from '../src/executor';
 import { makeWorkspaceSchemaSql } from '../src/runtime';
@@ -27,20 +27,6 @@ async function admitActorTurn(input: Parameters<typeof startActorTurn>[0] extend
   });
 
   return { program, events: startActorTurn({ ...input, program }) };
-}
-
-async function collectUI(result: InferenceStreamResult, sendReasoning = true): Promise<UIMessageChunk[]> {
-  const schema = uiMessageChunkSchema();
-  const chunks: UIMessageChunk[] = [];
-
-  for await (const chunk of result.toUIMessageStream({ sendReasoning })) {
-    const parsed = await schema.validate?.(chunk);
-
-    if (!parsed?.success) throw new Error('the program emitted an invalid SDK UI chunk');
-    chunks.push(parsed.value);
-  }
-
-  return chunks;
 }
 
 const inputSchema = jsonSchema<Record<string, never>>({ type: 'object', properties: {}, additionalProperties: false });
@@ -197,7 +183,7 @@ for (const program of programs) test(`${program.name} preserves reasoning and ac
     .toContainEqual(expect.objectContaining({ type: 'tool-result', toolCallId: 'probe-call', output: { type: 'text', value: 'private result nonce1842' } }));
 });
 
-test('both existing transforms execute their pinned version even if live and version files later change', async () => {
+test('the transform executes its pinned version even if live and version files later change', async () => {
   const old = 'async function run() { await host.emit({ type: "text_delta", text: "version one" }); }';
   const changed = 'async function run() { await host.emit({ type: "text_delta", text: "version two" }); }';
   const { rt, files } = await runtime(old);
@@ -205,17 +191,12 @@ test('both existing transforms execute their pinned version even if live and ver
   const run = { rt, task: 'go', llmStream: () => { throw new Error('unexpected model'); } };
   const chat = scaffoldChatTransform({ program, chat: (async function* () {})(), run });
 
-  const hosted = scaffoldInferenceTransform({ program, run,
-    result: { toUIMessageStream: () => (async function* () {})() } });
-
   rt.identity.scaffold.read = async () => changed;
   await files.writeFile(rt.identity.scaffold.path + '.v1', changed);
   expect((await collect(chat)).flatMap(event => event.type === 'text-delta' ? [event.delta] : []).join('')).toBe('version one');
-  const chunks = await collectUI(hosted);
-  expect(chunks).toContainEqual(expect.objectContaining({ type: 'text-delta', delta: 'version one' }));
 });
 
-test('the hosted UI stream receives actual successful SDK output data, not rendered JSON text', async () => {
+test('the turn receives a tool\'s actual output data, not its model-side rendering', async () => {
   const { rt } = await runtime(CUSTOM_STREAM_SOURCE);
   let step = 0;
   const value = { error: 'business data', nonce: 'raw-output' };
@@ -232,15 +213,15 @@ test('the hosted UI stream receives actual successful SDK output data, not rende
     toModelOutput: () => ({ type: 'text', value: 'model-only representation' }),
   }) };
 
-  const result = scaffoldInferenceTransform({
+  const events = await collect(scaffoldChatTransform({
     program: await prepareActorProgram({ runtime: rt, mode: 'build', version: 1 }),
-    result: { toUIMessageStream: () => (async function* () {})() },
+    chat: (async function* () {})(),
     run: { rt, task: 'go', llmStream: createScaffoldLLMStream({ model, tools: () => tools }) },
-  });
+  }));
 
-  const chunks = await collectUI(result, false);
-  expect(chunks).toContainEqual(expect.objectContaining({ type: 'tool-output-available', output: value }));
-  expect(chunks).not.toContainEqual(expect.objectContaining({ type: 'reasoning-delta' }));
+  // The result event carries what the tool RETURNED — the client's data —
+  // while the model is shown the tool's own rendering of it.
+  expect(events).toContainEqual(expect.objectContaining({ type: 'tool-result', toolCallId: 'raw-call', result: JSON.stringify(value), success: true }));
 });
 
 test('a custom model call preserves completed tool messages when its next request is cancelled', async () => {

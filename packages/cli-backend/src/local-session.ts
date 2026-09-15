@@ -881,6 +881,9 @@ export class LocalAgentSession implements BackendHost {
       // version in this repo is a placeholder, so a claim for a builtin turn
       // records the build as unknown rather than naming one nobody can verify.
       installedBuild: null,
+      // The context-edit evidence the working history writes lands in this
+      // session's own run-event log, as it does on the hosted root.
+      events: this.eventRecorder,
       orchestration: orchestration.deps,
     });
 
@@ -894,6 +897,9 @@ export class LocalAgentSession implements BackendHost {
       actorSession: this.actorSession,
       sessionId: this.sessionId,
       transcript: new ActorMessagesTranscript(this.rt.storage.sql, this.rt.actor, this.sessionId),
+      // An answer's id is a random UUID here; the hosted root names its own
+      // through the same seam.
+      mintAnswerId: () => crypto.randomUUID(),
       pendingSends,
       eventLog: this.eventLog,
       eventRecorder: this.eventRecorder,
@@ -904,6 +910,8 @@ export class LocalAgentSession implements BackendHost {
       transport: { deliver: opts.onEvent },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        // No review surface here: a plan is reviewed in the hosted workspace UI.
+        planTurnRefusal: () => 'Plan review is available in the hosted workspace UI; this local session has no review surface.',
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         terminal: () => this.terminal,
         holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
@@ -2184,28 +2192,6 @@ export class LocalAgentSession implements BackendHost {
     return listRuns(this.eventRecorder, request?.cursor ?? null, request?.limit);
   }
 
-  /** A hired-for-context turn opens on an empty history but names the turn
-   *  whose conversation it inherits (`metadata.drainTurnId`): seed those rows
-   *  before the live prompt so the child reads its parent context in place. */
-  /** A delegated turn opens on the actor's working revision through the shared
-   *  rule; a root turn appends its input as before. */
-  private openTurnInput(item: ChatTurnInput, lease: ActorTurnLease, message: ModelMessage): void {
-    const drainTurn = v.safeParse(v.string(), item.metadata?.drainTurnId);
-
-    if (drainTurn.success) {
-      this.actorSession.openDelegatedTurn(lease, {
-        messages: [message],
-        birthContext: subordinateTurnContext(this.eventLog, drainTurn.output).map(inheritedAsModelMessage),
-      });
-    } else {
-      this.actorSession.appendInput(lease, message);
-    }
-
-    // A re-opened turn's prior output follows its input: the model continues
-    // its own answer rather than starting one.
-    if (item.priorOutput !== undefined) this.actorSession.appendPriorOutput(lease, item.priorOutput);
-  }
-
   /**
    * Assemble one admitted turn — the ChatSession's `prepareTurn` port.
    *
@@ -2365,9 +2351,13 @@ export class LocalAgentSession implements BackendHost {
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
 
-    this.openTurnInput(item, lease, fileParts.length > 0
-      ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-      : { role: 'user', content: item.text });
+    this.actorSession.openTurnInput(lease, {
+      item,
+      message: fileParts.length > 0
+        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+        : { role: 'user', content: item.text },
+      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+    });
 
     // Live state (facts, memory tail, executor status, running background work,
     // the open fork roster) rides the dynamic-context ledger — the shared step

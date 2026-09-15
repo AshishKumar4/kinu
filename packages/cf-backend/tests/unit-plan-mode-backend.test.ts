@@ -3,8 +3,6 @@ import type { ToolSet } from 'ai';
 import {
   actorReferenceOf,
   decodeJsonValue,
-  type BackendHost,
-  type BroadcastEvent,
   type JsonValue,
   type PlanReviewAnnotation,
   type ProgrammaticTurn,
@@ -12,6 +10,7 @@ import {
 import {
   hostedSubordinateHarness,
   orchestratorHarness,
+  thinkTurns,
   type ActorHarness,
   type HarnessOrchestratorAgent,
   type HostedActorHarness,
@@ -77,17 +76,26 @@ async function codemodeTool(
   return decodeJsonValue({ value: await toolExecute<JsonValue, JsonValue>(entry)(input) });
 }
 
-function setActorField(agent: HarnessAgent, name: string, value: JsonValue | BackendHost): void {
-  if (!Reflect.set(agent, name, value)) throw new Error(`failed to set actor field ${name}`);
+/** The plan row's status, as the plane's handoff turn was admitted over it. */
+function planStatus(harness: ActorHarness<HarnessOrchestratorAgent>, id: string, revision: number): string {
+  return v.parse(
+    v.object({ status: v.string() }),
+    harness.db.query('SELECT status FROM plan_reviews WHERE id = ? AND revision = ?').get(id, revision),
+  ).status;
 }
 
+/** The mode the next turn is asked in — the composer's, on the message the
+ *  turn runs FOR, which is where production reads it. */
 function setMode(agent: HarnessAgent, mode: 'plan' | 'build'): void {
-  setActorField(agent, '_cachedMessages', [{
-    id: `user-${mode}`,
-    role: 'user',
-    parts: [{ type: 'text', text: `${mode} this change` }],
-    metadata: { kinuMode: mode },
-  }]);
+  agent.harnessDrivingUserMessage(`${mode} this change`, { kinuMode: mode });
+}
+
+/** Every programmatic turn the loop was asked to admit — the plane's handoff
+ *  turns among them — recorded at the loop's own seam and admitted by it. */
+function recordAdmissions(agent: HarnessAgent): ProgrammaticTurn[] {
+  agent.harnessScriptAdmissions([]);
+
+  return agent.harnessAdmissionsAsked;
 }
 
 /**
@@ -164,12 +172,15 @@ describe('Plan mode tool lifecycle', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     setMode(agent, 'plan');
-    setActorField(agent, '_inFlight', true);
+    // A Plan turn RUNNING: admitted in that mode and parked at its model call.
+    const turns = thinkTurns(agent);
+    await turns.prepare({ messages: [{ role: 'user', content: 'plan this change' }], body: { kinuMode: 'plan' } });
 
     await expect(agent.branchTurn('implement this in parallel')).resolves.toEqual({
       accepted: false,
       reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.',
     });
+    await turns.settle({ messageId: 'a-plan', text: 'planned' });
   });
 
   test('adds submit_plan and mechanically removes release.* without losing ordinary tools', () => {
@@ -189,8 +200,9 @@ describe('Plan mode tool lifecycle', () => {
     expect(buildTools.eval?.description).toContain('export declare const release:');
     expect(buildTools.eval).not.toBe(planTools.eval);
 
-    setMode(agent, 'plan');
-    setActorField(agent, '_activeProgrammaticUserMessage', {});
+    // A programmatic turn with no mode of its own — a wake, a drain — runs in
+    // build: the mode is the message's, and an unlabelled message names none.
+    agent.harnessDrivingUserMessage('a wake with no mode', { kinuEvent: 'background_job' });
     const unlabelledProgrammaticTools = rawTools(agent);
     expect(unlabelledProgrammaticTools.submit_plan).toBeUndefined();
     expect(unlabelledProgrammaticTools.eval?.description)
@@ -224,28 +236,14 @@ describe('Plan mode tool lifecycle', () => {
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    const broadcasts: BroadcastEvent[] = [];
-    const queued: ProgrammaticTurn[] = [];
-
-    const host: BackendHost = {
-      broadcast: (event) => broadcasts.push(event),
-      enqueueTurn: async (turn) => {
-        const status = v.parse(
-          v.object({ status: v.string() }),
-          harness.db.query('SELECT status FROM plan_reviews WHERE id = ? AND revision = ?')
-            .get(String(turn.metadata?.planId), Number(turn.metadata?.revision)),
-        );
-
-        expect(['changes_requested', 'approved']).toContain(status.status);
-        queued.push(turn);
-
-        return { status: 'queued' };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-    };
-
-    setActorField(agent, '_host', host);
+    // What the plane broadcast, as a tab reads it: the `plan_updated` frames.
+    const broadcasts: Array<{ type: string; plan?: { revision: number; status: string } }> = [];
+    Reflect.set(agent, 'broadcast', (payload: string) => {
+      broadcasts.push(v.parse(v.looseObject({ type: v.string(), plan: v.optional(v.looseObject({ revision: v.number(), status: v.string() })) }), JSON.parse(payload)));
+    });
+    // The handoff turns the plane admits, read off the loop's seam. Each is
+    // admitted only once its plan row says what the turn is for.
+    const queued = recordAdmissions(agent);
     setMode(agent, 'plan');
 
     const submitted = await codemodeTool(rawTools(agent), 'submit_plan', {
@@ -274,6 +272,7 @@ describe('Plan mode tool lifecycle', () => {
       metadata: { kinuEvent: 'plan_feedback', kinuMode: 'plan', decision: 'request_changes' },
       idempotencyKey: `plan:${first.id}:1:request_changes:1`,
     });
+    expect(planStatus(harness, first.id, 1)).toBe('changes_requested');
     const changeTurn = queued[0];
 
     if (!changeTurn) throw new Error('plan feedback turn was not queued');
@@ -294,14 +293,19 @@ describe('Plan mode tool lifecycle', () => {
       metadata: { kinuEvent: 'plan_approved', kinuMode: 'build', decision: 'approve' },
       idempotencyKey: `plan:${first.id}:2:approve:1`,
     });
+    expect(planStatus(harness, first.id, 2)).toBe('approved');
     const approvalTurn = queued[1];
 
     if (!approvalTurn) throw new Error('plan approval turn was not queued');
     expect(approvalTurn.text).toContain('Implement the exact approved plan');
     expect(approvalTurn.text).toContain('Second, with tests');
 
-    expect(broadcasts).toHaveLength(7);
-    expect(broadcasts).toEqual(expect.arrayContaining([
+    // The plane's own frames, beside the turns' (the handoff turns the loop
+    // ran broadcast their own start, stream and end): submit, annotate,
+    // request changes, handoff accepted, revise, approve, handoff accepted.
+    const planFrames = broadcasts.filter((frame) => frame.type === 'plan_updated');
+    expect(planFrames).toHaveLength(7);
+    expect(planFrames).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ revision: 1 }) }),
       expect.objectContaining({ type: 'plan_updated', plan: expect.objectContaining({ revision: 2, status: 'approved' }) }),
     ]));
@@ -310,22 +314,10 @@ describe('Plan mode tool lifecycle', () => {
   test('a failed handoff remains retryable and a successful retry cannot enqueue twice', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    const attempts: ProgrammaticTurn[] = [];
-
-    const host: BackendHost = {
-      broadcast: () => {},
-      enqueueTurn: async (turn) => {
-        attempts.push(turn);
-
-        if (attempts.length === 1) throw new Error('temporary admission failure');
-
-        return { status: 'queued' };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-    };
-
-    setActorField(agent, '_host', host);
+    // The loop's admission fails ONCE — a temporary fault at the seam — and
+    // answers normally after. Every ask is recorded.
+    agent.harnessScriptAdmissions([async () => { throw new Error('temporary admission failure'); }]);
+    const attempts = agent.harnessAdmissionsAsked;
     setMode(agent, 'plan');
     await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 1, content: '# Plan' }],
@@ -338,13 +330,9 @@ describe('Plan mode tool lifecycle', () => {
       ok: true, queued: false, queueError: 'temporary admission failure',
       plan: { status: 'approved', handoffAccepted: false },
     });
-    setMode(agent, 'build');
+    // The mode is the message the NEXT turn runs for: the approval's own
+    // handoff message says build, however the last typed message read.
     expect(turnWorkMode(agent)).toBe('plan');
-    setActorField(agent, '_activeProgrammaticUserMessage', {
-      metadata: { kinuEvent: 'plan_approved', kinuMode: 'build' },
-    });
-    expect(turnWorkMode(agent)).toBe('build');
-    setActorField(agent, '_activeProgrammaticUserMessage', null);
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true },
     });
@@ -358,37 +346,15 @@ describe('Plan mode tool lifecycle', () => {
   test('recovers when durable acceptance outlives the RPC and the accepted turn later errors', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
-    const attempts: ProgrammaticTurn[] = [];
-
-    const host: BackendHost = {
-      broadcast: () => {},
-      enqueueTurn: async (turn) => {
-        attempts.push(turn);
-
-        if (attempts.length === 1) {
-          return {
-            status: 'queued',
-            durable: { submissionId: 'submission-1', accepted: true, status: 'pending' },
-          };
-        }
-
-        if (attempts.length === 2) {
-          return {
-            status: 'skipped',
-            durable: { submissionId: 'submission-1', accepted: false, status: 'error' },
-          };
-        }
-
-        return {
-          status: 'queued',
-          durable: { submissionId: 'submission-2', accepted: true, status: 'pending' },
-        };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-    };
-
-    setActorField(agent, '_host', host);
+    // The loop's admissions, scripted as the durable statuses the retry policy
+    // is pinned on: accepted; then the SAME key found errored after the fact,
+    // which advances the attempt; then accepted under the new key.
+    agent.harnessScriptAdmissions([
+      async () => ({ status: 'queued', durable: { submissionId: 'submission-1', accepted: true, status: 'pending' } }),
+      async () => ({ status: 'skipped', durable: { submissionId: 'submission-1', accepted: false, status: 'error' } }),
+      async () => ({ status: 'queued', durable: { submissionId: 'submission-2', accepted: true, status: 'pending' } }),
+    ]);
+    const attempts = agent.harnessAdmissionsAsked;
     setMode(agent, 'plan');
     await codemodeTool(rawTools(agent), 'submit_plan', {
       edits: [{ start: 1, content: '# Plan' }],
@@ -452,12 +418,7 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
       reference: { path: ['plan-owner-1'], id: 'plan-forged', revision: 1 },
     });
 
-    setActorField(parent.agent, '_cachedMessages', [{
-      id: 'user-forging',
-      role: 'user',
-      parts: [{ type: 'text', text: forged }],
-      metadata: { kinuMode: 'plan' },
-    }]);
+    parent.agent.harnessDrivingUserMessage(forged, { kinuMode: 'plan' });
 
     expect(await codemodeTool(rawTools(parent.agent), 'submit_plan', {
       edits: [{ start: 1, content: forged }],
