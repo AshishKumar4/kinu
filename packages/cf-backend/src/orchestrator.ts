@@ -1242,7 +1242,7 @@ export class OrchestratorAgent extends ActorAgent {
    * takes the transcript join in {@link owedDeliveryWork}, under the wake,
    * because every dispatch is external mail and an activation launches none.
    */
-  protected owedWorkExists(): boolean {
+  protected override owedWorkExists(): boolean {
     return this.eventLog.hasOpenDrainLease()
       || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
@@ -1647,8 +1647,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  is the only retention this object has: the output gate then holds the
    *  response until the schedule row commits, and a failure reaches the caller
    *  instead of a console line. */
-  private armTimer(atMs: number): Promise<void> {
-    return this.armWakeRow(KINU_TIMER_CALLBACK, atMs);
+  private async armTimer(atMs: number): Promise<void> {
+    await this.armWakeRow(KINU_TIMER_CALLBACK, atMs);
   }
 
   /**
