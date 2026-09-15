@@ -9,7 +9,7 @@
  * These tests exercise `gateProviderExec` and `DefaultExecutionRouter`
  * directly — the seam itself — independent of any tool/backend wiring, so they
  * fail immediately if `ExecutionRouter.register()` stops gating (the bypass
- * reopens) regardless of how `run`/`execute_tools` are built on top.
+ * reopens) regardless of how `run`/`eval` are built on top.
  *
  * Revert-proof: dropping the `gateProviderExec` call from `register()` so it is
  * just `this.providers.set(provider.name, provider)` turns every "closes the
@@ -193,7 +193,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     expect(executed).toEqual([]);
   });
 
-  test('BUG REPRO: getProviders() — what execute_tools is actually built from on both backends — returns the gated tool too', async () => {
+  test('BUG REPRO: getProviders() — what eval is actually built from on both backends — returns the gated tool too', async () => {
     const router = new DefaultExecutionRouter(strictNoChannelPolicy());
     const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
     router.register(provider);

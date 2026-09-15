@@ -1,5 +1,5 @@
 // BackgroundJobRunner — the backend-agnostic lifecycle for auto-detached >30s
-// tool calls (think-heads, long execute_tools/run). Mints a job, keeps the
+// tool calls (think-heads, long eval/run). Mints a job, keeps the
 // in-flight promise alive in a durable fiber, settles/fails it, and wakes the
 // agent with a synthesis signal — over the AgentRuntime fiber + the one
 // signal-delivery seam.
@@ -69,7 +69,7 @@ export function backgroundJobWakeTrigger(jobId: string): string {
   return `background-job-wake:${jobId}`;
 }
 
-/** Thrown by a resumer for a kind it cannot re-drive (e.g. `run`/`execute_tools`,
+/** Thrown by a resumer for a kind it cannot re-drive (e.g. `run`/`eval`,
  *  whose partial side effects make blind re-execution unsafe). The runner treats
  *  it as "not resumable" → the job is failed with the eviction message, exactly
  *  as before this recovery path existed. A closed signal, not a bare Error. */
@@ -103,7 +103,7 @@ export type JobResumer = (
  * have RIGHT NOW", read out of the durable rows the work already wrote.
  *
  * Null when the kind has nothing partial to give, which is the honest answer for a
- * side-effecting call: `run` and `execute_tools` either happened or did not.
+ * side-effecting call: `run` and `eval` either happened or did not.
  */
 export type JobHarvester = (
   kind: string,
@@ -255,7 +255,7 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
     }
   }
 
-  if (kind === 'execute_tools') {
+  if (kind === 'eval') {
     const parsed = v.safeParse(ExecuteJobInputSchema, input);
 
     if (parsed.success) return parsed.output.code.trim().slice(0, 80);

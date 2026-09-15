@@ -71,7 +71,7 @@ export type { DynamicApproval, MissingCapability } from '../types/dynamic-contex
  *  background-job registry (jobs/store.ts), never a second copy of it. */
 export interface DynamicJob {
   readonly id: string;
-  /** The producing tool surface — `think_heads`, `execute_tools`, … */
+  /** The producing tool surface — `think_heads`, `eval`, … */
   readonly kind: string;
   readonly label: string | null;
 }
@@ -595,7 +595,7 @@ const EMPTY_ROSTER: ActiveRoster<never> = { items: [], total: 0 };
 
 const DYNAMIC_SECTION_TITLES = {
   mode: '## Work mode',
-  craftedTools: '## Crafted tools available through execute_tools',
+  craftedTools: '## Crafted tools available through eval',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',

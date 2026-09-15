@@ -6,7 +6,7 @@ import {
   type CodemodeProvider, type ChatEvent,
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 
 async function invoke(code: string, providers: CodemodeProvider[] = []) {
   let step = 0;
@@ -14,7 +14,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
   const model = scriptedTurnModel({
     doGenerate: () => ({
       content: ++step === 1
-        ? [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'execute_tools', input: JSON.stringify({ code }) }]
+        ? [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'eval', input: JSON.stringify({ code }) }]
         : [{ type: 'text', text: 'done' }],
       finishReason: { unified: step === 1 ? 'tool-calls' : 'stop', raw: undefined },
       usage: {
@@ -25,7 +25,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
     }),
   });
 
-  const tool = createNodeExecuteToolFactory({ extraProviders: providers })({
+  const tool = createNodeCodemodeToolFactory({ extraProviders: providers })({
     native: {}, craftedTools: () => ({}), providers: [],
   });
 
@@ -45,7 +45,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
 
   for await (const event of runChat({
     model, system: 'Run the requested program.', history: [{ role: 'user', content: 'go' }],
-    tools: { execute_tools: tool }, extensions, stopWhen: stepCountIs(2),
+    tools: { eval: tool }, extensions, stopWhen: stepCountIs(2),
   })) events.push(event);
   const result = events.find((event) => event.type === 'tool-result');
 

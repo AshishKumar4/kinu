@@ -23,7 +23,7 @@ export interface DelegationFeatures extends ExecutionPathSignals {
   teamCalls: number;
   thinkCalls: number;
   peerCalls: number;
-  executeToolsCalls: number;
+  executeCodemodeCalls: number;
   wallClockMs: number;
 }
 
@@ -248,7 +248,7 @@ export function delegationFeatures(turn: TurnProcessRecord): DelegationFeatures 
     teamCalls: count((call) => hasKey(STAFFING_ACTIONS, agentsAction(call))),
     thinkCalls: count((call) => hasKey(EXPLORATION_ACTIONS, agentsAction(call))),
     peerCalls: count((call) => hasKey(MESSAGING_ACTIONS, agentsAction(call))),
-    executeToolsCalls: count((call) => call.name === 'execute_tools'),
+    executeCodemodeCalls: count((call) => call.name === 'eval'),
     wallClockMs: turn.durationMs,
     ...executionPathSignals(turn.toolCalls),
   };
@@ -270,7 +270,7 @@ export function renderDelegationFeatures(features: DelegationFeatures): string {
 
   return `Turn process: ${features.stepCount} sequential steps, ${features.teamCalls} hiring, ` +
     `${features.thinkCalls} exploration, ${features.peerCalls} messaging, ` +
-    `${features.executeToolsCalls} execute_tools, ${compactDuration(features.wallClockMs)} wall clock` +
+    `${features.executeCodemodeCalls} eval, ${compactDuration(features.wallClockMs)} wall clock` +
     (path.length > 0 ? `. Wasted motion: ${path.join(', ')} tool calls` : '');
 }
 

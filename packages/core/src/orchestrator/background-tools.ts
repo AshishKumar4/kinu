@@ -75,7 +75,7 @@ export const BACKGROUNDABLE_TOOLS = {
  * surface does not emit — are TRANSLATED onto the same path by
  * `resumableAgentsInput` rather than refused, because a durable row is history
  * and nobody is left to correct its spelling. Side-effecting kinds
- * (execute_tools / run) can't be safely re-executed, so they decline.
+ * (eval / run) can't be safely re-executed, so they decline.
  *
  * `rawTools` is a thunk: the gate runs first, so a non-resumable kind never
  * pays for (or fails on) tool construction — the CLI resolves its model-bound
@@ -115,7 +115,7 @@ export async function resumeBackgroundJob(
  *
  * The gate is the SAME predicate the detach and the resume use, deliberately: a kind
  * that could not be re-driven has no durable state to read either, so a third
- * predicate would drift from the two. `run` and `execute_tools` therefore return null,
+ * predicate would drift from the two. `run` and `eval` therefore return null,
  * which is the honest answer — a side-effecting call either happened or did not, and
  * there is no half of it to hand over.
  *

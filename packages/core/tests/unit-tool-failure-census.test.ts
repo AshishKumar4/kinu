@@ -290,7 +290,7 @@ describe('a refusal, a failing job, a missing runtime and a broken tool are four
         outcome: { success: false, reason: 'io', execution: { exitCode: 1 } }, result: 'Error (exit 1)\n' }),
       call({ name: 'run', toolCallId: 't3', args: { command: 'bun test' },
         outcome: { success: false, reason: 'io', execution: { exitCode: 127 } }, result: 'bun: command not found' }),
-      call({ name: 'execute_tools', toolCallId: 't4', error: 'boom' }),
+      call({ name: 'eval', toolCallId: 't4', error: 'boom' }),
     ]);
 
     expect(census.failures).toHaveLength(4);
@@ -311,9 +311,9 @@ describe('a failure cannot hide', () => {
     const data = { error: 'workspace.createTool is not a function' };
 
     for (const result of [data, JSON.stringify(data)]) {
-      expect(classifyToolFailure(call({ name: 'execute_tools', toolCallId: 't1', result, outcome: { success: true } }))).toBeNull();
-      expect(classifyToolFailure(call({ name: 'execute_tools', toolCallId: 't2', result }))).toBeNull();
-      expect(classifyToolFailure(call({ name: 'execute_tools', toolCallId: 't3', result, outcome: { success: false, reason: null } })))
+      expect(classifyToolFailure(call({ name: 'eval', toolCallId: 't1', result, outcome: { success: true } }))).toBeNull();
+      expect(classifyToolFailure(call({ name: 'eval', toolCallId: 't2', result }))).toBeNull();
+      expect(classifyToolFailure(call({ name: 'eval', toolCallId: 't3', result, outcome: { success: false, reason: null } })))
         .toMatchObject({ reason: 'unclassified', refused: false, workFailed: false });
     }
   });
@@ -324,7 +324,7 @@ describe('a failure cannot hide', () => {
     // stdout mentions a missing function. The fix belongs at the seam that
     // decides what `success` means, not in a downstream sniff.
     expect(classifyToolFailure(call({
-      name: 'execute_tools', toolCallId: 't1',
+      name: 'eval', toolCallId: 't1',
       result: 'workspace.createTool is not a function.',
     }))).toBeNull();
   });
@@ -334,7 +334,7 @@ describe('a failure cannot hide', () => {
     // it would read as an ordinary exception, when it is a defect in the tool's
     // own contract.
     expect(classifyToolFailure(call({
-      name: 'execute_tools', toolCallId: 't1', error: FAILURE_WITHOUT_ERROR,
+      name: 'eval', toolCallId: 't1', error: FAILURE_WITHOUT_ERROR,
     }))).toMatchObject({ reason: 'failed_without_error', refused: false, workFailed: false });
     expect(classifyToolFailure(call({
       name: 'web', toolCallId: 't2', error: 'fetch failed: ECONNREFUSED',
@@ -699,7 +699,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const refusal = await narrow.tools.runCode.execute('print(1)');
     expect(refusal).toMatchObject({ reason: 'unsupported' });
-    expect(censusOf(call({ name: 'execute_tools', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
+    expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: refusal, outcome: { success: true } })).failures).toEqual([]);
   });
 
   test('laptop: no device attached is a platform gap, not a successful call', async () => {
@@ -768,7 +768,7 @@ describe('each executor tool files its own failure in the right part', () => {
   test('workspace: the inline plane refuses with a class its own caller can read', async () => {
     // `run` never reaches this tool — the workspace branch calls `rt.shell`
     // directly — so what the classification buys here is the OTHER caller:
-    // LLM-generated code inside `execute_tools`, which can now branch on `reason`
+    // LLM-generated code inside `eval`, which can now branch on `reason`
     // instead of matching prose, and a block reader that can see a failure at all.
     const { rt } = createTestRuntime();
 
@@ -779,7 +779,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const payload = await workspace.tools.exec.execute(42);
     expect(payload).toEqual({ reason: 'bad_input', error: 'workspace.exec: command must be a string' });
-    expect(censusOf(call({ name: 'execute_tools', toolCallId: 'handled', result: payload, outcome: { success: true } })).failures).toEqual([]);
+    expect(censusOf(call({ name: 'eval', toolCallId: 'handled', result: payload, outcome: { success: true } })).failures).toEqual([]);
   });
 
   test('workspace: the misevolution gate working is a refusal, not a defect', async () => {
@@ -800,7 +800,7 @@ describe('each executor tool files its own failure in the right part', () => {
     expect(vetoed).toMatchObject({ ok: false, reason: 'denied' });
 
     const census = censusToolFailures([call({
-      name: 'execute_tools', toolCallId: 'tc-1', args: { code: 'workspace.createTool(...)' },
+      name: 'eval', toolCallId: 'tc-1', args: { code: 'workspace.createTool(...)' },
       outcome: { success: true }, result: v.parse(JsonObjectSchema, vetoed),
     })]);
 

@@ -692,7 +692,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
 
   test('a property description stays on the native schema; the declaration carries only the shape', () => {
     // The sandbox declaration is a SECOND serialisation of every input schema,
-    // shipped inside the execute_tools docstring on every request. A property's
+    // shipped inside the eval docstring on every request. A property's
     // description already rides the native schema the provider receives, so
     // repeating it inside the rendered type duplicated that text per request —
     // the drift this test locks against returning.

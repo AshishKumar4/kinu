@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1307" viewBox="0 0 640 1307" style="max-width:100%;height:auto;display:block" role="img" aria-labelledby="capabilities-title capabilities-desc">
 <title id="capabilities-title">CURRENT + TARGET: Tools and codemode capabilities</title>
-<desc id="capabilities-desc">Current native tools and execute_tools codemode reach introduced host capabilities under actor identity, role, mode and provider gates. MCP and executor availability narrow that reach. The existing state capability is actor-scoped codemode_state; raw env.db or db is not introduced. The target database capability is a design proposal scoped to permitted data and operations, not unrestricted internal SQLite access.</desc>
-<!-- Sources: packages/cf-backend/src/execute-tools.ts; packages/cf-backend/src/codemode-sandbox.ts; packages/core/src/tools/state-codemode.ts; docs/TOOLS.md; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
+<desc id="capabilities-desc">Current native tools and eval codemode reach introduced host capabilities under actor identity, role, mode and provider gates. MCP and executor availability narrow that reach. The existing state capability is actor-scoped codemode_state; raw env.db or db is not introduced. The target database capability is a design proposal scoped to permitted data and operations, not unrestricted internal SQLite access.</desc>
+<!-- Sources: packages/cf-backend/src/codemode-tool.ts; packages/cf-backend/src/codemode-sandbox.ts; packages/core/src/tools/state-codemode.ts; docs/TOOLS.md; user-messages.jsonl:975 / 7e1ad485. Current-source baseline: 9e452eadaaedcc5994fbc0c43cd4bcfc83588b5a. -->
 <style>text{font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}path,rect{vector-effect:non-scaling-stroke}</style>
 <defs>
 <marker id="capabilities-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -36,7 +36,7 @@
 </text>
 <text x="68" y="405" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Native tool calls</tspan>
-<tspan x="68" dy="30">execute_tools: JavaScript codemode</tspan>
+<tspan x="68" dy="30">eval: JavaScript codemode</tspan>
 </text>
 </g>
 <path d="M320 474 V510" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#capabilities-arrow)" />

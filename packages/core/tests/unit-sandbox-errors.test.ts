@@ -8,7 +8,7 @@
  *
  * Where the capability actually IS is read from TOOL_REACH, never a hardcoded
  * `name === 'run'` branch pointing at `workspace.exec` with every other native
- * tool told "it is not reachable from inside execute_tools" — a sentence that
+ * tool told "it is not reachable from inside eval" — a sentence that
  * is FALSE for the six that own a codemode namespace and for `file`, whose
  * bytes are `workspace.readFile`/`writeFile`/`editFile`. The per-tool test
  * below is what makes that impossible: it reads the declaration and demands
@@ -43,9 +43,9 @@ test('recovered host failures retain each binding in the census without failing 
     return { result: 'recovered' };
   });
 
-  const outcome = successfulToolOutcome('execute_tools', output);
+  const outcome = successfulToolOutcome('eval', output);
   expect(outcome.success).toBe(true);
-  const census = censusToolFailures([{ type: 'tool_call_end', runId: 'run', eventIndex: 0, timestamp: new Date(0).toISOString(), name: 'execute_tools', toolCallId: 'call', outcome }]);
+  const census = censusToolFailures([{ type: 'tool_call_end', runId: 'run', eventIndex: 0, timestamp: new Date(0).toISOString(), name: 'eval', toolCallId: 'call', outcome }]);
   expect(census.byKey).toEqual([['file·unavailable', 1], ['run·exit_1', 1]]);
 });
 
@@ -69,8 +69,8 @@ describe('explainNativeToolReferenceError', () => {
       const namespace = TOOL_REACH[name].codemode;
       const out = explainNativeToolReferenceError(`${name} is not defined`);
 
-      if (name === 'execute_tools') {
-        // execute_tools IS the sandbox; a program cannot call it from inside itself.
+      if (name === 'eval') {
+        // eval IS the sandbox; a program cannot call it from inside itself.
         expect(out).toBe(`${name} is not defined`);
         continue;
       }
@@ -93,18 +93,18 @@ describe('explainNativeToolReferenceError', () => {
     }
   });
 
-  test('no native tool is told it is unreachable from inside execute_tools', () => {
+  test('no native tool is told it is unreachable from inside eval', () => {
     // A message that hardcodes one tool's answer says exactly that for seven of
     // eight, and it is false for all seven.
     for (const name of BUILTIN_TOOLS) {
       expect(explainNativeToolReferenceError(`${name} is not defined`))
-        .not.toContain('not reachable from inside execute_tools');
+        .not.toContain('not reachable from inside eval');
     }
   });
 
-  test('execute_tools itself is never rewritten — it names no OTHER tool', () => {
-    const out = explainNativeToolReferenceError('execute_tools is not defined');
-    expect(out).toBe('execute_tools is not defined');
+  test('eval itself is never rewritten — it names no OTHER tool', () => {
+    const out = explainNativeToolReferenceError('eval is not defined');
+    expect(out).toBe('eval is not defined');
   });
 
   test('an undefined identifier that is not a native tool name passes through unchanged', () => {

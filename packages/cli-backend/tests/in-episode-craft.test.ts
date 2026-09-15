@@ -5,7 +5,7 @@
 // no turn boundary crossed, the agent builds itself a tool, calls it, the call
 // is scored by whether it actually ran, and a tool that keeps failing stops
 // being callable before the same turn is over. Real createCLIRuntime (real
-// filesystem, real CraftStore, real execute_tools sandbox), fake streaming model.
+// filesystem, real CraftStore, real eval sandbox), fake streaming model.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -21,7 +21,7 @@ const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
 };
 
-/** A model that spends one turn issuing `blocks` in order, one execute_tools
+/** A model that spends one turn issuing `blocks` in order, one eval
  *  call per step, then answers. This is the long-episode shape in miniature:
  *  many steps, one turn, nobody replying. */
 function scriptedEpisode(blocks: readonly string[]): LanguageModel {
@@ -42,7 +42,7 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
 
             if (code !== undefined) {
               controller.enqueue({
-                type: 'tool-call', toolCallId: `call-${step}`, toolName: 'execute_tools',
+                type: 'tool-call', toolCallId: `call-${step}`, toolName: 'eval',
                 input: JSON.stringify({ code }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });

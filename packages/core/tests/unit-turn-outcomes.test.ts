@@ -50,7 +50,7 @@ describe('isTrivialTurn — the LLM-call pre-filter', () => {
   });
 
   test('a turn that ran tools is never trivial', () => {
-    expect(isTrivialTurn(turn('ok', [{ name: 'execute_tools', args: {}, result: 1 }]))).toBe(false);
+    expect(isTrivialTurn(turn('ok', [{ name: 'eval', args: {}, result: 1 }]))).toBe(false);
   });
 });
 
@@ -505,18 +505,18 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
       type: 'step_finish',
       stepIndex: 2,
       messages: [
-        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-2', toolName: 'execute_tools', input: { code: 'ls' } }] },
-        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-2', toolName: 'execute_tools', output: { type: 'text', value: 'done' } }] },
+        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'tc-2', toolName: 'eval', input: { code: 'ls' } }] },
+        { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'tc-2', toolName: 'eval', output: { type: 'text', value: 'done' } }] },
       ],
     });
-    recorder.emit('run-1', { type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
+    recorder.emit('run-1', { type: 'tool_call_end', name: 'eval', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
     seed(sql, actor, 1, 0);
 
     const instance = buildOutcomeEvalSplit(sql, actor, 2).train[0];
     expect(instance.evidence).toContain('Outcome: corrected');
     expect(instance.evidence).toContain(
-      'Turn process: 2 sequential steps, 1 hiring, 0 exploration, 0 messaging, 1 execute_tools',
+      'Turn process: 2 sequential steps, 1 hiring, 0 exploration, 0 messaging, 1 eval',
     );
   });
 

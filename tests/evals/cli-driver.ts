@@ -48,7 +48,7 @@ const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
  * `createCLIRuntime` roots the `laptop` executor at `cwd ?? process.cwd()`
  * unless told otherwise (`cli-backend/src/runtime.ts:545`) — so the child's host
  * plane WAS the repository, and an episode reaches every registered provider
- * through `execute_tools`. The eval runs of 2026-08-24 left `reference.mjs`,
+ * through `eval`. The eval runs of 2026-08-24 left `reference.mjs`,
  * `solution.mjs` and `test-eval.mjs` (a corpus task's seed files and the agent's
  * own harness) plus core's spill directories `.kinu/tool-output/` and
  * `attachments/` in the repository root.

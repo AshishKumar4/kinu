@@ -1,4 +1,4 @@
-// The Node `execute_tools` factory runs the model's code in-process. Two
+// The Node `eval` factory runs the model's code in-process. Two
 // behaviours it must match the CF codemode sandbox on: capture console.* (so it
 // never leaks to the CLI's stdout, which under `kinu exec --json` IS the
 // event stream) and return it as `logs`; and implicit-return a trailing bare
@@ -8,9 +8,9 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
-import { EXECUTE_TOOLS_CODE_DESCRIPTION } from '@kinu.run/core';
+import { CODEMODE_CODE_DESCRIPTION } from '@kinu.run/core';
 import { scratchDir, toolExecute, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -25,14 +25,14 @@ interface ExecuteToolResult {
 type ExecuteTool = (args: { code: string }) => Promise<ExecuteToolResult>;
 
 function makeTool(): ExecuteTool {
-  const factory = createNodeExecuteToolFactory();
+  const factory = createNodeCodemodeToolFactory();
 
   return toolExecute(factory({ native: {}, craftedTools: () => ({}), providers: [] }));
 }
 
-describe('createNodeExecuteToolFactory — the code field the model reads', () => {
+describe('createNodeCodemodeToolFactory — the code field the model reads', () => {
   test('the input schema describes a script body, not an arrow function', () => {
-    const built = createNodeExecuteToolFactory()({ native: {}, craftedTools: () => ({}), providers: [] });
+    const built = createNodeCodemodeToolFactory()({ native: {}, craftedTools: () => ({}), providers: [] });
 
     const schema = v.parse(v.object({
       jsonSchema: v.object({
@@ -41,34 +41,34 @@ describe('createNodeExecuteToolFactory — the code field the model reads', () =
       }),
     }), built.inputSchema).jsonSchema;
 
-    expect(schema.properties.code.description).toBe(EXECUTE_TOOLS_CODE_DESCRIPTION);
+    expect(schema.properties.code.description).toBe(CODEMODE_CODE_DESCRIPTION);
     expect(schema.required).toEqual(['code']);
   });
 });
 
-describe('createNodeExecuteToolFactory — console capture + implicit return', () => {
+describe('createNodeCodemodeToolFactory — console capture + implicit return', () => {
   test('saving a crafted tool preserves the native description and makes the next call usable', async () => {
     let crafted: CraftedToolSet = {};
-    const factory = createNodeExecuteToolFactory();
+    const factory = createNodeCodemodeToolFactory();
     const surface = { native: {}, craftedTools: () => crafted, providers: [] };
     const first = factory(surface);
     crafted = { cache_echo: { description: 'Return the supplied text', execute: async (text) => text } };
     const next = factory(surface);
 
     expect(next.description).toBe(first.description);
-    expect(craftedToolDeclarations({ execute_tools: first }, { workMode: 'build', allowedTools: ['execute_tools'] }))
+    expect(craftedToolDeclarations({ eval: first }, { workMode: 'build', allowedTools: ['eval'] }))
       .toEqual([{ name: 'cache_echo', description: 'Return the supplied text' }]);
-    expect(craftedToolDeclarations({ execute_tools: first }, { workMode: 'build', allowedTools: [] })).toEqual([]);
+    expect(craftedToolDeclarations({ eval: first }, { workMode: 'build', allowedTools: [] })).toEqual([]);
     expect(await toolExecute<{ code: string }, ExecuteToolResult>(next)({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }))
       .toEqual({ result: 'CACHE_ECHO_OK' });
   });
 
   test('the provider sees the callable declaration in the ledger and a real call returns its output', async () => {
-    const executeTools = createNodeExecuteToolFactory()({ native: {}, providers: [], craftedTools: () => ({
+    const codemode = createNodeCodemodeToolFactory()({ native: {}, providers: [], craftedTools: () => ({
       cache_echo: { description: 'Return the supplied text', execute: async (text) => text },
     }) });
 
-    const tools = { execute_tools: executeTools };
+    const tools = { eval: codemode };
     let calls = 0;
 
     const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
@@ -76,7 +76,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
 
       return {
         content: invoke
-          ? [{ type: 'tool-call', toolName: 'execute_tools', toolCallId: 'echo', input: JSON.stringify({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }) }]
+          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'echo', input: JSON.stringify({ code: 'return await tools.cache_echo("CACHE_ECHO_OK");' }) }]
           : [{ type: 'text', text: 'done' }],
         finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
         usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -86,7 +86,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
 
     for await (const event of runChat({ model, system: 'Use the available tools.', history: [{ role: 'user', content: 'Invoke the echo function.' }], tools,
       dynamicContext: { ledger: new DynamicContextLedger(), snapshot: () => ({
-        craftedTools: craftedToolDeclarations(tools, { workMode: 'build', allowedTools: ['execute_tools'] }),
+        craftedTools: craftedToolDeclarations(tools, { workMode: 'build', allowedTools: ['eval'] }),
       }) },
     })) {
       if (event.type === 'error') throw new Error(event.message);
@@ -147,7 +147,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
   // it here is a ReferenceError, and a bare "run is not defined" gives the
   // model no idea why. Real evidence from production (2026-08-12 debug
   // audit): a model wrote exactly this and got only the bare V8 message back.
-  test('calling the native `run` tool from inside execute_tools gets an actionable hint, not a bare ReferenceError', async () => {
+  test('calling the native `run` tool from inside eval gets an actionable hint, not a bare ReferenceError', async () => {
     const pending = makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
     await expect(pending).rejects.toThrow('run is not defined');
     await expect(pending).rejects.toThrow('"run" is a native Kinu tool');
@@ -181,7 +181,7 @@ function makeToolWithFailingProvider(error: Error) {
     },
   };
 
-  const factory = createNodeExecuteToolFactory({
+  const factory = createNodeCodemodeToolFactory({
     extraProviders: [provider],
   });
 
@@ -192,7 +192,7 @@ function makeToolWithFailingProvider(error: Error) {
   return { tool, calls };
 }
 
-describe('createNodeExecuteToolFactory — a failing host call can never kill the process', () => {
+describe('createNodeCodemodeToolFactory — a failing host call can never kill the process', () => {
   test('a FLOATED rejecting provider call does not become an unhandled rejection', async () => {
     // The production crash: the model forgets `await`, workspace.readdir('/app')
     // rejects with ENOENT, nothing is handling that promise, and Bun kills the
@@ -228,13 +228,13 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
     });
 
     expect(out.result).toBe('caught:ENOENT: nope');
-    expect(successfulToolOutcome('execute_tools', out)).toEqual({ success: true, failures: [
+    expect(successfulToolOutcome('eval', out)).toEqual({ success: true, failures: [
       { success: false, tool: 'file', action: null, reason: null, error: 'ENOENT: nope' },
     ] });
   });
 
   test('the tool description tells the model what workspace.* actually is', async () => {
-    const factory = createNodeExecuteToolFactory();
+    const factory = createNodeCodemodeToolFactory();
     const built = factory({ native: {}, craftedTools: () => ({}), providers: [] });
     expect(built.description).toContain('canonical durable workspace');
     expect(built.description).toContain('`run` with runtime "workspace"');
@@ -242,13 +242,13 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
 
   test('every wired namespace is DECLARED to the model, not just bound', async () => {
     // The defect this locks: the description was BUILTIN_TOOL_DESCRIPTIONS
-    // .execute_tools alone, and adaptExecutorProvider collected each provider's
+    // .eval alone, and adaptExecutorProvider collected each provider's
     // `types` without ever reading one. So the CLI model was handed
     // `memory.*`, `tasks.*`, `agents.*`, `web.*` and `llm.*` as live callables
     // and told about none of them — a whole reachable surface it could not
     // discover. Both a capability provider and an executor provider are
     // included here because the two arrive by different routes.
-    const factory = createNodeExecuteToolFactory({
+    const factory = createNodeCodemodeToolFactory({
       extraProviders: [{
         name: 'memory',
         types: 'export declare const memory: {\n  save(content: string): Promise<unknown>;\n};\n',
@@ -275,11 +275,11 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
   });
 });
 
-describe('createNodeExecuteToolFactory — crafted tools, on the episode clock', () => {
+describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock', () => {
   /** A crafted set that changes between calls, the way the CraftStore does
    *  when the model crafts a tool mid-turn. */
   function makeToolOverStore(store: Map<string, CraftedToolSet[string]['execute']>): ExecuteTool {
-    const built = createNodeExecuteToolFactory()({
+    const built = createNodeCodemodeToolFactory()({
       native: {},
       craftedTools: () => Object.fromEntries(
         [...store].map(([name, execute]) => [name, { description: name, execute }]),
@@ -321,7 +321,7 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },
     };
 
-    const built = createNodeExecuteToolFactory({ extraProviders: [provider] })({
+    const built = createNodeCodemodeToolFactory({ extraProviders: [provider] })({
       native: {},
       craftedTools: () => ({ real: { description: 'r', execute: async () => 'crafted' } }),
       providers: [],
@@ -333,12 +333,12 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
   });
 });
 
-describe('createNodeExecuteToolFactory — native tools under tools.<name>', () => {
+describe('createNodeCodemodeToolFactory — native tools under tools.<name>', () => {
   /** A finished surface the way buildActorTools hands it in: the sandbox's own
    *  entry beside the native tools it declares. */
   function surfaceWith(run: (input: { command: string }) => Promise<string>) {
     return {
-      execute_tools: tool({
+      eval: tool({
         description: 'the sandbox itself',
         inputSchema: jsonSchema<{ code: string }>({ type: 'object' }),
         execute: async () => 'never',
@@ -359,7 +359,7 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
     // them, so `tools.run(...)` answered `tools.run is not a function`.
     const seen: string[] = [];
 
-    const built = createNodeExecuteToolFactory()({
+    const built = createNodeCodemodeToolFactory()({
       native: surfaceWith(async ({ command }) => {
         seen.push(command);
 
@@ -379,7 +379,7 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
   });
 
   test('native declarations stay in the tool and crafted declarations ride the live ledger', () => {
-    const built = createNodeExecuteToolFactory()({
+    const built = createNodeCodemodeToolFactory()({
       native: surfaceWith(async () => ''),
       craftedTools: () => ({ double: { description: 'Doubles a number', execute: async () => 2 } }),
       providers: [],
@@ -390,18 +390,18 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
     expect(built.description).not.toContain('double(...args: unknown[]): Promise<unknown>;');
     expect(renderDynamicContextBlock({ craftedTools: [{ name: 'double', description: 'Doubles a number' }] }))
       .toContain('double(...args: unknown[]): Promise<unknown>;');
-    expect(built.description).not.toContain('execute_tools(input');
+    expect(built.description).not.toContain('eval(input');
   });
 
   test('the sandbox does not bind its own entry', async () => {
-    const built = createNodeExecuteToolFactory()({
+    const built = createNodeCodemodeToolFactory()({
       native: surfaceWith(async () => ''),
       craftedTools: () => ({}),
       providers: [],
     });
 
     const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
-      code: 'return typeof tools.execute_tools;',
+      code: 'return typeof tools.eval;',
     });
 
     expect(out.result).toBe('undefined');

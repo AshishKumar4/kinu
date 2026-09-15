@@ -209,7 +209,7 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
         TOOL: { kind: 'tool', name: 'run' },
         MISSING_TOOL: { kind: 'tool', name: 'not_a_tool' },
         DELEGATE: { kind: 'tool', name: 'agents' },
-        EXEC: { kind: 'tool', name: 'execute_tools' },
+        EXEC: { kind: 'tool', name: 'eval' },
         SELF: { kind: 'namespace', namespace: 'agents' },
         MODEL: { kind: 'ai', tier: 'quantum' },
         GONE: { kind: 'app', id: 'missing' },
@@ -226,7 +226,7 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
   expect(problem('GH')).toBe('MCP server gitlab is not connected');
   expect(problem('MISSING_TOOL')).toBe('no tool named not_a_tool is available');
   expect(problem('DELEGATE')).toBe('a slate cannot delegate or control its calling agent');
-  expect(problem('EXEC')).toBe('a slate cannot run execute_tools');
+  expect(problem('EXEC')).toBe('a slate cannot run eval');
   expect(problem('SELF')).toBe('a slate cannot delegate or control its calling agent');
   expect(problem('MODEL')).toBe('you have no quantum tier');
   expect(problem('GONE')).toBe('no slate named missing');

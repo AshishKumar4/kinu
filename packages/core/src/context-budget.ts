@@ -53,7 +53,7 @@ export type BulkProducer =
   | 'run'
   | 'file_read'
   | 'web_fetch'
-  | 'execute_tools'
+  | 'eval'
   | 'external_tool'
   | 'attachment'
   | 'pasted_text';

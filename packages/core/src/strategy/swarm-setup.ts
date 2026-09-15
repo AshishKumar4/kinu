@@ -1147,7 +1147,7 @@ export function buildNodeDeps(input: {
   readonly mission?: MissionScope;
   readonly provisionHome?: NodeWorkspaceProvisioner;
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  readonly executeTool?: unknown;
+  readonly codemodeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
   const deps = input;
@@ -1173,7 +1173,7 @@ export function buildNodeDeps(input: {
 
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
 
-  if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
+  if (deps.codemodeTool !== undefined) nodeDeps.codemodeTool = deps.codemodeTool;
 
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
 

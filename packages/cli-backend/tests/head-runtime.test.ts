@@ -374,13 +374,13 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
   });
 
-  test('a head is offered the real fork surface: run + file + execute_tools + web + record + split', async () => {
+  test('a head is offered the real fork surface: run + file + eval + web + record + split', async () => {
     let captured: string[] = [];
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
     await (await runtime.spawnHead(aHeadInput())).run();
     expect(new Set(captured)).toEqual(new Set([
       'record_evidence', 'record_decision',
-      'execute_tools', 'run', 'file', 'web',
+      'eval', 'run', 'file', 'web',
       'split_subheads',
     ]));
   });
@@ -395,7 +395,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 
       return {
         content: invoke
-          ? [{ type: 'tool-call', toolName: 'execute_tools', toolCallId: 'unbound', input: JSON.stringify({ code: '// Probe an unbound function\nreturn await tools.secret_echo({});' }) }]
+          ? [{ type: 'tool-call', toolName: 'eval', toolCallId: 'unbound', input: JSON.stringify({ code: '// Probe an unbound function\nreturn await tools.secret_echo({});' }) }]
           : [{ type: 'text', text: 'done' }],
         finishReason: { unified: invoke ? 'tool-calls' : 'stop', raw: undefined },
         usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -584,7 +584,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      executeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
+      codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     });
@@ -799,7 +799,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       // Through the parent EXECUTOR: that is where a head's writes to its
       // parent land, and where attribution is recorded.
       const write = (content: string) => envelope([{
-        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'execute_tools',
+        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'eval',
         input: JSON.stringify({
           code: `await parent.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
         }),
@@ -847,7 +847,7 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
   });
 });
 
-describe("a head's execute_tools holds the namespaces the shared description promises", () => {
+describe("a head's eval holds the namespaces the shared description promises", () => {
   // The description every backend renders promises `state.set`/`state.get` to
   // every program. Red on 2026-09-05: the CLI head bound web and llm only, so a
   // fork program calling `state.set` answered a bare ReferenceError while the
@@ -863,7 +863,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
 
         const content = step === 1
           ? [{
-            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'execute_tools',
+            type: 'tool-call' as const, toolCallId: 'state-1', toolName: 'eval',
             input: JSON.stringify({
               code: '// Keep a marker between programs\nawait state.set("marker", "kept");\nreturn await state.get("marker");',
             }),
@@ -887,7 +887,7 @@ describe("a head's execute_tools holds the namespaces the shared description pro
 
     const outputs = journal.readSteps('stateful')
       .flatMap((s) => s.toolCalls)
-      .filter((c) => c.name === 'execute_tools')
+      .filter((c) => c.name === 'eval')
       .map((c) => JSON.stringify(c.output ?? ''));
 
     expect(outputs).toHaveLength(1);

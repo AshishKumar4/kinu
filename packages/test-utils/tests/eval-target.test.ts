@@ -73,7 +73,7 @@ function cappedTrail(): RunEvent[] {
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
 
   for (let step = 0; step < 10; step += 1) {
-    events.push(event({ type: 'tool_call_end', name: 'execute_tools', toolCallId: `tc-${String(step)}` }));
+    events.push(event({ type: 'tool_call_end', name: 'eval', toolCallId: `tc-${String(step)}` }));
     events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
   }
 
@@ -146,7 +146,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
     expect(totals.steps).toBe(10);
     expect(totals.tokensIn).toBe(190_979);
     expect(totals.tokensOut).toBe(6_016);
-    expect(totals.toolNames).toEqual(Array<string>(10).fill('execute_tools'));
+    expect(totals.toolNames).toEqual(Array<string>(10).fill('eval'));
     expect(totals.failures).toEqual([]);
   });
 

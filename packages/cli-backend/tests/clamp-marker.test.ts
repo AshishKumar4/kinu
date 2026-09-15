@@ -2,7 +2,7 @@
  * Clamp-marker honesty on the LOCAL backend. Here rt.shell is the HOST shell
  * (the user's machine at cwd) while the clamp offloads full outputs to the
  * workspace filesystem — two different filesystems. The marker's advertised
- * remedy must therefore be workspace.readFile (execute_tools, same VFS on
+ * remedy must therefore be workspace.readFile (eval, same VFS on
  * every backend), never a host-shell grep of the offload path.
  */
 import { describe, expect, test } from 'bun:test';
@@ -38,13 +38,13 @@ describe('clamped run output on the local backend', () => {
     expect(clamped).toContain('chars omitted');
     expect(clamped).toContain('FINAL-ERROR-LINE');
     // The marker advertises only the remedy that works here.
-    expect(clamped).toContain('workspace.readFile inside execute_tools');
+    expect(clamped).toContain('workspace.readFile inside eval');
     expect(clamped).not.toContain('runtime "workspace"');
 
     const path = /full output saved to (\S+) —/.exec(clamped)?.[1];
     expect(path).toBeTruthy();
 
-    // Following the marker's own instruction: the execute_tools workspace
+    // Following the marker's own instruction: the eval workspace
     // surface restores the full text.
     const workspace = rt.executionRouter!.getProvider('workspace')!;
     const restored = await workspace.tools.readFile!.execute(path);

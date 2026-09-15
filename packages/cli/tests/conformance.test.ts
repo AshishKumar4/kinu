@@ -202,7 +202,7 @@ describe('cli backend conformance', () => {
     // above would judge an empty world.
     expect(captured.length).toBeGreaterThanOrEqual(5);
     expect(observed.planes.table!.size).toBeGreaterThanOrEqual(25);
-    expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+    expect(observed.planes.tool!.has('eval')).toBe(true);
     // The peer transport reached the model. `reply` used to witness it as its
     // own action; the addressing verbs are one `msg` now, so the witness is the
     // TARGET only peers can offer — `event_id`, which is in the advertised

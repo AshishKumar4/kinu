@@ -222,7 +222,7 @@ describe('readFileSlice', () => {
   test('one line larger than the cap hands over a recipe instead of clipping silently', () => {
     const slice = readFileSlice('x'.repeat(500), { path: '/f', maxChars: 100 });
     expect(slice.output).toContain('does not fit');
-    expect(slice.output).toContain('workspace.readFile inside execute_tools');
+    expect(slice.output).toContain('workspace.readFile inside eval');
     expect(slice.omitted).toBe(400);
   });
 

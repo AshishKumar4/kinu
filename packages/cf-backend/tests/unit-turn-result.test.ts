@@ -176,7 +176,7 @@ describe('MessageView tool prominence', () => {
   test('arbitrary codemode result fields remain unknown, rendered quietly', () => {
     for (const effect of ['read', 'mutate']) {
       const html = render([
-        tool('program', 'execute_tools', { code: 'return await inspect()' }, 'output-available', { result: { effect } }),
+        tool('program', 'eval', { code: 'return await inspect()' }, 'output-available', { result: { effect } }),
       ]);
 
       expect(html).toContain('data-tool-effect="unknown"');

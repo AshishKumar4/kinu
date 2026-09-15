@@ -146,7 +146,7 @@ const RELEASE_TABLE = {
 
 export const BACKEND_CONFORMANCE: ConformanceManifest = {
   tool: {
-    execute_tools: EVERYWHERE,
+    eval: EVERYWHERE,
     run: EVERYWHERE,
     file: EVERYWHERE,
     agents: EVERYWHERE,
@@ -511,7 +511,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // reviews.
     refinement_requests: EVERYWHERE,
 
-    // ── execute_tools state ──
+    // ── eval state ──
     // The `state.*` sandbox namespace: what one program saved for the next.
     // In `initActorTables`, because every root that can run a program can keep
     // something between two of them.

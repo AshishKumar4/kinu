@@ -263,9 +263,9 @@ export interface SwarmRunDeps {
   /** How a node's own runtime is built once it has a home — see
    *  {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
-  /** Backend-built `execute_tools` and live research, handed to every agent node.
+  /** Backend-built `eval` and live research, handed to every agent node.
    *  Absent means the node's surface is narrower, not broken. */
-  readonly executeTool?: unknown;
+  readonly codemodeTool?: unknown;
   readonly webSearch?: WebSearchProvider;
   /**
    * The compaction barrier over *Inherited context*: rewrite one parent's context
@@ -631,7 +631,7 @@ export async function runSwarm(
     signal: deps.signal, reportModelCall: deps.reportModelCall,
     maxWallClockMs: deps.maxWallClockMs, mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,
-    executeTool: deps.executeTool, webSearch: deps.webSearch,
+    codemodeTool: deps.codemodeTool, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });
 

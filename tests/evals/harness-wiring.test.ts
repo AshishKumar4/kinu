@@ -13,7 +13,7 @@
  *
  *   craft_reuse         the harness runs the OPENED runtime, not the degraded
  *                       one `createWorkspace` returns. Revert that and every
- *                       `execute_tools` block fails with `workspace.createTool
+ *                       `eval` block fails with `workspace.createTool
  *                       is not a function`, and this test goes red.
  *   completion_honesty  the harness declares `oneShot`, the only thing that arms
  *                       the gate, and settles the pump so the gate's confirming
@@ -71,7 +71,7 @@ const LLM: LLMProviderConfig = {
 const ARM: EvalArmState = {
   evolution: true,
   settle: 'none',
-  tools: ['execute_tools', 'run', 'file', 'agents', 'memory', 'tasks', 'web', 'report'],
+  tools: ['eval', 'run', 'file', 'agents', 'memory', 'tasks', 'web', 'report'],
 };
 
 /**
@@ -82,7 +82,7 @@ const ARM: EvalArmState = {
  * exists to resolve.
  */
 type ScriptedStep =
-  | { readonly tool: 'execute_tools'; readonly input: { readonly code: string } }
+  | { readonly tool: 'eval'; readonly input: { readonly code: string } }
   | { readonly tool: 'run'; readonly input: { readonly command: string } }
   | {
       readonly tool: 'file';
@@ -266,9 +266,9 @@ test('the SDK step collector pairs outcomes by call id and never interprets resu
 describe('crafted-tool discovery and execution use the production CLI adapter', () => {
   test('workspace.listTools exposes exactly the callable inherited craft set before reuse', async () => {
     const { rt, surface } = await openRuntimeProbe('crafted-production-set');
-    const executeEntry = surface.tools.execute_tools;
+    const executeEntry = surface.tools.eval;
 
-    if (!executeEntry) throw new Error('the eval surface omitted execute_tools');
+    if (!executeEntry) throw new Error('the eval surface omitted eval');
     const execute = toolExecute<{ code: string }, unknown>(executeEntry);
 
     const createDouble = await execute({ code: CREATE_DOUBLE });
@@ -415,11 +415,11 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
       .toEqual(['memory-action', 'producer', 'table']);
   }, 0);
 
-  test('every codemode namespace production wires is reachable from execute_tools', async () => {
+  test('every codemode namespace production wires is reachable from eval', async () => {
     const { surface } = await openRuntimeProbe('parity-codemode-namespaces');
-    const executeEntry = surface.tools.execute_tools;
+    const executeEntry = surface.tools.eval;
 
-    if (!executeEntry) throw new Error('the eval surface omitted execute_tools');
+    if (!executeEntry) throw new Error('the eval surface omitted eval');
     const execute = toolExecute<{ code: string }, unknown>(executeEntry);
 
     // A namespace is proven by CALLING it, not by finding its provider in a
@@ -512,7 +512,7 @@ describe('published run-event provenance', () => {
     }, {
       dir,
       model: scripted([{
-        tool: 'execute_tools',
+        tool: 'eval',
         input: { code: `throw new Error(${JSON.stringify(secret)});` },
       }]),
       llm: LLM,
@@ -527,7 +527,7 @@ describe('published run-event provenance', () => {
     expect(timestamps).toEqual([...timestamps].sort());
     expect(output.provenance.events.some((event) =>
       event.type === 'tool_call_end'
-      && event.name === 'execute_tools'
+      && event.name === 'eval'
       && event.failureClass !== undefined)).toBe(true);
 
     // The task prompt, submitted code, tool result and error text all contain
@@ -541,8 +541,8 @@ describe('published run-event provenance', () => {
 describe('behaviour harness wiring — the three scorers that read zero live', () => {
   test('craft_reuse: the harness binds the workspace provider, so a tool crafted mid-turn is callable', async () => {
     const scores = await run('wiring-craft', [
-      { tool: 'execute_tools', input: { code: CREATE_DOUBLE } },
-      { tool: 'execute_tools', input: { code: 'return await tools.doubleIt(21);' } },
+      { tool: 'eval', input: { code: CREATE_DOUBLE } },
+      { tool: 'eval', input: { code: 'return await tools.doubleIt(21);' } },
     ]);
 
     const craft = scoreOf(scores, 'craft_reuse');
@@ -663,9 +663,9 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     rmSync(probe, { recursive: true, force: true });
 
     await run('wiring-isolation', [
-      { tool: 'execute_tools', input: { code:
+      { tool: 'eval', input: { code:
         `await laptop.writeFile(${JSON.stringify(join(probe, 'add.js'))}, "escaped"); return "wrote";` } },
-      { tool: 'execute_tools', input: { code:
+      { tool: 'eval', input: { code:
         `return await laptop.exec(${JSON.stringify(`mkdir -p ${probe} && echo escaped > ${join(probe, 'add.test.js')}`)});` } },
     ]);
 
@@ -677,7 +677,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
     const db = opened[opened.length - 1];
 
     if (!db) throw new Error('the harness opened no store');
-    const rows = toolCallRows(db).filter((r) => r.name === 'execute_tools');
+    const rows = toolCallRows(db).filter((r) => r.name === 'eval');
     expect(rows).toHaveLength(2);
 
     for (const row of rows) {
@@ -754,22 +754,22 @@ function toolCallRows(db: Database): Extract<RunEvent, { type: 'tool_call_end' }
 describe('tool-failure attribution over a real turn', () => {
   test('program recovery and propagated refusals retain binding attribution in the durable census', async () => {
     await run('attrib-codemode', [
-      { tool: 'execute_tools', input: { code: 'const failure = await workspace.readFile("/absent-codemode-file"); if (failure.success === false) return "recovered"; throw new Error("expected failure");' } },
-      { tool: 'execute_tools', input: { code: 'return await tools.file({ action: "read", path: "/absent-codemode-file" });' } },
-      { tool: 'execute_tools', input: { code: 'return await tools.run({ runtime: "sandbox", command: "pwd" });' } },
+      { tool: 'eval', input: { code: 'const failure = await workspace.readFile("/absent-codemode-file"); if (failure.success === false) return "recovered"; throw new Error("expected failure");' } },
+      { tool: 'eval', input: { code: 'return await tools.file({ action: "read", path: "/absent-codemode-file" });' } },
+      { tool: 'eval', input: { code: 'return await tools.run({ runtime: "sandbox", command: "pwd" });' } },
     ], ['workspace']);
     const db = opened.at(-1);
 
     if (db === undefined) throw new Error('the harness opened no store');
     const rows = toolCallRows(db);
-    expect(rows.filter((row) => row.name === 'execute_tools').map((row) => row.outcome?.success)).toEqual([true, false, false]);
+    expect(rows.filter((row) => row.name === 'eval').map((row) => row.outcome?.success)).toEqual([true, false, false]);
     const census = censusToolFailures(rows);
     const keys = Object.fromEntries(census.byKey);
     expect(keys['file·missing']).toBe(1);
     expect(keys['file·read·missing']).toBe(1);
     expect(keys['run·unavailable']).toBe(1);
     expect(census.failures).toHaveLength(3);
-    expect(census.failures.some((failure) => failure.tool === 'execute_tools')).toBe(false);
+    expect(census.failures.some((failure) => failure.tool === 'eval')).toBe(false);
   }, 60_000);
 
   test('every failure is attributed to its tool, action and reason, split three ways', async () => {

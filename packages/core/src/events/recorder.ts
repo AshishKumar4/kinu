@@ -140,7 +140,7 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('context_budget'), admittedChars: v.number(),
     omittedChars: v.number(), trips: v.object({
       run: v.optional(v.number()), file_read: v.optional(v.number()), web_fetch: v.optional(v.number()),
-      execute_tools: v.optional(v.number()), external_tool: v.optional(v.number()),
+      eval: v.optional(v.number()), external_tool: v.optional(v.number()),
       attachment: v.optional(v.number()), pasted_text: v.optional(v.number()),
     }), referenced: v.number(), tightened: v.number(), followUps: v.number() }),
   v.object({ ...BaseFields, type: v.literal('file_edit'), attempts: v.number(), applied: v.number(),

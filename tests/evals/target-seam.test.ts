@@ -3,7 +3,7 @@
  *
  * WHY THIS EXISTS RATHER THAN LEAVING THE SEAM TO THE LIVE ARMS. Every wiring
  * defect the eval tier has ever shipped was silent: a runtime with no executors
- * built `execute_tools` with an empty provider surface and every `workspace.*`
+ * built `eval` with an empty provider surface and every `workspace.*`
  * call failed as an ordinary tool result (two graded runs reported 0.817 and
  * 0.903 over it); a runtime with no profile resolver killed eleven tests across
  * three suites; a degraded birth runtime produced `craft_reuse eligible 0` and

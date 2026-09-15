@@ -204,7 +204,7 @@ if (import.meta.main) {
 
   const replacements = [{ file: 'packages/cli-backend/src/executor.ts', owner: 'createSandboxedExecutor',
       classification: 'REPLACED', replacement: 'Package-owned @cloudflare/codemode/normalize through typed local runtime adapters',
-      proof: 'bun test packages/cli-backend/tests/executor.test.ts packages/cli-backend/tests/execute-tools-factory.test.ts' },
+      proof: 'bun test packages/cli-backend/tests/executor.test.ts packages/cli-backend/tests/codemode-tool-factory.test.ts' },
     { file: 'scripts/jsonc.ts', owner: 'parseJsonc', classification: 'REPLACED',
       replacement: 'Bun.JSONC.parse followed by the existing Valibot schema',
       proof: 'bun test scripts/jsonc.test.ts scripts/release-config.test.ts scripts/analytics-datasets.test.ts' },

@@ -164,12 +164,12 @@ export interface ExplorationHostSeams {
    * read-mostly while owning a private directory nobody mentioned.
    */
   nodeHome(actor: HostedActor): Promise<NodeWorkspace>;
-  /** The `execute_tools` surface an exploration actor gets over its own runtime.
-   *  A `Tool`, named: core's `HeadToolDeps.executeTool` widens it to `unknown`
+  /** The `eval` surface an exploration actor gets over its own runtime.
+   *  A `Tool`, named: core's `HeadToolDeps.codemodeTool` widens it to `unknown`
    *  because the shape is the AI SDK's and core does not depend on it, but this
    *  seam is both ends' own backend and has no reason to hand its caller a
    *  value it cannot use. */
-  executeTool(runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet) => Tool;
+  codemodeTool(runtime: CFRuntime, webSearch: WebSearchProvider): (finished: ToolSet) => Tool;
   /** Where a finished step lands while the actor still runs: the journal that
    *  holds this head's own row, which is the workspace's — ONE database now, so
    *  a depth-2 head's spawn row and its step rows finally join. */
@@ -311,7 +311,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
             model: seams.resolveModel(spec),
             tools: buildHeadToolSet({
               input, capture, rt: runtime,
-              executeTool: seams.executeTool(runtime, webSearch),
+              codemodeTool: seams.codemodeTool(runtime, webSearch),
               webSearch,
               split: seams.split(actor, runtime, input),
             }),

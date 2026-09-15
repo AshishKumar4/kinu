@@ -14,7 +14,7 @@
 // instead of an unclaimed loop over private bytes nobody else could read.
 //
 // The tool surface is the SAME backend-agnostic buildHeadToolSet the cf Facet
-// uses: `run` + `execute_tools` + `web` (the parent's vocabulary, so a fork's
+// uses: `run` + `eval` + `web` (the parent's vocabulary, so a fork's
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 
@@ -34,7 +34,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, toKinuError, renderThrownChain } from '@kinu.run/core/obs';
 import type { CLIRuntime } from './runtime';
-import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
 /**
  * One head's seat: the runtime objects its CLAIMED loop runs on.
@@ -82,7 +82,7 @@ export interface CLIHeadRuntimeDeps {
   /** The shared web research provider — same seam the main loop uses. Backs the
    *  head's `web` tool. */
   webSearch: WebSearchProvider;
-  /** Extra codemode namespaces spliced into the head's execute_tools sandbox —
+  /** Extra codemode namespaces spliced into the head's eval sandbox —
    *  `web.*`, WITHOUT `agents.*`/`agent.*`: a head forks its
    *  parent's resources, never its authority to delegate. */
   codemodeExtras: () => CodemodeProvider[];
@@ -208,7 +208,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
   try {
     const rt = seat.actor.runtime;
 
-    // execute_tools over the head's OWN router providers (its own home in the
+    // eval over the head's OWN router providers (its own home in the
     // one file plane + the parent's real `laptop.*`) plus the web/llm codemode
     // namespaces, `state.*` over the head's own program state and `db.*` over
     // the head's own app data — the shared description promises both to every
@@ -219,7 +219,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
     // function of the finished head surface, the shape buildHeadToolSet
     // resolves after its own filtering, so `tools.<name>` declares and binds
     // exactly the tools this head holds.
-    const sandbox = createNodeExecuteToolFactory({
+    const sandbox = createNodeCodemodeToolFactory({
       extraProviders: [
         ...deps.codemodeExtras(),
         createStateCodemodeProvider(seat.actor.handle.programState),
@@ -227,7 +227,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       ],
     });
 
-    const executeTool = (finished: ToolSet) => sandbox({
+    const codemodeTool = (finished: ToolSet) => sandbox({
       native: finished,
       // A head reads the workspace's crafted tools through its own router; it
       // crafts none of its own for the length of one fork.
@@ -239,7 +239,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       input,
       capture,
       rt,
-      executeTool,
+      codemodeTool,
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),
     });

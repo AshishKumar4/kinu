@@ -102,10 +102,10 @@ test('the current actor profile supplies mode and actual plan-submission reach t
 
 test('crafted declarations follow the installed sandbox reader and the bound grant', () => {
   const o = setup();
-  const profile: DynamicContextInput['profile'] = { workMode: 'build', allowedTools: ['execute_tools'] };
+  const profile: DynamicContextInput['profile'] = { workMode: 'build', allowedTools: ['eval'] };
   let declarations = [{ name: 'live_echo', description: 'Initial implementation' }];
 
-  const tools = { execute_tools: withCraftedToolDeclarations(
+  const tools = { eval: withCraftedToolDeclarations(
     tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'executed' }),
     () => declarations,
   ) };

@@ -130,7 +130,7 @@ describe('a usage histogram carries no attribution and is never read as one', ()
     runId: 'usage-histogram',
     observations: [scored('ws-fix-broken', 0, [row({
       name: 'tool_outcomes', eligible: 39, passed: 30,
-      detail: '30/39 tool calls returned; run×29, execute_tools×6, file×4',
+      detail: '30/39 tool calls returned; run×29, eval×6, file×4',
     })])],
   })], []);
 

@@ -274,7 +274,7 @@ import {
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
-import { createExecuteToolsFactory, type ExecuteToolsFactory } from "./execute-tools";
+import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
 import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
@@ -632,7 +632,7 @@ function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
  *  runs — including after its own call has detached. Named against the builtin
  *  union rather than written as a bare string, so a rename breaks the build
  *  instead of leaving this silently matching nothing. */
-const EXECUTE_TOOLS_TOOL = 'execute_tools' satisfies BuiltinToolName;
+const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
 
 /** The schedule callback that finishes what a dead activation's terminal
  *  sequence still owed. Public on the actor because `Agent.schedule()` types its
@@ -3861,11 +3861,11 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
 
-  // The execute_tools factory is built once per DO lifetime. Its sandbox
+  // The eval factory is built once per DO lifetime. Its sandbox
   // reads craftStore.list() on every execute call, so newly-saved tools appear
-  // on the next execute_tools invocation without any registry or cache
+  // on the next eval invocation without any registry or cache
   // coherence work.
-  private readonly _craftExecTools = new Map<string, ExecuteToolsFactory>();
+  private readonly _codemodeFactories = new Map<string, CodemodeFactory>();
 
   /** The stores every agent has, from core — one list both backends inherit,
    *  so a store added there exists for this actor too. Lazy inside: the bundle
@@ -4244,7 +4244,7 @@ export abstract class ActorAgent extends Think<Env> {
         // Evict-resume (B6): re-drive an interrupted job from its durable
         // checkpoint. A fork re-runs the raw agents tool — MCTS continues its
         // remaining search budget via the search store; heads re-run from input.
-        // Side-effecting kinds (execute_tools / run) are not safe to blindly
+        // Side-effecting kinds (eval / run) are not safe to blindly
         // re-execute, so they decline and fall back to the eviction failure.
         resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal),
         // What a bounded-out job already produced. Same predicate as `resume` above,
@@ -4325,7 +4325,7 @@ export abstract class ActorAgent extends Think<Env> {
    * answered conservatively in one direction only: a wrong `true` costs a warm
    * container, a wrong `false` pulls the filesystem out from under running work.
    * Every source below is therefore admitted on "may use", never on "will use" —
-   * a `run` and an `execute_tools` reach the container directly, and every other
+   * a `run` and an `eval` reach the container directly, and every other
    * kind of work can call one.
    *
    * Four durable sources plus one in-memory one, and each answers a question
@@ -4893,7 +4893,7 @@ export abstract class ActorAgent extends Think<Env> {
       // runtime is built by the host, which assigns the home it provisioned —
       // and assigns it rather than spreading it, because the factory reads the
       // key's PRESENCE to decide whose credential both planes carry.
-      // No onToolRegistered hook: the execute_tools sandbox reads
+      // No onToolRegistered hook: the eval sandbox reads
       // craftStore.list() fresh on every call, so mid-turn saves propagate
       // without any registry plumbing (see docs/CRAFT-ARCHITECTURE.md §3).
       // `this` (a subclass) DOES have access to its protected env/ctx; cast to
@@ -4966,7 +4966,7 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * The actor at the end answers with its OWN surface narrowed by its OWN
    * current role — the same resolver and narrowing its native tools and its
-   * `execute_tools` sandbox are built from — so a binding never reaches more
+   * `eval` sandbox are built from — so a binding never reaches more
    * than the actor holding it does, and a role change is seen on the next call.
    * What changed is only where the hop goes: the directory resolves the name
    * under this actor, and the host runs the rest of the path on that actor's
@@ -5022,7 +5022,7 @@ export abstract class ActorAgent extends Think<Env> {
    * The workspace root forwards a facet's binding call down the facet's own path,
    * one hop at a time, and the actor at the end answers with its own surface
    * narrowed by its own current role — the same resolver and the same narrowing
-   * its native tools and its `execute_tools` sandbox are built from — so a
+   * its native tools and its `eval` sandbox are built from — so a
    * binding never reaches more than the actor holding it does, and a role change
    * is seen on the next call.
    *
@@ -5186,7 +5186,7 @@ export abstract class ActorAgent extends Think<Env> {
     const { rt, native, providers, reach, route, mode } = input;
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
-    const factory = createExecuteToolsFactory({
+    const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.getWebSearchProvider(), reach,
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
@@ -5271,7 +5271,7 @@ export abstract class ActorAgent extends Think<Env> {
    * Every codemode namespace this turn wires, in one place.
    *
    * ONE list with two readers: `beforeTurn` asks it which codemode-only
-   * capabilities exist so a role can name them, and `getExecuteToolsFactory` asks
+   * capabilities exist so a role can name them, and `getCodemodeToolFactory` asks
    * it what to narrow. Two lists would let a role allow a capability whose
    * provider is absent, or narrow a set the resolver never saw.
    *
@@ -5281,7 +5281,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   /**
    * The codemode namespaces this turn reaches — and the ONE place they are
-   * listed, which is why `db` belongs here and not in `execute-tools.ts`.
+   * listed, which is why `db` belongs here and not in `codemode-tool.ts`.
    *
    * This method has two readers. The second is
    * `codemodeCapabilitiesFor(turnCodemodeProviders)`, which is what lets a ROLE
@@ -5304,7 +5304,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /**
    * Every namespace a slate's namespace binding may reach: the surfaces the
-   * agent's own `execute_tools` sandbox dispatches to on a build turn, minus the
+   * agent's own `eval` sandbox dispatches to on a build turn, minus the
    * sandbox's two internal ones (`tools`, `state`). The router's providers come
    * gated exactly as codemode receives them (execution/approval.ts), and the
    * projected namespaces are the same factories the sandbox is built from, so a
@@ -5320,10 +5320,10 @@ export abstract class ActorAgent extends Think<Env> {
     ];
   }
 
-  /** Build (or return cached) this DO's execute_tools tool. Construction (see
-   *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
+  /** Build (or return cached) this DO's eval tool. Construction (see
+   *  codemode-tool.ts) is once per DO lifetime; crafted tools saved mid-turn
    *  still become callable because the executor re-reads craftStore per call. */
-  private getExecuteToolsFactory(mode: WorkMode, profileKey: string): ExecuteToolsFactory {
+  private getCodemodeToolFactory(mode: WorkMode, profileKey: string): CodemodeFactory {
     // The role's narrowing is PART OF THE KEY. `profileKey` is the actor's
     // active tool names, which two roles can share while reaching different
     // namespaces — so without the digest the first role's provider set is
@@ -5332,8 +5332,8 @@ export abstract class ActorAgent extends Think<Env> {
     const narrowing = narrowToolSurface(profile?.allowedTools);
     const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${profile?.digest ?? ''}`;
 
-    if (!this._craftExecTools.has(key)) {
-      this._craftExecTools.set(key, createExecuteToolsFactory({
+    if (!this._codemodeFactories.has(key)) {
+      this._codemodeFactories.set(key, createCodemodeToolFactory({
         loader: this.env.LOADER,
         egress: codemodeEgress(),
         rt: this.rt,
@@ -5362,9 +5362,9 @@ export abstract class ActorAgent extends Think<Env> {
       }));
     }
 
-    const factory = this._craftExecTools.get(key);
+    const factory = this._codemodeFactories.get(key);
 
-    if (factory === undefined) throw new Error(`execute_tools profile ${key} was not built`);
+    if (factory === undefined) throw new Error(`eval profile ${key} was not built`);
 
     return factory;
   }
@@ -5974,7 +5974,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
 
     try {
-      // No registry sync: the execute_tools sandbox reads craftStore.list()
+      // No registry sync: the eval sandbox reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §3.
 
       const builtinDeps: Parameters<typeof buildActorTools>[0] = {
@@ -5996,7 +5996,7 @@ export abstract class ActorAgent extends Think<Env> {
         // The sandbox declares the FINISHED native surface, so core builds it
         // last, over the set that holds every other tool, and wraps it with
         // the clamp and the effect claim the registry declares for it.
-        executeTools: ({ native }) => this.getExecuteToolsFactory(mode, profileKey).toolFor(native),
+        codemode: ({ native }) => this.getCodemodeToolFactory(mode, profileKey).toolFor(native),
         craftedToolExecute: null,
         // The turn's cumulative bulk budget lives on the accumulator, so the
         // cached toolset holds a stable reference across turns and the reset
@@ -6024,7 +6024,7 @@ export abstract class ActorAgent extends Think<Env> {
         facts: this.facts,
         // The remaining actor-profile dep: the subordinate report spine.
         // The release lane is codemode-only now (release.* — see
-        // getExecuteToolsFactory below), not a BuiltinToolDeps field.
+        // getCodemodeToolFactory below), not a BuiltinToolDeps field.
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       };
@@ -6746,7 +6746,7 @@ export abstract class ActorAgent extends Think<Env> {
     const extensionToolNames = Object.keys(extensionTools);
     const availableAgentActions = actorAgentsActions(turnActorDeps);
     // The turn's WHOLE nameable surface. `release` / `agent` / `llm` are
-    // reachable only inside `execute_tools`, so no native tool id names them and
+    // reachable only inside `eval`, so no native tool id names them and
     // without them here the role intersection drops every one — a narrowed role
     // would silently lose its codemode lanes wholesale. Derived from the
     // providers actually wired for this mode, so a capability is never offered
@@ -7248,18 +7248,18 @@ export abstract class ActorAgent extends Think<Env> {
     });
   }
 
-  /** The device-request channel the `execute_tools` call now running was armed
+  /** The device-request channel the `eval` call now running was armed
    *  with, or null outside one. */
   private _activeDeviceRequests: DeviceRequestChannel | null = null;
 
   /**
    * Publish the per-invocation device-request channel for the duration of one
-   * `execute_tools` call.
+   * `eval` call.
    *
    * A codemode script issues device execs for as long as it runs — including
    * after its call has detached into a background job — and the channel is what
    * carries the owning job into each of those execs. It cannot be a construction
-   * argument: `createExecuteToolsFactory` builds its provider namespaces once per DO
+   * argument: `createCodemodeToolFactory` builds its provider namespaces once per DO
    * lifetime, while the channel belongs to one invocation.
    *
    * Applied INSIDE the background wrap, because the wrap is what arms the bag:
@@ -7269,14 +7269,14 @@ export abstract class ActorAgent extends Think<Env> {
    * side-streams share that object and must stay unwrapped.
    */
   private publishDeviceRequestChannel(raw: ToolSet): ToolSet {
-    const entry = raw[EXECUTE_TOOLS_TOOL];
+    const entry = raw[CODEMODE_TOOL_TOOL];
     const exec = entry?.execute;
 
     if (entry === undefined || exec === undefined) return raw;
 
     return {
       ...raw,
-      [EXECUTE_TOOLS_TOOL]: {
+      [CODEMODE_TOOL_TOOL]: {
         ...entry,
         execute: async (input, options) => {
           const outer = this._activeDeviceRequests;

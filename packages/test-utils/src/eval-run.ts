@@ -378,7 +378,7 @@ export type EvalObservation =
      * why "did the agent ever enter codemode" had to be re-derived from source
      * twice instead of read off the artifact. It is the cheapest possible
      * covariate and it explains outcomes directly: a run whose tool list contains
-     * no `execute_tools` cannot have crafted anything, and one that never touched
+     * no `eval` cannot have crafted anything, and one that never touched
      * `file` produced no gradable edit signal however well it did the task.
      *
      * Optional for exactly one reason: `tests/eval/runs/flash-a.json` and

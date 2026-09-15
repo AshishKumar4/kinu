@@ -801,7 +801,7 @@ export function mockAgentsSdk(): void {
     },
   }));
   // The DO layer reaches the runtime + codemode module graph (a head builds a
-  // CF runtime and an execute_tools tool), both of which import this
+  // CF runtime and an eval tool), both of which import this
   // workerd-only module at load. So does `@cloudflare/sandbox`, and its import
   // list grew in 0.12.0: it now names `tracing` as well as `RpcTarget`, and an
   // ES named import that the mock does not provide is a SyntaxError at module

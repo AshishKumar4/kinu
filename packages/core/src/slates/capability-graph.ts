@@ -83,7 +83,7 @@ function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'm
         body = `Writes, edits or deletes files in workspace ${workspace} as you.`;
       } else if (capability.name === 'run') {
         body = `Runs shell commands in workspace ${workspace} as you. A command can change or delete anything there.`;
-      } else if (capability.name === 'execute_tools') {
+      } else if (capability.name === 'eval') {
         body = `Runs a program with your whole tool surface in workspace ${workspace}.`;
       } else if (capability.name === 'report') {
         body = 'Sends reports to your agent as you.';
@@ -179,7 +179,7 @@ function graphBinding(
 
     if (declared.name === 'agents') return row(capability, [], DELEGATION_PROBLEM);
 
-    if (declared.name === 'execute_tools') return row(capability, [], 'a slate cannot run execute_tools');
+    if (declared.name === 'eval') return row(capability, [], 'a slate cannot run eval');
 
     return row(
       capability,

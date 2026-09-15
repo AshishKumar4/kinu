@@ -3,10 +3,10 @@
  * reaches a shell: the `run` tool's workspace shortcut (a raw `Shell`) and
  * every `ExecutorProvider`'s `exec`/`startProcess` tool (workspace, sandbox,
  * laptop — reached both by `run`'s router dispatch AND by codemode's
- * `<name>.exec()` namespace calls inside `execute_tools`).
+ * `<name>.exec()` namespace calls inside `eval`).
  *
  * Before this, the gate lived inside the `run` TOOL's own executor — one
- * call site out of the many that reach the same shells. `execute_tools`
+ * call site out of the many that reach the same shells. `eval`
  * calling `workspace.exec()` / `sandbox.exec()` /
  * `laptop.exec()` skipped it entirely: same shell, same permissions, no
  * review. Moving the gate here closes that hole with ONE implementation

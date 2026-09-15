@@ -120,7 +120,7 @@ function actionOn(action: string, target?: string, body?: string): string {
   return tail ? `${head} — ${tail}` : head;
 }
 
-/** The first line of an execute_tools program that isn't blank or a comment —
+/** The first line of an eval program that isn't blank or a comment —
  *  the expanded card shows the rest. */
 function firstCodeLine(code: string): string {
   for (const raw of code.split("\n")) {
@@ -336,7 +336,7 @@ function summarizeRelease(input: JsonObject): string {
 type ToolSummarizer = (input: JsonObject) => string;
 
 const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
-  execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
+  eval: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
   file: summarizeFile,
   agents: summarizeAgents,
@@ -505,7 +505,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",
-  execute_tools: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
+  eval: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
   think: (input) => {
     const heads = Array.isArray(input.heads) ? input.heads.length : 0;
 

@@ -44,7 +44,7 @@ const FULL_SYSTEM_PROMPT = `A self-evolving coding assistant with MCTS explorati
 
 ## Tools (5 tools)
 
-### execute_tools
+### eval
 Write JavaScript to accomplish tasks. Your code runs in a sandboxed Worker with these APIs:
 
 **workspace.*** — file and shell operations on your persistent virtual filesystem:
@@ -78,15 +78,15 @@ Save a note to long-term memory (FTS-indexed). Quick persist — no code needed.
 Full-text search over long-term memory. Quick recall — no code needed.
 
 ## Evolution
-Your capabilities improve automatically via CraftStore — good patterns become codemode.* APIs inside execute_tools.
+Your capabilities improve automatically via CraftStore — good patterns become codemode.* APIs inside eval.
 Summarize what you did after using tools.`;
 
-// Tool schemas that Kinu registers (execute_tools, run, explore, save_note, search_memory)
+// Tool schemas that Kinu registers (eval, run, explore, save_note, search_memory)
 const TOOL_SCHEMAS = [
   {
     type: "function" as const,
     function: {
-      name: "execute_tools",
+      name: "eval",
       description: "Execute code to achieve a goal. Write an async arrow function in JavaScript that returns the result.",
       parameters: { type: "object", properties: { code: { type: "string", description: "JavaScript code to execute" } }, required: ["code"] },
     },

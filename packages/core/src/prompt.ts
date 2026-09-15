@@ -249,7 +249,7 @@ function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutor
 function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
 
-  if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
+  if (!hasTool(tools, 'eval') && !hasTool(tools, 'run')) return '';
 
   const executors = surface.selectableExecutors;
   const laptopOffline = offlineLaptop(surface.executors);
@@ -291,7 +291,7 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
   const tools = surface.builtinTools;
   const parts: string[] = [render(PERSISTENCE_SECTION, {})];
 
-  if (hasTool(tools, 'execute_tools')) {
+  if (hasTool(tools, 'eval')) {
     parts.push(render(CODE_EXECUTION_SECTION, { craftedNamespace: CRAFTED_TOOL_NAMESPACE }));
   }
 
@@ -307,18 +307,18 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
       hasHire: has('hire'),
       // Both backends build the `agents.*` codemode provider from the deps that
       // produced surface.agentsActions, so the namespace exists exactly when
-      // they do and execute_tools is on the surface.
-      rungsInCode: actions.length > 0 && hasTool(tools, 'execute_tools'),
+      // they do and eval is on the surface.
+      rungsInCode: actions.length > 0 && hasTool(tools, 'eval'),
       hasReport: hasTool(tools, 'report'),
     }));
   }
 
-  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
+  if (hasTool(tools, 'run') || hasTool(tools, 'eval') || hasTool(tools, 'agents')) {
     parts.push(render(BACKGROUND_WORK_SECTION, {}));
   }
 
   parts.push(render(VERIFICATION_SECTION, {
-    hasShell: hasTool(tools, 'run') || hasTool(tools, 'execute_tools'),
+    hasShell: hasTool(tools, 'run') || hasTool(tools, 'eval'),
   }));
   parts.push(render(OUTPUT_FORMAT_SECTION, {}));
 

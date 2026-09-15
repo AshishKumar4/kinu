@@ -540,12 +540,12 @@ describe('the crafted-tools plane', () => {
   test('a reported empty set still renders its section — the listTools check answered in-line', () => {
     // The doctrine tells the model to check `workspace.listTools()` before
     // building, and an omitted section left that check unanswered: the model
-    // probed with a `execute_tools` call just to learn there was nothing to
+    // probed with a `eval` call just to learn there was nothing to
     // call. The empty set is itself the answer, so it renders.
     const text = renderDynamicContextBlock({ craftedTools: [] })!;
 
     expect(isDynamicBlock(text)).toBe(true);
-    expect(text).toContain('## Crafted tools available through execute_tools');
+    expect(text).toContain('## Crafted tools available through eval');
     expect(text).toContain('No crafted tools exist in this workspace yet');
     expect(text).toContain('`workspace.listTools()` returns an empty list');
   });
@@ -567,7 +567,7 @@ describe('the crafted-tools plane', () => {
     }).at(-1)?.content);
 
     expect(gained).toContain('kind="delta"');
-    expect(gained).toContain('## Crafted tools available through execute_tools');
+    expect(gained).toContain('## Crafted tools available through eval');
     expect(gained).toContain('echo_back');
     expect(gained).not.toContain('Cleared:');
 

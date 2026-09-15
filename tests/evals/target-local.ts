@@ -21,7 +21,7 @@
  *     Three flash runs blamed that zero on the corpus.
  *   `hostRoot: null`       — the default `laptop` provider is rooted at
  *     `process.cwd()`, and an episode reaches every registered provider through
- *     `execute_tools`. A live run left `scratch-add/{add.js,add.test.js}` in a
+ *     `eval`. A live run left `scratch-add/{add.js,add.test.js}` in a
  *     worktree root and `report.txt` in the repo root.
  *   `installPreTurnProfile` — `setProfileResolver` has exactly ONE caller in the
  *     product, `LocalAgentSession`'s constructor (`local-session.ts:625`), so a

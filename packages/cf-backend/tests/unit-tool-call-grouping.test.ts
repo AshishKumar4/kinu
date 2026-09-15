@@ -60,8 +60,8 @@ describe('tool effects follow the operation', () => {
     { name: 'run', input: { command: 'ls; touch changed' }, effect: 'unknown' },
     { name: 'run', input: { command: 'rg --pre ./rewrite needle' }, effect: 'unknown' },
     { name: 'run', input: { command: 'git diff --output=changes.patch' }, effect: 'unknown' },
-    { name: 'execute_tools', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'unknown' },
-    { name: 'execute_tools', input: { code: 'return await workspace.readFile("a")' }, effect: 'unknown' },
+    { name: 'eval', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'unknown' },
+    { name: 'eval', input: { code: 'return await workspace.readFile("a")' }, effect: 'unknown' },
   ];
 
   test.each(cases)('$name $input is $effect', ({ name, input, effect }) => {
@@ -72,7 +72,7 @@ describe('tool effects follow the operation', () => {
   test.each(['read', 'mutate'])('arbitrary program output cannot establish a %s effect', (effect) => {
     for (const output of [{ effect }, { result: { effect } }]) {
       const part: ToolUIPart = {
-        type: 'tool-execute_tools', toolCallId: 'program', state: 'output-available',
+        type: 'tool-eval', toolCallId: 'program', state: 'output-available',
         input: { code: 'await workspace.writeFile("a", "b"); return { effect: "read" }' }, output,
       };
 
@@ -81,7 +81,7 @@ describe('tool effects follow the operation', () => {
   });
 
   test('unclassified contracts and source hints stay unknown', () => {
-    expect(toolCallEffect('execute_tools', { effect: 'read' })).toBe('unknown');
+    expect(toolCallEffect('eval', { effect: 'read' })).toBe('unknown');
     expect(toolCallEffect('run', undefined)).toBe('unknown');
     expect(toolCallEffect('crafted_unknown', { action: 'read' })).toBe('unknown');
     expect(toolCallEffect('file', 'read a')).toBe('unknown');

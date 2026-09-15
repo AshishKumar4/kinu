@@ -16,7 +16,7 @@ is data loss.
 
 | Producer | Digest kept inline | Resolvable reference | Code |
 |---|---|---|---|
-| `run`, `web` fetch, `execute_tools` results | head + tail (40k) | `.kinu/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
+| `run`, `web` fetch, `eval` results | head + tail (40k) | `.kinu/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
 | `file` read of an oversize file | offset-bounded page (40k) | the file's own path, and the next offset in the marker | `core/src/tools/file-tool.ts` |
 | MCP / external tool results | head + tail (40k) | same | `withClampedToolResults` at each backend's MCP wiring |
 | Attachments the model cannot accept | reference text part | `attachments/<hash>.<ext>` | `core/src/prompting/attachment-sanitizer.ts` |
@@ -88,7 +88,7 @@ that neither admit nor spill bulk write none.
 |---|---|
 | `admittedChars` | tool-result chars this turn's root actually ingested (post-clamp) |
 | `omittedChars` | chars withheld and spilled (bytes, for binary payloads) |
-| `trips` | spill count per producer (`run`, `file_read`, `web_fetch`, `execute_tools`, `external_tool`, `attachment`, `pasted_text`) |
+| `trips` | spill count per producer (`run`, `file_read`, `web_fetch`, `eval`, `external_tool`, `attachment`, `pasted_text`) |
 | `referenced` | trips whose spill write landed, so the reference resolves |
 | `tightened` | trips clamped at the floor because the turn's admit budget was spent |
 | `followUps` | tool calls this turn that cited a spill address (the recipe being *used* rather than emitted) |

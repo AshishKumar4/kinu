@@ -76,7 +76,7 @@ describe('openTurnRun / closeTurnRun', () => {
     acc.context.recordSpill({ producer: 'run', omitted: 160_000, referenced: true });
     acc.recordToolCall({
       toolCallId: 'fixture-1',
-      toolName: 'execute_tools',
+      toolName: 'eval',
       input: { code: `await workspace.readFile('/${SPILL_DIRS.toolOutput}/abc.log')` },
       success: true,
       output: 'ok',
@@ -164,11 +164,11 @@ describe('openTurnRun / closeTurnRun', () => {
     // The episode: craft in one call, reach for it in the next.
     crafted.push('sum');
     cycle.onToolResult({
-      toolName: 'execute_tools', args: { code: 'await workspace.createTool("sum","d","async()=>1")' },
+      toolName: 'eval', args: { code: 'await workspace.createTool("sum","d","async()=>1")' },
       result: 'ok', success: true,
     });
     cycle.onToolResult({
-      toolName: 'execute_tools', args: { code: 'return await tools.sum(1)' },
+      toolName: 'eval', args: { code: 'return await tools.sum(1)' },
       result: '1', success: true,
     });
 

@@ -17,7 +17,7 @@
  *
  * Claude-Code SKILL.md compatible. No LLM-facing tool and no codemode
  * namespace: skills are ordinary files under /workspace/skills/, reachable
- * via workspace.readFile/writeFile/readdir/exec in execute_tools.
+ * via workspace.readFile/writeFile/readdir/exec in eval.
  */
 
 export * from './types';

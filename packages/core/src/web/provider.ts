@@ -445,7 +445,7 @@ const TYPES = `export declare const web: {
 };
 `;
 
-/** Codemode provider exposing the same web capability inside execute_tools as
+/** Codemode provider exposing the same web capability inside eval as
  *  `web.search(query, { limit })` / `web.fetch(url)`, so agents can loop
  *  searches and fetch in parallel from one JS block. Shape is the shared
  *  `{ name, tools }` codemode contract both backends already inject. */

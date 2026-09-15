@@ -3,7 +3,7 @@
 // carried.
 import { describe, test, expect } from 'bun:test';
 import { clip, describeToolCall, summarizeToolCall, toolCallEffect } from '../src/tools/tool-call-summary';
-import { renderExecuteToolsDescription } from '../src/tools/registry';
+import { renderCodemodeDescription } from '../src/tools/registry';
 
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls are told apart by action and target', () => {
@@ -112,15 +112,15 @@ describe('tool call summaries — builtins', () => {
       .toBe('completed — "audit finished"');
   });
 
-  test('execute_tools separates the visible intent from the first executable line', () => {
+  test('eval separates the visible intent from the first executable line', () => {
     const code = '// Fetch the roster to identify idle agents\n\nconst r = await team.list();\nreturn r;';
-    expect(describeToolCall('execute_tools', { code })).toBe('Fetch the roster to identify idle agents');
-    expect(summarizeToolCall('execute_tools', { code })).toBe('const r = await team.list();');
-    expect(describeToolCall('execute_tools', { code: 'const r = await team.list();' })).toBe('Ran a tool program');
+    expect(describeToolCall('eval', { code })).toBe('Fetch the roster to identify idle agents');
+    expect(summarizeToolCall('eval', { code })).toBe('const r = await team.list();');
+    expect(describeToolCall('eval', { code: 'const r = await team.list();' })).toBe('Ran a tool program');
   });
 
   test('the codemode prompt requires the intent line the interface reads', () => {
-    const description = renderExecuteToolsDescription('declare const workspace: unknown;');
+    const description = renderCodemodeDescription('declare const workspace: unknown;');
     expect(description).toContain('Start every program with exactly one `//` comment');
     expect(description).toContain('The interface shows this line to the user as the call intent.');
   });
@@ -212,7 +212,7 @@ describe('toolCallEffect — consequence controls activity density', () => {
 
   test('programs and unclassified contracts remain explicitly unknown', () => {
     expect(toolCallEffect('run', { command: 'node inspect.js' })).toBe('unknown');
-    expect(toolCallEffect('execute_tools', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
+    expect(toolCallEffect('eval', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
     expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('unknown');
     expect(toolCallEffect('file', 'read a')).toBe('unknown');
   });

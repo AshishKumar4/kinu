@@ -805,11 +805,11 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
 });
 
 describe('AgentOrchestrator — the in-episode evolution clock', () => {
-  /** Drive one settled `execute_tools` call through the orchestrator's own
+  /** Drive one settled `eval` call through the orchestrator's own
    *  per-turn extension, which is the seam both backends register. */
   async function runBlock(orch: AgentOrchestrator, code: string, failure?: string): Promise<void> {
     await orch.turnExtension.onToolResult?.({
-      toolName: 'execute_tools',
+      toolName: 'eval',
       args: { code },
       result: failure ?? 'ok',
       ...(failure === undefined ? { success: true } satisfies ToolOutcome : { success: false, reason: null } satisfies ToolOutcome),

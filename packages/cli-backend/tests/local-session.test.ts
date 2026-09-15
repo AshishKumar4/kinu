@@ -42,7 +42,7 @@ import {
 import { createCLIRuntime, makeExecRaw, makeSql, makeSqlExec, type CLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver';
-import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
+import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { discoverAgentsMd } from '../src/agents-md';
 import { nodeSeatFactory } from './actor-fixture';
 import * as v from 'valibot';
@@ -321,8 +321,8 @@ async function fireTimer(session: LocalAgentSession, label: string, fireAt = Dat
   await session.fireDueTriggers(fireAt);
 }
 
-/** A model that calls execute_tools once with the given code, then answers. */
-function executeToolsModel(code: string): LanguageModel {
+/** A model that calls eval once with the given code, then answers. */
+function codemodeModel(code: string): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
 
@@ -339,7 +339,7 @@ function executeToolsModel(code: string): LanguageModel {
 
             if (step === 1) {
               controller.enqueue({
-                type: 'tool-call', toolCallId: 'call-1', toolName: 'execute_tools',
+                type: 'tool-call', toolCallId: 'call-1', toolName: 'eval',
                 input: JSON.stringify({ code }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -1898,7 +1898,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('Node execute fallback exposes the local agent.schedule namespace', async () => {
     const received: Array<{ atMs?: number; label?: string }> = [];
 
-    const executeTool = createNodeExecuteToolFactory({
+    const codemodeTool = createNodeCodemodeToolFactory({
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
@@ -1915,7 +1915,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       })],
     })({ native: {}, craftedTools: () => ({}), providers: [] });
 
-    const result = await toolExecute<{ code: string }, unknown>(executeTool)({
+    const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
     });
 
@@ -1927,7 +1927,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('Node execute fallback exposes agent.compactNow, arming the ladder for the next turn', async () => {
     let arms = 0;
 
-    const executeTool = createNodeExecuteToolFactory({
+    const codemodeTool = createNodeCodemodeToolFactory({
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
@@ -1941,7 +1941,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       })],
     })({ native: {}, craftedTools: () => ({}), providers: [] });
 
-    const result = await toolExecute<{ code: string }, unknown>(executeTool)({
+    const result = await toolExecute<{ code: string }, unknown>(codemodeTool)({
       code: 'return await agent.compactNow();',
     });
 
@@ -1986,7 +1986,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     await session.send('/focused remember this');
     // No tool is exempted from its own restriction: there is no `skills` tool
-    // left to protect, and execute_tools (the only remaining path to a skill's
+    // left to protect, and eval (the only remaining path to a skill's
     // own VFS bytes) is restricted the same as any other tool a skill's
     // allowed_tools omits.
     expect(new Set(captured)).toEqual(new Set(['memory']));
@@ -2267,7 +2267,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // the turn and force the model into polling its own job instead of working.
     const { db, session, events } = setup(
       'unused',
-      executeToolsModel('await new Promise(r => setTimeout(r, 120));\n"computed inline"'),
+      codemodeModel('await new Promise(r => setTimeout(r, 120));\n"computed inline"'),
       { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
     );
 
@@ -2280,14 +2280,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('the CLI sandbox binds state.* as the shared docstring promises', async () => {
-    // The production defect: the shared `execute_tools` description promises
+    // The production defect: the shared `eval` description promises
     // `state.set`/`state.get`, and the hosted backend binds the provider — but
     // the CLI factory list never included it, so a CLI program calling
     // `state.set` answered a bare ReferenceError with no correction. A program
     // round-trips one key through the provider backed by this session's SQL.
     const { session, events } = setup(
       'unused',
-      executeToolsModel('await state.set("probe", "found")\nawait state.get("probe")'),
+      codemodeModel('await state.set("probe", "found")\nawait state.get("probe")'),
       { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
     );
 
@@ -2299,7 +2299,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('the same call detaches once it crosses the policy threshold', async () => {
     const { db, rt, session, events } = setup(
       'unused',
-      executeToolsModel('await new Promise(r => setTimeout(r, 200));\nreturn "computed late";'),
+      codemodeModel('await new Promise(r => setTimeout(r, 200));\nreturn "computed late";'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000, wakesAfterTurn: true } },
     );
 
@@ -2320,7 +2320,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('past the concurrent-job cap a crossing call stays foreground and settles', async () => {
     const { db, rt, session, events } = setup(
       'unused',
-      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
+      codemodeModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500, wakesAfterTurn: true } },
     );
 
@@ -2349,7 +2349,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // Full parity with the DO surface: execution + durable state + delegation.
     // No `skills` — read/create/edit/delete are workspace.readFile/writeFile/
     // readdir/exec calls now, not a separate tool.
-    for (const t of ['run', 'execute_tools', 'memory', 'agents']) expect(names).toContain(t);
+    for (const t of ['run', 'eval', 'memory', 'agents']) expect(names).toContain(t);
     expect(names).not.toContain('skills');
     // ...and the keyed-fact actions ride the one durable-state tool.
     expect(names).not.toContain('fact');
@@ -2361,7 +2361,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const model = toolSequenceModel([
       { name: 'file', input: { action: 'read', path: 'shared.txt' } },
       {
-        name: 'execute_tools',
+        name: 'eval',
         input: { code: 'return await workspace.writeFile("shared.txt", "changed by codemode");' },
       },
     ]);
@@ -2378,7 +2378,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('a workspace.readFile authorizes native file write in the same CLI turn', async () => {
     const model = toolSequenceModel([
       {
-        name: 'execute_tools',
+        name: 'eval',
         input: { code: 'return await workspace.readFile("shared.txt");' },
       },
       {
@@ -2431,13 +2431,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
               if (step === 1) {
                 controller.enqueue({
-                  toolCallId: 'call-1', type: 'tool-call', toolName: 'execute_tools',
+                  toolCallId: 'call-1', type: 'tool-call', toolName: 'eval',
                   input: JSON.stringify({ code: 'await new Promise(r => setTimeout(r, 60)); return "slow-done";' }),
                 });
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
               } else if (step === 2) {
                 controller.enqueue({
-                  toolCallId: 'call-2', type: 'tool-call', toolName: 'execute_tools',
+                  toolCallId: 'call-2', type: 'tool-call', toolName: 'eval',
                   input: JSON.stringify({ code: '"noop"' }),
                 });
                 controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
@@ -2473,7 +2473,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // mechanism the owner's polling complaint doubted; here it is proven, not
     // asserted.
     expect(wakeText).toBeDefined();
-    expect(wakeText).toContain('execute_tools');
+    expect(wakeText).toContain('eval');
     expect(wakeText).toContain("agent.jobResult('");
     await session.end();
   });
@@ -5004,7 +5004,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   /** The node factory with only the agents provider bound, so the code under
    *  test is the sandbox + the projection and nothing else. */
   function sandboxWith(deps: AgentsToolDeps) {
-    const tool = createNodeExecuteToolFactory({
+    const tool = createNodeCodemodeToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
     })({ native: {}, craftedTools: () => ({}), providers: [] });
 
@@ -5175,7 +5175,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // The production wiring, end to end: a real turn, the real toolset, the
     // real sandbox. The script reports what it can reach by writing to the
     // workspace, which is how sandbox code returns anything durable anyway.
-    const { rt, session, events } = setup('done', executeToolsModel(`
+    const { rt, session, events } = setup('done', codemodeModel(`
       await workspace.writeFile('/workspace/probe/agents.json', JSON.stringify({
         members: Object.keys(agents), swarm: typeof agents.swarm, hire: typeof agents.hire,
       }));
@@ -5183,7 +5183,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     `));
 
     await session.send('what can you delegate to?');
-    expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
+    expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'eval' && e.success)).toBe(true);
     // This standalone fixture wires only the exploration substrate; the daemon
     // conformance suite covers durable local subordinates.
     const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
@@ -5202,7 +5202,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       return 'probed';
     `;
 
-    const plan = setup('done', executeToolsModel(probeCode('/workspace/probe/plan-tools.json')));
+    const plan = setup('done', codemodeModel(probeCode('/workspace/probe/plan-tools.json')));
     await expect(plan.session.enqueueTurn({
       text: 'research a plan', metadata: { kinuMode: 'plan' },
     })).rejects.toThrow('hosted workspace UI');
@@ -5210,7 +5210,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     await plan.session.end();
 
     // Ordinary local Build behavior stays unchanged.
-    const build = setup('done', executeToolsModel(probeCode('/workspace/probe/build-tools.json')));
+    const build = setup('done', codemodeModel(probeCode('/workspace/probe/build-tools.json')));
     await build.session.send('implement the change');
 
     const buildProbe = JSON.parse(String(await build.rt.storage.vfs.readFile(

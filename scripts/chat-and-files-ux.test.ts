@@ -2127,7 +2127,7 @@ const ASSEMBLED = `cfut_${'a'.repeat(48)}`;
  * nowhere in the document.
  *
  * VALUE-LEVEL REDACTION (KINU-011's second half). Field names cannot see a
- * token inside a free-form string, and the `run`/`execute_tools` inputs plus
+ * token inside a free-form string, and the `run`/`eval` inputs plus
  * `errorText` render as free text, not JSON — so the canonical policy's other
  * half, `redactSecrets`, masks secret-shaped VALUES off the same
  * `SECRET_PATTERNS` list the commit-tier scan runs. The gallery fixture

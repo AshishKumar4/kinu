@@ -99,7 +99,7 @@ export { OrchestratorAgent } from "./orchestrator";
 
 export { KinuSandbox } from "./kinu-sandbox";
 
-// The loopback Fetcher every `fetch()` inside an `execute_tools` program rides
+// The loopback Fetcher every `fetch()` inside an `eval` program rides
 // (codemode-egress.ts). Resolved by `enable_ctx_exports` like the Nimbus
 // entrypoints below; absent, the sandbox has no network at all.
 export { CodemodeEgress } from "./codemode-egress";
@@ -144,7 +144,7 @@ export { ControlPlaneDO } from "./control-plane/control-plane-do";
 //   KinuSandbox carries the `KinuSandbox` durable_objects binding (bound as
 //     `Sandbox`) and the `containers` entry of the same class.
 //   CodemodeEgress carries the loopback stub `codemodeEgress()` hands to
-//     `execute_tools` sandboxes (codemode-egress.ts).
+//     `eval` sandboxes (codemode-egress.ts).
 //   ContainerProxy carries the Sandbox SDK's outbound-interception fetchers.
 //   UserDO, MonitorDO, and ControlPlaneDO carry their durable_objects
 //     bindings.

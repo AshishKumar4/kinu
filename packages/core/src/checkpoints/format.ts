@@ -74,7 +74,7 @@ export function parseCheckpointSubject(
  * holding another user's files. A path it may not read is not a broken
  * checkpoint. It is a path the snapshot does not cover, which is a
  * fact to record, not a reason to refuse the mutation the snapshot precedes. The
- * live defect this replaces failed 3 of 4 `execute_tools` calls in one run with
+ * live defect this replaces failed 3 of 4 `eval` calls in one run with
  * `checkpoint staging failed: warning: could not open directory
  * 'systemd-private-…'`.
  *

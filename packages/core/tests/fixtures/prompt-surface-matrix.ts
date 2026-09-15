@@ -232,7 +232,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'delegation-swarm-with-codemode',
     opts: {
-      availableTools: ['agents', 'execute_tools'],
+      availableTools: ['agents', 'eval'],
       agentsActions: ['swarm'],
       temporaryAsk: true,
       registeredExecutors: [],
@@ -246,13 +246,13 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     // ONE case, not the `code-execution-with/without-temporary-ask` pair this
     // replaces. `temporaryAsk` reaches the prompt only through the Delegation
     // section's `hasTemporaryAsk`, which is `surface.temporaryAsk && has('hire')`
-    // (prompt.ts) — so on a surface carrying `execute_tools` and no `agents`
+    // (prompt.ts) — so on a surface carrying `eval` and no `agents`
     // tool the flag renders nothing in either position, and the two cases were
     // one request under two names. The Code-execution section had its own
     // temporary-delegation bullet until the 2026-09-03 delegation-nudge
     // cutover; the pair outlived it.
     name: 'code-execution',
-    opts: { availableTools: ['execute_tools'], registeredExecutors: [] },
+    opts: { availableTools: ['eval'], registeredExecutors: [] },
   },
   {
     // The task lifetime's TRUE direction, and the only case that renders it.

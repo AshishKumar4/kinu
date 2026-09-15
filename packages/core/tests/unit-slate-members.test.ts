@@ -61,7 +61,7 @@ test('the tool rows restate the native classification — pinned to the tools th
 
   // A single-call tool has no read shape: `call` is the only member and it
   // mutates — `agents` included.
-  for (const tool of ['run', 'execute_tools', 'report', 'agents']) {
+  for (const tool of ['run', 'eval', 'report', 'agents']) {
     expect(toolMembers(tool)).toEqual(['call']);
     expect(toolActionEffect(tool, 'call')).toBe('mutate');
   }

@@ -358,7 +358,7 @@ The backend wrapper may differ where the hosting API differs. Hosted Think, loca
 
 ### 9.1 Current native and code surfaces
 
-The builtin registry defines `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web` and `report`. Availability is intersected with the actor's role and wired dependencies. MCP and crafted tools are additional admitted tools; eight builtin names do not mean every actor has exactly eight total tools.
+The builtin registry defines `eval`, `run`, `file`, `agents`, `memory`, `tasks`, `web` and `report`. Availability is intersected with the actor's role and wired dependencies. MCP and crafted tools are additional admitted tools; eight builtin names do not mean every actor has exactly eight total tools.
 
 The current hosted code program receives capability namespaces, not the trusted Worker's raw environment:
 
@@ -375,7 +375,7 @@ The current hosted code program receives capability namespaces, not the trusted 
 | Hosted global `fetch` | The selected outbound capability. Plan receives no network capability; Build uses the shared destination policy. |
 | `db` or `env.db` | **Absent in the reviewed implementation.** `state.*` is not raw SQLite under a different name. |
 
-Hosted programs run in dynamic Worker isolation. The local factory has a different implementation: `createNodeExecuteToolFactory` evaluates normalized code in process with provider bindings and the local require path. The product must not describe these as identical security boundaries merely because both are called codemode.
+Hosted programs run in dynamic Worker isolation. The local factory has a different implementation: `createNodeCodemodeToolFactory` evaluates normalized code in process with provider bindings and the local require path. The product must not describe these as identical security boundaries merely because both are called codemode.
 
 ### 9.2 Required database contract
 

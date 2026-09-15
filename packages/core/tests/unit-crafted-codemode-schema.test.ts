@@ -1,6 +1,6 @@
 /**
  * Phase D evidence: buildActorTools hands crafted tools to the injected
- * execute_tools builder under the shape that produces the `tools.<name>()`
+ * eval builder under the shape that produces the `tools.<name>()`
  * namespace — the LLM-visible contract.
  *
  * We do NOT import the real @cloudflare/codemode here (it's a cf-backend peer
@@ -31,13 +31,13 @@ import {
   buildActorTools,
   type ActorToolsetDeps,
   type CraftedToolExecute,
-  type ExecuteToolsBuilder,
-  type ExecuteToolsSurface,
+  type CodemodeBuilder,
+  type CodemodeSurface,
 } from '../src/index';
 
 interface CapturedExecuteTool {
-  builder: ExecuteToolsBuilder;
-  surface: () => ExecuteToolsSurface;
+  builder: CodemodeBuilder;
+  surface: () => CodemodeSurface;
 }
 
 /**
@@ -48,7 +48,7 @@ interface CapturedExecuteTool {
  * needs a cast to undo the narrowing.
  */
 function captureExecuteTool(): CapturedExecuteTool {
-  const seen: ExecuteToolsSurface[] = [];
+  const seen: CodemodeSurface[] = [];
 
   return {
     builder: (surface) => {
@@ -63,14 +63,14 @@ function captureExecuteTool(): CapturedExecuteTool {
     surface: () => {
       const first = seen[0];
 
-      if (!first) throw new Error('the execute_tools builder was never called');
+      if (!first) throw new Error('the eval builder was never called');
 
       return first;
     },
   };
 }
 
-function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'executeTools'>) {
+function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'craftedToolExecute' | 'codemode'>) {
   // The runtime's OWN actor: a claim is keyed by its owner, and a second
   // handle here would let this actor's tool call replay under nobody's turn.
   return buildActorTools({
@@ -80,7 +80,7 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'cr
   });
 }
 
-describe('Phase D — crafted tools reach the execute_tools builder under tools.*', () => {
+describe('Phase D — crafted tools reach the eval builder under tools.*', () => {
   test('crafted tool appears in the tools map passed to the builder', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
@@ -100,7 +100,7 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     };
 
     const capture = captureExecuteTool();
-    actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
+    actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
 
     const captured = capture.surface();
     // Nothing is resolved until the sandbox asks: the crafted set is read per
@@ -131,7 +131,7 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
 
         return v.parse(v.number(), arg) * 4;
       },
-      executeTools: capture.builder,
+      codemode: capture.builder,
     });
     const resolve = capture.surface().craftedTools;
     expect(Object.keys(resolve())).toEqual([]);
@@ -168,7 +168,7 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     };
 
     const capture = captureExecuteTool();
-    actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
+    actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
 
     const tripleExec = capture.surface().craftedTools().triple!.execute;
     expect(await tripleExec(7)).toBe(21);
@@ -195,7 +195,7 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     };
 
     const capture = captureExecuteTool();
-    actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
+    actorTools(rt, { craftedToolExecute: factory, codemode: capture.builder });
 
     const names = Object.keys(capture.surface().craftedTools());
     expect(factoryCalls).toBe(0);

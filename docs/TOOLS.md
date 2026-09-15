@@ -2,7 +2,7 @@
 
 `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` defines eight native
 tools. Each is a standing choice, so a longer list reduces selection accuracy.
-`buildBuiltinTools` builds one set for both backends. Only `execute_tools`,
+`buildBuiltinTools` builds one set for both backends. Only `eval`,
 `run`, `file`, `memory`, and `tasks` are unconditional. The rest need wired
 deps. Subordinates get `report` and no `peers`, so answering an inbound agent
 message event — `msg` with `event_id` — is off their surface. Files use `file`
@@ -12,7 +12,7 @@ or `workspace.*`. Crafted tools use `tools.<name>(args)`.
 
 | Tool | Purpose |
 |------|---------|
-| `execute_tools` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, `web.*`, `agent.*`, `llm.*`, and `tools.<name>` for crafted tools |
+| `eval` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, `web.*`, `agent.*`, `llm.*`, and `tools.<name>` for crafted tools |
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane, over the same workspace filesystem every other surface addresses. `read` a file, `edit` exact text inside it, `write` it whole |
 | `agents` | The whole delegation surface: `swarm \| hire \| msg \| list \| dismiss` |
@@ -29,7 +29,7 @@ or `workspace.*`. Crafted tools use `tools.<name>(args)`.
 report: { native: true,  codemode: 'report' }   // both surfaces
 run:    { native: true,  codemode: 'workspace' } // native, plus a namespace it does not own
 release:{ native: false, codemode: 'release' }   // codemode only
-execute_tools: { native: true, codemode: null }  // native only; it IS the sandbox
+eval: { native: true, codemode: null }  // native only; it IS the sandbox
 ```
 
 `codemode` is a namespace name, not a boolean. `run` and `file` use shared
@@ -40,7 +40,7 @@ execute_tools: { native: true, codemode: null }  // native only; it IS the sandb
 | --- | --- |
 | `BuiltinToolName` (a derived type) | `BUILTIN_TOOL_SPECS` / `BUILTIN_TOOL_DESCRIPTIONS` cannot compile without an entry for a newly-native capability, and `BUILTIN_TOOLS` cannot list one the declaration does not call native |
 | every `*-codemode.ts` factory | takes its provider `name` straight from the table, so a namespace cannot exist for a capability the table gives none, and cannot be spelled differently. Deleting `report`'s namespace from the table makes `report-codemode.ts` fail to compile |
-| `explainNativeToolReferenceError` | tells the model where the capability actually is when it reaches for a native tool name inside the sandbox. It reads the declaration for all eight rather than hardcoding one name, so no capability is reported unreachable from inside execute_tools when it is not |
+| `explainNativeToolReferenceError` | tells the model where the capability actually is when it reaches for a native tool name inside the sandbox. It reads the declaration for all eight rather than hardcoding one name, so no capability is reported unreachable from inside eval when it is not |
 | `getToolDescriptions` (cf) | reports it to the Tools panel instead of guessing `nativeNames.has(name) ? 'native' : 'codemode'` |
 
 Reach says what a surface exposes. Deps say what an actor gets. The UI receives
@@ -76,7 +76,7 @@ Research memory, task/state records, evidence/reports and `submit_plan` remain
 available. Temporary research children inherit Plan; persistent hire/dismiss and
 search configurations that measure, publish or apply project changes require Build.
 
-Hosted `execute_tools` retains isolated analysis through WorkerLoader, with only
+Hosted `eval` retains isolated analysis through WorkerLoader, with only
 permitted host callbacks and no raw egress. MCP reads also require the producer's
 read-only declaration and the existing role/owner gates; that declaration is a
 remote contract, not proof about a third-party server's implementation. The CLI
@@ -103,7 +103,7 @@ and devices keep separate files under `sandbox.*` and `laptop.*`.
 ### Why it exists
 
 Before `file`, all file changes used `run`. One local Terminal-Bench run found
-789 `run` calls and 6 `execute_tools` calls. Of 374 `run` commands in the 2.1
+789 `run` calls and 6 `eval` calls. Of 374 `run` commands in the 2.1
 set, 65 were inline `python3 -c`, 55 heredocs, 23 shell redirects, and 14
 `sed -i`. Roughly two in five hand-rolled a mutation. None can report an absent
 target, and `sed -i` exits 0 either way.
@@ -120,7 +120,7 @@ recorded date.
 | **Atomic batches** | Every edit in a call matches the file *as it was read*, never a sibling's result; offsets are applied back-to-front. One bad anchor applies none of them. Overlapping edits are refused by name. |
 | **Read-before-write** | `edit`, and `write` over an existing file, are refused unless the file has been read, and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the content digest, so a different spelling of the same path is not a spurious refusal, and a write authorizes the edits that follow it. |
 | **Seen depth** | How much was read matters. A capped or paged read authorizes an `edit`, where the anchor still has to be exactly and uniquely present, but not a `write` that discards lines the model never saw. Coverage is the contiguous prefix the turn has paged through, which is exactly the shape the read's own `offset=N` recipe produces, so paging to the end earns the overwrite and the gate is never a dead end. |
-| **No silent truncation** | When output is truncated, `read` names the offset that continues it, and no read is ever a bare empty string. An empty file says so, an offset past the end says so, and a single line too large to show at all hands over the `workspace.readFile`-inside-`execute_tools` recipe. A trailing newline ends the last line rather than creating a phantom one, so the offsets it hands back always resolve. Reads are counted against the same per-turn bulk budget as every other tool result (`context-budget.ts`). |
+| **No silent truncation** | When output is truncated, `read` names the offset that continues it, and no read is ever a bare empty string. An empty file says so, an offset past the end says so, and a single line too large to show at all hands over the `workspace.readFile`-inside-`eval` recipe. A trailing newline ends the last line rather than creating a phantom one, so the offsets it hands back always resolve. Reads are counted against the same per-turn bulk budget as every other tool result (`context-budget.ts`). |
 | **Nothing invisible** | A BOM is stripped from what the read shows, so the first line can be copied back as `old_text` and match. Restored on write. |
 | **Faithful round-trip** | Matching happens on LF text with the BOM stripped, so an anchor typed with `\n` matches a CRLF file. The splice lands on the original string at mapped indices, so a file with mixed endings keeps every ending it had outside the replaced span. Only the inserted text takes the file's ending. |
 | **A gradable outcome** | Every attempt is counted by outcome into the turn's `TurnFileLedger`, and the settle spine writes one `file_edit` run event per turn: `attempts` and `applied` (calls), `failures` by reason, `recoveredPaths` and `abandonedPaths` (paths, because recovery is a property of a file rather than of a call). |
@@ -274,11 +274,11 @@ transport's result instead. A `hire` naming a peer is the one call here that
 waits, as above. The host stamps Plan/Build mode. The shared drain queues the
 next serialized turn with it.
 
-## execute_tools: codemode
+## eval: codemode
 
-`execute_tools` runs JavaScript in an isolated sandbox. Cloudflare starts a
+`eval` runs JavaScript in an isolated sandbox. Cloudflare starts a
 child Worker through `LOADER` (`@cloudflare/codemode`). The CLI evaluates
-in-process through `createNodeExecuteToolFactory`. Both bind these namespaces.
+in-process through `createNodeCodemodeToolFactory`. Both bind these namespaces.
 
 ### workspace.*
 
@@ -293,7 +293,7 @@ in-process through `createNodeExecuteToolFactory`. Both bind these namespaces.
 | `workspace.searchMemory` | `(query: string) → results` | FTS5 search over long-term memory |
 | `workspace.saveNote` | `(content: string) → "ok"` | Append note to MEMORY.md with FTS indexing |
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
-| `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create or update a crafted tool in CraftStore. Callable as `tools.<name>(args)` on the NEXT `execute_tools` call in the same turn, because the sandbox that created it is already built |
+| `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create or update a crafted tool in CraftStore. Callable as `tools.<name>(args)` on the NEXT `eval` call in the same turn, because the sandbox that created it is already built |
 
 `createInlineExecutor` registers `workspace` in `ExecutionRouter`. Native
 `file` and `workspace.*` share its `TurnFileLedger` read-before-write state.
@@ -330,8 +330,8 @@ and no alias. A name that is not in `tools` is not a tool.
 
 | Backend | How `tools.<name>` becomes callable |
 |---|---|
-| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/execute-tools.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and `renderToolsDeclaration(native, crafted)` is the declaration the model reads |
-| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/execute-tools-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set, and the same `renderToolsDeclaration(native, crafted)` block. `buildActorTools` builds the sandbox last, over the finished surface, so the block lists every tool the actor holds |
+| Cloudflare | one `CodemodeProvider` named `tools` (`packages/cf-backend/src/codemode-tool.ts`): native tools are host-dispatched functions, crafted tools are defined by its `prelude`, and `renderToolsDeclaration(native, crafted)` is the declaration the model reads |
+| CLI | the `tools` parameter of the evaluated function (`packages/cli-backend/src/codemode-tool-factory.ts`), beside `workspace` and `console`: native tools through the same `nativeToolFunctions` Cloudflare uses, crafted tools from the per-call set, and the same `renderToolsDeclaration(native, crafted)` block. `buildActorTools` builds the sandbox last, over the finished surface, so the block lists every tool the actor holds |
 
 Both re-read the crafted set per call, so a tool saved a program ago is callable
 now. A native tool referenced as a bare identifier is explained rather than
@@ -351,7 +351,7 @@ A script can delegate, then save the routine with `workspace.createTool`.
 graph engine, and step store.
 
 ```javascript
-// Inside execute_tools: a workflow is code.
+// Inside eval: a workflow is code.
 const settled = await Promise.all(areas.map((area) => agents.swarm({
   task: `review ${area}`,
   preset: "ideate",
@@ -371,11 +371,11 @@ safely. Use the native tool for durable work.
 
 ### No fallback, shared description, and preamble
 
-CF requires `LOADER`. The CLI requires `createNodeExecuteToolFactory`. Without
-either, `execute_tools` returns "not configured" instead of `new Function()`.
+CF requires `LOADER`. The CLI requires `createNodeCodemodeToolFactory`. Without
+either, `eval` returns "not configured" instead of `new Function()`.
 `new Function()` fails in a V8 isolate.
 
-`renderExecuteToolsDescription(typeBlock)` gives both backends the registry
+`renderCodemodeDescription(typeBlock)` gives both backends the registry
 spec, sandbox facts, and declarations. CF substitutes `{{types}}`. The CLI
 joins declared `types`. Neither writes its own text: a backend-written
 description reaches the model with none of the spec, omits live namespaces, and
@@ -421,7 +421,7 @@ workspace process.
 `runtime_not_provisioned`. Relative paths use `WORKSPACE_ROOT`, `/home/user`.
 Containers receive `/workspace`.
 
-`run` and `execute_tools` are backgroundable. `detachAfterMs` is 30,000
+`run` and `eval` are backgroundable. `detachAfterMs` is 30,000
 interactive or 300,000 one-shot. Detached work has no deadline. Teardown waits
 `settleGraceMs`, 300,000 interactive or 120,000 one-shot. Approval pre-flights
 every runtime: `deny` refuses; `gate` requires `allow_all`.
@@ -470,7 +470,7 @@ least 2 uses, never the last tool. Survivors become `tools.<name>(args)`.
 
 Eight standing choices matter more than a short description. `skills` and
 `release` stay reachable through `workspace.*` and `release.*`. Filesystem work
-uses `file` or `execute_tools`. Delegation uses `agents`. No shell substitutes
+uses `file` or `eval`. Delegation uses `agents`. No shell substitutes
 for `agents` or `file` exact-match enforcement.
 
 The native schema is 11,823 description characters, about 2,956 tokens at

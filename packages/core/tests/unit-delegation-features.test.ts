@@ -9,14 +9,14 @@ const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
   ({ name, args, result: null });
 
 const write = (path: string): ToolCallRecord =>
-  call('execute_tools', { code: `await workspace.writeFile("${path}", body);` });
+  call('eval', { code: `await workspace.writeFile("${path}", body);` });
 
 describe('delegationFeatures', () => {
   test('counts agents actions from a completed turn record', () => {
     // Live turns call the unified `agents` tool; the evidence separates the
     // persistent, search and messaging rungs by ACTION.
     const toolCalls: ToolCallRecord[] = [
-      call('execute_tools', { code: 'a()' }),
+      call('eval', { code: 'a()' }),
       call('agents', { action: 'hire', role: 'r' }),
       call('agents', { action: 'list' }),
       call('agents', { action: 'dismiss', agent: 'a' }),
@@ -32,7 +32,7 @@ describe('delegationFeatures', () => {
       teamCalls: 3,
       thinkCalls: 1,
       peerCalls: 3,
-      executeToolsCalls: 1,
+      executeCodemodeCalls: 1,
       wallClockMs: 372_000,
       loopedCalls: 0,
       redundantCalls: 0,
@@ -46,7 +46,7 @@ describe('delegationFeatures', () => {
     }));
 
     expect(line).toBe(
-      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
+      'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 eval, 6.2min wall clock',
     );
   });
 
@@ -73,7 +73,7 @@ describe('executionPathSignals — loops', () => {
 
   test('an alternating two-call cycle is a loop', () => {
     const a = call('run', { command: 'bun test' });
-    const b = call('execute_tools', { code: 'fix()' });
+    const b = call('eval', { code: 'fix()' });
     expect(executionPathSignals([a, b, a, b, a, b])).toMatchObject({
       loopedCalls: 4, redundantCalls: 4,
     });
@@ -121,7 +121,7 @@ describe('executionPathSignals — redundancy', () => {
   // evidence of repeated work. This also keeps the run-events reconstruction
   // (which records names without arguments) from manufacturing signal.
   test('argument-less calls are never counted as repeats', () => {
-    const bare = call('execute_tools');
+    const bare = call('eval');
     expect(executionPathSignals([bare, bare, bare, bare])).toEqual({
       loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0,
     });
@@ -132,7 +132,7 @@ describe('executionPathSignals — backtracking', () => {
   test('re-reading a file the turn just wrote via code-mode', () => {
     const trace = [
       write('/src/auth.ts'),
-      call('execute_tools', { code: 'const prev = await workspace.readFile("/src/auth.ts");' }),
+      call('eval', { code: 'const prev = await workspace.readFile("/src/auth.ts");' }),
     ];
 
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
@@ -161,7 +161,7 @@ describe('executionPathSignals — backtracking', () => {
 
   test('order matters: reading before writing is not backtracking', () => {
     const trace = [
-      call('execute_tools', { code: 'await workspace.readFile("/src/auth.ts");' }),
+      call('eval', { code: 'await workspace.readFile("/src/auth.ts");' }),
       write('/src/auth.ts'),
     ];
 
@@ -170,7 +170,7 @@ describe('executionPathSignals — backtracking', () => {
 
   test('a call cannot backtrack over its own write', () => {
     const trace = [
-      call('execute_tools', {
+      call('eval', {
         code: 'await workspace.writeFile("/a.ts", x); await workspace.readFile("/a.ts");',
       }),
     ];

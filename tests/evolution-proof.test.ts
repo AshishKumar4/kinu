@@ -128,7 +128,7 @@ async function chatTurn(
   const dynamicContext = renderDynamicContextBlock({ memoryTail });
 
   const reuseMode: ReuseMode =
-    /\b(?:must\s+)?use execute_tools\b/i.test(userMessage) ? 'instructed' : 'autonomous';
+    /\b(?:must\s+)?use eval\b/i.test(userMessage) ? 'instructed' : 'autonomous';
 
   const log = createStepToolCallLog();
 
@@ -339,7 +339,7 @@ function atbash(text: string): string {
 
 function rsaPrompt({ n, e, c }: RsaChallenge): string {
   return `
-Solve this RSA crypto challenge. You MUST use execute_tools to compute the answer.
+Solve this RSA crypto challenge. You MUST use eval to compute the answer.
 
 Given:
   n = ${String(n)} (public modulus, product of two primes)
@@ -358,7 +358,7 @@ function graphPrompt({ adjacency, from, to }: GraphChallenge): string {
     : row.out.map(edge => `${edge.to}:${String(edge.weight)}`).join(', ')}`).join('\n');
 
   return `
-Implement Dijkstra's shortest path algorithm and solve this problem. Use execute_tools.
+Implement Dijkstra's shortest path algorithm and solve this problem. Use eval.
 
 Graph (adjacency list with weights):
 ${rows}
@@ -369,7 +369,7 @@ Find the shortest distance from ${from} to ${to}. Return ONLY the number.
 
 function cipherPrompt({ ciphertext }: CipherChallenge): string {
   return `
-Decode this substitution cipher. Use execute_tools to try frequency analysis.
+Decode this substitution cipher. Use eval to try frequency analysis.
 
 The cipher maps each letter to another letter. The ciphertext is:
 "${ciphertext}"
@@ -452,7 +452,7 @@ describe('Evolution Proof', () => {
   liveTest('session 1, turn 1: RSA challenge (learn the pattern)', async () => {
     console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
     console.log(`    agents actions: ${surface.agentsActions.join(', ') || '(none)'}`);
-    expect(Object.keys(surface.tools)).toContain('execute_tools');
+    expect(Object.keys(surface.tools)).toContain('eval');
 
     const result = await chatTurn(model, rt, surface, RSA_CHALLENGE_1, 'session-1');
     // The request evidence, per turn, from the wire: what the provider was
@@ -474,7 +474,7 @@ describe('Evolution Proof', () => {
     console.log(`    Duration: ${result.durationMs}ms`);
 
     expect(result.text.length).toBeGreaterThan(0);
-    expect(result.toolCalls.some(tc => tc.name === 'execute_tools')).toBe(true);
+    expect(result.toolCalls.some(tc => tc.name === 'eval')).toBe(true);
 
     // THE FLAG. Exactly checkable, and computed by this file's own solver from
     // the same numbers the prompt above was rendered from.
@@ -671,7 +671,7 @@ describe('Evolution Proof', () => {
     console.log(`    Tools available: ${Object.keys(surface.tools).join(', ')}`);
 
     // What session 2 inherits, from the store it inherits it in. Crafted tools
-    // are sandbox-only — reached as `tools.<name>` inside `execute_tools`,
+    // are sandbox-only — reached as `tools.<name>` inside `eval`,
     // never as SDK tools (evolution/engine.ts:433-436) — so subtracting a
     // hardcoded builtin count from the list above measures nothing: it printed
     // `Crafted tools loaded: -1` beside a correct `Crafted tools: 3` as soon as
@@ -681,9 +681,9 @@ describe('Evolution Proof', () => {
     console.log(`    Crafted tools inherited from session 1: ${inheritedToolNames.join(', ')}`);
     expect(inheritedToolNames.length).toBeGreaterThan(0);
 
-    const executeEntry = surface.tools.execute_tools;
+    const executeEntry = surface.tools.eval;
 
-    if (!executeEntry) throw new Error('session 2 has no execute_tools dispatcher');
+    if (!executeEntry) throw new Error('session 2 has no eval dispatcher');
     const execute = toolExecute<{ code: string }, unknown>(executeEntry);
 
     // ── EXPOSURE, measured before reuse is asked for ────────────────────────
@@ -852,7 +852,7 @@ return report;`,
     // reuse: it is whether the mechanism was reachable at all, and folding it in
     // is what let a run report reuse over a surface where `tools.<name>` was
     // undefined. Reuse then splits by population, because these challenge
-    // prompts explicitly command `use execute_tools` — so this proof measures
+    // prompts explicitly command `use eval` — so this proof measures
     // INSTRUCTED transfer, and the behaviour eval's corpus, which mechanically
     // forbids that instruction, measures autonomous transfer. A missing
     // autonomous opportunity is `n/a`, never a zero folded into this rate.

@@ -2,9 +2,9 @@
  * Which capability a codemode program REACHED — the attribution every meter
  * that reads a native tool name gets wrong.
  *
- * A builtin called through the sandbox is one native `execute_tools` call whose
+ * A builtin called through the sandbox is one native `eval` call whose
  * `code` argument says `agents.swarm({…})`. So a meter keyed on the tool name
- * sees `execute_tools` and nothing else, and reports the capability as unused.
+ * sees `eval` and nothing else, and reports the capability as unused.
  * Measured in production, on the turn that prompted this file: five `agents.swarm`
  * calls through the sandbox, `turn_steering.converted: false`, and an advisor
  * whose prompt would have listed `agents` among the capabilities the turn "did
@@ -29,19 +29,19 @@ import type { JsonObject } from '../utils/json';
 import { TOOL_REACH, isBuiltinToolName } from './registry';
 
 /** The one tool a codemode program arrives as. */
-const EXECUTE_TOOLS = 'execute_tools';
+const CODEMODE_TOOL = 'eval';
 
 /** The submitted program's argument key, as both backends' sandbox tools name
  *  it — the same field `craft-cycle.ts` reads to score a crafted call. */
 const CodeArgSchema = v.object({ code: v.string() });
 
 /**
- * The program a settled `execute_tools` call submitted, or `''` when this was
+ * The program a settled `eval` call submitted, or `''` when this was
  * not one — an absent or non-string `code` is no program rather than an error,
  * because a malformed call has no call sites to find either way.
  */
 export function codemodeProgramOf(toolName: string, args: JsonObject): string {
-  if (toolName !== EXECUTE_TOOLS) return '';
+  if (toolName !== CODEMODE_TOOL) return '';
   const parsed = v.safeParse(CodeArgSchema, args);
 
   return parsed.success ? parsed.output.code : '';
@@ -61,7 +61,7 @@ export function codemodeReaches(program: string, capability: string): boolean {
   if (!isBuiltinToolName(capability)) return false;
   const namespace = TOOL_REACH[capability].codemode;
 
-  // `execute_tools` IS the sandbox and owns no namespace inside it, so there is
+  // `eval` IS the sandbox and owns no namespace inside it, so there is
   // nothing to match — and a program is never evidence of reaching it, since
   // being the program is what reaching it means.
   if (namespace === null) return false;
