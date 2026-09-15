@@ -85,7 +85,7 @@ describe('runEventToSpan', () => {
     expect(end.elapsedMs).toBe(42);
     expect(end.label).toBe('eval');
     const failed = runEventToSpan(ev({ type: 'tool_call_end', name: 'shell', toolCallId: 'tc2', error: 'nonzero exit', outcome: { success: false, reason: 'io', execution: { exitCode: 1 } } }));
-    expect(failed.label).toBe('run failed');
+    expect(failed.label).toBe('shell failed');
     expect(failed.detail).toBe('nonzero exit');
   });
 

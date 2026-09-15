@@ -61,7 +61,7 @@ describe('the cf turn over an interrupted history', () => {
     // request is re-keyed for its destination provider before the model sees
     // it, and the pairing rides the new ids.
     const orphan = assembled.flatMap((message) => message.role === 'assistant' && Array.isArray(message.content)
-      ? message.content.flatMap((part) => part.type === 'tool-call' && part.toolName === 'run' ? [part] : []) : []);
+      ? message.content.flatMap((part) => part.type === 'tool-call' && part.toolName === 'shell' ? [part] : []) : []);
 
     expect(orphan).toHaveLength(1);
 

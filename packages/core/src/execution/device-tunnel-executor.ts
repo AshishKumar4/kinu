@@ -1011,8 +1011,15 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
   /** One operation, dispatched by first segment: the mount is always
    *  /pc/<name>, so a path that names no live machine refuses with the
    *  connected names. The fleet's own root ("/") is the machine list,
-   *  handled by the callers that can answer it (readdir, stat, exists). */
+   *  handled by the callers that can answer it (readdir, stat, exists).
+   *  With no fleet snapshot here at all there is no segment vocabulary —
+   *  the unnamed view goes to the hub, which answers for a one-machine
+   *  account or refuses, exactly as the old single-machine bypass did. */
   const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Promise<T>): Promise<T> => {
+    if (connectedDevices(transport.status().devices).length === 0) {
+      return op(deviceFiles(transport, consent, undefined), path);
+    }
+
     const route = routeOf(path);
 
     if (!route) throw noSuchDevice(path);
@@ -1045,6 +1052,11 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async stat(path): Promise<VfsEntryStat | null> {
       if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, isDir: true };
+
+      if (connectedDevices(transport.status().devices).length === 0) {
+        return deviceFiles(transport, consent, undefined).stat(path);
+      }
+
       const route = routeOf(path);
 
       return route ? route.view.stat(route.rest) : null;
@@ -1057,6 +1069,11 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async exists(path) {
       if (isFleetRoot(path)) return true;
+
+      if (connectedDevices(transport.status().devices).length === 0) {
+        return deviceFiles(transport, consent, undefined).exists(path);
+      }
+
       const route = routeOf(path);
 
       return route ? route.view.exists(route.rest) : false;
