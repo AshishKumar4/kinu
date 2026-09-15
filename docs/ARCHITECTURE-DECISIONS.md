@@ -233,12 +233,19 @@ at f6ec56c8f with `--gates-only` at thread budget 12, the box under other
 lanes' hooks (load 9 to 21): run 1, 68/68 source gates green and the hammer
 green in 815.9 s wall with only the account gate red on a missing
 KINU_ACCESS_API_TOKEN in the measuring process; run 2, 67/68 in 528.8 s with
-`bun run test:workerd` past its 480 s deadline. That gate is the finding: solo
-it ran 160 s and 398 s on the same tree against a declared 12.7 s, with 51
-`models_dev.catalog_fallback` events (HTTP 500 through miniflare) per run
-while models.dev answered 200 in 0.3 s from the shell. Its row declares
-`derived` and its closure cannot see that fetch. Budget 24 on a quiet box
-stays unmeasured.
+`bun run test:workerd` past its 480 s deadline. That gate was the finding:
+solo it ran 160 s and 398 s on the same tree against a declared 12.7 s, with
+51 `models_dev.catalog_fallback` events per run — the two-turn probe's
+outbound refused `https://models.dev/api.json`, which the worker saw as
+HTTP 500, and every provider fell back on each listing sweep. The seam is the
+probe's outbound: it now answers the catalog from a fixture (the shape the
+core unit tests already use), the drive records zero fallbacks and the
+two-turn suite pins that at zero, proved red by refusing the route again
+(3 fallbacks per drive). Re-measured with zero fallbacks: 439 s and 399 s
+solo, 36 files serial by design with 139 to 159 s of module import. So the
+network was a dependency, not the wall; the row now declares 420 s and the
+480 s deadline stands with 60 s of margin, which is thin and recorded as
+O2. Budget 24 on a quiet box stays unmeasured.
 
 ## Open
 
@@ -246,5 +253,7 @@ O1. A gate that pins a nonzero cache read on a representative multi-step turn
 per provider that supports caching.
 
 O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
-budget other than `nproc` is chosen; and `bun run test:workerd`'s wall and
-network path, which the ladder declares at 12.7 s and measured 160 to 398 s.
+budget other than `nproc` is chosen; and `bun run test:workerd`'s 399 to
+439 s solo wall against its 480 s deadline — 139 to 159 s of it is module
+import across 36 serial files, which a per-file import cache or a smaller
+worker bundle would take back.
