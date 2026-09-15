@@ -1,5 +1,5 @@
 {
-  "measured": "da2f3a141: 1064 test files, 951 runnable suites, 12586 tests, 36 runners, 77 non-public product members",
+  "measured": "6d0abe762: 1066 test files, 953 runnable suites, 12589 tests, 36 runners, 81 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -390,6 +390,10 @@
       "count": 2
     },
     {
+      "key": "private_reach :: packages/cf-backend/tests/unit-native-error-feedback.test.ts :: parallel hosted native calls retain their SDK identities after reverse completion :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
       "key": "private_reach :: packages/cf-backend/tests/unit-output-limit-continuation.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 3
     },
@@ -423,6 +427,22 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: (file scope) :: harness bridge to a non-public member",
+      "count": 3
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: a failed handoff remains retryable and a successful retry cannot enqueue twice :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: a reference-shaped body carried as ordinary content never becomes a protocol frame :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: adds submit_plan and mechanically removes release.* without losing ordinary tools :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-plan-mode-backend.test.ts :: recovers when durable acceptance outlives the RPC and the accepted turn later errors :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -495,6 +515,10 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the scope is the claim identity, not whatever turn is ambient :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: (file scope) :: harness bridge to a non-public member",
       "count": 1
     },
     {

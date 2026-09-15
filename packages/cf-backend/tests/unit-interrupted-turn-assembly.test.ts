@@ -5,12 +5,12 @@
 // call_ed15d29f352a4735e6b01b5.` — thrown by `convertToLanguageModelPrompt`
 // inside `streamText`, client-side, before any request leaves the isolate.
 //
-// `beforeTurn` returns `TurnConfig.messages`, and Think uses that array verbatim
-// as the turn's request (think.js: `finalMessages = config.messages ?? messages`).
-// So the pairing invariant has to hold on THIS output, whatever the stored
-// transcript looks like. This drives the real OrchestratorAgent's `beforeTurn`
-// through the actor harness with a history that already holds an orphaned call —
-// the shape a bricked workspace is in right now — and asserts what comes out.
+// The loop's runner assembles the request the model is called with (core
+// chat.ts → assembleTurnMessages → settleUnpairedToolCalls), so the pairing
+// invariant has to hold on THAT request, whatever the stored transcript looks
+// like. This drives the real OrchestratorAgent's turn through the actor
+// harness with a history that already holds an orphaned call — the shape a
+// bricked workspace is in right now — and asserts what the model was handed.
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { INTERRUPTED_TOOL_RESULT } from '@kinu.run/core';
@@ -28,13 +28,13 @@ const interruptedHistory: ModelMessage[] = [
   { role: 'user', content: 'hello?' },
 ];
 
-describe('cf beforeTurn assembly over an interrupted history', () => {
+describe('the cf turn over an interrupted history', () => {
   test('hands the model a terminal result for the orphaned call', async () => {
     const { agent } = orchestratorHarness();
 
     const config = await thinkTurns(agent).prepare({ messages: interruptedHistory });
-
-    const assembled = config.messages;
+    // What the model was actually called with at its first step.
+    const assembled = config.prompt;
     expect(assembled.length).toBeGreaterThan(0);
 
     // Every non-provider-executed tool call in the assembled request has a
@@ -57,10 +57,18 @@ describe('cf beforeTurn assembly over an interrupted history', () => {
 
     // And the result says the turn was cut, rather than pretending the call was
     // never made or that it definitely did not run.
+    // The call is found by what it IS, not by the id it was stored under: the
+    // request is re-keyed for its destination provider before the model sees
+    // it, and the pairing rides the new ids.
+    const orphan = assembled.flatMap((message) => message.role === 'assistant' && Array.isArray(message.content)
+      ? message.content.flatMap((part) => part.type === 'tool-call' && part.toolName === 'run' ? [part] : []) : []);
+
+    expect(orphan).toHaveLength(1);
+
     const results = assembled.flatMap((message) => message.role === 'tool'
       ? message.content.filter((part) => part.type === 'tool-result') : []);
 
-    expect(results.find((r) => r.toolCallId === ORPHAN_ID)?.output)
+    expect(results.find((r) => r.toolCallId === orphan[0]?.toolCallId)?.output)
       .toEqual({ type: 'error-text', value: INTERRUPTED_TOOL_RESULT });
 
     // The stored history is not rewritten: assembly builds the request, and a

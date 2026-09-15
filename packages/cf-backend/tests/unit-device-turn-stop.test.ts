@@ -97,7 +97,7 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   await actor.agent.harnessRefreshDeviceStatus();
   // The turn the command belongs to, opened through the same seam production
   // opens it with, so the durable row carries a turn a Stop can name.
-  thinkTurns(actor.agent).openInFlight(TURN);
+  await thinkTurns(actor.agent).openInFlight(TURN);
   const broadcasts: string[] = [];
   Reflect.set(actor.agent, 'broadcast', (payload: string) => { broadcasts.push(payload); });
 

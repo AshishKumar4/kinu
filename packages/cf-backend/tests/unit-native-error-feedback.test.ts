@@ -61,14 +61,17 @@ test('parallel hosted native calls retain their SDK identities after reverse com
     return await readFile(...args);
   };
 
-  const observed = agent.afterToolCall.bind(agent);
+  // The order the tools SETTLED in, read where the loop's runner reports each
+  // result: the actor's extension host.
   const order: string[] = [];
-  agent.afterToolCall = async (context) => {
-    await observed(context);
-    order.push(context.toolCallId);
+  agent.harnessRegisterExtension({
+    name: 'probe.tool-order',
+    onToolResult: (context) => {
+      order.push(context.toolCallId ?? '');
 
-    if (context.toolCallId === 'call-B') first.resolve();
-  };
+      if (context.toolCallId === 'call-B') first.resolve();
+    },
+  });
 
   let step = 0;
 
@@ -107,7 +110,6 @@ test('parallel hosted native calls retain their SDK identities after reverse com
   } finally {
     first.resolve();
     files.readFile = readFile;
-    agent.afterToolCall = observed;
   }
 });
 

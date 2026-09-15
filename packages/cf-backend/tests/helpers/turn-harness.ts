@@ -110,6 +110,10 @@ export interface TurnHarness {
    *  inside continues, the sends it acknowledged rerun — and read the request
    *  the first resumed turn was assembled with, parked at its model call. */
   resume(): Promise<PreparedRequest>;
+  /** Park the NEXT turn, whoever admits it — a signal, a wake, the workspace's
+   *  own first turn — at its model call, and hand back the request it was
+   *  parked with. The suite settles it as it settles a prepared one. */
+  park(): Promise<PreparedRequest>;
   /** The request the loop composes for step `stepNumber` of the prepared
    *  turn, over `messages` — the per-step weave (dynamic context, cache
    *  breakpoints, pruning) a suite pins on the array the model receives. */
@@ -121,7 +125,9 @@ export interface TurnHarness {
   /** Name the durable turn the next settle belongs to — the identity the
    *  terminal transition claims against. */
   open(turnId: string): void;
-  /** Name the turn AND mark it running, so a send routes into its next step
-   *  rather than into a turn of its own. */
-  openInFlight(turnId: string): void;
+  /** Name the turn AND run it: admitted under this id and parked at its
+   *  model call, so a send routes into its next step rather than into a turn
+   *  of its own, and a command the turn issues carries its id. Settled like
+   *  any prepared turn. */
+  openInFlight(turnId: string): Promise<void>;
 }
