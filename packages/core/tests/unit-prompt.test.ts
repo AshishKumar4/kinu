@@ -1448,8 +1448,17 @@ describe('buildSystemPromptSync', () => {
       //   happen, when `git clone` died against the memory wall and the agent
       //   retried in place instead of moving to the container. Measured +56
       //   on its own base; the two raises land on one prefix here, so the
-      //   ceiling is their sum over the original 3050 with the same headroom.
-      'Execution environments': 3260,
+      //   base; the two raises land on one prefix here, so the ceiling is
+      //   their sum over the original 3050 with the same headroom.
+      // 2026-09-15: +152, exact measured 3412. One sentence under `hasSandbox`
+      //   stating the container's mount equivalence — the container's whole
+      //   filesystem sits at `/sandbox` while its commands run in `/workspace`
+      //   — so `/sandbox/workspace/x` is the file a `run` on `sandbox` calls
+      //   `x`. The mount paragraph it lives beside is `hasDevices`-gated, and
+      //   a device-less workspace (every eval workspace) never saw it: the
+      //   public-failure-recovery model wrote to `/sandbox/` (container `/`)
+      //   and its `cd /` test run backgrounded on the 30s window.
+      'Execution environments': 3412,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.

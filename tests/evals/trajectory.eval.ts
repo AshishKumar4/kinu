@@ -83,7 +83,7 @@ import { afterAll, describe, expect, test } from 'vitest';
 import * as v from 'valibot';
 
 import {
-  type EvalBudget, type LLMProviderConfig, type RunEvent,
+  type EvalBudget, isBackgroundHandle, type LLMProviderConfig, type RunEvent,
 } from '../../packages/core/src/index';
 import {
   budgetRow, createObservedModelAccumulator, EVAL_MODELS, FULL_TOOL_SURFACE, ledgerTotalsFromEvents,
@@ -103,9 +103,11 @@ import {
   resolvePublicSessionPlan,
   scorePublicLedger,
   type KinuPublicSession,
+  type PublicBackgroundJob,
   type PublicSendResult,
   type PublicSessionPlan,
 } from './public-session';
+import { tolerate } from '../../packages/core/src/obs/index';
 import { DEGENERATE_EVENTS, LEDGER_EVENTS } from './fixtures/public-session-frames';
 
 const SUITE = 'Trajectory Evals';
@@ -198,7 +200,7 @@ interface TrajectoryCase {
   /** The machine-checkable subgoals, over the workspace and the ledger the
    *  public surfaces expose. */
   verify(input: {
-    readonly session: Pick<KinuPublicSession, 'readFile' | 'execute'>;
+    readonly session: Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'>;
     readonly events: readonly RunEvent[];
     readonly history: readonly { readonly role: string; readonly text: string }[];
     readonly steerLanding: 'mid-turn' | 'turn' | null;
@@ -243,8 +245,19 @@ const BROKEN_TEST = [
  *  deployment, so the same literal runs where `bun` is real. */
 const RECOVERY_TEST_COMMAND = 'bun test broken.test.mjs';
 
+/** A `cd <dir> && ` chain ahead of the pinned command. The recovery run is the
+ *  COMMAND, not its leading directory hop: the model that found the files at
+ *  the container root ran `cd / && bun test broken.test.mjs` — the same test,
+ *  from the directory the files actually landed in. The hop is what the
+ *  literal pin was refusing to see. Chained hops fold into one prefix; a
+ *  prefix that does not end at the literal command is not the test. */
+const CD_PREFIX = /^(?:cd .+? && )+/u;
+
 const RecoveryTestRunSchema = v.object({
-  command: v.literal(RECOVERY_TEST_COMMAND),
+  command: v.pipe(v.string(), v.check(
+    (command) => command.replace(CD_PREFIX, '') === RECOVERY_TEST_COMMAND,
+    `a ${RECOVERY_TEST_COMMAND} run, optionally behind a 'cd <dir> &&' prefix`,
+  )),
   runtime: v.literal('sandbox'),
 });
 
@@ -400,8 +413,16 @@ const CASES: readonly TrajectoryCase[] = [
       const failed = firstCalls.filter((call) => call.outcome?.success === false
         && call.outcome.execution !== undefined && call.outcome.execution.exitCode !== 0);
 
+      // A recovery counts only when the test RAN and exited zero. A detached
+      // rerun's call succeeded — the handle — without running anything yet, so
+      // its zero comes from the settled job's row, and a call whose row never
+      // settled proves nothing either way.
+      const jobs = reruns.some((call) => isBackgroundHandle(call.result))
+        ? await session.backgroundJobs()
+        : [];
+
       const recovered = failed.some((failure) => reruns.some((later) =>
-        compareRunEventOrder(failure, later) < 0 && later.outcome?.success === true));
+        compareRunEventOrder(failure, later) < 0 && runExitedZero(later, jobs)));
 
       const answers = history.filter((row) => row.role === 'assistant');
       const first = answers[0]?.text.trim() ?? '';
@@ -533,7 +554,16 @@ function isToolCallEnd(event: RunEvent): event is Extract<RunEvent, { type: 'too
 /** Identify the requested prompt's run, not a later autonomous run or an
  * earlier run that happens to use the same tool. Missing identity earns no
  * credit. A prompt absorbed mid-turn opens no `run_start` of its own: its run
- * is the one it landed in, read off `absorbedBy` rather than the log. */
+ * is the one it landed in, read off `absorbedBy` rather than the log.
+ *
+ * A detached tool call's recovery lands in neither of those: its run's calls
+ * end at the background handle, and the job's settle wakes a NEW run whose
+ * `run_start.userMessage` is the wake text — never the prompt. The wake run is
+ * still the prompt's answer: its `run_start` names the detached job's id
+ * verbatim, and the job id is in the handle the prompt's own run returned. So
+ * a prompt owns its own runs plus the wake runs of the jobs those runs
+ * detached — a recovery that settles past the detach is scorable instead of
+ * invisible by construction. */
 function promptToolCalls(
   events: readonly RunEvent[], prompt: string | undefined,
   absorbedBy?: ReadonlyMap<string, string>,
@@ -544,7 +574,165 @@ function promptToolCalls(
 
   if (absorbed !== undefined) runs.add(absorbed);
 
+  for (const jobId of detachedJobIds(events, runs)) {
+    for (const event of events) {
+      if (event.type === 'run_start' && event.userMessage?.includes(jobId) === true) runs.add(event.runId);
+    }
+  }
+
   return events.filter(isToolCallEnd).filter((call) => runs.has(call.runId));
+}
+
+
+/** What a settled `run` job's stored result carries when it carries an exit
+ *  verdict at all: the serialized refusal shape a failed command's error was
+ *  packed into — never the stdout string a zero exit resolves to. */
+const SettledRunResultSchema = v.looseObject({ execution: v.optional(v.looseObject({ exitCode: v.number() })) });
+
+/** The exit code a `run` call's row proves, or null when the row proves none.
+ *
+ *  Foreground: `success: true` IS the zero — the tool throws a classified
+ *  failure on any nonzero exit (builtins.ts clamps a refusal into a thrown
+ *  KinuError), so a settled `success` answers 0 and a `success: false` answers
+ *  its `execution.exitCode` when the substrate reported one. The one shape
+ *  that proves nothing is the background handle: `success: true` arrived in
+ *  30s because the WAIT detached, not because the command settled.
+ *
+ *  Detached: the durable job row is the only place the command's settlement
+ *  survives. `completed` is a zero — the wrapped tool promise only resolves on
+ *  exit 0 — and `failed` is never one. A `result` that still carries an
+ *  `execution.exitCode` overrides the default for a kind that can settle an
+ *  object. */
+function runExitedZero(
+  call: Extract<RunEvent, { type: 'tool_call_end' }>,
+  jobs: readonly PublicBackgroundJob[],
+): boolean {
+  const handle = isBackgroundHandle(call.result) ? call.result : undefined;
+
+  if (handle !== undefined) {
+    const job = jobs.find((candidate) => candidate.id === handle.jobId);
+
+    if (job === undefined || job.status === 'running' || job.status === 'failed' || job.status === 'cancelled') {
+      return false;
+    }
+
+    const raw = job.result;
+
+    const parsed = v.safeParse(SettledRunResultSchema, raw === null || raw === undefined
+      ? null
+      : tolerate(() => JSON.parse(raw), 'malformed-input'));
+
+    if (parsed.success && parsed.output.execution !== undefined) {
+      return parsed.output.execution.exitCode === 0;
+    }
+
+    return true;
+  }
+
+  if (call.outcome?.success !== true) return false;
+
+  // A refusal string can arrive inside a successful call's text result — the
+  // command never ran, so its exit code is not 0.
+  const text = v.safeParse(v.string(), call.result);
+
+  if (text.success) {
+    const refusal = v.safeParse(
+      v.looseObject({ reason: v.string(), error: v.string() }),
+      tolerate(() => JSON.parse(text.output), 'malformed-input'),
+    );
+
+    if (refusal.success) return false;
+  }
+
+  return true;
+}
+
+/** The background jobs a set of runs detached, read off the handles their tool
+ *  calls returned. A handle is the only place the prompt's ledger and the job
+ *  row meet: the call's `result` carries the `jobId`, and nothing else on
+ *  either side does. */
+function detachedJobIds(
+  events: readonly RunEvent[], runs: ReadonlySet<string>,
+): string[] {
+  return [...new Set(events.filter(isToolCallEnd)
+    .filter((call) => runs.has(call.runId))
+    .map((call) => call.result)
+    .filter(isBackgroundHandle)
+    .map((handle) => handle.jobId))];
+}
+
+/** The poll cadence the public plane can absorb: the run-event route is paged
+ *  REST, and each read is several round trips — anything tighter is load the
+ *  episode creates, not evidence it waits for. */
+const WAKE_POLL_MS = 250;
+
+/**
+ * Wait out the detached jobs a case's prompts minted, until their wake runs
+ * close — the product's promise a detached call makes ("the settled result
+ * will wake me") measured where it lands.
+ *
+ * THE BOUND IS THE RUN'S COMPLETION, never a clock (AGENTS.md: no elapsed
+ * deadlines on turn work). For each job the prompt's calls detached, a wake
+ * run's `run_start` carries the job id verbatim in its `userMessage` — the
+ * synthesized "Background run job …" text — so the run to wait on is named
+ * rather than guessed. The wait ends per job when every such run has closed;
+ * a wake that never opened a run is declared over when the job is settled and
+ * no run is still open — either its event was spliced into and consumed by an
+ * open turn (which a closed log then rules out), or the delivery failed, in
+ * which case the scoring reads the job row the runner wrote before waking.
+ *
+ * One quiet poll is not proof of quiet: the splice-to-queue hand-off inside
+ * the workspace can land a wake's `run_start` a beat after the last `run_end`
+ * was read. Two consecutive polls that agree nothing is owed end the wait;
+ * the second read costs one page of runs and nothing else.
+ */
+async function awaitDetachedJobWakes(
+  session: Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs'>,
+  entry: TrajectoryCase,
+  absorbedBy: ReadonlyMap<string, string>,
+): Promise<void> {
+  let quiet = 0;
+
+  for (;;) {
+    const [jobs, events] = await Promise.all([session.backgroundJobs(), session.runEvents()]);
+
+    const promptRuns = new Set(
+      events.filter((event) => event.type === 'run_start' && event.userMessage !== undefined
+          && entry.turns.includes(event.userMessage)).map((event) => event.runId),
+    );
+
+    for (const runId of absorbedBy.values()) promptRuns.add(runId);
+
+    const detached = detachedJobIds(events, promptRuns);
+
+    if (detached.length === 0) return;
+
+    const openRuns = new Set(
+      events.filter((event) => event.type === 'run_start').map((event) => event.runId)
+        .filter((runId) => !events.some((event) => event.type === 'run_end' && event.runId === runId)),
+    );
+
+    const pending = detached.filter((jobId) => {
+      const wakeRuns = events.filter((event) =>
+        event.type === 'run_start' && event.userMessage?.includes(jobId) === true).map((event) => event.runId);
+
+      if (wakeRuns.length > 0) return wakeRuns.some((runId) => openRuns.has(runId));
+
+      const job = jobs.find((candidate) => candidate.id === jobId);
+
+      return openRuns.size > 0 || (job !== undefined && job.status === 'running');
+    });
+
+    if (pending.length === 0) {
+      quiet += 1;
+
+      if (quiet >= 2) return;
+    } else {
+      quiet = 0;
+    }
+
+    await new Promise<void>((resolve) => setTimeout(resolve, WAKE_POLL_MS));
+  }
 }
 
 const FileActionSchema = v.object({ action: v.string(), path: v.string() });
@@ -658,7 +846,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     ];
 
     const input = {
-      session: { readFile: async () => ARTIFACT_MARKER, execute: async () => ({ exitCode: 0 }) },
+      session: { readFile: async () => ARTIFACT_MARKER, execute: async () => ({ exitCode: 0 }), backgroundJobs: async () => [] },
       events, steerLanding: null, history: [
         { role: 'user', text: entry.turns[0] ?? '' }, { role: 'assistant', text: 'DONE' },
         { role: 'user', text: entry.turns[1] ?? '' }, { role: 'assistant', text: ARTIFACT_MARKER },
@@ -695,6 +883,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       session: {
         readFile: async (path: string) => path === 'notes/wal.txt' ? wal : STEER_MARKER,
         execute: async () => ({ exitCode: 0 }),
+        backgroundJobs: async () => [],
       },
       events: [], steerLanding: 'turn' as const, history: [
         { role: 'user', text: entry.steer ?? '' }, { role: 'assistant', text: 'wal.txt\nsteered.txt' },
@@ -714,8 +903,9 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     if (!entry) throw new Error('missing recovery case');
     const root = scratchDir('trajectory-oracle');
 
-    const session: Pick<KinuPublicSession, 'readFile' | 'execute'> = {
+    const session: Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'> = {
       readFile: (path) => Bun.file(join(root, path)).text(),
+      backgroundJobs: async () => [],
       async execute(_executor, command) {
         // The verifier stages into /workspace (the sandbox container's
         // default cwd, core/src/execution/sandbox.ts) while this fake runs on
@@ -766,6 +956,155 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     expect(notTested.find((subgoal) => subgoal.what === 'cause-fixed')?.reached).toBe(true);
   });
 
+  /**
+   * CREDENTIAL-FREE: the recovery command pin takes the test, not the shell
+   * that reached it.
+   *
+   * The literal command stays the pin — `cd / && bun test broken.test.mjs`
+   * ran the same test the verifier re-stages from /workspace — while a prefix
+   * that bends the command's end, or a different command entirely, must not
+   * fold into it.
+   */
+  test('recovery command accepts a cd prefix and nothing else', () => {
+    const accepts = (command: string): boolean => v.is(RecoveryTestRunSchema, { command, runtime: 'sandbox' });
+
+    expect(accepts(RECOVERY_TEST_COMMAND)).toBe(true);
+    expect(accepts(`cd / && ${RECOVERY_TEST_COMMAND}`)).toBe(true);
+    expect(accepts(`cd /workspace && cd / && ${RECOVERY_TEST_COMMAND}`)).toBe(true);
+    expect(accepts(`cd /tmp/sub dir && ${RECOVERY_TEST_COMMAND}`)).toBe(true);
+
+    expect(accepts(`bun test ${RECOVERY_TEST_COMMAND}`)).toBe(false);
+    expect(accepts(`cd / && ${RECOVERY_TEST_COMMAND} --watch`)).toBe(false);
+    expect(accepts(`echo ${RECOVERY_TEST_COMMAND}`)).toBe(false);
+    expect(accepts(`cd / && ${RECOVERY_TEST_COMMAND} && cd /`)).toBe(false);
+    expect(v.is(RecoveryTestRunSchema, { command: RECOVERY_TEST_COMMAND, runtime: 'workspace' })).toBe(false);
+  });
+
+  /**
+   * CREDENTIAL-FREE: a detached run is a pending job, not a passed test.
+   *
+   * The handle answered `success: true` because the wait window closed, so the
+   * settlement it promises lives on the job row — running, failed, missing, or
+   * a settled nonzero exit all prove nothing; a settled completed row, and a
+   * foreground `success` whose command actually ran, do.
+   */
+  test('a background handle is never a recovery until its job settles', async () => {
+    const handle = {
+      background: true, jobId: 'bgjob-live', kind: 'run',
+      message: 'Outran the 30s foreground window; backgrounded — still running, not cancelled.',
+    };
+
+    const detached: Extract<RunEvent, { type: 'tool_call_end' }> = {
+      type: 'tool_call_end', runId: 'second', eventIndex: 2, timestamp: '2026-09-07T00:00:04Z',
+      name: 'run', toolCallId: 'rerun-test',
+      args: { command: `cd / && ${RECOVERY_TEST_COMMAND}`, runtime: 'sandbox' },
+      result: handle, outcome: { success: true },
+    };
+
+    const job = (status: string, result?: string): PublicBackgroundJob => ({
+      id: 'bgjob-live', kind: 'run', status, result: result ?? null, error: null,
+    });
+
+    expect(runExitedZero(detached, [])).toBe(false);
+    expect(runExitedZero(detached, [job('running')])).toBe(false);
+    expect(runExitedZero(detached, [job('failed')])).toBe(false);
+    expect(runExitedZero(detached, [job('cancelled')])).toBe(false);
+    expect(runExitedZero(detached, [job('completed', '"1 pass, 0 fail"')])).toBe(true);
+    expect(runExitedZero(detached, [job('completed', '{"execution":{"exitCode":1}}')])).toBe(false);
+
+    // A successful foreground call proves its exit zero only by having run:
+    // plain stdout counts; a refusal packed into the text result does not.
+    expect(runExitedZero({ ...detached, result: '1 pass, 0 fail' }, [])).toBe(true);
+    expect(runExitedZero({ ...detached, result: '{"reason":"workspace-off","error":"sandbox refused"}' }, [])).toBe(false);
+    expect(runExitedZero({
+      ...detached, result: undefined,
+      outcome: { success: false, reason: null, execution: { exitCode: 1 } },
+    }, [])).toBe(false);
+  });
+
+  /**
+   * CREDENTIAL-FREE: a wake run's calls belong to the prompt that detached the
+   * job.
+   *
+   * The wake's `run_start.userMessage` is synthesized wake text — it names the
+   * job id, never the prompt — so attribution walks handle → job id → wake
+   * run. Without it the second prompt's rerun would read as never having
+   * happened and a settled recovery would score the same as no recovery.
+   */
+  test('wake runs are attributed to the prompt that detached their job', async () => {
+    const entry = CASES.find((candidate) => candidate.id === 'public-failure-recovery');
+
+    if (!entry) throw new Error('missing recovery case');
+    const root = scratchDir('trajectory-wake');
+
+    const session: Pick<KinuPublicSession, 'readFile' | 'execute' | 'backgroundJobs'> = {
+      readFile: (path) => Bun.file(join(root, path)).text(),
+      backgroundJobs: async () => [
+        { id: 'bgjob-live', kind: 'run', status: 'completed', result: '"1 pass, 0 fail"', error: null },
+      ],
+      async execute(_executor, command) {
+        const translated = command.replaceAll('/workspace', root);
+        const process = Bun.spawn(['bash', '-c', translated], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+
+        const [exitCode, stdout, stderr] = await Promise.all([process.exited,
+          new Response(process.stdout).text(), new Response(process.stderr).text()]);
+
+        return { exitCode, stdout, stderr };
+      },
+    };
+
+    const events: RunEvent[] = [
+      { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
+        agentId: 'eval-public', userMessage: entry.turns[0] },
+      { type: 'tool_call_end', runId: 'first', eventIndex: 99, timestamp: '2026-09-07T00:00:02Z',
+        name: 'run', toolCallId: 'failed-test', args: { command: RECOVERY_TEST_COMMAND, runtime: 'sandbox' },
+        outcome: { success: false, reason: null, execution: { exitCode: 1 } } },
+      { type: 'run_end', runId: 'first', eventIndex: 100, timestamp: '2026-09-07T00:00:03Z', reason: 'reply' },
+      { type: 'run_start', runId: 'second', eventIndex: 0, timestamp: '2026-09-07T00:00:04Z',
+        agentId: 'eval-public', userMessage: entry.turns[1] },
+      { type: 'tool_call_end', runId: 'second', eventIndex: 2, timestamp: '2026-09-07T00:00:05Z',
+        name: 'run', toolCallId: 'rerun-test', args: { command: `cd / && ${RECOVERY_TEST_COMMAND}`, runtime: 'sandbox' },
+        result: { background: true, jobId: 'bgjob-live', kind: 'run', message: 'Outran the 30s foreground window.' },
+        outcome: { success: true } },
+      { type: 'run_end', runId: 'second', eventIndex: 3, timestamp: '2026-09-07T00:00:06Z', reason: 'reply' },
+      // The settle's wake: a new run whose message is the wake text naming the
+      // job, with the recovery call — a file write the prompt asked for after
+      // the test — recorded on IT, not on either prompt run.
+      { type: 'run_start', runId: 'wake', eventIndex: 0, timestamp: '2026-09-07T00:00:40Z',
+        agentId: 'eval-public',
+        userMessage: 'Background run job "bgjob-live" finished (exit code 0): 1 pass, 0 fail' },
+      { type: 'tool_call_end', runId: 'wake', eventIndex: 1, timestamp: '2026-09-07T00:00:41Z',
+        name: 'file', toolCallId: 'wake-write', args: { action: 'write', path: 'report.txt' },
+        result: 'ok', outcome: { success: true } },
+      { type: 'run_end', runId: 'wake', eventIndex: 2, timestamp: '2026-09-07T00:00:42Z', reason: 'reply' },
+    ];
+
+    const calls = promptToolCalls(events, entry.turns[1], new Map());
+    expect(calls.map((call) => call.toolCallId)).toEqual(['rerun-test', 'wake-write']);
+    expect(promptToolCalls(events, entry.turns[0], new Map()).map((call) => call.toolCallId))
+      .toEqual(['failed-test']);
+
+    const input = { session, events, steerLanding: null, history: [
+      { role: 'assistant', text: 'FAIL' }, { role: 'assistant', text: 'PASS' },
+    ] };
+
+    await Bun.write(join(root, 'broken.test.mjs'), BROKEN_TEST);
+    await Bun.write(join(root, 'broken.mjs'), 'export const add = (a, b) => a - -b;\n');
+    const scored = await entry.verify(input);
+    expect(scored.find((subgoal) => subgoal.what === 'recovery-took')?.reached).toBe(true);
+
+    // The same stream with the job still running is a recovery that never
+    // settled — the handle alone must not carry it.
+    const stillRunning = await entry.verify({
+      ...input,
+      session: { ...session, backgroundJobs: async () => [
+        { id: 'bgjob-live', kind: 'run', status: 'running', result: null, error: null },
+      ] },
+    });
+
+    expect(stillRunning.find((subgoal) => subgoal.what === 'recovery-took')?.reached).toBe(false);
+  });
+
   test('memory persists across turns only when both turns use the tool', async () => {
     const entry = CASES.find((candidate) => candidate.id === 'public-memory-across-turns');
 
@@ -795,6 +1134,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       session: {
         readFile: async () => 'BLUEBIRD',
         execute: async () => ({ exitCode: 0 }),
+        backgroundJobs: async () => [],
       },
       events, steerLanding: null, history: [],
     };
@@ -842,6 +1182,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     const input = {
       session: {
         readFile: async () => 'public-first:done',
+        backgroundJobs: async () => [],
         execute: async () => ({ exitCode: 0 }),
       },
       events, steerLanding: null, history: [],
@@ -978,6 +1319,14 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         }
 
         for (const turn of rest) recordLanding(turn, await session.prompt(turn));
+
+        // A `run` that outran the foreground window detached into a job whose
+        // settlement arrives as a WAKE turn — a new run this episode's prompts
+        // never asked for. Wait for those runs before collecting, or the
+        // recovery the product already produced is scored on a ledger that
+        // ended one settle early. Bounded by the jobs' own lifecycle, never by
+        // a clock: a still-running job is still owed its wake.
+        await awaitDetachedJobWakes(session, entry, absorbedBy);
 
         const { events, history } = await collect();
         observedModels.note(events);
