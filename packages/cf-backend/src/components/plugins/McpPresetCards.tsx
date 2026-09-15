@@ -61,9 +61,13 @@ function presetWord(server: McpServerSummary | undefined) {
   }
 }
 
-function PresetCard({ preset, server, onChanged }: {
+function PresetCard({ preset, server, appConfigured, onChanged }: {
   preset: McpPreset;
   server: McpServerSummary | undefined;
+  /** Whether the deployment carries this preset's registered OAuth app.
+   *  `undefined` while the availability read is still open — optimistic, so
+   *  a configured card never flickers into its fallback on first paint. */
+  appConfigured: boolean | undefined;
   onChanged: () => void;
 }) {
   const [openToken, setOpenToken] = useState(false);
@@ -74,6 +78,16 @@ function PresetCard({ preset, server, onChanged }: {
   const { word, dot } = presetWord(server);
   const Icon = PRESET_ICON[preset.id];
   const added = server !== undefined;
+
+  // Sign-in exists for every preset that answers an authorize URL: 'oauth'
+  // unconditionally (the server registers the client itself), 'oauth-app'
+  // only while the deployment carries the registration. Without it, an
+  // oauth-app card asks for its token fallback instead.
+  const signIn = preset.auth === 'oauth' || (preset.auth === 'oauth-app' && appConfigured !== false);
+
+  const tokenLabel = preset.auth === 'oauth-app'
+    ? preset.tokenFallback?.label ?? 'Access token'
+    : preset.tokenLabel ?? 'Access token';
 
   const add = async (input: McpServerInput) => {
     setErr(null);
@@ -97,7 +111,7 @@ function PresetCard({ preset, server, onChanged }: {
   };
 
   const connect = async (): Promise<void> => {
-    if (preset.auth === 'oauth') {
+    if (signIn) {
       await add({ presetId: preset.id });
     } else {
       setOpenToken(true);
@@ -135,7 +149,7 @@ function PresetCard({ preset, server, onChanged }: {
                 title="Remove server">
                 <TrashIcon size={11} /> Remove
               </button>
-            ) : preset.auth === 'oauth' ? (
+            ) : signIn ? (
               <button onClick={connect} disabled={busy}
                 className="text-xs px-2 py-1 rounded-sm p-accent-bg p-accent font-medium disabled:opacity-50">
                 {busy ? 'Connecting…' : 'Connect'}
@@ -159,7 +173,7 @@ function PresetCard({ preset, server, onChanged }: {
                 screenshot, so it carries the same marker the add form does. */}
             <input {...SECRET_REGION} type="password" autoComplete="off"
               value={token} onChange={(e) => setToken(e.target.value)}
-              aria-label={preset.tokenLabel} placeholder={preset.tokenLabel}
+              aria-label={tokenLabel} placeholder={tokenLabel}
               className={inputCls + ' min-w-0 flex-1'} />
             <button
               onClick={async () => { await add({
@@ -180,18 +194,31 @@ function PresetCard({ preset, server, onChanged }: {
 
 /** One card per preset; rendered as a fragment so the caller's grid owns the
  *  layout (PluginSection's grid on the plugins page, the panel's own row in
- *  account surfaces). */
-export function McpPresetCards({ servers, onChanged }: {
+ *  account surfaces). An `oauth-app` preset with no configured app and no
+ *  token fallback offers nothing, so its card only appears once the user has
+ *  added the server another way — while the availability read is open the
+ *  card renders as though configured rather than vanish on first paint. */
+export function McpPresetCards({ servers, availability, onChanged }: {
   servers: readonly McpServerSummary[];
+  availability: readonly { id: string; appConfigured: boolean }[] | undefined;
   onChanged: () => void;
 }) {
   return (
     <>
-      {MCP_PRESETS.map((preset) => (
-        <PresetCard key={preset.id} preset={preset}
-          server={servers.find((s) => s.presetId === preset.id)}
-          onChanged={onChanged} />
-      ))}
+      {MCP_PRESETS.map((preset) => {
+        const server = servers.find((s) => s.presetId === preset.id);
+        const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
+
+        if (preset.auth === 'oauth-app' && appConfigured === false
+          && preset.tokenFallback === undefined && server === undefined) {
+          return null;
+        }
+
+        return (
+          <PresetCard key={preset.id} preset={preset} server={server}
+            appConfigured={appConfigured} onChanged={onChanged} />
+        );
+      })}
     </>
   );
 }
