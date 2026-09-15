@@ -8,7 +8,7 @@ import {
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { MockLanguageModelV3 } from 'ai/test';
-import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, thinkTurns, orchestratorHarness } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { resetRecordedMcp, seedMcpTools, seedMcpAnswer } from './helpers/agents-sdk';
 import { ROOT_SLATE_CALLER, type SlateCaller } from '../src/slates/bindings';
@@ -72,10 +72,9 @@ test('native MCP protocol failures reject while namespace responses retain their
     seedMcpTools('connection-id', [{ name: 'read_issue', inputSchema: { type: 'object' }, annotations: { readOnlyHint: true } }]);
     actor.agent.harnessDrivingUserMessage('Read the issue.', { kinuMode: 'build' });
 
-    const turn = await actor.agent.beforeTurn({ system: 'base', messages: [{ role: 'user', content: 'Read the issue.' }],
-      tools: actor.agent.observeRawTools(), model: 'harness-model', continuation: false, body: {} });
+    const turn = await thinkTurns(actor.agent).prepare({ messages: [{ role: 'user', content: 'Read the issue.' }], tools: actor.agent.observeRawTools() });
 
-    const native = turn?.tools?.mcp_github_read_issue;
+    const native = turn.tools.mcp_github_read_issue;
 
     if (native === undefined) throw new Error('the native MCP tool was not admitted');
     const invoke = toolExecute<Record<string, never>, JsonValue>(native);
