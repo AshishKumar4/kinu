@@ -206,17 +206,35 @@ export async function createWebGpuRenderer(
 
         if (pulseCount > 0) pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE));
 
-        frame(gpu, (pass) => {
-          pass.pass({ target: scene, clear: [0, 0, 0, 0] }, (encoder) => {
-            encoder.draw(strokes, { instances: strokeCount });
-            encoder.draw(pulses, { instances: pulseCount });
-            encoder.draw(nodes, { instances: nodeCount });
+        try {
+          frame(gpu, (pass) => {
+            pass.pass({ target: scene, clear: [0, 0, 0, 0] }, (encoder) => {
+              encoder.draw(strokes, { instances: strokeCount });
+              encoder.draw(pulses, { instances: pulseCount });
+              encoder.draw(nodes, { instances: nodeCount });
+            });
+            pass.pass({ target: bloomA }, bright);
+            pass.pass({ target: bloomB }, blurH);
+            pass.pass({ target: bloomA }, blurV);
+            pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
           });
-          pass.pass({ target: bloomA }, bright);
-          pass.pass({ target: bloomB }, blurH);
-          pass.pass({ target: bloomA }, blurV);
-          pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
-        });
+        } catch (thrown) {
+          // A dead device does not reach `gpu.onError` — `frame()` asserts
+          // usability and throws. `DISPOSED` arriving while this renderer is
+          // alive can only be a device the GPU half killed under itself, so
+          // both codes are one fault here; anything else is a real bug and
+          // propagates.
+          if (thrown instanceof VGPUError
+            && (thrown.code === 'VGPU-DEVICE-LOST' || thrown.code === 'VGPU-DEVICE-DISPOSED')) {
+            fault = thrown;
+            renderer.dispose();
+            faultHandler?.(thrown);
+
+            return;
+          }
+
+          throw thrown;
+        }
       },
       onFault(handler) {
         faultHandler = handler;

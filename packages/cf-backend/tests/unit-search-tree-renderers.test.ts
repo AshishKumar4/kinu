@@ -307,6 +307,9 @@ class FakeGpu {
   readonly errorListeners = new Set<(error: Error) => void>();
   frames = 0;
   disposed = false;
+  /** When set, the next `frame()` throws it — the way a dead device throws
+   *  VGPU-DEVICE-LOST out of `frame()` rather than through `onError`. */
+  frameThrows: Error | undefined;
 
   onError(cb: (error: Error) => void): () => void {
     this.errorListeners.add(cb);
@@ -392,6 +395,7 @@ await mock.module('vgpu', () => ({
     set: () => undefined,
   }),
   frame: (gpu: FakeGpu, callback: (pass: FakePass) => void): void => {
+    if (gpu.frameThrows !== undefined) throw gpu.frameThrows;
     gpu.frames += 1;
     callback({
       pass(_spec: FakePassSpec, payload: FakePassPayload): void {
@@ -460,8 +464,33 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
   });
 });
 
-/* ── deleted: "a device loss mid-run swaps to canvas". A real WebGPU device
- *  loss does not reach `gpu.onError` — vgpu 0.4.1 throws from the next
- *  `frame()` call — so the old fake-DOM test asserted a seam real vgpu does
- *  not take. The product question it raises (a dead device must still drop
- *  the mount to Canvas2D) is recorded, not solved here. ── */
+describe('a device loss mid-run is the same fault the listener reports', () => {
+  test('a frame() that throws VGPU-DEVICE-LOST swaps the mount out', async () => {
+    const outcome = await createWebGpuRenderer(Object.create(null), PALETTE, 1200, 600, 1);
+
+    if (outcome.kind !== 'renderer') throw new Error(`expected a renderer, got ${outcome.kind}`);
+
+    const gpu = lastGpu;
+
+    if (gpu === null) throw new Error('init was never called');
+
+    const seen: Error[] = [];
+    outcome.renderer.onFault?.((error) => { seen.push(error); });
+
+    // One live frame, then the device dies — through `frame()`, the only
+    // channel a real loss has.
+    outcome.renderer.render(frameAfter(4));
+    expect(gpu.frames).toBe(1);
+
+    const loss = new MockVGPUError({ code: 'VGPU-DEVICE-LOST', message: 'the device was lost' });
+    gpu.frameThrows = loss;
+
+    outcome.renderer.render(frameAfter(4));
+
+    expect(seen).toEqual([loss]);
+    expect(gpu.disposed).toBe(true);
+
+    // The renderer already handed off: a later render is a no-op, never a throw.
+    outcome.renderer.render(frameAfter(4));
+  });
+});
