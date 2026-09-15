@@ -2509,6 +2509,9 @@ export abstract class ActorAgent extends Think<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          // The turn's own wake at its open: a kill mid-turn leaves the run
+          // row AND the wake that re-drives what it owed, at the lap-0 delay.
+          armTurnWake: () => this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(0)),
           modelWindow: () => ({
             contextWindow: this.sessionContextWindow(),
             modelOutputLimit: this.modelCatalog.modelOutputLimit(),

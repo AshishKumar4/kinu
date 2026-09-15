@@ -18,7 +18,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { openWorkspaceMainActor } from '@kinu.run/core';
 import { makeSql } from '../../core/tests/helpers';
-import { hostedSubordinateHarness, orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { hostedSubordinateHarness, orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /**
  * The actor these rows belong to.
@@ -571,6 +571,30 @@ describe('the workspace keeps exactly one wake row', () => {
     // work has a future row of its own.
     expect(rows.map((row) => row.time).sort((a, b) => a - b))
       .toEqual([dueSec, Math.ceil(laterAtMs / 1000)]);
+  });
+
+  test('a root turn arms the wake when it opens', async () => {
+    // A turn that opens has a run row but owes nothing yet — and on the old
+    // shape it held NO wake of its own either: the ledger's open turn sat
+    // un-driven until some unrelated event woke the object. The arm rides the
+    // terminal-retry row (soonest-wins), so exactly one is what an opened turn
+    // leaves behind it.
+    const { agent } = orchestratorHarness();
+    await agent.activateActor();
+    await agent.harnessSettleBackgroundTasks();
+    expect(await agent.listSchedules()).toEqual([]);
+
+    const turns = thinkTurns(agent);
+    const request = await turns.prepare({ messages: [{ role: 'user', content: 'a turn that opens' }] });
+
+    const armed = (await agent.listSchedules())
+      .filter((row) => row.callback === '_kinuTerminalRetryTick');
+
+    expect(armed).toHaveLength(1);
+
+    // The turn is only parked, not owed by the suite: settle it so the pump
+    // finishes cleanly inside this test rather than leaking a pending call.
+    await turns.settle({ messageId: request.identity.messageId, text: 'done' });
   });
 
   test('two concurrent arms converge on ONE wake row, the earliest', async () => {
