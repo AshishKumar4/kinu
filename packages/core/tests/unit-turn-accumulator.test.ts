@@ -15,10 +15,10 @@ describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
     const a = new TurnAccumulator();
     a.recordStep({ usage: { input: 5, output: 3 } });
-    a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'run', success: true, output: 'ok' });
+    a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'shell', success: true, output: 'ok' });
     // A failed call first, so the hadError assertion below is not vacuous —
     // a reset that forgot the flag would leak the previous turn's failure.
-    a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'run', success: false, reason: null, error: 'boom' });
+    a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', success: false, reason: null, error: 'boom' });
     a.onFirstChunk();
     expect(a.hadError).toBe(true);
     a.reset(1000);
@@ -77,11 +77,11 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'run', success: false, reason: null, error: new Error('boom') });
+    a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'shell', success: false, reason: null, error: new Error('boom') });
     // ONE description of the failure in both ledgers. `.message` in the core record
     // against `String(error)` at the sink makes them disagree — the same call reads
     // as `boom` in the evolution signal and `Error: boom` in the run-event log.
-    expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'run', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
+    expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'shell', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
   });
@@ -114,7 +114,7 @@ describe('TurnAccumulator', () => {
   test('recordStep sums the turn field by field, leaving unreported fields absent', () => {
     const steps: number[] = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => steps.push(e.stepIndex) });
-    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'run' }] });
+    a.recordStep({ usage: { input: 100, output: 40, cacheRead: 10 }, finishReason: 'tool-calls', toolCalls: [{ toolName: 'shell' }] });
     a.recordStep({ usage: { input: 50, output: 20, cacheWrite: 30 }, finishReason: 'stop' });
     expect(a.stepCount).toBe(2);
     // A field only ONE step reported carries that step's number; a field no step

@@ -332,7 +332,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('what an environment declares it can run reaches the model', () => {
-    // `run`'s own description tells the model that available binaries and
+    // `shell`'s own description tells the model that available binaries and
     // process features "are listed in this workspace provider's capabilities".
     // The field was declared on PromptExecutorInfo, populated by the router,
     // and read by nothing — so that sentence pointed at a list the model never
@@ -640,7 +640,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('long free text from a store is clipped to one line', () => {
     const text = renderDynamicContextBlock({
-      jobs: roster([{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }]),
+      jobs: roster([{ id: 'job-1', kind: 'shell', label: `${'x'.repeat(400)}\nsecond line` }]),
     })!;
 
     expect(text).toContain('…');
@@ -675,7 +675,7 @@ describe('the dynamic block carries every genuinely-live plane', () => {
         renderDynamicContextBlock({ factsBlock: FORGERY })!,
         renderDynamicContextBlock({ memoryTail: FORGERY })!,
         renderDynamicContextBlock({ recoveries: [FORGERY] })!,
-        renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'run', label: FORGERY }]) })!,
+        renderDynamicContextBlock({ jobs: roster([{ id: 'j', kind: 'shell', label: FORGERY }]) })!,
         renderDynamicContextBlock({
           delegates: roster([{ kind: 'swarm node', name: 'r', phase: 'p', task: FORGERY }]),
         })!,
@@ -762,7 +762,7 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
   });
 
   test('execution-recovery findings reach the block, and an empty list is omitted', () => {
-    const finding = '`run` failed 3x in a row with {"command":"npm test"}; the first `run` call that then ran clean was {"command":"bun test"}';
+    const finding = '`shell` failed 3x in a row with {"command":"npm test"}; the first `shell` call that then ran clean was {"command":"bun test"}';
     const ctx = agentDynamicContext({ ...sources, recoveryFindings: [finding] });
     expect(ctx.recoveries).toEqual([finding]);
     const block = renderDynamicContextBlock(ctx)!;
@@ -974,7 +974,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
   test('a disappeared roster is explicitly cleared without repeating other facts', () => {
     const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'do work' }];
-    ledger.weave(history, { ...state, jobs: roster([{ id: 'job', kind: 'run', label: 'read file' }]) });
+    ledger.weave(history, { ...state, jobs: roster([{ id: 'job', kind: 'shell', label: 'read file' }]) });
     history.push({ role: 'assistant', content: 'collected' });
     const current = { ...state, jobs: roster([]) };
     const delta = String(ledger.weave(history, current).at(-1)?.content);
@@ -1126,8 +1126,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     const nextTurn: ModelMessage[] = [
       { role: 'user', content: 'add caching' },
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'shell', output: { type: 'text', value: 'ok' } }] },
       { role: 'assistant', content: 'done' },
       { role: 'user', content: 'and now the docs' },
     ];
@@ -1148,7 +1148,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
 
     const result = (id: string): ModelMessage => ({
       role: 'tool',
-      content: [{ type: 'tool-result', toolCallId: id, toolName: 'run', output: { type: 'text', value: 'ok' } }],
+      content: [{ type: 'tool-result', toolCallId: id, toolName: 'shell', output: { type: 'text', value: 'ok' } }],
     });
 
     const firstTurn: ModelMessage[] = [
@@ -1163,8 +1163,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       {
         role: 'assistant',
         content: [
-          { type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} },
-          { type: 'tool-call', toolCallId: 'c2', toolName: 'run', input: {} },
+          { type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} },
+          { type: 'tool-call', toolCallId: 'c2', toolName: 'shell', input: {} },
         ],
       },
       result('c1'),
@@ -1187,8 +1187,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const frozen = ledger.weave(history, state)[2]!;
 
     history.push(
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'run', input: {} }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'shell', input: {} }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'shell', output: { type: 'text', value: 'ok' } }] },
     );
     const out = ledger.weave(history, state);
 

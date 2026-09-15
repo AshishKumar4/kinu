@@ -16,7 +16,7 @@
  * shares the scanner the crafted side uses so both read one definition of what a
  * call site in submitted code is.
  *
- * WHAT IT CANNOT DO, stated rather than discovered. `run` and `file` share the
+ * WHAT IT CANNOT DO, stated rather than discovered. `shell` and `file` share the
  * `workspace` namespace, so a program calling `workspace.exec` reports BOTH as
  * reached. That direction is deliberate: the failure this exists to stop is
  * telling an agent it ignored a capability it used, and over-reporting reach

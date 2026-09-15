@@ -1,6 +1,6 @@
 /**
  * Who drives one local conversation, at the two PRODUCT surfaces that compete
- * for it: the interactive client `kinu chat`/`run`/the TUI open, and the
+ * for it: the interactive client `kinu chat`/`shell`/the TUI open, and the
  * scheduler daemon's foreground pass.
  *
  * They really do compete. Every interactive surface auto-starts the resident

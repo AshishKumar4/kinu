@@ -442,7 +442,7 @@ describe('mcpToolKey', () => {
   });
   test('never produces a builtin name', () => {
     // The whole reason we reserve the `mcp_` prefix in buildBuiltinTools.
-    expect(mcpToolKey('x', 'run')).not.toBe('run');
+    expect(mcpToolKey('x', 'shell')).not.toBe('shell');
     expect(mcpToolKey('x', 'skills')).not.toBe('skills');
   });
 });

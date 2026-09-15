@@ -250,8 +250,8 @@ describe('the composite file plane', () => {
   });
 });
 
-describe('the run tool names the machine', () => {
-  /** `run` over the real router and the real provider — the path a model's
+describe('the shell tool names the machine', () => {
+  /** `shell` over the real router and the real provider — the path a model's
    *  `run { runtime: "laptop", device }` actually takes. */
   function runTool(fleet: readonly DeviceFleetEntry[]) {
     const t = fleetTransport(fleet);
@@ -262,7 +262,7 @@ describe('the run tool names the machine', () => {
 
     return {
       t,
-      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.run),
+      run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.shell),
     };
   }
 

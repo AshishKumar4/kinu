@@ -51,7 +51,7 @@ export interface AcpAgentDeps {
  *  with no "old transcript" justification, since ACP maps calls as they
  *  happen rather than rendering stored history. */
 const TOOL_KINDS = new Map<string, ToolKind>([
-  ['run', 'execute'],
+  ['shell', 'execute'],
   ['eval', 'execute'],
   ['memory', 'think'],
   ['tasks', 'think'],
@@ -71,12 +71,12 @@ function toolKind(name: string, args: JsonObject): ToolKind {
 }
 
 /** A one-line summary of what a call is doing — the tool call's ACP title.
- *  `run` gets its command because that is the thing a user is deciding about. */
+ *  `shell` gets its command because that is the thing a user is deciding about. */
 function toolTitle(name: string, args: JsonObject): string {
   const command = args.command;
   const parsedCommand = v.safeParse(v.string(), command);
 
-  if (name === 'run' && parsedCommand.success) return parsedCommand.output;
+  if (name === 'shell' && parsedCommand.success) return parsedCommand.output;
   const action = args.action;
   const parsedAction = v.safeParse(v.string(), action);
 

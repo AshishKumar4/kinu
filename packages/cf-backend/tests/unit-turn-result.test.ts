@@ -87,7 +87,7 @@ describe('MessageView transcript order', () => {
 
   test('a provision refusal does not expand its explanatory panel by default', () => {
     const html = render([
-      tool('a', 'run', { command: 'cat missing.sql' }, 'output-available', JSON.stringify({
+      tool('a', 'shell', { command: 'cat missing.sql' }, 'output-available', JSON.stringify({
         error: 'runtime_not_provisioned', runtime: 'sandbox', message: 'nope',
       })),
     ]);
@@ -186,8 +186,8 @@ describe('MessageView tool prominence', () => {
 
   test('a shell program is not labelled as a measured read or mutation', () => {
     const html = render([
-      tool('read', 'run', { command: 'cat notes.txt' }),
-      tool('write', 'run', { command: 'touch changed' }),
+      tool('read', 'shell', { command: 'cat notes.txt' }),
+      tool('write', 'shell', { command: 'touch changed' }),
     ]);
 
     expect(html).toContain('data-tool-count="2"');
@@ -230,7 +230,7 @@ describe('buttonAttributes', () => {
 
 describe('tool failure protocol', () => {
   test('a provision refusal counts as failed', () => {
-    const part = tool('a', 'run', {}, 'output-available', JSON.stringify({
+    const part = tool('a', 'shell', {}, 'output-available', JSON.stringify({
       error: 'runtime_not_provisioned', runtime: 'sandbox', message: 'nope',
     }));
 
@@ -248,7 +248,7 @@ describe('tool failure protocol', () => {
   test('tool output that reads like a pass never becomes a check line', () => {
     const html = render([
       text('Suite is green.'),
-      tool('a', 'run', { command: 'bun test' }, 'output-available', '920 pass, 0 fail'),
+      tool('a', 'shell', { command: 'bun test' }, 'output-available', '920 pass, 0 fail'),
     ]);
 
     expect(html).not.toContain('Check passed');

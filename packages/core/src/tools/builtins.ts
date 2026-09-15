@@ -81,7 +81,7 @@ import {
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportHandoff, type SubordinateReportStatus,
 } from '../events/hub/types';
-import { createFileToolSteer } from './run-file-steer';
+import { createFileToolSteer } from './shell-file-steer';
 import { createFileTool } from './file-tool';
 import { TurnFileLedger } from './file-ledger';
 import { TurnContextBudget } from '../context-budget';
@@ -207,7 +207,7 @@ export interface BuiltinToolDeps {
    *  caller that omits it (a node's own toolset, tests) gets a fresh one, so
    *  the policy is per-root by construction. */
   contextBudget?: TurnContextBudget;
-  /** The turn's escalation decisions — which provisioned environments `run` was
+  /** The turn's escalation decisions — which provisioned environments `shell` was
    *  sent to instead of the workspace shell, the model's stated reason, and the
    *  outcome. Same ownership rule as fileLedger/contextBudget: backends pass
    *  their TurnAccumulator's, and a caller that omits it gets a fresh one. */
@@ -370,11 +370,11 @@ interface WebToolInput {
  * that. Every one is a refusal or a handled failure — a THROWN error is not
  * logged here, because whoever catches it classifies it there.
  */
-const RUN_SHELL_ABSENT = 'run.shell_absent';
+const RUN_SHELL_ABSENT = 'shell.shell_absent';
 
-const RUN_ESCALATION_REFUSED = 'run.escalation_refused';
+const RUN_ESCALATION_REFUSED = 'shell.escalation_refused';
 
-const RUN_ESCALATION_FAILED = 'run.escalation_failed';
+const RUN_ESCALATION_FAILED = 'shell.escalation_failed';
 
 const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
 
@@ -384,7 +384,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const router = rt.executionRouter;
   const shell = rt.shell;
 
-  const runRuntimes = [...new Set([
+  const shellRuntimes = [...new Set([
     'workspace',
     ...(router?.listExecutors().map(({ name }) => name) ?? []),
   ])];
@@ -393,10 +393,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
   // Same per-turn ownership as the budget: the turn's escalation decisions, so
-  // `run` can record WHY it left the workspace shell at the moment it decides.
+  // `shell` can record WHY it left the workspace shell at the moment it decides.
   const escalations = deps.escalations ?? new TurnEscalationLedger();
   // Same per-turn ownership as the budget: each hand-rolled-write shape gets
-  // its note once, on the call that earned it (run-file-steer.ts).
+  // its note once, on the call that earned it (shell-file-steer.ts).
   const fileToolSteer = createFileToolSteer();
   // The observability seam. A toolset built without one still logs: the console
   // logger writes one JSON line per event to the sink both backends already
@@ -434,7 +434,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   // Restorable result budget: oversize eval results are offloaded to
-  // the workspace VFS and clamped to head+tail (see clamp.ts). The `run` tool
+  // the workspace VFS and clamped to head+tail (see clamp.ts). The `shell` tool
   // clamps at its own return sites below.
   tools.eval = withClampedToolResult(tools.eval, {
     vfs: rt.storage.vfs, budget, producer: 'eval',
@@ -448,15 +448,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // chain: if you ask for "sandbox" and sandbox isn't ready, you get a
   // structured error pointing at the install card, not silently routed
   // somewhere else.
-  tools.run = tool({
-    description: BUILTIN_TOOL_DESCRIPTIONS.run,
+  tools.shell = tool({
+    description: BUILTIN_TOOL_DESCRIPTIONS.shell,
     inputSchema: jsonSchema<{ command: string; runtime?: string; device?: string; why?: string }>({
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to run' },
         runtime: {
           type: 'string',
-          enum: runRuntimes,
+          enum: shellRuntimes,
           description:
             'Execution runtime. Use one of the environments listed in the system prompt — that list is live for this turn; check it instead of assuming availability. ' +
             'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
@@ -491,13 +491,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // workspace VFS before clamping (see clamp.ts), so big outputs never
       // rot the session and nothing is lost. A command that hand-rolls a file
       // edit carries the `file` steer back with it, the first time this turn
-      // uses that shape (run-file-steer.ts) — outside the clamp, so the note is
+      // uses that shape (shell-file-steer.ts) — outside the clamp, so the note is
       // never the part that gets truncated.
       const steer = fileToolSteer(args.command);
 
       const clamp = async (result: CommandResult): Promise<string> => {
         const text = v.is(v.string(), result) ? result : result.error;
-        const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+        const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'shell' });
 
         if (!v.is(v.string(), result)) throw new KinuError(result.reason, clamped, { execution: result.execution });
 
@@ -601,7 +601,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   // ── 3. file ─────────────────────────────────────────────────────────────
-  // The file plane: read / edit / write over the same filesystem `run` and
+  // The file plane: read / edit / write over the same filesystem `shell` and
   // eval address, so one tool serves every mount on both backends.
   // Unconditional — every runtime has rt.storage.vfs, and a model without an
   // exact-match editor falls back to sed -i and heredocs.

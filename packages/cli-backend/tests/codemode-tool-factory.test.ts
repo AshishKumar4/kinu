@@ -143,18 +143,18 @@ describe('createNodeCodemodeToolFactory — console capture + implicit return', 
     expect(out.logs).toBeUndefined();
   });
 
-  // `run` is a native top-level tool, not a codemode binding — reaching for
+  // `shell` is a native top-level tool, not a codemode binding — reaching for
   // it here is a ReferenceError, and a bare "run is not defined" gives the
   // model no idea why. Real evidence from production (2026-08-12 debug
   // audit): a model wrote exactly this and got only the bare V8 message back.
-  test('calling the native `run` tool from inside eval gets an actionable hint, not a bare ReferenceError', async () => {
-    const pending = makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
-    await expect(pending).rejects.toThrow('run is not defined');
-    await expect(pending).rejects.toThrow('"run" is a native Kinu tool');
-    await expect(pending).rejects.toThrow('`tools.run(input)`');
+  test('calling the native `shell` tool from inside eval gets an actionable hint, not a bare ReferenceError', async () => {
+    const pending = makeTool()({ code: 'return await shell({ runtime: "sandbox", command: "ls" });' });
+    await expect(pending).rejects.toThrow('shell is not defined');
+    await expect(pending).rejects.toThrow('"shell" is a native Kinu tool');
+    await expect(pending).rejects.toThrow('`tools.shell(input)`');
     // Where the capability actually is now comes from TOOL_REACH, so the
     // pointer is the namespace rather than one hand-picked member — and it is
-    // right for all eight native tools instead of only `run`.
+    // right for all eight native tools instead of only `shell`.
     await expect(pending).rejects.toThrow('through the `workspace` namespace');
   });
 
@@ -237,7 +237,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
     const factory = createNodeCodemodeToolFactory();
     const built = factory({ native: {}, craftedTools: () => ({}), providers: [] });
     expect(built.description).toContain('canonical durable workspace');
-    expect(built.description).toContain('`run` with runtime "workspace"');
+    expect(built.description).toContain('`shell` with runtime "workspace"');
   });
 
   test('every wired namespace is DECLARED to the model, not just bound', async () => {
@@ -336,19 +336,19 @@ describe('createNodeCodemodeToolFactory — crafted tools, on the episode clock'
 describe('createNodeCodemodeToolFactory — native tools under tools.<name>', () => {
   /** A finished surface the way buildActorTools hands it in: the sandbox's own
    *  entry beside the native tools it declares. */
-  function surfaceWith(run: (input: { command: string }) => Promise<string>) {
+  function surfaceWith(shellExec: (input: { command: string }) => Promise<string>) {
     return {
       eval: tool({
         description: 'the sandbox itself',
         inputSchema: jsonSchema<{ code: string }>({ type: 'object' }),
         execute: async () => 'never',
       }),
-      run: tool({
+      shell: tool({
         description: 'Run a shell command over the canonical durable workspace.',
         inputSchema: jsonSchema<{ command: string }>({
           type: 'object', properties: { command: { type: 'string' } }, required: ['command'],
         }),
-        execute: async (input) => run(input),
+        execute: async (input) => shellExec(input),
       }),
     };
   }
@@ -356,7 +356,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
   test('a native tool is callable as tools.<name>(input) with the native input object', async () => {
     // The defect this locks, reproduced 2026-09-05: the shared docstring said
     // every native tool is `tools.<name>(input)` and the CLI bound none of
-    // them, so `tools.run(...)` answered `tools.run is not a function`.
+    // them, so `tools.shell(...)` answered `tools.shell is not a function`.
     const seen: string[] = [];
 
     const built = createNodeCodemodeToolFactory()({
@@ -370,7 +370,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     });
 
     const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
-      code: 'return await tools.run({ command: "ls" });',
+      code: 'return await tools.shell({ command: "ls" });',
     });
 
     expect(out.error).toBeUndefined();
@@ -386,7 +386,7 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     });
 
     expect(built.description).toContain('export declare const tools: {');
-    expect(built.description).toContain('run(input: { command: string }): Promise<unknown>;');
+    expect(built.description).toContain('shell(input: { command: string }): Promise<unknown>;');
     expect(built.description).not.toContain('double(...args: unknown[]): Promise<unknown>;');
     expect(renderDynamicContextBlock({ craftedTools: [{ name: 'double', description: 'Doubles a number' }] }))
       .toContain('double(...args: unknown[]): Promise<unknown>;');

@@ -327,7 +327,7 @@ describe('buildHeadSystemPrompt — the head is told the truth about its envelop
     // tool-derived conventions say plainly that recursion is unavailable.
     const prompt = buildHeadSystemPrompt(
       loopInput({ maxDepth: 0 }),
-      ['record_evidence', 'record_decision', 'run'],
+      ['record_evidence', 'record_decision', 'shell'],
     );
 
     expect(prompt).not.toContain('more level(s) deep');

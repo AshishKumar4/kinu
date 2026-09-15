@@ -147,7 +147,7 @@ const RELEASE_TABLE = {
 export const BACKEND_CONFORMANCE: ConformanceManifest = {
   tool: {
     eval: EVERYWHERE,
-    run: EVERYWHERE,
+    shell: EVERYWHERE,
     file: EVERYWHERE,
     agents: EVERYWHERE,
     memory: EVERYWHERE,

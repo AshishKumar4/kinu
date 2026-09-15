@@ -56,7 +56,7 @@ function sandboxEntry(marker: string) {
 describe('head function-form eval resolves over the allowed surface', () => {
   test('the function builds over the filtered tools, and its entry runs', async () => {
     const { rt } = createTestRuntime();
-    const allowed = ['eval', 'run', 'file', 'record_evidence'];
+    const allowed = ['eval', 'shell', 'file', 'record_evidence'];
     let seen: readonly string[] | null = null;
 
     const codemodeTool = (finished: ToolSet) => {
@@ -80,7 +80,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
     expect(names.length).toBeGreaterThan(0);
 
     for (const name of names) expect(allowed).toContain(name);
-    expect(names).toContain('run');
+    expect(names).toContain('shell');
     expect(names).not.toContain('web');
     expect(names).not.toContain('record_decision');
   });
@@ -96,7 +96,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
     };
 
     const tools = buildHeadToolSet({
-      input: headInput({ allowedTools: ['run'] }),
+      input: headInput({ allowedTools: ['shell'] }),
       capture: new HeadCapture(),
       rt,
       codemodeTool,
@@ -106,7 +106,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
 
     expect(tools.eval).toBeUndefined();
     expect(calls).toBe(0);
-    expect(Object.keys(tools)).toEqual(['run']);
+    expect(Object.keys(tools)).toEqual(['shell']);
   });
 
   test('a finished codemodeTool entry installs directly and runs', async () => {

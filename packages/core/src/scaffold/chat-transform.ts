@@ -78,7 +78,7 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
 
 /**
  * Route a prepared default-turn stream through the agent's evolved scaffold.
- * `run` carries everything `runScaffold` needs except `emit` and
+ * `shell` carries everything `runScaffold` needs except `emit` and
  * `defaultInference`, which this seam owns.
  */
 export function scaffoldChatTransform(opts: {

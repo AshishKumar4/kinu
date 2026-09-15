@@ -34,7 +34,7 @@ test('the member table is what the grant, the graph and the audit row read', () 
   expect(memberEffect('rpc', 'dropTables')).toBe('read');
   expect(memberEffect('agent', 'send')).toBe('mutate');
   expect(memberEffect('agent', 'anything')).toBe('mutate');
-  expect(memberEffect('ai', 'run')).toBe('mutate');
+  expect(memberEffect('ai', 'shell')).toBe('mutate');
   expect(memberEffect('ai', 'anything')).toBe('mutate');
 });
 
@@ -61,7 +61,7 @@ test('the tool rows restate the native classification — pinned to the tools th
 
   // A single-call tool has no read shape: `call` is the only member and it
   // mutates — `agents` included.
-  for (const tool of ['run', 'eval', 'report', 'agents']) {
+  for (const tool of ['shell', 'eval', 'report', 'agents']) {
     expect(toolMembers(tool)).toEqual(['call']);
     expect(toolActionEffect(tool, 'call')).toBe('mutate');
   }
@@ -76,8 +76,8 @@ test('tool member derivation reads the action, and unknown tools get call', () =
   expect(toolActionMember('file', {})).toBe('call');
   expect(toolActionMember('file', { action: 7 })).toBe('call');
   // A single-call tool ignores whatever `action` says.
-  expect(toolActionMember('run', { command: 'ls' })).toBe('call');
-  expect(toolActionMember('run', { action: 'read' })).toBe('call');
+  expect(toolActionMember('shell', { command: 'ls' })).toBe('call');
+  expect(toolActionMember('shell', { action: 'read' })).toBe('call');
 
   // A crafted tool this table does not know still gets its one member.
   expect(toolMembers('nightly_rollup')).toEqual(['call']);

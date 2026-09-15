@@ -122,7 +122,7 @@ function fakeModel(
 }
 
 /** A model whose non-streaming call never resolves — the test's stand-in for a
- *  detached `run` that started a server: the work is genuinely alive, and it is
+ *  detached `shell` that started a server: the work is genuinely alive, and it is
  *  never going to settle. */
 function hangingModel(): LanguageModel {
   const base = fakeModel('unused');
@@ -499,7 +499,7 @@ async function captureSettleTimings(run: () => Promise<void>): Promise<{ evoluti
   return timings;
 }
 
-/** The lines one named `diagnostics.failure` wrote while `run` ran — the same
+/** The lines one named `diagnostics.failure` wrote while `shell` ran — the same
  *  door captureSettleTimings uses, because a lane that reports its failure
  *  nowhere else is only provable from the stream it actually writes to. */
 async function captureFailures(event: string, run: () => Promise<void>): Promise<string[]> {
@@ -2012,7 +2012,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('recoverBackgroundJobs fails + wakes an orphaned job of a non-resumable kind, clears stale fibers', async () => {
     const { db, rt, session, events } = setup();
     // Simulate a previous CLI exit mid-background-job: a running job + its
-    // interrupted bg:* fiber row (stashed phase 'running'). `run` has partial
+    // interrupted bg:* fiber row (stashed phase 'running'). `shell` has partial
     // side effects, so it declines the resume and fails as before.
     //
     // BOTH ROWS UNDER THE RECOVERING ACTOR. `detectOrphanedFibers` reads this
@@ -2021,8 +2021,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // workspace mints the same `bg:*` lane names. A row planted under any other
     // owner is not an orphan this session can see: the sweep returns an empty
     // set, `recover` is never reached, and the test would assert nothing.
-    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-x', 'run', 'build', 'running', 1)`);
-    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"run"}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-x', 'shell', 'build', 'running', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f1', 'bg:run', '{"phase":"running","jobId":"bgjob-x","kind":"shell"}', 1)`);
 
     await session.recoverBackgroundJobs();
 
@@ -2119,8 +2119,8 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // AND the wake turn it enqueues before the caller closes.
     const { db, rt, session, events } = setup('synthesized the background result');
     // A non-resumable orphaned job: recover fails it, then wakes the agent.
-    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-w', 'run', 'build', 'running', 1)`);
-    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fw', 'bg:run', '{"phase":"running","jobId":"bgjob-w","kind":"run"}', 1)`);
+    db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-w', 'shell', 'build', 'running', 1)`);
+    db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fw', 'bg:run', '{"phase":"running","jobId":"bgjob-w","kind":"shell"}', 1)`);
 
     await session.recoverBackgroundJobs();
     // Awaiting this must not resolve until the wake turn has run start→end — no
@@ -2142,7 +2142,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('settleBackgroundWork gives up on work that never settles, and leaves it running', async () => {
-    // The regression this pins: `kinu exec` detaches a server-style `run`
+    // The regression this pins: `kinu exec` detaches a server-style `shell`
     // (a VM, a package server, a training job), the agent correctly ends its
     // turn, and the process then blocked on Promise.allSettled over a fiber
     // that never settles — 6.4 of 16.2 agent-hours of dead idle across a
@@ -2325,7 +2325,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     );
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'busy-${i}', 'run', 'build', 'running', 1)`);
+      db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'busy-${i}', 'shell', 'build', 'running', 1)`);
     }
 
     await session.send('start another one');
@@ -2349,7 +2349,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // Full parity with the DO surface: execution + durable state + delegation.
     // No `skills` — read/create/edit/delete are workspace.readFile/writeFile/
     // readdir/exec calls now, not a separate tool.
-    for (const t of ['run', 'eval', 'memory', 'agents']) expect(names).toContain(t);
+    for (const t of ['shell', 'eval', 'memory', 'agents']) expect(names).toContain(t);
     expect(names).not.toContain('skills');
     // ...and the keyed-fact actions ride the one durable-state tool.
     expect(names).not.toContain('fact');
@@ -5244,7 +5244,7 @@ function runThenAnswerModel(confirmWith: 'text' | 'tool' = 'text'): LanguageMode
   };
 
   const call = (controller: ReadableStreamDefaultController, id: string, command: string) => {
-    controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'run', input: JSON.stringify({ command }) });
+    controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'shell', input: JSON.stringify({ command }) });
     controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
   };
 

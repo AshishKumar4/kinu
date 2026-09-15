@@ -89,7 +89,7 @@ export async function clampToolResult(
     : '';
 
   // The marker promises workspace.readFile, which reads the same filesystem
-  // the run tool's `workspace` shell runs over on every backend — so the
+  // the shell tool's `workspace` shell runs over on every backend — so the
   // model can also grep the file it names.
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +

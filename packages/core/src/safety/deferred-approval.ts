@@ -132,7 +132,7 @@ export interface DeferredApproval {
 /**
  * What the gate learns when it consults the queue about a command.
  *
- * `run` is the ONLY verdict that lets execution proceed, and reaching it has
+ * `shell` is the ONLY verdict that lets execution proceed, and reaching it has
  * already spent the grant — so a second attempt at the same command parks
  * again rather than riding one approval twice. It names the spend it made,
  * because the gate has to close that spend once it knows whether the command

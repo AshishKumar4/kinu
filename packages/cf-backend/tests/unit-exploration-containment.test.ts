@@ -138,7 +138,7 @@ describe('head tool surface — containment', () => {
   test('a head reaches the real workspace: eval and run are present', () => {
     const { tools } = buildSurface();
     expect(tools.eval).toBeDefined();
-    expect(tools.run).toBeDefined();
+    expect(tools.shell).toBeDefined();
 
     // The tools that lied about being a sandbox are gone — the real planes
     // are reached through eval/run instead.
@@ -220,8 +220,8 @@ describe('head tool surface — containment', () => {
   });
 
   test('allowedTools narrows the surface further, never widens it', () => {
-    const { tools } = buildSurface({ input: headInput({ allowedTools: ['run', 'record_evidence', 'think'] }) });
-    expect(Object.keys(tools).sort()).toEqual(['record_evidence', 'run']);
+    const { tools } = buildSurface({ input: headInput({ allowedTools: ['shell', 'record_evidence', 'think'] }) });
+    expect(Object.keys(tools).sort()).toEqual(['record_evidence', 'shell']);
   });
 
   test('builtin tool calls land in the HeadCapture so the report keeps them', async () => {

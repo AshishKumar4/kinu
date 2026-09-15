@@ -1,13 +1,13 @@
 /**
  * explainNativeToolReferenceError — the codemode sandbox's undefined-
  * identifier hint (D of the observability audit, 2026-08-12). A model that
- * reaches for a native top-level tool (`run`, `agents`, ...) as if it were a
+ * reaches for a native top-level tool (`shell`, `agents`, ...) as if it were a
  * codemode global gets a bare V8 ReferenceError today; this rewrites exactly
  * that shape into an actionable correction and leaves every other error
  * (real bugs, thrown provider errors, timeouts) untouched.
  *
  * Where the capability actually IS is read from TOOL_REACH, never a hardcoded
- * `name === 'run'` branch pointing at `workspace.exec` with every other native
+ * `name === 'shell'` branch pointing at `workspace.exec` with every other native
  * tool told "it is not reachable from inside eval" — a sentence that
  * is FALSE for the six that own a codemode namespace and for `file`, whose
  * bytes are `workspace.readFile`/`writeFile`/`editFile`. The per-tool test
@@ -45,8 +45,8 @@ test('recovered host failures retain each binding in the census without failing 
 
   const outcome = successfulToolOutcome('eval', output);
   expect(outcome.success).toBe(true);
-  const census = censusToolFailures([{ type: 'tool_call_end', runId: 'run', eventIndex: 0, timestamp: new Date(0).toISOString(), name: 'eval', toolCallId: 'call', outcome }]);
-  expect(census.byKey).toEqual([['file·unavailable', 1], ['run·exit_1', 1]]);
+  const census = censusToolFailures([{ type: 'tool_call_end', runId: 'shell', eventIndex: 0, timestamp: new Date(0).toISOString(), name: 'eval', toolCallId: 'call', outcome }]);
+  expect(census.byKey).toEqual([['file·unavailable', 1], ['shell·exit_1', 1]]);
 });
 
 test('throwing the failure value propagates its native reason and a malformed program remains a ReferenceError', async () => {
@@ -82,10 +82,10 @@ describe('explainNativeToolReferenceError', () => {
     }
   });
 
-  test('run and file point at workspace; the six namespace owners point at themselves', () => {
+  test('shell and file point at workspace; the six namespace owners point at themselves', () => {
     // Spelled out rather than only derived, so the derivation above cannot pass
     // by agreeing with a declaration that is itself wrong.
-    expect(explainNativeToolReferenceError('run is not defined')).toContain('`workspace` namespace');
+    expect(explainNativeToolReferenceError('shell is not defined')).toContain('`workspace` namespace');
     expect(explainNativeToolReferenceError('file is not defined')).toContain('`workspace` namespace');
 
     for (const name of ['agents', 'memory', 'tasks', 'web', 'report'] as const) {

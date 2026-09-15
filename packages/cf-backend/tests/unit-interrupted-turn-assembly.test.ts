@@ -23,7 +23,7 @@ const interruptedHistory: ModelMessage[] = [
   { role: 'user', content: 'check the repo' },
   { role: 'assistant', content: [
     { type: 'text', text: 'checking the tree' },
-    { type: 'tool-call', toolCallId: ORPHAN_ID, toolName: 'run', input: { command: 'git status' } },
+    { type: 'tool-call', toolCallId: ORPHAN_ID, toolName: 'shell', input: { command: 'git status' } },
   ] },
   { role: 'user', content: 'hello?' },
 ];

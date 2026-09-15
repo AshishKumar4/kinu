@@ -838,7 +838,7 @@ export {
   type ClampToolResultOptions,
 } from './tools/clamp';
 
-export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer';
+export { handRolledFileWrite, createFileToolSteer } from './tools/shell-file-steer';
 
 export {
   toCraftedToolSource,

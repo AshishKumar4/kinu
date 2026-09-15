@@ -15,7 +15,7 @@ function ev(event: RunEventInput): RunEvent {
 
 describe('toolKindFor', () => {
   test('maps tool names to runtime/mcts/skills/tool-call', () => {
-    expect(toolKindFor('run')).toBe('runtime-exec');
+    expect(toolKindFor('shell')).toBe('runtime-exec');
     expect(toolKindFor('think')).toBe('mcts');
     expect(toolKindFor('skills')).toBe('skills');
     expect(toolKindFor('eval')).toBe('tool-call');
@@ -79,12 +79,12 @@ describe('runEventToSpan', () => {
   });
 
   test('tool calls map by tool name and carry latency on end', () => {
-    expect(runEventToSpan(ev({ type: 'tool_call_end', name: 'run', args: { command: 'ls' }, toolCallId: 'tc0', outcome: { success: true } })).kind).toBe('runtime-exec');
+    expect(runEventToSpan(ev({ type: 'tool_call_end', name: 'shell', args: { command: 'ls' }, toolCallId: 'tc0', outcome: { success: true } })).kind).toBe('runtime-exec');
     const end = runEventToSpan(ev({ type: 'tool_call_end', name: 'eval', toolCallId: 'tc1', durationMs: 42, outcome: { success: true } }));
     expect(end.kind).toBe('tool-call');
     expect(end.elapsedMs).toBe(42);
     expect(end.label).toBe('eval');
-    const failed = runEventToSpan(ev({ type: 'tool_call_end', name: 'run', toolCallId: 'tc2', error: 'nonzero exit', outcome: { success: false, reason: 'io', execution: { exitCode: 1 } } }));
+    const failed = runEventToSpan(ev({ type: 'tool_call_end', name: 'shell', toolCallId: 'tc2', error: 'nonzero exit', outcome: { success: false, reason: 'io', execution: { exitCode: 1 } } }));
     expect(failed.label).toBe('run failed');
     expect(failed.detail).toBe('nonzero exit');
   });

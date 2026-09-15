@@ -45,11 +45,11 @@ function toolExchange(id: string, output: string): ModelMessage[] {
   return [
     {
       role: 'assistant',
-      content: [{ type: 'tool-call', toolCallId: id, toolName: 'run', input: { command: `cat log-${id}` } }],
+      content: [{ type: 'tool-call', toolCallId: id, toolName: 'shell', input: { command: `cat log-${id}` } }],
     },
     {
       role: 'tool',
-      content: [{ type: 'tool-result', toolCallId: id, toolName: 'run', output: { type: 'text', value: output } }],
+      content: [{ type: 'tool-result', toolCallId: id, toolName: 'shell', output: { type: 'text', value: output } }],
     },
   ];
 }

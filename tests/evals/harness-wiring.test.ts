@@ -71,7 +71,7 @@ const LLM: LLMProviderConfig = {
 const ARM: EvalArmState = {
   evolution: true,
   settle: 'none',
-  tools: ['eval', 'run', 'file', 'agents', 'memory', 'tasks', 'web', 'report'],
+  tools: ['eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'report'],
 };
 
 /**
@@ -83,7 +83,7 @@ const ARM: EvalArmState = {
  */
 type ScriptedStep =
   | { readonly tool: 'eval'; readonly input: { readonly code: string } }
-  | { readonly tool: 'run'; readonly input: { readonly command: string } }
+  | { readonly tool: 'shell'; readonly input: { readonly command: string } }
   | {
       readonly tool: 'file';
       readonly input: {
@@ -251,10 +251,10 @@ test('the SDK step collector pairs outcomes by call id and never interprets resu
   log.onStepFinish({
     toolCalls: [
       { type: 'tool-call', toolCallId: 'first', toolName: 'file', input: {} },
-      { type: 'tool-call', toolCallId: 'second', toolName: 'run', input: {} },
+      { type: 'tool-call', toolCallId: 'second', toolName: 'shell', input: {} },
     ],
     content: [
-      { type: 'tool-error', toolCallId: 'second', toolName: 'run', input: {}, error: new Error('invocation failed') },
+      { type: 'tool-error', toolCallId: 'second', toolName: 'shell', input: {}, error: new Error('invocation failed') },
       { type: 'tool-result', toolCallId: 'first', toolName: 'file', input: {}, output: { error: 'ordinary file contents' } },
     ],
   });
@@ -756,7 +756,7 @@ describe('tool-failure attribution over a real turn', () => {
     await run('attrib-codemode', [
       { tool: 'eval', input: { code: 'const failure = await workspace.readFile("/absent-codemode-file"); if (failure.success === false) return "recovered"; throw new Error("expected failure");' } },
       { tool: 'eval', input: { code: 'return await tools.file({ action: "read", path: "/absent-codemode-file" });' } },
-      { tool: 'eval', input: { code: 'return await tools.run({ runtime: "sandbox", command: "pwd" });' } },
+      { tool: 'eval', input: { code: 'return await tools.shell({ runtime: "sandbox", command: "pwd" });' } },
     ], ['workspace']);
     const db = opened.at(-1);
 
@@ -767,7 +767,7 @@ describe('tool-failure attribution over a real turn', () => {
     const keys = Object.fromEntries(census.byKey);
     expect(keys['file·missing']).toBe(1);
     expect(keys['file·read·missing']).toBe(1);
-    expect(keys['run·unavailable']).toBe(1);
+    expect(keys['shell·unavailable']).toBe(1);
     expect(census.failures).toHaveLength(3);
     expect(census.failures.some((failure) => failure.tool === 'eval')).toBe(false);
   }, 60_000);
@@ -796,10 +796,10 @@ describe('tool-failure attribution over a real turn', () => {
       // transient — bun is registered only by the HOSTED Nimbus session and has
       // no installable runtime package — and it is why `ws-fix-broken`'s
       // failures are a platform gap rather than the agent finding a broken test.
-      { tool: 'run', input: { command: 'node -e "process.exit(1)"' } },
+      { tool: 'shell', input: { command: 'node -e "process.exit(1)"' } },
       // (4) THE WORKSPACE HAS NO SUCH PROGRAM: the shell's own 127. Nothing ran
       // the work, and nothing is broken — the program was never there.
-      { tool: 'run', input: { command: 'definitely-not-a-real-command --x' } },
+      { tool: 'shell', input: { command: 'definitely-not-a-real-command --x' } },
     ], ['workspace']);
 
     const db = opened[opened.length - 1];
@@ -831,9 +831,9 @@ describe('tool-failure attribution over a real turn', () => {
     expect(keys['file·edit·not_found']).toBe(1);
 
     // (3) the work failing and (4) the tool never running it are DIFFERENT rows
-    // with different reasons, both under `run`, which has no action.
-    expect(keys['run·exit_1']).toBe(1);
-    expect(keys['run·command_not_found']).toBe(1);
+    // with different reasons, both under `shell`, which has no action.
+    expect(keys['shell·exit_1']).toBe(1);
+    expect(keys['shell·command_not_found']).toBe(1);
 
     // THE SPLIT, four disjoint ways. Pooling these into "4 failures" is what
     // made a working FAIL-loudly contract read as four defects — and folding the

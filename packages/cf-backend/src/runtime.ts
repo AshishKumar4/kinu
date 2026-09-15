@@ -539,7 +539,7 @@ export function createCFRuntime(
   const identity = createIdentity(actor.actor, originVfs, sql, actor.scaffoldPath);
 
   // Execution router — manages workspace plus the separate sandbox and laptop.
-  // Live shell-approval policy every gated exec boundary consults (`run`'s
+  // Live shell-approval policy every gated exec boundary consults (`shell`'s
   // workspace/router dispatch and every ExecutorProvider's exec — see
   // execution/approval.ts). `mode` reads actor_config directly off the SAME
   // store the memory backfill above already opened, so a setShellApprovalMode

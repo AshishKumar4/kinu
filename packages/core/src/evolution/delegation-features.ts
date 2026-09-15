@@ -104,7 +104,7 @@ function blockEquals(prints: ReadonlyArray<string>, a: number, b: number, length
  * Path effects readable from a call's arguments. Files are touched three ways:
  * the `file` tool (the native file plane, whose path is a typed field read by
  * `fileToolPath` below), code-mode (`workspace.readFile` / `workspace.writeFile`,
- * the documented VFS surface) and `run` shell commands. The two text
+ * the documented VFS surface) and `shell` shell commands. The two text
  * vocabularies here cover the last two. Deliberately narrow: a missed effect
  * costs one missed signal, an invented one would poison the evidence line this
  * module feeds.

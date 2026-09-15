@@ -69,7 +69,7 @@ export function backgroundJobWakeTrigger(jobId: string): string {
   return `background-job-wake:${jobId}`;
 }
 
-/** Thrown by a resumer for a kind it cannot re-drive (e.g. `run`/`eval`,
+/** Thrown by a resumer for a kind it cannot re-drive (e.g. `shell`/`eval`,
  *  whose partial side effects make blind re-execution unsafe). The runner treats
  *  it as "not resumable" → the job is failed with the eviction message, exactly
  *  as before this recovery path existed. A closed signal, not a bare Error. */
@@ -103,7 +103,7 @@ export type JobResumer = (
  * have RIGHT NOW", read out of the durable rows the work already wrote.
  *
  * Null when the kind has nothing partial to give, which is the honest answer for a
- * side-effecting call: `run` and `eval` either happened or did not.
+ * side-effecting call: `shell` and `eval` either happened or did not.
  */
 export type JobHarvester = (
   kind: string,
@@ -245,7 +245,7 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
     }
   }
 
-  if (kind === 'run') {
+  if (kind === 'shell') {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
@@ -562,7 +562,7 @@ export class BackgroundJobRunner {
     // Three outcomes, because a kind that cannot be re-driven is neither a
     // success nor a crash: it is the LAST word on a job whose work already
     // happened, so it settles with what that work produced rather than with a
-    // failure string over it. A `run` has nothing partial and fails saying so; a
+    // failure string over it. A `shell` has nothing partial and fails saying so; a
     // search that had measured two candidates hands them back.
     type Recorded =
       | { readonly kind: 'settled'; readonly result: T }

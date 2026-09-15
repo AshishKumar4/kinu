@@ -15,10 +15,10 @@ import { createRecordingLogger } from '../../../src/obs/log';
 const log = createRecordingLogger();
 
 // No fields at all.
-log.event('run.escalated');
+log.event('shell.escalated');
 
 // Scalars, inline.
-log.event('run.escalated', { runtime: 'sandbox', attempts: 2, reused: true });
+log.event('shell.escalated', { runtime: 'sandbox', attempts: 2, reused: true });
 
 // A fields object held in an annotated variable, which is what most call sites
 // that build their fields conditionally end up with.
@@ -29,28 +29,28 @@ interface EscalationFields {
 
 const fields: EscalationFields = { runtime: 'sandbox', attempts: 1 };
 
-log.event('run.escalated', fields);
+log.event('shell.escalated', fields);
 
 // A Record whose keys are CLOSED. Enumerable keys are the whole requirement; a
 // Record is only rejected when its key type is `string` or `number`. `declare`
 // because the TYPE is the subject here, not the value.
 declare const closedKeys: Record<'runtime' | 'attempts', string>;
 
-log.event('run.escalated', closedKeys);
+log.event('shell.escalated', closedKeys);
 
 // A union-typed value, which is what a classification field actually is.
 type Outcome = 'ok' | 'failed' | 'refused';
 
 const outcome: Outcome = 'refused';
 
-log.event('run.escalated', { outcome, runtime: 'laptop' });
+log.event('shell.escalated', { outcome, runtime: 'laptop' });
 
 // A spread of a clean object, plus an extra field.
-log.event('run.escalated', { ...fields, reused: false });
+log.event('shell.escalated', { ...fields, reused: false });
 
 // A failure carries its classification, and fields are optional there too.
 const failure = new KinuError('unavailable', 'runtime_not_provisioned');
 
-log.failure('run.escalation_refused', failure);
+log.failure('shell.escalation_refused', failure);
 
-log.failure('run.escalation_refused', failure, { runtime: 'sandbox' });
+log.failure('shell.escalation_refused', failure, { runtime: 'sandbox' });

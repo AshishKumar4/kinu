@@ -249,7 +249,7 @@ function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutor
 function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
 
-  if (!hasTool(tools, 'eval') && !hasTool(tools, 'run')) return '';
+  if (!hasTool(tools, 'eval') && !hasTool(tools, 'shell')) return '';
 
   const executors = surface.selectableExecutors;
   const laptopOffline = offlineLaptop(surface.executors);
@@ -313,12 +313,12 @@ function renderAgentStateSection(surface: PromptSurface, render: RenderSection):
     }));
   }
 
-  if (hasTool(tools, 'run') || hasTool(tools, 'eval') || hasTool(tools, 'agents')) {
+  if (hasTool(tools, 'shell') || hasTool(tools, 'eval') || hasTool(tools, 'agents')) {
     parts.push(render(BACKGROUND_WORK_SECTION, {}));
   }
 
   parts.push(render(VERIFICATION_SECTION, {
-    hasShell: hasTool(tools, 'run') || hasTool(tools, 'eval'),
+    hasShell: hasTool(tools, 'shell') || hasTool(tools, 'eval'),
   }));
   parts.push(render(OUTPUT_FORMAT_SECTION, {}));
 

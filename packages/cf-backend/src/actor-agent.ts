@@ -1325,7 +1325,7 @@ export abstract class ActorAgent extends Think<Env> {
   /**
    * The temporary rung's port, built ONCE per actor.
    *
-   * The lifetime is the point: `run` parks a waiter here and the report ingress
+   * The lifetime is the point: `shell` parks a waiter here and the report ingress
    * resolves it, and those are two different calls on the same isolate. A port
    * rebuilt per call would hand the ingress an empty waiter map and leave every
    * ask hanging on an answer that had already arrived.
@@ -4325,7 +4325,7 @@ export abstract class ActorAgent extends Think<Env> {
    * answered conservatively in one direction only: a wrong `true` costs a warm
    * container, a wrong `false` pulls the filesystem out from under running work.
    * Every source below is therefore admitted on "may use", never on "will use" —
-   * a `run` and an `eval` reach the container directly, and every other
+   * a `shell` and an `eval` reach the container directly, and every other
    * kind of work can call one.
    *
    * Four durable sources plus one in-memory one, and each answers a question
@@ -6006,7 +6006,7 @@ export abstract class ActorAgent extends Think<Env> {
         // counters ride the accumulator, so the cached toolset sees the turn's
         // ledger and the reset rides the turn's own accounting.
         fileLedger: this.acc.files,
-        // Same turn-scoped ownership as fileLedger: the `run` dispatch records
+        // Same turn-scoped ownership as fileLedger: the `shell` dispatch records
         // each escalation decision here, and the settle spine above writes the
         // durable row.
         escalations: this.acc.escalations,

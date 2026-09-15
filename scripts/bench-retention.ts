@@ -135,7 +135,7 @@ export interface RunRetention {
   finish(report: JsonValue): void;
 }
 
-const RUN_FILE = 'run.json';
+const RUN_FILE = 'shell.json';
 
 const ATTEMPTS_FILE = 'attempts.jsonl';
 

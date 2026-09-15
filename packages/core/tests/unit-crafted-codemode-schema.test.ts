@@ -110,7 +110,7 @@ describe('Phase D — crafted tools reach the eval builder under tools.*', () =>
     const resolved = captured.craftedTools();
     expect(Object.keys(resolved)).toContain('double');
     // The builder sees the finished native surface it declares as `tools.*`.
-    expect(Object.keys(captured.native)).toEqual(expect.arrayContaining(['run', 'file', 'memory', 'tasks']));
+    expect(Object.keys(captured.native)).toEqual(expect.arrayContaining(['shell', 'file', 'memory', 'tasks']));
 
     // Entry shape — description and execute
     const doubleEntry = resolved.double;

@@ -1018,7 +1018,7 @@ export class OrchestratorAgent extends ActorAgent {
    * as a sibling of its own parent.
    *
    * No `temporary` port, and that absence is a boundary rather than an
-   * oversight: the port holds live `run` promises and must outlive the turn
+   * oversight: the port holds live `shell` promises and must outlive the turn
    * that parked them, and the one the report ingress resolves waiters through
    * is the HIRING actor's. So a hosted actor gets the two durable rungs — hire,
    * ask by name, send, list, dismiss — and no role-targeted temporary of its
@@ -4182,7 +4182,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Change how the `run` builtin handles 'gate' decisions from the
+   * Change how the `shell` builtin handles 'gate' decisions from the
    * approval-gate review. Stored in actor_config; effective on the NEXT
    * turn (the tool cache rebuilds when CraftStore changes — and on cold-
    * start any value here is read).

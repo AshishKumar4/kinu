@@ -11,7 +11,7 @@ export function buildBlockImage(image: string): void {
 }
 
 export function copyBlockProbe(image: string, destination: string): void {
-  const result = spawnSync('docker', ['run', '--rm', '--entrypoint', '/bin/cat', image, '/usr/local/bin/devbox-block-lower'],
+  const result = spawnSync('docker', ['shell', '--rm', '--entrypoint', '/bin/cat', image, '/usr/local/bin/devbox-block-lower'],
     { maxBuffer: 16 * 1024 * 1024 });
 
   if (result.status !== 0) throw new Error(result.stderr.toString());

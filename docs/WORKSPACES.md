@@ -80,7 +80,7 @@ actors that work inside it.
   authoritative Nimbus filesystem. A LOCAL workspace keeps TWO planes,
   deliberately: agent state (SOUL.md, scaffold, memory, craft store,
   conversation, every ledger) always lives in its own SQLite-backed
-  filesystem, while the WORKSPACE plane that `file`, `run`, `eval`
+  filesystem, while the WORKSPACE plane that `file`, `shell`, `eval`
   and AGENTS.md address binds to the directory on the agent's ref
   (`CLIRuntimeConfig.cwd`, never `process.cwd()`). With no directory bound,
   both planes are the one in-SQLite tree an isolated fixture or eval episode

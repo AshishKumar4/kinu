@@ -103,7 +103,7 @@ export function getShellApprovalMode(config: AgentConfigStore) {
 }
 
 /**
- * How the `run` builtin handles 'gate' decisions from the approval-gate
+ * How the `shell` builtin handles 'gate' decisions from the approval-gate
  * review. Effective on the next turn, once `onChanged` has dropped the tool
  * surface the old mode built.
  *

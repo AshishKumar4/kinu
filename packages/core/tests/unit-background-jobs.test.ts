@@ -38,7 +38,7 @@ describe('BackgroundJobStore', () => {
 
   test('fail marks failed; list reflects state', () => {
     const s = newStore();
-    s.create({ id: 'a', kind: 'run', workMode: 'build', now: 1 });
+    s.create({ id: 'a', kind: 'shell', workMode: 'build', now: 1 });
     s.create({ id: 'b', kind: 'think', workMode: 'build', now: 2 });
     s.fail('a', 0, 'boom', 3);
     expect(s.get('a')?.status).toBe('failed');
@@ -52,7 +52,7 @@ describe('BackgroundJobStore', () => {
     // crowd the still-running work out of the block entirely.
     const s = newStore();
 
-    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', workMode: 'build', now: i });
+    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'shell', workMode: 'build', now: i });
     s.settle('j1', 0, 'ok', 9);
     s.fail('j3', 0, 'boom', 9);
     expect(s.listRunning().items.map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
@@ -164,14 +164,14 @@ describe('BackgroundJobStore', () => {
 
   test('replacement creation and retry lineage are one durable write', () => {
     const s = newStore();
-    s.create({ id: 'failed', kind: 'run', workMode: 'build', input: '{}', now: 1 });
+    s.create({ id: 'failed', kind: 'shell', workMode: 'build', input: '{}', now: 1 });
     s.fail('failed', 0, 'boom', 2);
     expect(s.createRetry({
-      sourceId: 'failed', id: 'replacement-1', kind: 'run',
+      sourceId: 'failed', id: 'replacement-1', kind: 'shell',
       workMode: 'build', input: '{}', now: 3,
     })).toBe(true);
     expect(s.createRetry({
-      sourceId: 'failed', id: 'replacement-2', kind: 'run',
+      sourceId: 'failed', id: 'replacement-2', kind: 'shell',
       workMode: 'build', input: '{}', now: 4,
     })).toBe(false);
     expect(s.get('failed')?.retriedBy).toBe('replacement-1');
@@ -181,7 +181,7 @@ describe('BackgroundJobStore', () => {
 
   test('dismiss removes only settled jobs; clearSettled keeps running ones', () => {
     const s = newStore();
-    s.create({ id: 'run1', kind: 'run', workMode: 'build', now: 1 });
+    s.create({ id: 'run1', kind: 'shell', workMode: 'build', now: 1 });
     s.create({ id: 'done1', kind: 'think', workMode: 'build', now: 2 });
     s.settle('done1', 0, 'ok', 3);
     // Can't dismiss a running job.
@@ -271,7 +271,7 @@ describe('withBackgroundThreshold', () => {
   });
 
   test('a refused detach keeps the same live work foreground-owned through completion', async () => {
-    const out = await withBackgroundThreshold('run', async () => {
+    const out = await withBackgroundThreshold('shell', async () => {
       await delay(80);
 
       return 'completed after the capacity refusal';
@@ -284,7 +284,7 @@ describe('withBackgroundThreshold', () => {
   });
 
   test('a refused detach preserves a later tool failure', async () => {
-    await expect(withBackgroundThreshold('run', async () => {
+    await expect(withBackgroundThreshold('shell', async () => {
       await delay(40);
       throw new Error('failed after the capacity refusal');
     }, {
@@ -294,7 +294,7 @@ describe('withBackgroundThreshold', () => {
   });
 
   test('fast rejection propagates inline (no background)', async () => {
-    await expect(withBackgroundThreshold('run', async () => { throw new Error('quick fail'); }, {
+    await expect(withBackgroundThreshold('shell', async () => { throw new Error('quick fail'); }, {
       thresholdMs: 1000,
       onThreshold: () => { throw new Error('should not detach'); },
     })).rejects.toThrow('quick fail');
@@ -305,7 +305,7 @@ describe('withBackgroundThreshold', () => {
     // human is waiting on, never an unbounded inline wait.
     expect(BACKGROUND_POLICY.interactive.detachAfterMs).toBe(30_000);
 
-    const out = await withBackgroundThreshold('run', async () => 'inline', {
+    const out = await withBackgroundThreshold('shell', async () => 'inline', {
       onThreshold: () => { throw new Error('should not detach'); },
     });
 

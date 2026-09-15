@@ -207,7 +207,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     const turn = makeTurn({
       turnId: 'exec-1',
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     });
 
     await engine.reviewTurn(turn, null);
@@ -234,7 +234,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     });
 
     const acted: Partial<CompletedTurn> = {
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     };
 
     const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
@@ -270,7 +270,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
 
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-2', hadError: true,
-      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
+      toolCalls: [{ name: 'shell', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
     }), null);
 
     const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
@@ -289,7 +289,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const engine = new EvolutionEngine(rt);
     await engine.reviewTurn(makeTurn({
       turnId: 'exec-3', hadError: true,
-      toolCalls: [{ name: 'run', args: {}, result: { error: 'boom' } }],
+      toolCalls: [{ name: 'shell', args: {}, result: { error: 'boom' } }],
     }), null);
 
     const k = alignmentConvergence(rt.storage.sql, rt.actor);

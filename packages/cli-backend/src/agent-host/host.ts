@@ -274,7 +274,7 @@ interface HostEntry {
   eventLog: EventLog;
   roster: SubordinateRosterStore;
   /** The ONE temporary-agent port for this actor. It holds the live waiters, so
-   *  it is built with the entry and never per call: `run` parks on it and the
+   *  it is built with the entry and never per call: `shell` parks on it and the
    *  report ingress resolves it. */
   temporary: TemporaryAgentPort;
   team: TeamToolDeps | null;

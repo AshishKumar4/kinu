@@ -5,7 +5,7 @@
  * sees:
  *
  *   tools.<name>(input)   EVERY tool the agent has on this turn — the native
- *                         builtins (`file`, `run`, `memory`, `tasks`, `web`,
+ *                         builtins (`file`, `shell`, `memory`, `tasks`, `web`,
  *                         `agents`, `report`, …) with the same input object
  *                         the native call takes, and every crafted tool the
  *                         agent saved with `workspace.createTool`, called with
@@ -209,7 +209,7 @@ export function renderToolsDeclaration(
  * surface, called with the one input object the native call takes. Anything
  * else answers a refusal that names the call. The tool's answer crosses the
  * sandbox boundary as JSON, which `decodeJsonValue` establishes. Both sandboxes
- * bind this; a program's `tools.run(input)` reaches the same `run` the model
+ * bind this; a program's `tools.shell(input)` reaches the same `shell` the model
  * calls natively.
  */
 export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
@@ -246,7 +246,7 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
 
   const tool = namespace === CRAFTED_TOOL_NAMESPACE ? member
-    : owner?.[0] ?? (member === 'exec' ? 'run' : ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'].includes(member) ? 'file' : `${namespace}.${member}`);
+    : owner?.[0] ?? (member === 'exec' ? 'shell' : ['readFile', 'writeFile', 'editFile', 'readdir', 'exists', 'stat', 'mkdir', 'remove'].includes(member) ? 'file' : `${namespace}.${member}`);
 
   const call = bindProgramCall({ tool, action: owner === undefined ? null : member }, async (...args: unknown[]) => {
     const value = await invoke(...args);

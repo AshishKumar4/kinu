@@ -372,7 +372,7 @@ describe('route-shaped run events score through the production instruments', () 
     expect(totals.toolCalls).toBe(4);
     expect(totals.steps).toBe(2);
     expect(totals.tokensIn).toBe(2_700);
-    expect(totals.toolNames).toEqual(['file', 'run', 'file', 'run']);
+    expect(totals.toolNames).toEqual(['file', 'shell', 'file', 'shell']);
   });
 
   test('every instrument scores, and the failing tool call is counted as one', () => {
@@ -431,9 +431,9 @@ describe('route-shaped run events score through the production instruments', () 
     expect(provenance.totalEvents).toBe(LEDGER_EVENTS.length);
     expect(provenance.events.map((event) => event.eventIndex))
       .toEqual(LEDGER_EVENTS.map((event) => event.eventIndex));
-    // The failing `run` keeps its CLASS and its name; the clean one keeps no class.
+    // The failing `shell` keeps its CLASS and its name; the clean one keeps no class.
     const calls = provenance.events.filter((event) => event.type === 'tool_call_end');
-    expect(calls.map((event) => event.name)).toEqual(['file', 'run', 'file', 'run']);
+    expect(calls.map((event) => event.name)).toEqual(['file', 'shell', 'file', 'shell']);
     expect(calls.map((event) => event.failureClass ?? null)).toEqual([null, 'exit_1', null, null]);
     expect(calls.map((event) => event.durationMs)).toEqual([12, 900, 20, 850]);
     expect(calls[1]?.outcome).toEqual({ success: false, reason: null, execution: { exitCode: 1 } });
@@ -473,7 +473,7 @@ describe('route-shaped run events score through the production instruments', () 
     expect(lines).toHaveLength(LEDGER_EVENTS.length);
     const events = lines.map((line) => v.parse(RunEventSchema, JSON.parse(line)));
     expect(ledgerTotalsFromEvents(events)).toEqual({
-      turns: 2, toolCalls: 4, toolNames: ['file', 'run', 'file', 'run'],
+      turns: 2, toolCalls: 4, toolNames: ['file', 'shell', 'file', 'shell'],
       tokensIn: 2700, tokensOut: 520, reasoningOut: 0, steps: 2, failures: ['run: exit_1'],
     });
     expect(JSON.parse(readFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), 'utf8'))).toEqual(history);

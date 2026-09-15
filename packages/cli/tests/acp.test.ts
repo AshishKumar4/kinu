@@ -239,8 +239,8 @@ describe('kinu acp — prompt turn', () => {
   test('a tool call is reported with its id, kind and title, then settled as completed', async () => {
     const fake = fakeClient({
       events: [
-        { type: 'tool-call', toolName: 'run', toolCallId: 'tc-1', args: { command: 'ls -la' } },
-        { type: 'tool-result', toolName: 'run', toolCallId: 'tc-1', result: 'a\nb', success: true },
+        { type: 'tool-call', toolName: 'shell', toolCallId: 'tc-1', args: { command: 'ls -la' } },
+        { type: 'tool-result', toolName: 'shell', toolCallId: 'tc-1', result: 'a\nb', success: true },
       ],
     });
 
@@ -255,7 +255,7 @@ describe('kinu acp — prompt turn', () => {
       sessionUpdate: 'tool_call',
       toolCallId: 'tc-1',
       kind: 'execute',
-      // `run` shows the command, because that is what a user is judging.
+      // `shell` shows the command, because that is what a user is judging.
       title: 'ls -la',
       status: 'in_progress',
     }));
@@ -269,8 +269,8 @@ describe('kinu acp — prompt turn', () => {
   test('a failed tool settles as failed rather than completed', async () => {
     const fake = fakeClient({
       events: [
-        { type: 'tool-call', toolName: 'run', toolCallId: 'tc-9', args: { command: 'false' } },
-        { type: 'tool-result', toolName: 'run', toolCallId: 'tc-9', result: 'exit 1', success: false, reason: null },
+        { type: 'tool-call', toolName: 'shell', toolCallId: 'tc-9', args: { command: 'false' } },
+        { type: 'tool-result', toolName: 'shell', toolCallId: 'tc-9', result: 'exit 1', success: false, reason: null },
       ],
     });
 
@@ -289,10 +289,10 @@ describe('kinu acp — prompt turn', () => {
   test('concurrent calls to the same tool settle independently by id', async () => {
     const fake = fakeClient({
       events: [
-        { type: 'tool-call', toolName: 'run', toolCallId: 'a', args: { command: 'one' } },
-        { type: 'tool-call', toolName: 'run', toolCallId: 'b', args: { command: 'two' } },
-        { type: 'tool-result', toolName: 'run', toolCallId: 'b', result: 'second', success: true },
-        { type: 'tool-result', toolName: 'run', toolCallId: 'a', result: 'first', success: false, reason: null },
+        { type: 'tool-call', toolName: 'shell', toolCallId: 'a', args: { command: 'one' } },
+        { type: 'tool-call', toolName: 'shell', toolCallId: 'b', args: { command: 'two' } },
+        { type: 'tool-result', toolName: 'shell', toolCallId: 'b', result: 'second', success: true },
+        { type: 'tool-result', toolName: 'shell', toolCallId: 'a', result: 'first', success: false, reason: null },
       ],
     });
 

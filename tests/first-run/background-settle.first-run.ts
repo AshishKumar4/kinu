@@ -22,7 +22,7 @@ const observations: EvalObservation[] = [];
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
 /**
- * The settle a detached `run` owes the agent, measured the way the missing
+ * The settle a detached `shell` owes the agent, measured the way the missing
  * recovery surfaced: `public-failure-recovery` on build c9a43fdb8 backgrounded
  * its test run at the 30s window and the episode's ledger closed with the
  * result still on the job row — the wake either never ran or ran where nobody
@@ -47,7 +47,7 @@ describe(SUITE, () => {
       modelCalls: 'expected',
       async run({ session }) {
         const first = await session.prompt(
-          `Use your run tool with runtime 'sandbox' to execute exactly: sleep 45 && echo ${MARKER}. `
+          `Use your shell tool with runtime 'sandbox' to execute exactly: sleep 45 && echo ${MARKER}. `
           + 'The command sleeps before it prints — let it run to completion, do not kill it. '
           + 'When it has finished, tell me the marker it printed.',
         );

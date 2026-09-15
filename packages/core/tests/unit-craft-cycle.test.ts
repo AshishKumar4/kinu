@@ -99,7 +99,7 @@ describe('CraftCycle — the trigger', () => {
   test('tools other than eval are not the craft surface', () => {
     const cycle = new CraftCycle(fakeLedger(['sum']), new TurnAccumulator());
     cycle.reset(true);
-    cycle.onToolResult({ toolName: 'run', args: { command: 'tools.sum(1)' }, result: 'ok', success: true });
+    cycle.onToolResult({ toolName: 'shell', args: { command: 'tools.sum(1)' }, result: 'ok', success: true });
     expect(cycle.snapshot()).toBeNull();
   });
 
@@ -212,7 +212,7 @@ describe('CraftCycle — the fitness signal', () => {
   });
 
   test('a failure a tool caught and RETURNED still counts as a failure', () => {
-    // The `run`-tool shape: success:true with an error payload. The repo's one
+    // The `shell`-tool shape: success:true with an error payload. The repo's one
     // definition of a failing result (isFailingToolResult) is what decides.
     const ledger = fakeLedger(['sum']);
     const cycle = new CraftCycle(ledger, new TurnAccumulator());
@@ -312,7 +312,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
     expect(turnUsage(fakeLedger(['sum']), [
       { toolName: 'mcp__github__create_issue' },
       { toolName: 'some_extension_tool' },
-      { toolName: 'run' },
+      { toolName: 'shell' },
     ])).toEqual([]);
   });
 

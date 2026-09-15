@@ -366,8 +366,8 @@ Names are stable. Numeric codes fall through.
 ## `ReservedLogField`, a ban that is structural
 
 ```ts
-log.event('run.escalated', { runtime: 'sandbox', attempts: 2 });   // compiles
-log.event('run.escalated', { soul: prompt });                      // does NOT
+log.event('shell.escalated', { runtime: 'sandbox', attempts: 2 });   // compiles
+log.event('shell.escalated', { soul: prompt });                      // does NOT
 ```
 
 Values are scalars. A mapped `keyof Fields` check catches variables,
@@ -393,7 +393,7 @@ The other three rely on scalar values, dotted name and required error.
 Each writes one JSON line to Workers Logs on workerd or the CLI journal.
 
 ```json
-{"event":"run.escalation_refused","code":"unavailable","cause":"runtime_not_provisioned","fields":{"runtime":"sandbox"}}
+{"event":"shell.escalation_refused","code":"unavailable","cause":"runtime_not_provisioned","fields":{"runtime":"sandbox"}}
 ```
 
 `createLineLogger` owns it (`obs/log.ts:207`). `createConsoleLogger` binds
@@ -404,7 +404,7 @@ use it. Envelope keys nest fields. `createRecordingLogger()` keeps it assertable
 ## Why not `neverthrow`
 
 `AGENTS.md` rejects `Result<T, KinuError>` via `neverthrow`: it cannot
-cross `run`, `tool_call_end` or `eval` structured clone.
+cross `shell`, `tool_call_end` or `eval` structured clone.
 `{ reason, error }` crosses namespace boundaries; native invocations use the
 SDK's thrown-error channel. `KinuError` retains native `cause` and any
 producer-observed process exit metadata.

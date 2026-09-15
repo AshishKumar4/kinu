@@ -81,7 +81,7 @@ describe('crafted-tool execution integration', () => {
     const { rt } = createTestRuntime();
 
     for (const [name, code] of [
-      ['healthy', '  async () => 1  '], ['run', 'async () => 2'],
+      ['healthy', '  async () => 1  '], ['shell', 'async () => 2'],
       ['mcp_shadow', 'async () => 3'], ['empty', '   '], ['comment', '  // disabled'],
       ['retired', 'async () => 4'],
     ] as const) {

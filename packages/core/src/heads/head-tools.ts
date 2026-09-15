@@ -4,7 +4,7 @@
  * function: the hosted head and the CLI in-process head runtime.
  *
  * A head IS a fork: it reaches the parent's real execution surface through the
- * same `run`, `eval`, and `web` vocabulary. Hosted heads share the
+ * same `shell`, `eval`, and `web` vocabulary. Hosted heads share the
  * canonical workspace directly; local heads expose it as `parent.*` beside a
  * private scratch workspace. The prompt receives that backend layout explicitly.
  *
@@ -23,7 +23,7 @@
  * deadline is checked when the tool executes.
  *
  * The `allowedTools` filter runs LAST over the head's real vocabulary, so a
- * parent fork request naming `run` / `eval` / `web` maps onto the
+ * parent fork request naming `shell` / `eval` / `web` maps onto the
  * head's actual tools instead of silently emptying the set (the old bug: the
  * parent's vocabulary was filtered against a disjoint `sandbox_*` head surface).
  *
@@ -62,7 +62,7 @@ export interface HeadToolDeps {
   /** The findings accumulator every tool in the surface writes into. */
   capture: HeadCapture;
   /** The head's forked runtime. Its exact file topology is supplied separately
-   *  to the inference prompt; this value backs `run`, `file`, and eval. */
+   *  to the inference prompt; this value backs `shell`, `file`, and eval. */
   rt: AgentRuntime;
   /** Pre-built `eval`; the backend owns it because codemode
    *  construction differs per platform (cf: LOADER Worker; CLI: Node eval).

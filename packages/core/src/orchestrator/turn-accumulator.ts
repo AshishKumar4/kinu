@@ -119,7 +119,7 @@ export class TurnAccumulator {
    *  durable `file_edit` row. Reset with the rest of the turn. */
   readonly files = new TurnFileLedger();
   /** Which provisioned environments the turn reached for instead of its own
-   *  shell, why, and how each turned out. Handed to the toolset so the `run`
+   *  shell, why, and how each turned out. Handed to the toolset so the `shell`
    *  dispatch can record the decision at the moment it is made, and read at turn
    *  end for the durable `execution_escalation` row. Reset with the rest of the
    *  turn. */

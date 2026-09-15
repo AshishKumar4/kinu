@@ -55,7 +55,7 @@ async function executeUnderPath(PATH: string, code: string): Promise<v.InferOutp
     `console.log(JSON.stringify(answer));`,
   ].join('\n'));
 
-  const child = Bun.spawn([process.execPath, 'run', probe], {
+  const child = Bun.spawn([process.execPath, 'shell', probe], {
     env: { PATH, HOME: process.env.HOME ?? '/tmp' },
     stdout: 'pipe',
     stderr: 'pipe',

@@ -25,7 +25,7 @@
 // surface at all.
 //
 // `codemode` is a NAMESPACE and not a boolean because it is not always the
-// capability's own name: `run` and `file` are reached inside the sandbox
+// capability's own name: `shell` and `file` are reached inside the sandbox
 // through the shared `workspace` primitives they already dispatch into, so
 // they own no namespace of their own. A capability OWNS its namespace exactly
 // when `codemode` equals its own key, which is what every *-codemode.ts factory
@@ -81,7 +81,7 @@ export const TOOL_REACH = {
   // Arbitrary code with the whole executor surface behind it: nothing about a
   // second run of it is safe.
   eval: { native: true, codemode: null, replay: 'claimed' },
-  run: { native: true, codemode: 'workspace', replay: 'claimed' },
+  shell: { native: true, codemode: 'workspace', replay: 'claimed' },
   // `file` reads AND writes, and one policy covers the capability, so the
   // answer is the one that is never wrong for a write.
   file: { native: true, codemode: 'workspace', replay: 'claimed' },
@@ -219,7 +219,7 @@ const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
 );
 
 /** Which capabilities reach one codemode namespace. Plural because two do:
- *  `run` and `file` both reach `workspace`, so that namespace survives while
+ *  `shell` and `file` both reach `workspace`, so that namespace survives while
  *  EITHER of them does. Derived from the reach table at load, so a namespace
  *  cannot join the surface without joining this index. */
 const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName[]>> = (() => {
@@ -782,17 +782,17 @@ export const BUILTIN_TOOL_SPECS = {
     summary:
       'Run a JavaScript program in a Node-like sandbox where every tool you have is callable as `tools.<name>(input)`, files and shells are namespaces, and `state.*` keeps values between programs.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, calling a tool you crafted, fetching over HTTP, or holding state between calls.',
-    whenNotToUse: 'Do not use for a single shell command when `run` is enough, or to read and edit one file when `file` is enough.',
+    whenNotToUse: 'Do not use for a single shell command when `shell` is enough, or to read and edit one file when `file` is enough.',
     // Other runtimes still own their own paths. The workspace namespace is the
-    // stable anchor: the same canonical bytes as `file` and `run` workspace.
+    // stable anchor: the same canonical bytes as `file` and `shell` workspace.
     doctrine:
-      'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `run` with runtime "workspace". '
+      'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `shell` with runtime "workspace". '
       + 'A separate container or machine keeps its commands behind its own runtime; when live, its files also sit in the workspace plane at /pc or /sandbox.',
     result: 'Returns whatever the program returns, plus everything it logged with console.*, or the error it threw. Binding failures resolve to { success: false, reason, error, execution? }, with the same reason as the native tool. Inspect success === false to recover; returning that refusal propagates it on the tool error channel. Inner failures remain in the call census even when the program recovers.',
     example: "eval({code:\"// List the newest reports\\nconst fs = require('fs/promises');\\nconst files = await fs.readdir('reports');\\nreturn files.slice(0, 5)\"})",
   },
-  run: {
-    name: 'run',
+  shell: {
+    name: 'shell',
     summary: 'Run one shell command in one explicitly selected available runtime.',
     whenToUse: 'Use for a direct command in the same runtime where its files and dependencies live.',
     whenNotToUse: 'Do not use for multi-step logic, cross-runtime file access, or a runtime that is not explicitly listed as available.',
@@ -823,7 +823,7 @@ export const BUILTIN_TOOL_SPECS = {
       + 'write creates a file, or replaces one whole.',
     whenNotToUse:
       'Do not rewrite a whole file with write to change part of it — edit it. '
-      + 'Do not change files by pointing `run` at sed -i, a heredoc, or an inline python/perl script: those write whether or not the text they aimed at was there.',
+      + 'Do not change files by pointing `shell` at sed -i, a heredoc, or an inline python/perl script: those write whether or not the text they aimed at was there.',
     // The two rules that make an edit safe, stated where the model decides how
     // to write the call — not after it has already failed one.
     doctrine:
@@ -941,7 +941,7 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
  *  assertion, which is the worse of the two. */
 export const BUILTIN_TOOL_DESCRIPTIONS = {
   eval: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.eval),
-  run: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.run),
+  shell: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.shell),
   file: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.file),
   tasks: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.tasks),
   agents: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.agents),

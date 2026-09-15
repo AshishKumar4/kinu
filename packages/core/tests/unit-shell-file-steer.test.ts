@@ -1,33 +1,33 @@
-// The `run` interceptor for hand-rolled file edits.
+// The `shell` interceptor for hand-rolled file edits.
 //
-// `file`'s spec prohibits changing files by pointing `run` at sed -i, a
+// `file`'s spec prohibits changing files by pointing `shell` at sed -i, a
 // heredoc, or an inline script — those write whether or not the text they
 // aimed at was there. The corpus says what that prohibition is up against: a
-// 25% base rate of exactly those shapes across 789 `run` calls, against prose
+// 25% base rate of exactly those shapes across 789 `shell` calls, against prose
 // our own telemetry rates near 0% conversion. So the policy is also a
 // mechanism. It STEERS and never blocks: the contract these tests pin is that
 // the command runs, its output arrives whole, and a note names `file`.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
-import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/run-file-steer';
+import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/shell-file-steer';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
 const echoShell = (): Shell => ({
   exec: async (command: string) => ({ stdout: `ran: ${command}`, stderr: '', exitCode: 0 }),
 });
 
-const runToolOver = (shell: Shell): RunTool => {
+const shellToolOver = (shell: Shell): ShellTool => {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
 
   return {
     execute: toolExecute<{ command: string; runtime?: string }, string>(
-      buildBuiltinTools({ rt: runtime }).run,
+      buildBuiltinTools({ rt: runtime }).shell,
     ),
   };
 };
@@ -61,7 +61,7 @@ describe('handRolledFileWrite', () => {
       .toBe('an inline interpreter script');
     expect(handRolledFileWrite(`node -e "require('fs').writeFileSync('f','x')"`))
       .toBe('an inline interpreter script');
-    // Computation is exactly what `run` is for.
+    // Computation is exactly what `shell` is for.
     expect(handRolledFileWrite(`python3 -c "print(1+1)"`)).toBeNull();
     expect(handRolledFileWrite(`node -e "console.log(process.version)"`)).toBeNull();
   });
@@ -82,10 +82,10 @@ describe('handRolledFileWrite', () => {
   });
 });
 
-describe('the run tool', () => {
+describe('the shell tool', () => {
   test('runs the command anyway and returns its output whole, with the steer attached', async () => {
-    const run = runToolOver(echoShell());
-    const out = await run.execute({ command: "sed -i 's/a/b/' src/app.ts" });
+    const tool = shellToolOver(echoShell());
+    const out = await tool.execute({ command: "sed -i 's/a/b/' src/app.ts" });
     expect(out).toContain("ran: sed -i 's/a/b/' src/app.ts");
     expect(out).toContain('`file`');
     expect(out).toContain('an in-place stream edit');
@@ -93,8 +93,8 @@ describe('the run tool', () => {
   });
 
   test('says nothing on a command that does not hand-roll a write', async () => {
-    const run = runToolOver(echoShell());
-    const out = await run.execute({ command: 'npm test' });
+    const tool = shellToolOver(echoShell());
+    const out = await tool.execute({ command: 'npm test' });
     expect(out).toBe('ran: npm test');
   });
 
@@ -106,24 +106,24 @@ describe('the run tool', () => {
   });
 
   test('a shape repeated in one turn is noted once, and the output still arrives whole', async () => {
-    const run = runToolOver(echoShell());
-    const first = await run.execute({ command: "sed -i 's/a/b/' one.ts" });
-    const second = await run.execute({ command: "sed -i 's/c/d/' two.ts" });
+    const tool = shellToolOver(echoShell());
+    const first = await tool.execute({ command: "sed -i 's/a/b/' one.ts" });
+    const second = await tool.execute({ command: "sed -i 's/c/d/' two.ts" });
     expect(first).toContain('an in-place stream edit');
     expect(second).not.toContain('Kinu note');
     expect(second).toBe("ran: sed -i 's/c/d/' two.ts");
   });
 
   test('a different shape in the same turn still gets its own note', async () => {
-    const run = runToolOver(echoShell());
-    await run.execute({ command: "sed -i 's/a/b/' one.ts" });
-    const heredoc = await run.execute({ command: "cat > f.json <<'EOF'\n{}\nEOF" });
+    const tool = shellToolOver(echoShell());
+    await tool.execute({ command: "sed -i 's/a/b/' one.ts" });
+    const heredoc = await tool.execute({ command: "cat > f.json <<'EOF'\n{}\nEOF" });
     expect(heredoc).toContain('a heredoc written to a file');
   });
 
   test('the next turn starts fresh — a new toolset has said nothing yet', async () => {
-    await runToolOver(echoShell()).execute({ command: "sed -i 's/a/b/' one.ts" });
-    const nextTurn = await runToolOver(echoShell()).execute({ command: "sed -i 's/a/b/' one.ts" });
+    await shellToolOver(echoShell()).execute({ command: "sed -i 's/a/b/' one.ts" });
+    const nextTurn = await shellToolOver(echoShell()).execute({ command: "sed -i 's/a/b/' one.ts" });
     expect(nextTurn).toContain('an in-place stream edit');
   });
 });

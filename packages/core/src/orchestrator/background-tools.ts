@@ -115,7 +115,7 @@ export async function resumeBackgroundJob(
  *
  * The gate is the SAME predicate the detach and the resume use, deliberately: a kind
  * that could not be re-driven has no durable state to read either, so a third
- * predicate would drift from the two. `run` and `eval` therefore return null,
+ * predicate would drift from the two. `shell` and `eval` therefore return null,
  * which is the honest answer — a side-effecting call either happened or did not, and
  * there is no half of it to hand over.
  *

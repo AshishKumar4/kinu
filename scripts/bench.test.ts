@@ -388,7 +388,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
     // Read BEFORE finish: a run that dies mid-flight must still have its trials.
     expect(readRetainedAttempts(retention.dir).map((o) => [o.taskId, o.variantId, o.passed]))
       .toEqual([['task-a', 'agent', false], ['task-a', 'agent-evolving', true]]);
-    expect(parseJsonValue(readFileSync(join(retention.dir, 'run.json'), 'utf8'))).toMatchObject({
+    expect(parseJsonValue(readFileSync(join(retention.dir, 'shell.json'), 'utf8'))).toMatchObject({
       completedAt: null,
       commit: readGitIdentity(REPO_ROOT).commit,
       model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
@@ -400,7 +400,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
 
     retention.recordAttempt(attempt('task-b', 'agent', true));
     retention.finish({ headline: 'fixture' });
-    expect(parseJsonValue(readFileSync(join(retention.dir, 'run.json'), 'utf8'))).toMatchObject({
+    expect(parseJsonValue(readFileSync(join(retention.dir, 'shell.json'), 'utf8'))).toMatchObject({
       completedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       report: { headline: 'fixture' },
       perTask: [

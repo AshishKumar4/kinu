@@ -205,7 +205,7 @@ export interface ExecutorProvider {
    * This matches codemode's SimpleToolRecord shape so it can be passed
    * directly as a ToolProvider to createExecuteTool({ providers: [...] }).
    *
-   * Cancellation contract: in-process callers (the `run` tool) pass a
+   * Cancellation contract: in-process callers (the `shell` tool) pass a
    * trailing `{ signal }` options argument to `exec`. Implementations honor it
    * at the strongest level their transport supports, and those levels are not
    * interchangeable — one kills the work, another can only stop waiting for it.

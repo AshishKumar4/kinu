@@ -404,7 +404,7 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
     // `eval` is absent from the surface when no factory is wired, which is the
     // "absent deps, absent tool" half — so the surface is a SUBSET of what is given and
     // is disjoint from what is withheld.
-    const surface: readonly string[] = ['run', 'file', 'report'];
+    const surface: readonly string[] = ['shell', 'file', 'report'];
     const given: readonly string[] = NODE_BUILTIN_TOOLS;
 
     for (const name of surface) expect(given).toContain(name);

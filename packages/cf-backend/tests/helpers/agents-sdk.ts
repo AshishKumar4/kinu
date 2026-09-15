@@ -334,7 +334,7 @@ export function mockAgentsSdk(): void {
 
       /** The vendor base's tracing seam: every startup and submission-drain
        *  bracket goes through it, so a stand-in without it fails every drain.
-       *  There is no tracer here — the span is the body — but `run` still gets
+       *  There is no tracer here — the span is the body — but `shell` still gets
        *  an attribute-writer, because think stamps turn outcomes through it. */
       _withAgentSpan<Result>(
         _operation: string,

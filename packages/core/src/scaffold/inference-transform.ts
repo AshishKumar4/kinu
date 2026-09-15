@@ -49,7 +49,7 @@ export interface InferenceStreamResult {
 
 /**
  * Route a prepared default-inference result through the agent's evolved
- * scaffold. `run` carries everything `runScaffold` needs except `emit` and
+ * scaffold. `shell` carries everything `runScaffold` needs except `emit` and
  * `defaultInference`, which this seam owns.
  */
 export function scaffoldInferenceTransform(opts: {

@@ -75,7 +75,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
     // so the errno-style `code` read that identifies a filesystem error cannot
     // tell them apart at all. The NAME is the discriminator, and a remote
     // executor that cannot kill an in-flight command rejects with exactly this
-    // (execution/signal.ts) — so reading `code` there makes the run tool report
+    // (execution/signal.ts) — so reading `code` there makes the shell tool report
     // a cancelled wait and a dead transport identically.
     const aborted = provokeAbort();
     const timedOut = await provokeTimeout();

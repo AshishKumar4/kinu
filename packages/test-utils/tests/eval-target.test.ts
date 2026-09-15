@@ -154,7 +154,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
     nextIndex = 0;
 
     const totals = ledgerTotalsFromEvents([
-      event({ type: 'tool_call_end', name: 'run', toolCallId: 'tc-1', error: 'exit 127' }),
+      event({ type: 'tool_call_end', name: 'shell', toolCallId: 'tc-1', error: 'exit 127' }),
       event({ type: 'run_end', reason: 'error', error: 'provider refused' }),
     ]);
 
@@ -166,9 +166,9 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
 
   test('typed outcomes control failure while reported diagnostics stay intact', () => {
     const totals = ledgerTotalsFromEvents([
-      event({ type: 'tool_call_end', name: 'run', toolCallId: 'success', outcome: { success: true }, error: 'stale error' }),
-      event({ type: 'tool_call_end', name: 'run', toolCallId: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 7 } }, error: 'test command failed with useful details' }),
-      event({ type: 'tool_call_end', name: 'run', toolCallId: 'untyped', error: 'a bare error string, no outcome' }),
+      event({ type: 'tool_call_end', name: 'shell', toolCallId: 'success', outcome: { success: true }, error: 'stale error' }),
+      event({ type: 'tool_call_end', name: 'shell', toolCallId: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 7 } }, error: 'test command failed with useful details' }),
+      event({ type: 'tool_call_end', name: 'shell', toolCallId: 'untyped', error: 'a bare error string, no outcome' }),
     ]);
 
     expect(totals.failures).toEqual(['run: test command failed with useful details', 'run: a bare error string, no outcome']);
@@ -387,7 +387,7 @@ describe('RUN_END_FAILURE_PREFIX — one spelling, producer and consumer', () =>
     nextIndex = 0;
 
     const totals = ledgerTotalsFromEvents([
-      event({ type: 'tool_call_end', name: 'run', toolCallId: 'tc-1', error: 'exit 1' }),
+      event({ type: 'tool_call_end', name: 'shell', toolCallId: 'tc-1', error: 'exit 1' }),
       event({ type: 'run_end', reason: 'error', error: 'Internal Server Error' }),
     ]);
 

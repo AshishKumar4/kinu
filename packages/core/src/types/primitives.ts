@@ -219,7 +219,7 @@ export interface Identity {
  * 7. SHELL — POSIX command execution over a VFS.
  * Both the workspace shell (structural match) and any other
  * host-native shell bridge satisfy this. Optional on AgentRuntime; tools that
- * need shell access (e.g. `run`) read it and fall back to the executionRouter.
+ * need shell access (e.g. `shell`) read it and fall back to the executionRouter.
  */
 export interface ShellExecOptions {
   stdin?: string;

@@ -429,7 +429,7 @@ class DeltaShell {
 
     if (node === undefined || node.kind !== 'file') return 1;
     const bytes = bytesOf(node);
-    // A full disk throws `DiskFull`, which `run` reports as this line's exit.
+    // A full disk throws `DiskFull`, which `shell` reports as this line's exit.
     this.disk.charge(bytes.byteLength, prefix);
 
     for (let block = 0; block * blockBytes < bytes.byteLength; block += 1) {

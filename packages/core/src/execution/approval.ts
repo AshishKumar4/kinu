@@ -1,11 +1,11 @@
 /**
  * Approval gating at the execution seam — the two places a command actually
- * reaches a shell: the `run` tool's workspace shortcut (a raw `Shell`) and
+ * reaches a shell: the `shell` tool's workspace shortcut (a raw `Shell`) and
  * every `ExecutorProvider`'s `exec`/`startProcess` tool (workspace, sandbox,
- * laptop — reached both by `run`'s router dispatch AND by codemode's
+ * laptop — reached both by `shell`'s router dispatch AND by codemode's
  * `<name>.exec()` namespace calls inside `eval`).
  *
- * Before this, the gate lived inside the `run` TOOL's own executor — one
+ * Before this, the gate lived inside the `shell` TOOL's own executor — one
  * call site out of the many that reach the same shells. `eval`
  * calling `workspace.exec()` / `sandbox.exec()` /
  * `laptop.exec()` skipped it entirely: same shell, same permissions, no
@@ -49,7 +49,7 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
 }
 
 /**
- * Gate a `Shell`'s `exec` — the primitive the `run` tool's workspace branch
+ * Gate a `Shell`'s `exec` — the primitive the `shell` tool's workspace branch
  * calls directly and `createInlineExecutor`'s `workspace.exec()` calls
  * underneath it. A refusal is shaped as a command that did not run: exit 1 with
  * the message on stderr for readers of the process fields, plus the gate's own
@@ -112,7 +112,7 @@ const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
 /**
  * Gate an ExecutorProvider's shell-reaching tools with the live approval
  * policy. Called by `ExecutionRouter.register()` for every provider it
- * accepts, so `run`'s router dispatch and every codemode `<name>.exec()`
+ * accepts, so `shell`'s router dispatch and every codemode `<name>.exec()`
  * call reach the identical decision — see the module doc for why `workspace`
  * is excluded and why re-registration of the same provider is a no-op.
  */

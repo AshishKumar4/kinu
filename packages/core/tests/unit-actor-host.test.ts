@@ -179,10 +179,10 @@ describe('one workspace database, many logical actors', () => {
             if (observe === undefined) throw new Error('the acquired actor has no step observation');
 
             for (let failures = 0; failures < 3; failures++) {
-              await observe({ toolName: 'run', args: { command: 'bad' }, result: 'failed', success: false, reason: null });
+              await observe({ toolName: 'shell', args: { command: 'bad' }, result: 'failed', success: false, reason: null });
             }
 
-            await observe({ toolName: 'run', args: { command: 'corrected' }, result: 'done', success: true });
+            await observe({ toolName: 'shell', args: { command: 'corrected' }, result: 'done', success: true });
             actor.session.orchestrator.recordTurn({
               userMessage: `assignment ${index}`, assistantResponse: 'done', toolCalls: [],
               steps: 1, durationMs: 1, feedback: null, hadError: false, turnId: `turn-${index}`,

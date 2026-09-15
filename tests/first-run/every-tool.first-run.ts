@@ -53,7 +53,7 @@ const LIST_ASK = 'List every tool you can call right now, one per line, names on
 
 const USE_ASK = 'Use each of these tools exactly once, in this order, then answer. '
   + `1. With the file tool, write ${PROBE_PATH} containing exactly ${PROBE_BYTES} and nothing else. `
-  + `2. With the run tool in the workspace runtime, run: echo ${RUN_MARK} `
+  + `2. With the shell tool in the workspace runtime, run: echo ${RUN_MARK} `
   + `3. With eval, run a one-line program that returns the string "${CODEMODE_MARK}". `
   + `4. With the memory tool, save the fact "${FACT}", then search memory for "${TASK_TITLE}". `
   + `5. With the tasks tool, add one task titled "${TASK_TITLE}". `
@@ -179,7 +179,7 @@ describe(SUITE, () => {
             ? `${PROBE_PATH} holds ${JSON.stringify(PROBE_BYTES)}`
             : `${PROBE_PATH} holds ${excerpt(written)} rather than ${JSON.stringify(PROBE_BYTES)}`,
         });
-        subgoals.push(callCarrying('run-ran', calls, 'run', RUN_MARK, (text) => text.includes(RUN_MARK)));
+        subgoals.push(callCarrying('shell-ran', calls, 'shell', RUN_MARK, (text) => text.includes(RUN_MARK)));
         subgoals.push(callCarrying(
           'codemode-tool-ran', calls, 'eval', CODEMODE_MARK, (text) => text.includes(CODEMODE_MARK),
         ));

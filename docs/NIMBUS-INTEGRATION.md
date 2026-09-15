@@ -85,7 +85,7 @@ reaches it, but the workspace executor declares neither `python` nor
 `native_binary` on this backend (`runtimeCatalog: false`, `runtime.ts`). The
 local CLI keeps them. It supplies `localFacetHost()`, which a Worker cannot.
 
-`Storage.vfs`, the native `file` tool, `run` with `runtime: "workspace"`, and
+`Storage.vfs`, the native `file` tool, `shell` with `runtime: "workspace"`, and
 the `workspace.*` codemode namespace all address that same session. A write
 through any one of them is immediately visible through the others.
 
@@ -97,7 +97,7 @@ Core interfaces:
 | Kinu surface | Nimbus authority |
 |---|---|
 | `Storage.vfs` | `box.files` through `nimbusSessionFiles()` |
-| `Shell` and `run` | `box.exec()` through `nimbusSessionShell()` |
+| `Shell` and `shell` | `box.exec()` through `nimbusSessionShell()` |
 | `workspace.*` | `createNimbusWorkspaceExecutor()` |
 | background processes | `box.startProcess()` and `box.processes` |
 | live previews | `box.ports`, wrapped by the Kinu capability host |

@@ -19,7 +19,7 @@
  *                                  names the provider and the retry window
  *                                  instead of reading "working" over silence.
  *                                    (quiet failure, protocol failure, a
- *                                    multi-line `run`, an MCP tool, a failing
+ *                                    multi-line `shell`, an MCP tool, a failing
  *                                    group)
  *   /gallery.html?frame=advisor  → the advisor's note card, once per severity
  *                                  (nit / concern / blocker), full ladder in
@@ -2285,7 +2285,7 @@ const TRANSCRIPTS = {
         reasoning: "Guarding at the edge would still let a null through the cart serializer, which reads the same table on the lazy path.",
         toolCalls: [
           { name: "file", input: { action: "edit", path: "packages/checkout/src/apply-coupon.ts" }, output: "2 hunks applied" },
-          { name: "run", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
+          { name: "shell", input: { command: "bun test packages/checkout" }, output: "42 pass\n0 fail\nRan 42 tests across 6 files. [1.21s]" },
         ],
       },
     ] },
@@ -2370,7 +2370,7 @@ const TRANSCRIPTS = {
         text: "Checking whether Tuesday's migration reached staging at all.",
         reasoning: "If staging never ran it, the null `kind` column there proves nothing about production and the whole comparison is off.",
         toolCalls: [
-          { name: "run", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
+          { name: "shell", input: { command: "./scripts/migrations.sh status --env staging" }, output: "0007_coupon_kind.sql  applied 2026-08-11" },
         ],
       },
       {
@@ -2404,7 +2404,7 @@ const TRANSCRIPTS = {
         reasoning: "The task names one file but the serializer re-exports from two others, so grepping the package is cheaper than reading it and less likely to miss a caller.",
         toolCalls: [
           {
-            name: "run",
+            name: "shell",
             input: { command: "rg -n 'coupon\\.kind|rules\\[' packages/cart/src" },
             output: "src/serializer.ts:88:  const rule = rules[coupon.kind];\nsrc/serializer.ts:141:  if (coupon.kind === 'fixed') {\nsrc/totals.ts:52:  const pct = rules[coupon.kind].percent;",
           },
@@ -2448,7 +2448,7 @@ const TRANSCRIPTS = {
         reasoning: "A read that lost its guard and a read that never had one need different fixes, and only the history tells them apart.",
         toolCalls: [
           {
-            name: "run",
+            name: "shell",
             input: { command: "git log --oneline -S'rules[' -- packages/pricing/src" },
             output: "8c1f20a1 refactor(pricing): one rate table, read through a resolver",
           },
@@ -2459,7 +2459,7 @@ const TRANSCRIPTS = {
         // as still running.
         text: "Reading that commit.",
         toolCalls: [
-          { name: "run", input: { command: "git show 8c1f20a1 --stat" } },
+          { name: "shell", input: { command: "git show 8c1f20a1 --stat" } },
         ],
       },
     ] },
@@ -4453,7 +4453,7 @@ const BACKGROUND_JOBS = [
     createdAt: NOW - 42e5, settledAt: NOW - 33e5,
   },
   {
-    id: "bgjob-9d3c6e11", kind: "run", label: "wrangler deploy --dry-run",
+    id: "bgjob-9d3c6e11", kind: "shell", label: "wrangler deploy --dry-run",
     workMode: "build" as const, status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
     createdAt: NOW - 61e5, settledAt: NOW - 58e5,
   },
@@ -4582,7 +4582,7 @@ const SHARE_GRAPH: SlateCapabilityGraph = {
       { member: "send", effect: "mutate", risk: RISK("Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace checkout-fixes.") },
     ] },
     { slate: "issue-triage", name: "BRAIN", kind: "ai", capability: { kind: "model", tier: "fast" }, members: [
-      { member: "run", effect: "mutate", risk: RISK("Runs a model call on your fast tier. Every call spends your inference.") },
+      { member: "shell", effect: "mutate", risk: RISK("Runs a model call on your fast tier. Every call spends your inference.") },
     ] },
     { slate: "issue-triage", name: "PEER", kind: "app", capability: { kind: "slate", id: "digest" }, members: [] },
     { slate: "digest", name: "DIGEST_FILES", kind: "namespace", capability: { kind: "executor", namespace: "workspace" }, members: [
@@ -5384,7 +5384,7 @@ const ACTIVITY_CONTEXT: ContextComposition = {
   segments: [
     { plane: "system", label: "Core instructions", chars: 18_400, items: 1 },
     { plane: "system", label: "Workspace brief", chars: 3_120, items: 1 },
-    { plane: "tools", label: "run", chars: 2_840, items: 1 },
+    { plane: "tools", label: "shell", chars: 2_840, items: 1 },
     { plane: "tools", label: "edit", chars: 3_610, items: 1 },
     { plane: "tools", label: "read", chars: 2_180, items: 1 },
     { plane: "messages", label: "tool", chars: 328_900, items: 96 },
@@ -5545,7 +5545,7 @@ const activityRpc = (snapshot: ActivitySnapshot): Rpc =>
 /** One message per state that the `chat` frame either folds into a group or
  *  can't show pre-expanded: a quiet failure (the tool caught it and returned
  *  it as a normal result), a protocol-level failure (the executor itself
- *  crashed — errorText, no output), a clean multi-line `run`, and an MCP tool
+ *  crashed — errorText, no output), a clean multi-line `shell`, and an MCP tool
  *  with no known summarizer contract. Auto-expanded on mount below so the
  *  input/output panel is the thing the screenshot shows. */
 const TOOLCALL_MESSAGES: UIMessage[] = [
@@ -5566,7 +5566,7 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
   msg({
     id: "tc-run", role: "assistant",
     parts: [
-      { type: "text", text: "A multi-line `run` command, expanded — a shell script, not an escaped JSON string." },
+      { type: "text", text: "A multi-line `shell` command, expanded — a shell script, not an escaped JSON string." },
       {
         type: "tool-run", toolCallId: "tc3", state: "output-available",
         input: { runtime: "sandbox", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },

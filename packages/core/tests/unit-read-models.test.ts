@@ -223,17 +223,17 @@ describe('run timeline', () => {
       VALUES (${actor.actorId}, 'e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, visits, value, status, action, task, created_at)
       VALUES (${actor.actorId}, 'n1', NULL, 'n1', 0, 1, 0.5, 'terminal', 'explore A', 't', ${base + 1000})`;
-    jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: base + 2000 });
+    jobs.create({ id: 'j1', kind: 'shell', workMode: 'build', now: base + 2000 });
 
     const spans = getRunTimeline({ sql, actor, events, jobs, currentRunId: 'r1' });
 
-    expect(spans.map((s) => s.source)).toEqual(['run', 'evolution', 'mcts', 'background']);
+    expect(spans.map((s) => s.source)).toEqual(['shell', 'evolution', 'mcts', 'background']);
     expect(spans.map((s) => s.ts)).toEqual([...spans].sort((a, b) => a.ts - b.ts).map((s) => s.ts));
     // text_delta is the stream's own noise — never a span.
     expect(spans.some((s) => s.rawType === 'text_delta')).toBe(false);
     // The evolution payload survives the merge, parsed.
     expect(spans[1]).toMatchObject({ kind: 'scaffold', label: 'v2 proposed', data: { version: 2 } });
-    expect(spans[3]).toMatchObject({ kind: 'background', label: 'Background run', detail: 'running in background' });
+    expect(spans[3]).toMatchObject({ kind: 'background', label: 'Background shell', detail: 'running in background' });
     db.close();
   });
 
@@ -670,10 +670,10 @@ describe('background-job control plane', () => {
 
     expect(retryBackgroundJob(deps, 'missing')).toEqual({ ok: false, error: 'job not found' });
 
-    jobs.create({ id: 'running', kind: 'run', workMode: 'build', input: '{}', now: 1 });
+    jobs.create({ id: 'running', kind: 'shell', workMode: 'build', input: '{}', now: 1 });
     expect(retryBackgroundJob(deps, 'running')).toEqual({ ok: false, error: 'job still running' });
 
-    jobs.create({ id: 'noinput', kind: 'run', workMode: 'build', now: 1 });
+    jobs.create({ id: 'noinput', kind: 'shell', workMode: 'build', now: 1 });
     jobs.settle('noinput', 0, 'r', 2);
     expect(retryBackgroundJob(deps, 'noinput')).toEqual({ ok: false, error: 'no stored input to retry' });
 

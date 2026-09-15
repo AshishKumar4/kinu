@@ -158,7 +158,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
  * The head tool builders in this module record themselves (they also record
  * artifacts, which only they can classify, and per-tool outcomes only they can
  * name). This wrapper is for the SHARED builtin surface a backend hands a head —
- * `run`, `eval`, `web` know nothing about heads, and without it
+ * `shell`, `eval`, `web` know nothing about heads, and without it
  * `HeadReport.toolCalls` (which the journal persists and the no-prose fallback
  * summary reads) would be empty for exactly the tools a head does its real work
  * with. It records the one outcome a generic wrapper honestly knows — resolved
@@ -208,7 +208,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
   'record_evidence',
   'record_decision',
   'eval',
-  'run',
+  'shell',
   'file',
   'web',
   'split_subheads',
@@ -217,7 +217,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = ['eval', 'run', 'file'] as const satisfies readonly BuiltinToolName[];
+const HEAD_WORK_TOOLS = ['eval', 'shell', 'file'] as const satisfies readonly BuiltinToolName[];
 
 export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
 
@@ -261,7 +261,7 @@ function renderHeadToolConventions(
     );
   }
 
-  if (hasHeadTool(tools, 'run')) {
+  if (hasHeadTool(tools, 'shell')) {
     const runDoctrine = workspaceLayout === 'shared-workspace'
       ? '- run executes one shell command. Name the runtime: `sandbox` / `laptop` are the parent agent\'s separate environments, '
         + 'and the default `workspace` runtime is the canonical workspace you were forked from.'

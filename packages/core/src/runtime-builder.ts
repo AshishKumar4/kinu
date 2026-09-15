@@ -70,12 +70,12 @@ export interface RuntimeComponents {
   abortBranch: AbortBranch;
   /**
    * Optional router for the runtime's registered execution environments. When
-   * provided, the canonical `run` and `eval` factories in core will
+   * provided, the canonical `shell` and `eval` factories in core will
    * consume it for routing. Absent → tools degrade gracefully.
    */
   executionRouter?: ExecutionRouter;
   /**
-   * Optional POSIX shell bound to VFS. Required by the canonical `run` tool
+   * Optional POSIX shell bound to VFS. Required by the canonical `shell` tool
    * for workspace-scoped commands (fast path, no router indirection) and by
    * the `eval` new-Function fallback.
    */

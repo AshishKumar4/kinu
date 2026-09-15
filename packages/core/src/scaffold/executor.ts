@@ -522,7 +522,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
     capturedEvents, state,
   });
 
-  // 3. Build the wrapper code that defines `run` (from scaffold) and invokes
+  // 3. Build the wrapper code that defines `shell` (from scaffold) and invokes
   // it with the task (injected as a literal) and the `host` global.
   // Scaffolds use `host.*` for all host interaction — `rt` is NOT a sandbox
   // global (the live object can't cross the boundary).
@@ -574,7 +574,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
  * or `async function* run(rt, task)`, the wrapper code drives it correctly
  * and emits done at the end.
  *
- * We inject the scaffold source verbatim, then call `run`. For generator
+ * We inject the scaffold source verbatim, then call `shell`. For generator
  * scaffolds, we iterate the generator and forward each yield
  * to host.emit (mapping `{type:'chunk', data}` → text_delta).
  */

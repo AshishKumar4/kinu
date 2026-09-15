@@ -105,16 +105,16 @@ describe('owner reads of retained subordinate paths', () => {
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');
     const events = new RunEventRecorder(fixture.sql, leaf);
-    events.emit('run', { type: 'run_start', agentId: 'leaf' });
-    events.emit('run', { type: 'tool_call_end', name: 'agents', toolCallId: 'ask-1', args: { action: 'ask', role: 'task' }, result: { agent: 'nested', transcript: 'kept' }, outcome: { success: true } });
-    events.emit('run', { type: 'run_end', reason: 'completed' });
+    events.emit('shell', { type: 'run_start', agentId: 'leaf' });
+    events.emit('shell', { type: 'tool_call_end', name: 'agents', toolCallId: 'ask-1', args: { action: 'ask', role: 'task' }, result: { agent: 'nested', transcript: 'kept' }, outcome: { success: true } });
+    events.emit('shell', { type: 'run_end', reason: 'completed' });
     const before = fixture.sql`SELECT run_id, event_index, type FROM run_events ORDER BY run_id, event_index`;
-    const first = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'run', query: { limit: 2 } });
+    const first = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'shell', query: { limit: 2 } });
     expect(first.view).toBe('events');
 
     if (first.view !== 'events' || first.page.status !== 'more') throw new Error('Expected another event page');
     expect(first.page.items.map((event) => event.type)).toEqual(['run_start', 'tool_call_end']);
-    const last = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'run', query: { limit: 2, since: first.page.next } });
+    const last = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'shell', query: { limit: 2, since: first.page.next } });
     expect(last).toMatchObject({ view: 'events', page: { status: 'end', items: [{ type: 'run_end', reason: 'completed' }] } });
     expect(fixture.sql`SELECT run_id, event_index, type FROM run_events ORDER BY run_id, event_index`).toEqual(before);
   });
@@ -187,7 +187,7 @@ describe('owner reads of retained subordinate paths', () => {
   });
 
   test('request variants reject fields that cannot apply to the selected view', () => {
-    expect(v.safeParse(SubordinateInspectionRequestSchema, { path: [], view: 'history', page: {}, runId: 'run' }).success).toBe(false);
+    expect(v.safeParse(SubordinateInspectionRequestSchema, { path: [], view: 'history', page: {}, runId: 'shell' }).success).toBe(false);
     expect(v.safeParse(SubordinateInspectionRequestSchema, { path: [], view: 'events', query: {} }).success).toBe(false);
     expect(v.safeParse(SubordinateInspectionRequestSchema, { path: ['foreign/path'], view: 'children', page: {} }).success).toBe(false);
   });

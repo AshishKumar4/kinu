@@ -337,7 +337,7 @@ type ToolSummarizer = (input: JsonObject) => string;
 
 const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   eval: (input) => clip(firstCodeLine(str(input, "code"))),
-  run: (input) => clip(str(input, "command")),
+  shell: (input) => clip(str(input, "command")),
   file: summarizeFile,
   agents: summarizeAgents,
   memory: summarizeMemory,
@@ -490,7 +490,7 @@ function describeAgents(input: JsonObject): string {
 type ToolDescriber = (input: JsonObject) => string;
 
 const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
-  run: (input) => describeCommand(str(input, "command")),
+  shell: (input) => describeCommand(str(input, "command")),
   file: (input) => {
     const verb = FILE_VERBS.get(str(input, "action"));
 
@@ -511,7 +511,7 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
 
     return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";
   },
-  skills: (input) => (str(input, "action") === "run" ? "Ran a skill" : ""),
+  skills: (input) => (str(input, "action") === "shell" ? "Ran a skill" : ""),
   release: (input) => {
     const action = str(input, "action");
 

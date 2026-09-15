@@ -182,7 +182,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps =
           return payload;
         } catch (error) {
           // A bare `run(...)` etc. inside the model's code throws a plain V8
-          // ReferenceError here (no dispatcher involved — `run` was simply
+          // ReferenceError here (no dispatcher involved — `shell` was simply
           // never one of the bound argNames above); rewrite that one shape
           // into an actionable correction, same as the CF codemode sandbox.
           const message = explainNativeToolReferenceError(renderThrownChain({ cause: error }));

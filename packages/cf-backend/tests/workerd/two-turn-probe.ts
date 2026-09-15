@@ -519,13 +519,13 @@ async function awaitQuiet(recording: RecordingLogger): Promise<void> {
 
 
 export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
-  /** Spike 1: does an AbortSignal cross the service binding into `run`?
+  /** Spike 1: does an AbortSignal cross the service binding into `shell`?
    *  Returns the kind FakeAI recorded, or the throw's message — the caller
    *  cannot distinguish "no signal" from a serialization failure otherwise. */
   async signalProbe(): Promise<{ signalKind: string } | { threw: string }> {
     try {
       // SAFETY: the vitest config declares `env.AI` as this worker's service
-      // binding to `FakeAI`, whose entrypoint contract provides `run` — the
+      // binding to `FakeAI`, whose entrypoint contract provides `shell` — the
       // member AIRunner names and the only member the adapter calls.
       const binding: AIRunner | undefined = this.env.AI as AIRunner | undefined;
       const controller = new AbortController();

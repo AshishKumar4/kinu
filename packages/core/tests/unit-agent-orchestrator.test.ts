@@ -902,9 +902,9 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     orch.beginTurn(Date.now());
 
     for (let i = 0; i < 3; i++) {
-      await orch.turnExtension.onToolCall?.({ toolName: 'run', args: { command: `x${i}` } });
+      await orch.turnExtension.onToolCall?.({ toolName: 'shell', args: { command: `x${i}` } });
       await orch.turnExtension.onToolResult?.({
-        toolName: 'run', args: { command: 'x' + i }, result: 'Error: no ' + i, success: false, reason: null,
+        toolName: 'shell', args: { command: 'x' + i }, result: 'Error: no ' + i, success: false, reason: null,
       });
     }
 
@@ -912,6 +912,6 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     // It names the tool and the streak that fired it.
     const steered = orch.steering.steerFor({ stepNumber: 4, messages: [] });
     expect(steered).toMatchObject({ kind: 'turn_steering' });
-    expect(steered?.text).toContain('`run` has failed 3 times in a row');
+    expect(steered?.text).toContain('`shell` has failed 3 times in a row');
   });
 });
