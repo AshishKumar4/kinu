@@ -101,7 +101,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_WEB_SCHEDULE, type WebSearchProvider,
   createAgentsCodemodeProvider, createReleaseCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -3275,6 +3275,7 @@ export class LocalAgentSession implements BackendHost {
 
     const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
       fetch: globalThis.fetch,
+      schedule: REAL_WEB_SCHEDULE,
     };
 
     if (getAuth) options.getAuth = getAuth;

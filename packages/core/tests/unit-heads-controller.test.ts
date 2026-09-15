@@ -27,6 +27,7 @@ import {
   type MergeStrategy,
   initHeadsTables,
 } from '../src/heads/index';
+import type { HeadClock } from '../src/heads/controller';
 import type { SqlValue } from '../src/types/primitives';
 import { makeSql, makeExecRaw, createTestActor } from './helpers';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
@@ -71,34 +72,87 @@ function fakeMergeOutput(narrative: string): MergeOutput {
   };
 }
 
+/**
+ * The budget's clock, advanced by hand (D19): the controller's wall-clock
+ * deadline fires when the test steps past it, never on a real timer racing a
+ * fake head's real sleep.
+ */
+function handClock(): HeadClock & { advance(ms: number): void; armed(count: number): Promise<void> } {
+  interface Armed { readonly at: number; readonly fire: () => void }
+
+  let now = 0;
+  let everArmed = 0;
+  const armed = new Set<Armed>();
+  const waiting: { readonly count: number; readonly resolve: () => void }[] = [];
+
+  return {
+    now: () => now,
+    after: (fire, ms) => {
+      const entry: Armed = { at: now + ms, fire };
+      armed.add(entry);
+      everArmed += 1;
+
+      for (const waiter of waiting.splice(0)) {
+        if (everArmed >= waiter.count) waiter.resolve();
+        else waiting.push(waiter);
+      }
+
+      return () => { armed.delete(entry); };
+    },
+    /** Resolves once `count` deadlines have been armed: the controller has
+     *  spawned its heads and is racing them, so a step past the budget now
+     *  fires a deadline that exists. */
+    armed: (count) => {
+      if (everArmed >= count) return Promise.resolve();
+      const { promise, resolve } = Promise.withResolvers<void>();
+      waiting.push({ count, resolve });
+
+      return promise;
+    },
+    advance: (ms) => {
+      const until = now + ms;
+
+      for (;;) {
+        const next = [...armed].filter((entry) => entry.at <= until).sort((a, b) => a.at - b.at)[0];
+
+        if (next === undefined) break;
+        now = next.at;
+        armed.delete(next);
+        next.fire();
+      }
+
+      now = until;
+    },
+  };
+}
+
 function buildRuntime(opts: {
   reports?: Record<string, HeadReport>;
-  reportDelays?: Record<string, number>;
+  /** Heads that never report on their own: they hold until aborted. */
+  heldTasks?: readonly string[];
   mergeOutput?: MergeOutput;
   mergeThrows?: Error;
   spawnedInputs?: HeadInput[];
 }): HeadRuntime {
-  const { reports = {}, reportDelays = {}, mergeOutput, mergeThrows, spawnedInputs } = opts;
+  const { reports = {}, heldTasks = [], mergeOutput, mergeThrows, spawnedInputs } = opts;
 
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       spawnedInputs?.push(input);
-      let aborted = false;
       const id = input.id;
+      // A held head never reports, aborted or not: the deadline's own
+      // rejection is what ends the race, exactly as a real head still
+      // running past its abort does.
+      const held = heldTasks.includes(input.task) ? Promise.withResolvers<void>() : undefined;
 
       return {
         id,
         async run() {
-          const delay = reportDelays[input.task] ?? 0;
-          await new Promise((r) => setTimeout(r, delay));
-
-          if (aborted) {
-            return fakeReport(id, { status: 'aborted', summary: 'aborted by runtime' });
-          }
+          await held?.promise;
 
           return reports[input.task] ?? fakeReport(id, { summary: `Default for ${input.task}` });
         },
-        async abort() { aborted = true; },
+        async abort() {  },
       };
     },
     async mergeLLM(_prompt, _schema): Promise<MergeOutput> {
@@ -296,22 +350,25 @@ describe('HeadController.run', () => {
   test('aborts heads that exceed wall-clock budget; records budget_exceeded', async () => {
     const { sql, journal } = newJournal();
 
-    const runtime = buildRuntime({
-      reportDelays: { 'angle A': 1000 }, // way over the 50ms budget
-    });
+    // The head holds until aborted; the budget's clock is stepped past it.
+    const runtime = buildRuntime({ heldTasks: ['angle A'] });
+    const clock = handClock();
+    const controller = new HeadController(runtime, journal, clock);
 
-    const controller = new HeadController(runtime, journal);
-
-    const result = await controller.run({
+    const run = controller.run({
       mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: { rationale: 'tight budget test', heads: [{ task: 'angle A', rationale: 'slow' }] },
       parentBudget: {
         maxDepth: 2, maxWallClockMs: 50,
-        spawnedAt: Date.now(),
+        spawnedAt: clock.now(),
       },
     });
+
+    await clock.armed(1);
+    clock.advance(51);
+    const result = await run;
 
     expect(result.costSummary.headCount).toBe(1);
 
@@ -336,17 +393,22 @@ describe('HeadController.run', () => {
     // which carries a real provider figure of 100 + 80 under its own spawn id
     // (a canned report keyed by task would carry a literal id the journal has
     // no row for, so its usage would never reach the columns below).
-    const runtime = buildRuntime({ reportDelays: { 'angle A': 1000 } });
-    const controller = new HeadController(runtime, journal);
+    const runtime = buildRuntime({ heldTasks: ['angle A'] });
+    const clock = handClock();
+    const controller = new HeadController(runtime, journal, clock);
 
-    const result = await controller.run({
+    const run = controller.run({
       mode: 'build',
       parentHeadId: null,
       rootId: 'root-mixed',
       inheritedContext: baseContext,
       request: baseRequest,
-      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: clock.now() },
     });
+
+    await clock.armed(2);
+    clock.advance(51);
+    const result = await run;
 
     // Exactly the sibling's tokens — the aborted head neither added to the
     // total nor dragged it toward a zero it never earned.
@@ -371,17 +433,22 @@ describe('HeadController.run', () => {
     // Both heads are cut off before they report anything. Nothing measured this
     // split, and the reports the controller writes for them carry no findings,
     // so it settles down the deterministic empty-split path.
-    const runtime = buildRuntime({ reportDelays: { 'angle A': 1000, 'angle B': 1000 } });
-    const controller = new HeadController(runtime, journal);
+    const runtime = buildRuntime({ heldTasks: ['angle A', 'angle B'] });
+    const clock = handClock();
+    const controller = new HeadController(runtime, journal, clock);
 
-    const result = await controller.run({
+    const run = controller.run({
       mode: 'build',
       parentHeadId: null,
       rootId: 'root-blank',
       inheritedContext: baseContext,
       request: baseRequest,
-      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 2, maxWallClockMs: 50, spawnedAt: clock.now() },
     });
+
+    await clock.armed(2);
+    clock.advance(51);
+    const result = await run;
 
     expect(result.costSummary.headCount).toBe(2);
     expect(result.costSummary.totalTokens).toBeUndefined();
