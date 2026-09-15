@@ -1261,6 +1261,17 @@ export class OrchestratorAgent extends ActorAgent {
       // send it acknowledged and never drained.
       || this.chatLoopOwesWork();
   }
+
+  /** The soonest instant a TIMED ledger owes a wake — the terminal retry and
+   *  the job runner's deferred resumes — or null when nothing timed waits.
+   *  Untimed owed work is excluded on purpose: an unfinished pass arms at the
+   *  lap pace, and a finished one with nothing timed releases its row, so the
+   *  only read this needs is the minimum the two timed stores already keep. */
+  protected override nextOwedAt(): number | null {
+    const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
+
+    return Number.isFinite(at) ? at : null;
+  }
   /**
    * Whether ANY actor in this workspace holds an admitted delegation nothing
    * has run yet — the arming half of the delegation drain.
