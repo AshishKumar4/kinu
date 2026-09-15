@@ -114,6 +114,58 @@ describe('DeviceConsentRegistry', () => {
 });
 
 /**
+ * The hub's half of a card: `connected` is not an owner's click, it is the
+ * machine arriving — and it settles the prompt exactly like one.
+ */
+describe('DeviceConsentRegistry non-owner settlement', () => {
+  test('a `connected` settle resolves the waiter with it, and a second settle is a no-op', async () => {
+    const { reg, notices } = registry();
+    const pending = reg.request(REQUEST);
+
+    expect(reg.settle('cons-1', 'connected')).toBe(true);
+    expect(await pending).toBe('connected');
+    // The card is gone: a reloading client re-renders nothing, and surfaces
+    // heard the same `settled` an answered card produces.
+    expect(reg.list()).toEqual([]);
+    expect(notices.map((n) => n.kind)).toEqual(['raised', 'settled']);
+
+    // One row, one settle: the id is spent, so the repeat takes nothing.
+    expect(reg.settle('cons-1', 'connected')).toBe(false);
+    expect(reg.resolve('cons-1', 'once')).toBe(false);
+  });
+
+  test('raise answers the card id without parking, and waitSettled joins it', async () => {
+    const { reg } = registry();
+    const consentId = reg.raise(REQUEST);
+
+    expect(consentId).toBe('cons-1');
+    expect(reg.list().map((c) => c.consentId)).toEqual(['cons-1']);
+
+    // The join keeps the ONE card: a second raise of the identical ask
+    // answers with the same id rather than minting a second.
+    expect(reg.raise(REQUEST)).toBe('cons-1');
+
+    const settled = reg.waitSettled('cons-1');
+    expect(reg.settle('cons-1', 'connected')).toBe(true);
+    // The wait carries no decision — it resolves only to say the card is gone.
+    await settled;
+    expect(reg.list()).toEqual([]);
+  });
+
+  test('waitSettled resolves at once when the card is already gone, or was never raised', async () => {
+    const { reg } = registry();
+    const consentId = reg.raise(REQUEST);
+    expect(reg.settle(consentId, 'connected')).toBe(true);
+
+    // The connect that lands between the hub's two calls: the card is already
+    // gone, and the wait still ends — a provisioning ask carries no decision
+    // worth remembering, only the fact the card is down.
+    await reg.waitSettled(consentId);
+    await reg.waitSettled('cons-never');
+  });
+});
+
+/**
  * One logical grant is one card. A fresh consentId per call gives a retry
  * re-asking the identical question a second card, and no surface can collapse
  * the two: every surface dedups on consentId, and the two ids differ. So the
