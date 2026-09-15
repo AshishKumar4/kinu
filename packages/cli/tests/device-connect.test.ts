@@ -1180,13 +1180,17 @@ describe('kinu connect waits on the daemon and says less', () => {
       proc,
       output: () => output,
       drained,
-      // A separate process writes to a PTY; there is no event to await, so the
-      // wait polls the buffer the reader fills.
-      async waitFor(text: string, timeoutMs = 15_000): Promise<void> {
-        const deadline = Date.now() + timeoutMs;
-
+      // The wait resolves on the awaited text or rejects when the child exits
+      // — EOF is the only failure this harness knows. There is no deadline:
+      // the product waits on the daemon and not on a clock, and a harness
+      // that fires before the text arrives would be asserting the clock the
+      // product refuses to carry.
+      async waitFor(text: string): Promise<void> {
         while (!output.includes(text)) {
-          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
+          if (proc.exitCode !== null) {
+            throw new Error(`process exited (code ${proc.exitCode}) while waiting for ${JSON.stringify(text)} in:\n${output}`);
+          }
+
           await Bun.sleep(25);
         }
       },
