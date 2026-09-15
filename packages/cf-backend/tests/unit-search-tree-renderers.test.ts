@@ -3,6 +3,7 @@
 // half hands the caller an outcome, never a throw. The mount itself mounts
 // the real component, so it is covered where it can only be true: against
 // the real browser (scripts/public-pages.test.ts reads `__kinuSearchTree`).
+import { VGPUError as CoreVGPUError } from '@vgpu/core';
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -482,7 +483,9 @@ describe('a device loss mid-run is the same fault the listener reports', () => {
     outcome.renderer.render(frameAfter(4));
     expect(gpu.frames).toBe(1);
 
-    const loss = new MockVGPUError({ code: 'VGPU-DEVICE-LOST', message: 'the device was lost' });
+    // The real class: the renderer names @vgpu/core's base, which is what
+    // the frame guard throws, not vgpu's own subclass.
+    const loss = new CoreVGPUError({ code: 'VGPU-DEVICE-LOST', message: 'the device was lost' });
     gpu.frameThrows = loss;
 
     outcome.renderer.render(frameAfter(4));
