@@ -6,6 +6,16 @@ import { describe, expect, test } from 'bun:test';
 import { type ArtFrame, NODE_STRIDE, PULSE_STRIDE, STROKE_STRIDE, TONE_BRIGHT } from '../src/web/art';
 import { CANVAS_SEGMENTS, Connectome, MESH_SEGMENTS } from '../src/web/connectome';
 
+/** CPU milliseconds this process spent since `since`: the picture's own cost,
+ *  which a wall clock confuses with whatever else the machine was doing (the
+ *  deploy tier runs every suite at once, and measured 612 ms of wall time on
+ *  2026-09-14 for work that costs under 400 ms of CPU). */
+function cpuMillisSince(since: NodeJS.CpuUsage): number {
+  const spent = process.cpuUsage(since);
+
+  return (spent.user + spent.system) / 1000;
+}
+
 const ASPECT = 900 / 1440;
 
 const DT = 1 / 60;
@@ -165,9 +175,9 @@ describe('the population is fixed for the picture\'s life', () => {
     const counts: number[] = [];
 
     for (const seed of [1729, 7, 11, 99]) {
-      const began = performance.now();
+      const began = process.cpuUsage();
       const connectome = new Connectome({ seed, aspect: ASPECT, segments: CANVAS_SEGMENTS });
-      expect(performance.now() - began).toBeLessThan(50);
+      expect(cpuMillisSince(began)).toBeLessThan(50);
       counts.push(connectome.frame().count);
     }
 
@@ -448,26 +458,26 @@ describe('the picture stays cheap', () => {
   test('an hour of canvas frames costs less than a blink', () => {
     const connectome = run(1729, 0);
     connectome.setActivity({ working: true, decisions: 0 });
-    const began = performance.now();
+    const began = process.cpuUsage();
 
     for (let index = 0; index < 3600; index += 1) {
       connectome.step(DT);
       connectome.frame();
     }
 
-    expect(performance.now() - began).toBeLessThan(600);
+    expect(cpuMillisSince(began)).toBeLessThan(600);
   });
 
   test('a mesh frame costs well under a millisecond and a half', () => {
     const connectome = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
     connectome.setActivity({ working: true, decisions: 0 });
-    const began = performance.now();
+    const began = process.cpuUsage();
 
     for (let index = 0; index < 600; index += 1) {
       connectome.step(DT);
       connectome.frame();
     }
 
-    expect((performance.now() - began) / 600).toBeLessThan(1.5);
+    expect(cpuMillisSince(began) / 600).toBeLessThan(1.5);
   });
 });
