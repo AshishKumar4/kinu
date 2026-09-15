@@ -61,7 +61,7 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
-import { requireSessionShellAccepts } from './support/session-shell';
+import { requireSessionShellAccepts, sessionShellRefusal } from './support/session-shell';
 import {
   baseObjectKey,
   chainStoreRoot,
@@ -1117,6 +1117,36 @@ describe('a composed container command is one a POSIX shell will run', () => {
 
   test('the listener probe parses too', () => {
     requireSessionShellAccepts(healthProbeCommand(8080));
+  });
+
+  // The third way one command ends the session: a top-level `set -e` stays
+  // set in the persistent shell, and the next failing command from ANY caller
+  // ends it. Settlement `20260915012040` lost G3's read-only probe that way.
+  // Both directions of the model are measured against a real bash fed the
+  // way the SDK feeds a session, so the fake's verdict is the shell's.
+  test('a top-level set -e is refused as a session death; a subshell-scoped one is accepted', () => {
+    const unscoped = ['# devbox-namespace-v2', 'set -e', 'mkdir -p /tmp/x'].join('\n');
+    const scoped = ['# devbox-namespace-v2', '(', 'set -e', 'mkdir -p /tmp/x', ')'].join('\n');
+
+    const refusal = sessionShellRefusal(unscoped);
+
+    expect(refusal?.name).toBe('SessionTerminatedError');
+    expect(refusal?.message).toContain('exit code: 1');
+    expect(sessionShellRefusal(scoped)).toBeUndefined();
+    expect(sessionShellRefusal(['(', 'set -o errexit', 'true', ')'].join('\n'))).toBeUndefined();
+    expect(sessionShellRefusal('set -o errexit\ntrue')?.name).toBe('SessionTerminatedError');
+
+    const session = (batch: string) => spawnSync('bash', ['--norc'], {
+      input: `${batch}\nfalse\nprintf 'session=alive\\n'\n`, encoding: 'utf8',
+    });
+
+    const dead = session(unscoped);
+    const alive = session(scoped);
+
+    expect(dead.stdout).not.toContain('session=alive');
+    expect(dead.status).toBe(1);
+    expect(alive.stdout).toContain('session=alive');
+    expect(alive.status).toBe(0);
   });
 
   test('the scan\'s own answers are read back: names, and the word for none', () => {

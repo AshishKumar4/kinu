@@ -37,6 +37,7 @@ import {
   type DeltaProbeEntry,
 } from '../src/chunked-delta';
 import { deltaCommand, type ShellReply } from './support/delta-shell';
+import { requireSessionShellAccepts } from './support/session-shell';
 import { readDeltaIndex } from '../src/chunked-delta';
 import { ContainerDisk } from './support/strategy-machine';
 import {
@@ -201,9 +202,13 @@ function realShell(command: string): ShellReply {
   return { stdout: run.stdout.toString(), stderr: run.stderr.toString(), exitCode: run.status ?? 1 };
 }
 
-/** What `runOpsBatched` sends: the header, `set -e`, the operations. */
+/** What `runOpsBatched` sends: the header, then the operations under a
+ *  subshell-scoped `set -e`. The session-shell model refuses the unscoped
+ *  form, and every chain run through the fake goes through that model. */
 function batch(ops: readonly string[]): string {
-  return [ops[0]!, 'set -e', ...ops.slice(1)].join('\n');
+  requireSessionShellAccepts([ops[0]!, '(', 'set -e', ...ops.slice(1), ')'].join('\n'));
+
+  return [ops[0]!, '(', 'set -e', ...ops.slice(1), ')'].join('\n');
 }
 
 /** Two trees compared, less what the running user decides rather than the
