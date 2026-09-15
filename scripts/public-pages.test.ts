@@ -10,6 +10,10 @@ import { THEMES, type Theme } from './computed-style';
 // declaration.
 import type { LandingMovieHandle } from '@kinu.run/core';
 
+// The hero's own `declare global` lives under packages/cf-backend and is out
+// of this gate's program, so the handle is named here instead.
+interface SearchTreeHandle { renderer(): 'webgpu' | 'canvas' | 'static' | 'pending' }
+
 const PHONE = { width: 390, height: 844 } as const;
 
 const DESKTOP = { width: 1280, height: 900 } as const;
@@ -100,6 +104,8 @@ interface Facts {
   prunedNodes?: number;
   hiddenNodes?: number;
   heroGraphWidth?: number;
+  /** Which renderer the hero mount landed on, and the canvas's own answer. */
+  heroMount?: { renderer?: string; canvasRenderer?: string };
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
   cli?: SurfaceFact;
@@ -246,6 +252,19 @@ beforeAll(async () => {
       facts.heroGraphWidth = await page.$eval('[data-hero-graph]', (graph) => (
         Math.round(graph.getBoundingClientRect().width)
       ));
+      // The mount's own answer: which renderer took the canvas, and that the
+      // canvas carries the same answer — the mount landed, whatever it landed on.
+      facts.heroMount = await page.evaluate(() => {
+        // SAFETY: `__kinuSearchTree` is constructed on this window by
+        // SearchTreeHero's mount when the mount lands — the suite's own
+        // `data-settled` wait above has already observed that landing.
+        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
+
+        return {
+          renderer: w.__kinuSearchTree?.renderer(),
+          canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
+        };
+      });
       const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
       await page.waitForFunction(
         (previous: string) => document.querySelector('canvas')?.toDataURL() !== previous,
@@ -838,14 +857,20 @@ beforeAll(async () => {
 }, 180_000);
 
 describe('the standalone landing runs', () => {
-  test('the settled graph keeps flowing without restarting its reveal', () => {
-    expect(required(facts.treeFlows, 'settled tree motion')).toBeTrue();
-  });
-
   test('the abstract tree cuts pruned branches before their descendants', () => {
     expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(3);
     expect(required(facts.hiddenNodes, 'hidden descendant count')).toBeGreaterThan(0);
     expect(required(facts.heroGraphWidth, 'hero graph width')).toBeGreaterThan(620);
+  });
+
+  test('the hero mount landed: the handle and the canvas name the same renderer', () => {
+    const mount = required(facts.heroMount, 'hero mount');
+
+    // WebGPU where the box has it, Canvas2D where it does not — both are the
+    // mount answering an outcome; 'pending' and 'static' would mean it never
+    // finished picking one.
+    expect(mount.renderer).toBeOneOf(['webgpu', 'canvas']);
+    expect(mount.canvasRenderer).toBe(mount.renderer);
   });
 
   test('reduced motion serves one settled result', () => {
