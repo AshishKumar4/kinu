@@ -34,6 +34,8 @@ import {
   type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace } from "./workspace-host";
+import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
+import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
@@ -90,6 +92,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   type SlateBindingRequest, type SlateCallResult, type SlateOperation, type SlateReadModel, SLATES_CHANGED_EVENT,
+  type SlateBindingCatalog, type LiveShareRecord,
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
@@ -453,7 +456,7 @@ export class OrchestratorAgent extends ActorAgent {
         if (ids.length !== 0) this.broadcast(JSON.stringify({ type: SLATES_CHANGED_EVENT, ids }));
       },
       ensureSlate: (owner) => this.slates.ensureDurable(owner),
-      slateInvocation: (port) => this.slates.previewInvocation(port),
+      slateInvocation: (port, socket) => this.slates.slateInvocation(port, socket),
     });
 
     return this._workspace;
@@ -1164,6 +1167,27 @@ export class OrchestratorAgent extends ActorAgent {
       }
 
       return await this.routeWorkspacePreview(parsed, handle, request, `/${rest.join('/')}`);
+    }
+
+    // A share socket cannot cross a DO RPC boundary, so the share route
+    // forwards it by `fetch` under this path — the label was already verified
+    // at the edge; `routeShare` admits by the share row and routes the port.
+    if (url.pathname.startsWith(`${SLATE_SHARE_PATH}/`)) {
+      const [handle, claimText, ...rest] = url.pathname.slice(SLATE_SHARE_PATH.length + 1).split('/');
+      // The claim segment is JSON the edge wrote; anything that does not parse
+      // was never written by the edge — valibot carries the parse failure into
+      // the same 404 the shape check would produce.
+
+      const claim = v.safeParse(
+        v.pipe(v.string(), v.parseJson(), ShareViewerClaimSchema),
+        claimText ? decodeURIComponent(claimText) : '',
+      );
+
+      if (!handle || !claim.success) {
+        return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+      }
+
+      return await this.routeSlateShare(handle, claim.output, request, `/${rest.join('/')}`);
     }
 
     return await super.fetch(request);
@@ -5090,6 +5114,38 @@ export class OrchestratorAgent extends ActorAgent {
     return this.slates.operation(caller, operation);
   }
 
+  /**
+   * What a live share's capability graph is drawn against: the workspace's
+   *   executors, MCP servers, crafted tools, model tiers and slates. Names —
+   *   never surfaces: the graph tells the dialog what a binding COULD reach,
+   *   and dispatch still decides what it does reach per call.
+   */
+  protected async slateBindingCatalog(): Promise<SlateBindingCatalog> {
+    const [profile, descriptors] = await Promise.all([
+      this.profileInputs(),
+      this.requireOwnerUserDO().userMcp_toolDescriptors(await this.userCaller()),
+    ]);
+
+    const mcp = v.parse(McpToolSurfaceSchema, JSON.parse(descriptors));
+
+    const mcpServers = new Map<string, { title: string; tools: { name: string; readOnly: boolean }[] }>();
+
+    for (const descriptor of mcp.descriptors) {
+      const group = mcpServers.get(descriptor.serverId) ?? { title: descriptor.serverName, tools: [] };
+      group.tools.push({ name: descriptor.name, readOnly: descriptor.readOnly === true });
+      mcpServers.set(descriptor.serverId, group);
+    }
+
+    return {
+      executors: this.slateNamespaces()
+        .map((provider) => ({ namespace: provider.name, members: Object.keys(provider.tools) })),
+      mcp: [...mcpServers.entries()].map(([server, group]) => ({ server, title: group.title, tools: group.tools })),
+      tools: this.rt.craftStore.list().map((tool) => tool.name),
+      tiers: tierIdsOf(profile.envelope.catalog),
+      slates: await this.slates.projects(ROOT_SLATE_CALLER),
+    };
+  }
+
   private _slates: SlateHost | undefined;
 
   protected get slates(): SlateHost {
@@ -5104,6 +5160,8 @@ export class OrchestratorAgent extends ActorAgent {
         remove: (owner) => this.hostedWorkspace().apps.remove(owner),
         url: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       },
+      catalog: () => this.slateBindingCatalog(),
+      shareUrl: (handle) => slateShareUrl(this.env, this.name, handle),
     });
 
     return this._slates;
@@ -5111,6 +5169,42 @@ export class OrchestratorAgent extends ActorAgent {
 
   async slateBindingCallAs(caller: SlateCaller, id: string, name: string, request: SlateBindingRequest): Promise<SlateCallResult> {
     return this.slates.bindingCall(caller, id, name, request);
+  }
+
+  /** A request the share route already verified for this workspace's handle:
+   *   admission and routing live on the slate host — the same grant the
+   *   runtime checks — and never in this method. */
+  async routeSlateShare(
+    handle: string,
+    claim: ShareViewerClaim,
+    request: Request,
+    pathname: string,
+  ): Promise<Response> {
+    return this.slates.routeShare(handle, claim, request, pathname);
+  }
+
+  /** The URL a live share answers at, or null where this deployment cannot mint one. */
+  liveShareUrl(handle: string): Promise<string | null> {
+    return slateShareUrl(this.env, this.name, handle);
+  }
+
+  /** The viewer ticket the share origin's exchange path consumes for one
+   *  named account — minted by the app host because only the app host knows
+   *  the signed-in user, and it binds that user to this workspace's share. */
+  viewerEntryUrl(handle: string, userId: string): Promise<string | null> {
+    return viewerEntryUrl(this.env, this.name, handle, userId);
+  }
+
+  /** The live share the app host's open-route reads — the row re-read through
+   *   the S6 gate, plus its title and description off the slate's package.json. */
+  async readLiveShare(share: string): Promise<SlateAnswer<{ record: LiveShareRecord; title: string; description: string }>> {
+    return this.slates.readLiveShareRecord(share);
+  }
+
+  /** Record the users the owner named on a live share — DO-only beside the
+   *  blueprint twin, for the same reason. */
+  async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<LiveShareRecord>> {
+    return this.slates.shareLiveWith(share, users);
   }
 
   @callable() async listSlates() {

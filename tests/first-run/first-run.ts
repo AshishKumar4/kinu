@@ -87,6 +87,7 @@ export const FIRST_RUN_CASES = [
   'snapshot-after-turn',
   'every-tool',
   'sandbox-mount-write',
+  'public-share',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -199,6 +200,13 @@ export const FIRST_RUN_DEFECTS = {
     missedBecause: 'Tests checked NOT RUN prose and queue state rather than structural producer refusals; generic stdout interpretation also mistakes successful business data for errors.',
     provedRedAt: '53ba25348',
     redDirection: 'Non-model CLI REST and AgentClient calls require producer-owned refusal metadata and no execution for denied/parked commands. Executed exit-one failures and successful JSON-looking stdout are independent controls. Original 53ba25348 RED receipts remain retained unchanged.',
+  },
+  'public-share': {
+    id: 'public-share',
+    found: 'The owner asked for a live share a stranger can open without an account and call one read-only member of, with every mutating member refused unless approved by name.',
+    missedBecause: 'No deployed route served a share origin: the share label parser, the grant cut and the viewer path existed in no build, so every unit and workerd proof ran against code production never had.',
+    provedRedAt: 'e060e360f',
+    redDirection: 'RED against the deployed e060e360f on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, `probe()` to answer over a Cap\'n Web batch, and `mutate()` to be refused with the share\'s own "does not grant" reason.',
   },
   'preview-address': {
     id: 'preview-address',
@@ -353,6 +361,7 @@ const SHORT_SUBJECT = {
   'snapshot-after-turn': 'snapshot',
   'every-tool': 'tools',
   'sandbox-mount-write': 'mount',
+  'public-share': 'public',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

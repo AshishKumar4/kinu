@@ -4,6 +4,9 @@ import { KinuError } from '../obs/error';
 import { isSlateMethodName } from './rpc';
 import type { SlateReadModel } from './read-models';
 import type { SlateBinding, SlateProject } from './project';
+import { grantAdmits } from './capability-graph';
+import { memberEffect, toolActionEffect, toolActionMember } from './members';
+import type { ShareGrant } from './sharing';
 
 export const SlateBindingRequestSchema = v.strictObject({
   member: v.pipe(v.string(), v.minLength(1)),
@@ -30,30 +33,39 @@ export const SlateBindingRequestSchema = v.strictObject({
 export type SlateBindingRequest = v.InferOutput<typeof SlateBindingRequestSchema>;
 
 /** One app invocation the host is running: which slate it entered, and the
- *  chain of slates already running above it. */
+ *  chain of slates already running above it. `viewer` is set when the
+ *  invocation opened through a live share rather than an owner session. */
 export interface SlateInvocation {
   readonly id: string;
   readonly chain: readonly string[];
+  readonly viewer?: SlateViewer;
+}
+
+/** Who a live-share invocation belongs to: the share it opened through, the
+ *  named account (`user:<id>`) or anonymous opener (`source:<hash>`) the call
+ *  is attributed to, and the audit row the request is recorded under. */
+export interface SlateViewer {
+  readonly share: string;
+  readonly subject: string;
+  readonly request: number;
 }
 
 /**
- * The chain a binding call runs under, taken from the host's own record of the
- * invocation the guest named.
- *
- * Three answers, and only one of them is a chain the guest influenced at all:
- * an unnamed invocation is the root; a named one the host is running lends its
- * chain; anything else is refused by reason. That covers a guest that retains
- * an older request's bindings and replays them — the id it holds has been
- * retired — and a guest that presents an id issued to a different slate.
+ * The invocation a request names, taken from the host's own record — never
+ *  off the wire. Three answers: an unnamed invocation is the root (null);
+ *  a named one the host is running is the invocation it was issued as;
+ *  anything else is refused by reason. That covers a guest that retains an
+ *  older request's bindings and replays them — the id it holds has been
+ *  retired — and a guest that presents an id issued to a different slate.
  */
-export function resolveSlateChain(input: {
+export function issuedSlateInvocation(input: {
   readonly invocations: ReadonlyMap<string, SlateInvocation>;
   readonly id: string;
   readonly invocation: string | null;
-}): readonly string[] {
+}): SlateInvocation | null {
   const { invocations, id, invocation } = input;
 
-  if (invocation === null) return [];
+  if (invocation === null) return null;
   const issued = invocations.get(invocation);
 
   if (issued === undefined) {
@@ -66,16 +78,17 @@ export function resolveSlateChain(input: {
       `Slate ${id} named app invocation ${invocation}, which was issued to slate ${issued.id}`);
   }
 
-  return issued.chain;
+  return issued;
 }
+
 
 export type SlateBindingRoute =
   | { readonly kind: 'namespace'; readonly namespace: string; readonly member: string; readonly args: readonly JsonValue[] }
   | { readonly kind: 'codemode'; readonly namespace: 'memory' | 'tasks' | 'web'; readonly member: string; readonly args: readonly JsonValue[] }
   | { readonly kind: 'tool'; readonly name: string; readonly input: JsonObject }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
-  | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject }
-  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue }
+  | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject; readonly readOnly?: true }
+  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly viewer?: string }
   | { readonly kind: 'ai'; readonly prompt: string; readonly system?: string; readonly tier?: string }
   | {
     readonly kind: 'app';
@@ -284,5 +297,81 @@ export function routeSlateBindingCall(input: {
     case 'rpc': return routeRpcCall(binding, request, ctx);
     case 'mcp': return routeMcpCall(binding, request, ctx);
     case 'app': return routeAppCall(binding, request, ctx);
+  }
+}
+
+/** A viewer's binding call resolved to its route and to the grant member it
+ *  was admitted under — the (member, effect) pair the audit row records. */
+export interface ViewerBindingCall {
+  readonly route: SlateBindingRoute;
+  readonly member: string;
+  readonly effect: 'read' | 'mutate';
+}
+
+/**
+ * A binding call made through a live share: the ordinary route first, so an
+ *  undeclared binding refuses exactly as an owner's call does, then the grant
+ *  check — every member but an app hop must be named in `grant.members`, and
+ *  the hop must name a slate the grant walks. A granted read mcp tool is
+ *  routed `readOnly`, and an agent call carries the viewer's subject so the
+ *  owner's agent sees who sent it.
+ */
+export function routeViewerBindingCall(input: {
+  readonly id: string;
+  readonly project: SlateProject;
+  readonly name: string;
+  readonly request: SlateBindingRequest;
+  readonly chain: readonly string[];
+  readonly viewer: SlateViewer;
+  readonly grant: ShareGrant;
+}): ViewerBindingCall {
+  const { id, name, grant } = input;
+  const route = routeSlateBindingCall(input);
+
+  const admitted = (member: string, effect: 'read' | 'mutate'): ViewerBindingCall => {
+    if (grantAdmits(grant, id, name, member) === null) {
+      throw new KinuError('denied', `Slate ${id} does not grant ${name}.${member} to viewers`);
+    }
+
+    return { route, member, effect };
+  };
+
+  switch (route.kind) {
+    case 'namespace': return admitted(route.member, memberEffect('namespace', route.member));
+    case 'codemode': return admitted(route.member, memberEffect(route.namespace, route.member));
+    case 'tool': {
+      const member = toolActionMember(route.name, route.input);
+
+      return admitted(member, toolActionEffect(route.name, member));
+    }
+
+    case 'rpc': return admitted(route.method, 'read');
+    case 'mcp': {
+      const entry = grantAdmits(grant, id, name, route.tool);
+
+      if (entry === null) {
+        throw new KinuError('denied', `Slate ${id} does not grant ${name}.${route.tool} to viewers`);
+      }
+
+      return {
+        route: entry.effect === 'read' ? { ...route, readOnly: true } : route,
+        member: route.tool,
+        effect: entry.effect,
+      };
+    }
+
+    case 'agent': return { ...admitted('send', 'mutate'), route: { ...route, viewer: input.viewer.subject } };
+    case 'ai': return admitted('run', 'mutate');
+    case 'app': {
+      if (!grant.slates.includes(route.id)) {
+        throw new KinuError('denied', `Slate ${id} does not grant ${name}.${route.method} to viewers`);
+      }
+
+      return {
+        route,
+        member: route.method,
+        effect: grant.members.some((member) => member.slate === route.id && member.effect === 'mutate') ? 'mutate' : 'read',
+      };
+    }
   }
 }

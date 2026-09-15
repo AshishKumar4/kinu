@@ -3,6 +3,7 @@ import type { Refusal } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type { WorkMode } from '../types/turn';
 import { requireWorkModePermission } from '../execution/work-mode';
+import { LiveShareVisibilitySchema } from './live-share-visibility';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
 
@@ -54,13 +55,24 @@ export const SlateOperationSchema = v.variant('op', [
   v.strictObject({ op: v.literal('publish'), id: SlateDirectoryName, version: VersionId, include: v.optional(IncludedPaths) }),
   v.strictObject({ op: v.literal('unshare'), share: ShareId }),
   v.strictObject({ op: v.literal('shares') }),
+  // Live shares: the grant surface, sharing under it, the rows and the audit.
+  v.strictObject({ op: v.literal('graph'), id: SlateDirectoryName }),
+  v.strictObject({
+    op: v.literal('share'), id: SlateDirectoryName,
+    visibility: LiveShareVisibilitySchema,
+    approved: v.array(v.strictObject({ slate: v.string(), binding: v.string(), member: v.string() })),
+  }),
+  v.strictObject({ op: v.literal('liveShares') }),
+  v.strictObject({ op: v.literal('viewerRequests'), share: ShareId }),
 ]);
 
 export type SlateOperation = v.InferOutput<typeof SlateOperationSchema>;
 
 const READ_ONLY_OPERATIONS: Record<SlateOperation['op'], boolean> = {
   list: true, history: true, inspect: true, shares: true,
+  graph: true, liveShares: true, viewerRequests: true,
   preview: false, call: false, commit: false, fork: false, restore: false, remove: false, publish: false, unshare: false,
+  share: false,
 };
 
 /** The parsed operation contract: listing, history, inspection and the share rows read; every other operation can change resources or run authored code. */

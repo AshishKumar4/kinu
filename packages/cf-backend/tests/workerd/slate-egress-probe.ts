@@ -44,6 +44,8 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
       remove: async () => ({ removed: false, port: null }),
       url: async () => { throw new Error('The fixture does not publish preview URLs'); },
     },
+    catalog: async () => ({ executors: [], mcp: [], tools: [], tiers: [], slates: {} }),
+    shareUrl: async () => null,
   });
 
   private prepare(): void {

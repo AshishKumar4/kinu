@@ -25,6 +25,7 @@
     "./slate-durability-probe.ts",
     "./account-reset-probe.ts",
     "./slate-actor-probe.ts",
+    "./slate-share-probe.ts",
     "./two-turn-probe.ts",
     "./user-socket-probe.ts"
   ]

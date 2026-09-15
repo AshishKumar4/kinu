@@ -1,13 +1,17 @@
 /**
- * The four Phase 1 sharing surfaces, in a real browser: the Shared page, the
- * blueprint page (signed in and signed out), the share dialog and the
- * unmapped-bindings panel, each at desktop and phone width in dark and light.
+ * The sharing surfaces, in a real browser: the Shared page with its four
+ * lists, the blueprint page (signed in and signed out), the share dialog in
+ * both modes and the unmapped-bindings panel, each at desktop and phone width
+ * in dark and light.
  *
  * What only a browser can say here: that the warning about secret-shaped text
  * names a location and never a value, that a signed-out visitor's one action
- * is a sign-in, that the picker offers every workspace plus a new one, and
- * that the dialog names the credentialed set above its confirm button.
- * Screenshots land in ~/kinu-logs/blueprints/ (outside the worktree).
+ * is a sign-in, that the picker offers every workspace plus a new one, that
+ * the live dialog grants every read member with no click and a mutating one
+ * only after a click that changes the grant summary, and that the risk text
+ * under a mutating member names the act, the workspace and who can trigger it
+ * rather than a generic warning. Screenshots land in ~/kinu-logs/blueprints/
+ * and ~/kinu-logs/live-shares/ (outside the worktree).
  */
 import { describe, expect, test } from 'bun:test';
 import { mkdirSync } from 'node:fs';
@@ -18,7 +22,11 @@ import { withGallery, type Gallery } from './gallery-harness';
 
 const SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'blueprints');
 
+const LIVE_SHOTS = join(import.meta.dir, '..', '..', 'kinu-logs', 'live-shares');
+
 mkdirSync(SHOTS, { recursive: true });
+
+mkdirSync(LIVE_SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
@@ -31,8 +39,8 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   return page;
 }
 
-async function shoot(page: Page, name: string): Promise<string> {
-  const path = join(SHOTS, `${name}.png`);
+async function shoot(page: Page, name: string, dir = SHOTS): Promise<string> {
+  const path = join(dir, `${name}.png`);
   await page.screenshot({ path, fullPage: true });
 
   return path;
@@ -51,9 +59,17 @@ describe('slate sharing surfaces', () => {
             const text = await shared.evaluate(() => document.body.innerText);
             expect(text).toContain('My shared');
             expect(text).toContain('Shared with me');
+            expect(text).toContain('Public');
+            expect(text).toContain('From people I know');
             expect(text).toContain('from sam@example.com');
-            expect(await shared.$$eval('button', (buttons) => buttons.filter((button) => button.textContent?.includes('Fork into a workspace')).length)).toBe(3);
+            expect(text).toContain('from lee@example.com');
+            // A blueprint row forks; a live row opens. Four blueprints, four live rows.
+            expect(await shared.$$eval('button', (buttons) => buttons.filter((button) => button.textContent?.includes('Fork into a workspace')).length)).toBe(4);
+            expect(await shared.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(4);
+            expect(text).toContain('live · public');
+            expect(text).toContain('live · people');
             shots.push(await shoot(shared, `shared-${viewport}-${theme}`));
+            shots.push(await shoot(shared, `shared-four-lists-${viewport}-${theme}`, LIVE_SHOTS));
             await shared.evaluate(() => {
               const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Fork into a workspace'));
 
@@ -101,7 +117,37 @@ describe('slate sharing surfaces', () => {
             await visitor.close();
           }
 
-          const dialog = await freshPage(gallery, 'sharedialog', theme, viewport);
+          const live = await freshPage(gallery, 'sharedialog', theme, viewport);
+
+          try {
+            const text = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
+            expect(text).toContain('Share live');
+            expect(text).toContain('What a viewer reaches');
+            // Read members are granted with no click; mutating ones wait for one.
+            expect(await live.$$eval('[role="dialog"] input[type="checkbox"]', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(0);
+            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('Viewers get 4 read-only members. You approved 0 of 5 mutating members.');
+            // The risk statement is per member: the act, the workspace, who can trigger it.
+            expect(text).toContain('Calls create_issue on GitHub with your credentials.');
+            expect(text).toContain('Writes, edits or deletes files in workspace checkout-fixes as you.');
+            expect(text).toContain("Sends a message to your agent's inbox as this slate.");
+            expect(text).toContain('Runs a model call on your fast tier. Every call spends your inference.');
+            expect(text).toContain('Anyone you named on this share can trigger it.');
+            expect(text).not.toMatch(/rate|spend cap|per hour|\$/);
+            // The app hop is drawn as a subtree of the slate it names.
+            expect(text).toContain('via PEER → digest');
+            expect(text).toContain('DIGEST_FILES');
+            shots.push(await shoot(live, `share-dialog-live-${viewport}-${theme}`, LIVE_SHOTS));
+            await live.click('[data-approve="ASK.send"]');
+            expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('You approved 1 of 5');
+            // Public wording follows the visibility switch.
+            await live.click('[role="radio"][aria-checked="false"]');
+            expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
+            shots.push(await shoot(live, `share-dialog-live-approved-public-${viewport}-${theme}`, LIVE_SHOTS));
+          } finally {
+            await live.close();
+          }
+
+          const dialog = await freshPage(gallery, 'sharedialog-blueprint', theme, viewport);
 
           try {
             const text = await dialog.$eval('[role="dialog"]', (element) => element.textContent ?? '');
@@ -113,6 +159,7 @@ describe('slate sharing surfaces', () => {
             expect(text).toContain('Share with users');
             expect(text).not.toMatch(/rate|spend|per hour|\$/);
             shots.push(await shoot(dialog, `share-dialog-${viewport}-${theme}`));
+            shots.push(await shoot(dialog, `share-dialog-blueprint-${viewport}-${theme}`, LIVE_SHOTS));
           } finally {
             await dialog.close();
           }
@@ -131,8 +178,8 @@ describe('slate sharing surfaces', () => {
         }
       }
 
-      expect(shots.length).toBe(24);
-      process.stdout.write(`slate-sharing-ux: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+      expect(shots.length).toBe(40);
+      process.stdout.write(`slate-sharing-ux: ${String(shots.length)} screenshots under ${SHOTS} and ${LIVE_SHOTS}\n`);
     });
   }, 240_000);
 });

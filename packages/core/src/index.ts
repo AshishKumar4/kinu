@@ -309,11 +309,29 @@ export {
   SHARE_KINDS, formatBlueprintId, parseBlueprintId, blueprintPagePath,
   BlueprintInspectionSchema, BlueprintViewSchema, BlueprintForkSchema, BlueprintBundleSchema, PublishedBlueprintSchema,
   SharedLibrarySchema, SlateShareRecordSchema,
-  type ShareKind, type BlueprintAddress, type BlueprintInspection, type BlueprintView, type BlueprintFork, type BlueprintBundle,
+  ShareGrantSchema, SlateCapabilityGraphSchema,
+  LiveShareRecordSchema, LiveShareCreatedSchema, ViewerCallSchema, ViewerRequestRecordSchema, ShareViewerClaimSchema,
+  type ShareKind, type LiveShareVisibility, type BlueprintAddress, type BlueprintInspection, type BlueprintView,
+  type BlueprintFork, type BlueprintBundle,
   type PublishedBlueprint, type SharedLibrary, type SharedRow, type SlateShareRecord, type BlueprintEntry, type BlueprintWarning,
+  type ShareGrantMember, type ShareGrant, type SlateCapability,
+  type SlateGraphMember, type SlateGraphBinding, type SlateCapabilityGraph,
+  type LiveShareRecord, type LiveShareCreated, type ViewerCall, type ViewerRequestRecord, type ShareViewerClaim,
 } from './slates/sharing';
 
-export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
+export {
+  memberEffect, toolActionMember, toolActionEffect, toolMembers,
+  type SlateMemberEffect,
+} from './slates/members';
+
+export {
+  slateCapabilityGraph, cutShareGrant, grantAdmits, type SlateBindingCatalog,
+} from './slates/capability-graph';
+
+export {
+  SlateBindingRequestSchema, routeSlateBindingCall, issuedSlateInvocation, routeViewerBindingCall,
+  type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation, type SlateViewer, type ViewerBindingCall,
+} from './slates/bindings';
 
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
 
@@ -324,7 +342,7 @@ export {
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
 } from './slates/rpc';
 
-export { initSlateStateTable, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
+export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, routeSlateStorageCall, type SlateStorageOp } from './slates/state';
 
 // The host↔client slate vocabulary: browser-safe — strings, bounds and one
 // valibot schema — so it belongs on the value-imported barrel.
@@ -2303,6 +2321,10 @@ export {
 export {
   type WorkspacePreviewHost, type WorkspacePreviewUrl, buildWorkspacePreviewHost, parseWorkspacePreviewLabel,
 } from './preview/nimbus-preview-host';
+
+export {
+  buildSlateShareHost, parseSlateShareLabel, type SlateShareLabel,
+} from './preview/slate-share-host';
 
 export {
   PREVIEW_SANDBOX, containPreviewResponse, extractPreviewUrl, hostOf, isPreviewHostRequest,
