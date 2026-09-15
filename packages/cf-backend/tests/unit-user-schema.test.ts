@@ -98,7 +98,7 @@ describe('UserDO schema bootstrap', () => {
       'created_at', 'connected_at', 'last_seen_at', 'expires_at', 'revoked_at',
       'last_ip', 'last_agent', 'replaced_at',
       'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu',
-      'agent_root', 'tier', 'unstopped_at',
+      'agent_root', 'tier', 'unstopped_at', 'version', 'update_check',
     ]);
     expect(columns(db, 'device_inflight_requests')).toEqual([
       'request_id', 'device_id', 'workspace', 'turn_id', 'background_job_id',

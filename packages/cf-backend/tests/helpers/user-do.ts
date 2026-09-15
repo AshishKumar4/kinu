@@ -108,6 +108,9 @@ export interface TestUserDO {
   /** Device RPC frames that reached the socket — the observable difference
    *  between "consent let it through" and "consent stopped it". */
   deviceFrames: DeviceFrame[];
+  /** Frames the hub pushed to a device that are not calls: the UPDATE a
+   *  HELLO earns, with the device it went to. */
+  devicePushes: DevicePush[];
   /**
    * How a prompted workspace answers. Default: refuse.
    *
@@ -173,6 +176,11 @@ export interface TestUserDOOptions {
    *  device call short-circuits on "no device connected" before reaching the
    *  consent path, which would leave that path untested. */
   connectedDeviceId?: string;
+  /** What the deployment publishes under `/downloads/`: the build stamp and
+   *  the CLI artifacts' checksums, served through the `ASSETS` binding the
+   *  hub reads for a device's UPDATE decision. Absent means a deployment
+   *  that published no stamp — the hub then pushes nothing. */
+  servedBuild?: { version: string; checksums?: Record<string, string> };
   /** Answer device RPC frames the way the daemon does, so a call that PASSES
    *  consent completes instead of hanging on a socket nobody listens to. The
    *  difference between "the grant let it through" and "the grant did nothing"
@@ -248,8 +256,37 @@ const DeviceFrameSchema = v.object({
   deviceId: v.optional(v.string()),
 });
 
+/** A pushed frame: typed by its `type` word, the rest kept as sent. */
+const DevicePushSchema = v.looseObject({ type: v.string() });
+
+export interface DevicePush extends v.InferOutput<typeof DevicePushSchema> {
+  device: string | null;
+}
+
+/**
+ * The static-asset bundle as the UserDO's `ASSETS` binding reads it: the build
+ * stamp and the checksum files, or the SPA shell for anything else — which is
+ * what a deployment answers for a file it never published, and what the
+ * asset reader refuses.
+ */
+function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']): Response {
+  if (build && pathname === '/downloads/kinu-version.json') {
+    return Response.json({ version: build.version, sha: 'sha', builtAt: '2026-09-15T00:00:00Z' });
+  }
+
+  const checksum = build?.checksums?.[pathname.replace(/\.sha256$/, '')];
+
+  if (build && pathname.endsWith('.sha256') && checksum !== undefined) {
+    return new Response(`${checksum}  ${pathname.slice('/downloads/'.length, -'.sha256'.length)}\n`);
+  }
+
+  return new Response('<!doctype html><title>Kinu</title>', { status: 200, headers: { 'content-type': 'text/html' } });
+}
+
 interface TestUserEnvironment {
   CREDENTIAL_ENCRYPTION_KEY: string;
+  CLI_PUBLIC_ORIGIN?: string;
+  ASSETS?: { fetch(input: Request): Promise<Response> };
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
   MCP_GITHUB_CLIENT_ID?: string;
   MCP_GITHUB_CLIENT_SECRET?: string;
@@ -341,6 +378,18 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const unavailableNotices: TestUserDO['unavailableNotices'] = [];
   const availableNotices: TestUserDO['availableNotices'] = [];
   const deviceFrames: DeviceFrame[] = [];
+  const devicePushes: DevicePush[] = [];
+
+  /** A frame the hub pushed that is not an RPC call — HELLO's answers such as
+   *  UPDATE — recorded with the socket it went to. */
+  const recordPush = (data: string, device: string | null): boolean => {
+    const push = v.safeParse(DevicePushSchema, JSON.parse(data));
+
+    if (!push.success) return false;
+    devicePushes.push({ ...push.output, device });
+
+    return true;
+  };
 
   // Bound after construction: the socket answers THROUGH the object that owns
   // it, exactly as the runtime's own message handler does.
@@ -359,6 +408,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     deserializeAttachment: () => ({ device: attached }),
     serializeAttachment: () => {},
     send: (data: string) => {
+      if (recordPush(data, attached)) return;
       const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
 
       if (!frame.success) return;
@@ -535,6 +585,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // The credential store refuses to operate without its key, so a harness
     // exercising the real methods has to supply one exactly as a deployment does.
     CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
+    CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
+    ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
@@ -623,7 +675,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     revokedSessionPushes, capabilityRepushes,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
-    consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames,
+    consentPrompts, raisedConsentIds, unavailableNotices, availableNotices, deviceFrames, devicePushes,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },
     answerConsent: (answer) => {
@@ -654,6 +706,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         deserializeAttachment: () => attachment,
         serializeAttachment: (value: JsonValue) => { attachment = value; },
         send: (data: string) => {
+          if (recordPush(data, deviceId)) return;
           const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
 
           if (!frame.success) return;

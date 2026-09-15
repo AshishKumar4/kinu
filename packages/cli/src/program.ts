@@ -487,6 +487,9 @@ export function buildProgram(): Command {
     .description('Update the installed Kinu command')
     .option('--origin <url>', 'Kinu app origin')
     .option('--force', 'Reinstall even if already current')
+    // The startup check's detached child: refresh the CLI tree, print nothing,
+    // leave the launcher alone.
+    .addOption(new Option('--background', 'Stage and swap the CLI tree silently').hideHelp())
     .action(wrapAction(updateCommand));
 
   program

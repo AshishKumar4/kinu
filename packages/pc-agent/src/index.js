@@ -17,6 +17,12 @@ const sandbox = require('./sandbox.js');
 
 const pty = require('./pty.js');
 
+const update = require('./update.js');
+
+/** The names this daemon requires beside itself — the three requires above
+ *  — for the updater to land a newer set of. */
+const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js'];
+
 const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
 
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
@@ -53,6 +59,12 @@ const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
  *  same thing: this machine's credential is dead and no amount of retrying
  *  brings it back, so the daemon stops LOUDLY instead of dialling forever. */
 const CREDENTIALS_REJECTED_CLOSE = 4401;
+
+/** The hub's close reason when another socket took this device's slot. Its
+ *  words, verbatim (`DEVICE_SOCKET_REPLACED_REASON` in core): after this
+ *  daemon started its successor, that close is the successor connecting, and
+ *  this daemon's cue to exit. */
+const SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 const CREDENTIALS_REJECTED = 'device credentials were rejected; re-run: kinu connect';
 
@@ -2217,12 +2229,14 @@ function startConnectLoop(opts) {
       if (stopped) return;
 
       if (event && event.code === CREDENTIALS_REJECTED_CLOSE) {
-        if (onClose) onClose();
+        if (onClose) onClose(event);
 
         return stopRejected(`the hub closed this socket with ${CREDENTIALS_REJECTED_CLOSE}`);
       }
 
-      if (onClose) onClose();
+      if (onClose) onClose(event);
+
+      if (stopped) return;
       logger('Disconnected, reconnecting in', backoff, 'ms');
       retry();
     });
@@ -2365,9 +2379,24 @@ function processRunsThisDaemon(pid) {
 }
 
 /**
+ * Whether `pid` is the daemon that started this process as its successor: the
+ * one holder whose claim this process takes over. Named by the environment the
+ * predecessor set AND this process's own parent — a stray variable names
+ * nobody.
+ */
+function isPredecessor(pid) {
+  const named = Number(process.env[update.PREDECESSOR_ENV]);
+
+  return Number.isInteger(named) && named > 0 && named === pid && pid === process.ppid;
+}
+
+/**
  * Take the machine for this process, or report the daemon that already holds
  * it. A pidfile naming this process is this process's own claim: the CLI
- * writes it for the daemon it just started, and that is the same claim.
+ * writes it for the daemon it just started, and that is the same claim. A
+ * pidfile naming this process's predecessor is a claim handed over: the
+ * predecessor keeps serving until the hub replaces its socket, and exits
+ * without touching a pidfile that no longer names it.
  */
 function claimMachine(pidPath = PID_PATH) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -2384,7 +2413,7 @@ function claimMachine(pidPath = PID_PATH) {
 
       if (holder === process.pid) return { held: true, holder: process.pid };
 
-      if (holder !== null && processAlive(holder) && processRunsThisDaemon(holder)) {
+      if (holder !== null && processAlive(holder) && processRunsThisDaemon(holder) && !isPredecessor(holder)) {
         return { held: false, holder };
       }
 
@@ -2472,6 +2501,17 @@ function main() {
     sessions,
   };
 
+  const updater = update.createUpdater({
+    layout: {
+      deviceHome: DEVICE_HOME,
+      daemonPath: __filename,
+      siblings: DAEMON_SIBLINGS,
+      runtime: process.execPath,
+    },
+    origin: HTTP_ORIGIN,
+    log,
+  });
+
   // The daemon's one WebSocket: the runtime's global. Kinu launches this
   // daemon only under its own Bun, whose WebSocket is the implementation the
   // whole connect protocol is exercised against — there is no `ws` fallback,
@@ -2503,13 +2543,26 @@ function main() {
     log('Commands cannot be sandboxed on this machine:', SANDBOX_CAPABILITY.detail);
   }
 
-  startConnectLoop({
+  const loop = startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
     // A dead credential is not a transient failure, so the process exits
     // non-zero and the log says which command relinks the machine.
     onRejected: () => { process.exitCode = REJECTED_EXIT; },
     secret: () => cfg.token,
-    onClose: () => {
+    onClose: (event) => {
+      // The successor this daemon started has connected: the hub gave it this
+      // device's slot and closed this socket for it. This daemon's work is
+      // done, and exiting releases nothing — the pidfile already names the
+      // successor.
+      if (updater.pending() && event && event.reason === SOCKET_REPLACED_REASON) {
+        const ended = ctx.sessions.closeAll();
+
+        if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
+        log('device.update_handed_over', `successor connected; pid ${process.pid} exiting`);
+        loop.stop();
+        process.exit(0);
+      }
+
       // The commands still waiting to answer can no longer report to anyone,
       // and their ids died with the caller that minted them. Terminating them
       // here is what keeps a dropped socket from leaving work running that
@@ -2528,6 +2581,12 @@ function main() {
       const ws = mkWs(wsUrl);
       ws.addEventListener('open', () => {
         log('Connected');
+
+        // The hub accepted this socket, so its row reads connected: an update
+        // that was pending on this machine has landed or been rolled back,
+        // either way into a daemon that connects. A daemon still waiting on
+        // its own successor leaves the marker for that successor to clear.
+        if (!updater.pending()) update.clearPendingMarker(DEVICE_HOME);
         // `root` is the directory `kinu connect` ran in, recorded in
         // device.json at link time: the hub scopes every base-tier file call
         // to it, so the tier is one directory the owner named rather than a
@@ -2535,9 +2594,15 @@ function main() {
         // under the full tier, sent so the hub never runs a command on this
         // machine to learn a path.
         ws.send(JSON.stringify({
-          type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid,
+          type: 'HELLO', user: USER, os: os.platform(), arch: os.arch(), hostname: os.hostname(), pid: process.pid,
           root: cfg.root,
           home: os.homedir(),
+          // The build this daemon is, from the stamp the CLI wrote beside it
+          // at connect (or the last update wrote), and whether the owner
+          // wants it left alone. Absent when no stamp exists: the hub then
+          // pushes nothing, as it does for every daemon before this field.
+          version: update.readVersionStamp(DEVICE_HOME) ?? undefined,
+          updateCheck: !update.updateOptedOut(DEVICE_HOME),
           // What this machine PROVED at startup, in the hub's words: the hub
           // decides the tier and needs one term for what the machine can
           // honour, so a machine that cannot sandbox is never silently given a
@@ -2573,6 +2638,10 @@ function main() {
           return;
         }
 
+        // The hub's UPDATE frame: the updater owns everything that follows,
+        // on its own promise, and the socket keeps serving meanwhile.
+        if (updater.handle(msg)) return;
+
         // The hub rotates this machine's long-lived token on every accepted
         // connect. Rename a complete same-directory file before changing memory:
         // a crash leaves either the old valid JSON or the complete new JSON.
@@ -2602,7 +2671,18 @@ function main() {
 
 if (require.main === module) {
   try {
-    main();
+    // `--selftest`: the landed daemon run once by the one it replaces. The
+    // requires above have loaded every sibling by now; the stamp beside this
+    // file is what its HELLO would report. No pidfile is claimed and nothing
+    // connects.
+    if (process.argv.includes('--selftest')) {
+      const stamp = update.readVersionStamp(DEVICE_HOME);
+
+      if (stamp === null) throw new Error(`no version stamp beside ${__filename}`);
+      console.log(stamp);
+    } else {
+      main();
+    }
   } catch (err) {
     console.error('Kinu PC agent:', err instanceof Error ? err.message : String(err));
     process.exitCode = 1;

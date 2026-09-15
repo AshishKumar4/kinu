@@ -1769,7 +1769,7 @@ export abstract class ActorAgent extends Think<Env> {
         // a terminal claim of its own. Neither flag alone names it, which is
         // what {@link turnMayStillRun} is for.
         turnIsLive: (turnId) => this.turnMayStillRun(turnId),
-        scheduleRetry: (atMs: number) => this.scheduleTerminalRetry(atMs),
+        scheduleRetry: async (atMs: number) => { await this.scheduleTerminalRetry(atMs); },
       });
     }
 
@@ -1839,11 +1839,11 @@ export abstract class ActorAgent extends Think<Env> {
    * than this one: a row at `nowSec` is one this method would immediately read
    * as un-armed, so it would be written again on the next call.
    */
-  protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<void> {
+  protected async armWakeRow(callback: keyof this & string, atMs: number): Promise<string> {
     const nowSec = Math.floor(Date.now() / 1000);
     // Round UP: the SDK stores schedule times in whole seconds, and waking
-    // before the target leaves the work not-yet-due, which would re-arm for the
-    // same second and busy-spin the alarm until the millisecond passed.
+    // before the target leaves the work not-yet-due, which would re-arm for
+    // the same second and busy-spin the alarm until the millisecond passed.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
 
     const pending = async (): Promise<{ id: string; time: number }[]> =>
@@ -1854,11 +1854,9 @@ export abstract class ActorAgent extends Think<Env> {
     const armed = await pending();
     const desired = Math.min(targetSec, ...armed.map((row) => row.time));
 
-    if (armed.length === 1 && armed[0].time === desired) return;
+    if (armed.length === 1 && armed[0].time === desired) return armed[0].id;
     await this.schedule(new Date(desired * 1000), callback);
     const settled = await pending();
-
-    if (settled.length <= 1) return;
 
     const keeper = settled.reduce((best, row) =>
       row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best);
@@ -1870,12 +1868,15 @@ export abstract class ActorAgent extends Think<Env> {
     for (const row of settled) {
       if (row.id !== keeper.id) await this.cancelSchedule(row.id);
     }
+
+    return keeper.id;
   }
 
   /** The terminal-retry chain's arm: the wake that carries every post-activation
    *  obligation — owed effects, budgeted sweep remainders, activation-scoped
-   *  recovery. One row per actor, soonest-wins. */
-  protected scheduleTerminalRetry(atMs: number): Promise<void> {
+   *  recovery. One row per actor, soonest-wins. Answers the survivor row's id
+   *  so a caller that armed pessimistically can release exactly that row. */
+  protected scheduleTerminalRetry(atMs: number): Promise<string> {
     return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs);
   }
 
@@ -1887,6 +1888,14 @@ export abstract class ActorAgent extends Think<Env> {
    * storage and re-arms from what is left, so a duplicate wake costs one read.
    */
   async _kinuTerminalRetryTick(): Promise<void> {
+    // ARM FIRST, drain second: the pessimistic next-lap wake is durable before
+    // any pass runs, so a kill anywhere inside this frame leaves a future row
+    // rather than relying on the platform's preservation of the executing one.
+    // The collapse keeps it one row when another arm races in, and a tick that
+    // finds nothing owed releases the row it wrote at the end.
+    const armedRowId = await this.scheduleTerminalRetry(
+      Date.now() + recoveryBackoffMs(this.#maintenanceLaps + 1));
+
     // Maintenance first: the budgeted sweeps and the activation-scoped
     // recovery run in this alarm frame, then the owed external deliveries.
     // One wake, one carrier, collapse semantics included — a pass that left
@@ -1908,9 +1917,19 @@ export abstract class ActorAgent extends Think<Env> {
 
     if (sweepsUnfinished || recoveryUnfinished) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
-      await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(this.#maintenanceLaps));
     } else {
       this.#maintenanceLaps = 0;
+
+      // The pass is finished, so the pessimistic row's insurance has paid
+      // out. What it owes next is decided by the ledgers, not by the laps:
+      // a timed obligation waits for its own instant (a lone deferred job
+      // costs ONE wake at the instant, not a chain that arrives early and
+      // does nothing), and nothing owed at all sleeps empty — either way
+      // the row this tick wrote is released, never kept on suspicion.
+      const nextOwed = this.nextOwedAt();
+      await this.cancelSchedule(armedRowId);
+
+      if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     }
   }
 
@@ -1949,6 +1968,23 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
 
+  /** Whether anything anywhere still owes this actor a wake. The base owns
+   *  none of the rosters the predicate reads, so it answers false; the
+   *  subclass that knows its owed surfaces overrides and the tick asks this,
+   *  never a flattened copy of the roster, for its end-of-tick cancel. */
+  protected owedWorkExists(): boolean {
+    return false;
+  }
+
+  /** The earliest instant anything timed owes this actor a wake, or null
+   *  when only untimed work — or nothing — remains. A finished tick arms at
+   *  this instant instead of keeping its pessimistic next-lap row, so a lone
+   *  deferred obligation costs one wake at its own instant rather than a
+   *  chain of laps that arrive early and do nothing. The base times nothing,
+   *  so it answers null; the subclass that owns the ledgers overrides. */
+  protected nextOwedAt(): number | null {
+    return null;
+  }
 
   /**
    * A deterministic cut point in the terminal sequence. Null in production.
@@ -2509,6 +2545,9 @@ export abstract class ActorAgent extends Think<Env> {
           driverGate: () => this.driverGate(),
           // The workspace UI IS the review surface: a plan turn is admitted.
           planTurnRefusal: () => null,
+          // The turn's own wake at its open: a kill mid-turn leaves the run
+          // row AND the wake that re-drives what it owed, at the lap-0 delay.
+          armTurnWake: async () => { await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(0)); },
           modelWindow: () => ({
             contextWindow: this.sessionContextWindow(),
             modelOutputLimit: this.modelCatalog.modelOutputLimit(),
@@ -3705,7 +3744,7 @@ export abstract class ActorAgent extends Think<Env> {
         // schedule row of its own — and the tick that row fires re-enters the
         // job sweep itself, because the fork reconcile behind it runs at most
         // once per activation and a deferred job outlives that.
-        scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
+        scheduleResume: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
       });
     }
 
