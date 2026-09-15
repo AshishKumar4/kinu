@@ -138,18 +138,16 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
     if (step === 0 && name !== null && name !== profile?.displayName) {
       setBusy(true);
+      const failure = await setDisplayName(name).then(() => null, (...rejection: [unknown]) => renderThrownChain({ cause: rejection[0] }));
+      setBusy(false);
 
-      try {
-        await setDisplayName(name);
-        account.reload();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
+      if (failure !== null) {
+        setError(failure);
 
         return;
       }
 
-      setBusy(false);
+      account.reload();
     }
 
     setStep((s) => Math.min(s + 1, LAST_STEP));
