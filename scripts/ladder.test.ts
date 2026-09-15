@@ -205,6 +205,7 @@ describe('the ladder measures something', () => {
     expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
       'scripts/bench-c3-overwrite-cell.test.ts',
       'scripts/bench-corpus-gate.test.ts',
+      'scripts/bench-devbox-ask-again.test.ts',
       'scripts/bench-devbox-block-attach.test.ts',
       'scripts/bench-devbox-decision.test.ts',
       'scripts/bench-devbox-workerd.test.ts',
