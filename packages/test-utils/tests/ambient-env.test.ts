@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test';
 import { join, basename, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
-  AMBIENT_CREDENTIAL_ENV, LIVE_MODEL_ENV, stripAmbientCredentials,
+  AMBIENT_CREDENTIAL_ENV, LIVE_MODEL_ENV, envObject, stripAmbientCredentials,
 } from '../src/ambient-env';
 import { SCRATCH_ROOT_PREFIX } from '../src/scratch';
 
@@ -70,7 +70,7 @@ describe('the rule', () => {
 
   test('it reports what it took and leaves everything else alone', () => {
     const env = { ...SIGNED_IN_SHELL, KINU_HOME: '/tmp/scratch', PATH: '/usr/bin' };
-    expect([...stripAmbientCredentials(env)].sort()).toEqual(['KINU_ORIGIN', 'KINU_TOKEN']);
+    expect([...stripAmbientCredentials(envObject(env))].sort()).toEqual(['KINU_ORIGIN', 'KINU_TOKEN']);
     expect(Object.keys(env).sort()).toEqual(['KINU_HOME', 'PATH']);
     expect(env.KINU_HOME).toBe('/tmp/scratch');
   });
@@ -81,13 +81,13 @@ describe('the rule', () => {
     // exactly this shape because the adapter resolves the empty value in
     // preference to its own default. Presence is the test, never truthiness.
     const env = { KINU_BASE_URL: '', KINU_AUTH: 'Bearer x' };
-    expect([...stripAmbientCredentials(env)].sort()).toEqual(['KINU_AUTH', 'KINU_BASE_URL']);
+    expect([...stripAmbientCredentials(envObject(env))].sort()).toEqual(['KINU_AUTH', 'KINU_BASE_URL']);
     expect(Object.keys(env)).toEqual([]);
   });
 
   test('a clean environment is left untouched and reported as such', () => {
     const env = { PATH: '/usr/bin' };
-    expect(stripAmbientCredentials(env)).toEqual([]);
+    expect(stripAmbientCredentials(envObject(env))).toEqual([]);
     expect(env).toEqual({ PATH: '/usr/bin' });
   });
 });

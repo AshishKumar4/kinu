@@ -94,12 +94,19 @@ KINU_WRANGLER_ARGS=()
 # runs the full phase with no tolerance at all, unconditionally, in both
 # environments, and its findings fail the deployment.
 KINU_BOOTSTRAP=0
+# `--gates-only` runs every pre-publish wave exactly as a deploy would — same
+# gates, same barriers, same thread budget — and stops before the build. It
+# is how the wave is MEASURED: the width figures in scripts/ladder.ts come
+# from this path, on the argv and never from the environment, so no ambient
+# variable can turn a deploy into a rehearsal.
+KINU_GATES_ONLY=0
 case "${1:-}" in
   "") ;;
   --bootstrap) KINU_BOOTSTRAP=1 ;;
+  --gates-only) KINU_GATES_ONLY=1 ;;
   *)
     echo -e "${RED}Unknown option '$1'.${NC}"
-    echo "Usage: scripts/deploy.sh [--bootstrap]"
+    echo "Usage: scripts/deploy.sh [--bootstrap|--gates-only]"
     exit 2
     ;;
 esac
@@ -191,16 +198,35 @@ run_required_gate() {
   GATE_CMDS+=("$*")
 }
 
-# Each heavy gate runs Bun with up to four workers. One outer process per four
-# hardware threads keeps the aggregate at the machine's thread count. The old
-# half-thread rule launched 12 outer gates and up to 48 inner workers here.
-# Measured 2026-08-23: that wave turned a 23.67s CLI file into a 173.54s run
-# and produced nine false timeout failures. Six outer gates keep all 24 threads
-# available without oversubscribing them.
-gate_jobs() {
-  local threads
-  threads="$(nproc 2>/dev/null || echo 4)"
-  echo "${KINU_DEPLOY_JOBS:-$(( threads / 4 > 0 ? threads / 4 : 1 ))}"
+# The wave is scheduled by THREAD BUDGET, not by a count of gates. Each gate
+# weighs the hardware threads it occupies at peak — GATE_WEIGHT below, held
+# equal to GATE_WEIGHTS in scripts/ladder.ts by deploy.test.ts, and one for a
+# gate not named there — and a gate launches only while the running weight
+# plus its own fits the budget. A gate heavier than the whole budget still
+# launches when nothing else is running, so the budget can never wedge.
+#
+# Measured 2026-08-23: a half-thread rule launched 12 outer gates and up to 48
+# inner workers here, turned a 23.67s CLI file into a 173.54s run and produced
+# nine false timeout failures. Measured 2026-09-16: a six-gate width — the
+# rule that replaced it — put the eleven-suite UI row beside two `--parallel=4`
+# package suites and failed every deploy that day on a puppeteer wall, while
+# the same row passed alone in 361s. Both are the same defect: a count of
+# gates is not a measure of load. The budget is the box's thread count.
+declare -A GATE_WEIGHT=(
+  ['bun test --parallel=4 packages/cf-backend/']=11
+  ['bun test --parallel=4 packages/cli-backend/']=11
+  ['bun run test']=11
+  ['bun run test:cli']=11
+  ['bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts']=5
+  ['bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts']=5
+  ['bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts']=5
+  ['bun test scripts/react-runtime-identity.test.ts']=5
+  ['bun test scripts/swarm-tree-geometry.test.ts']=5
+  ['bun test scripts/chat-scroll.test.ts']=5
+  ['bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts']=5
+)
+gate_threads() {
+  echo "${KINU_DEPLOY_THREADS:-$(nproc 2>/dev/null || echo 4)}"
 }
 
 # A gate that cannot exit is a failure, not an infinite deploy. The slowest
@@ -248,7 +274,7 @@ flush_gates() {
   local total=${#GATE_LABELS[@]}
   if [ "$total" -eq 0 ]; then return 0; fi
 
-  local jobs; jobs="$(gate_jobs)"
+  local budget; budget="$(gate_threads)"
   # Every gate writes its output here and every failure is reported out of it, so
   # a directory that could not be created is a wave that cannot be reported on.
   # Refused rather than worked around: with `$dir` empty the redirections below
@@ -282,21 +308,25 @@ flush_gates() {
 
   local -a launched=() statuses=()
   local -A busy=() gate_of_pid=()
-  local pick group finished status
-  local running=0 settled=0 failures=0
+  local pick group finished status weight
+  local running=0 load=0 settled=0 failures=0
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
-  echo "Running $total gate(s), up to $jobs at once"
+  echo "Running $total gate(s) within a budget of $budget threads"
   while [ "$settled" -lt "$total" ]; do
     # Take the FIRST gate that is neither launched nor blocked by a peer in its
-    # own group. A plain queue pointer would stall the whole wave behind a
-    # gallery gate waiting for its turn.
-    while [ "$failures" -eq 0 ] && [ "$running" -lt "$jobs" ]; do
+    # own group and whose weight fits the remaining budget — or, when nothing
+    # is running, the first gate regardless, so a gate heavier than the whole
+    # budget still runs. A plain queue pointer would stall the whole wave
+    # behind a gallery gate waiting for its turn.
+    while [ "$failures" -eq 0 ]; do
       pick=-1
       for ((index = 0; index < total; index++)); do
         if [ "${launched[index]}" -eq 1 ]; then continue; fi
         group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
         if [ -n "$group" ] && [ -n "${busy[$group]:-}" ]; then continue; fi
+        weight="${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}"
+        if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi
         pick=$index
         break
       done
@@ -304,6 +334,7 @@ flush_gates() {
       group="${GATE_GROUP[${GATE_CMDS[pick]}]:-}"
       if [ -n "$group" ]; then busy[$group]=1; fi
       launched[pick]=1
+      load=$((load + ${GATE_WEIGHT[${GATE_CMDS[pick]}]:-1}))
       # `timeout` signals the gate's process group and escalates after five
       # seconds. That kills the gate command tree, and no more: a child that
       # calls setsid (a detached dev server, a daemonized browser helper)
@@ -347,6 +378,7 @@ flush_gates() {
     index="${gate_of_pid[$finished]}"
     unset "gate_of_pid[$finished]"
     running=$((running - 1))
+    load=$((load - ${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}))
     settled=$((settled + 1))
     statuses[index]=$status
     group="${GATE_GROUP[${GATE_CMDS[index]}]:-}"
@@ -496,7 +528,7 @@ run_required_gate "React runtime identity" bun test scripts/react-runtime-identi
 run_required_gate "Nested container resolution" bun test scripts/nested-container-resolution.test.ts
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
 run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts
-run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
+run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts
 run_required_gate "Tier-budget ratchet" bun run gate:ladder-budget
 run_required_gate "Dead code" bun run gate:dead-code
 # The other direction of the same census: `gate:dead-code` reports a declaration
@@ -584,6 +616,10 @@ flush_gates
 
 echo ""
 echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
+if [ "$KINU_GATES_ONLY" = "1" ]; then
+  echo "Gates only: stopping before the build, as asked."
+  exit 0
+fi
 
 # ── Step 2: Build Kinu ────────────────────────────────────────
 echo ""

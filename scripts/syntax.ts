@@ -140,7 +140,7 @@ export function walk(node: SyntaxNode, visit: (n: SyntaxNode) => void): void {
  */
 const StringValued = v.object({ value: v.string() });
 
-const literalString = (raw: Node): string | undefined => {
+export const literalString = (raw: Node): string | undefined => {
   if (raw.type !== 'Literal') return undefined;
   const decoded = v.safeParse(StringValued, raw);
 
