@@ -1507,7 +1507,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
-      // ws_session dispatcher: push the reply back through Think's chat
+      // ws_session dispatcher: push the reply back through the chat
       // broadcast. The reply() tool's content becomes a synthetic assistant
       // message visible to connected WS clients.
       const wsDispatcher: ReplyDispatcher = {
@@ -1524,9 +1524,11 @@ export class OrchestratorAgent extends ActorAgent {
               parts: [{ type: 'text', text }],
             } as const;
 
+            // The tab's conversation, from the store the transcript writes —
+            // the same rows a redial reads — with the reply appended.
             this.broadcast(JSON.stringify({
               type: 'cf_agent_chat_messages',
-              messages: [...this.messages, message],
+              messages: [...this.chatTranscript.history(), message],
             }));
 
             return { delivered: true };
