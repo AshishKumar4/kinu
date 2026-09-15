@@ -45,13 +45,6 @@ function requestText(prompt: readonly ModelMessage[]): string {
     .join('\n');
 }
 
-/** A first message from the operator, durable the way the chat request leaves
- *  it: persisted BEFORE its own turn queues, which is exactly the admission
- *  order the offered turn's slot reads. */
-function admitOperatorMessage(agent: HarnessOrchestratorAgent, text: string): void {
-  agent.harnessDrivingUserMessage(text);
-}
-
 /** The activity ledger's rows for this actor — the durable half of the
  *  `genesis.yielded_to_message` record, beside the diagnostics event. */
 function activityEvents(db: Database): string[] {
@@ -146,24 +139,24 @@ describe('the workspace takes its own first turn', () => {
       if (parsed.success && parsed.output.state === 'undelivered') cardGone();
     });
 
-    admitOperatorMessage(harness.agent, 'Summarize the incident timeline first.');
-
-    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    await harness.agent.harnessChatLoop.pumpPromise;
-    await cardWithdrawn;
-
-    // The offer yielded at its slot: nothing ran, and the ledger says why.
-    expect(turnsRun(harness.agent).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
-    expect(activityEvents(harness.db)).toContain('genesis.yielded_to_message');
-
-    // The operator's message is the first turn, and its request carries no
-    // offer.
+    // The operator's message reaches the loop before the offer does, as a
+    // send the transport hands the idle loop: it IS the first turn, opened
+    // and parked at its model call, its row durable before the offer arrives.
     const turns = thinkTurns(harness.agent);
     const request = await turns.prepare({ messages: [{ role: 'user', content: 'Summarize the incident timeline first.' }] });
     expect(requestText(request.prompt)).toContain('Summarize the incident timeline first.');
     expect(requestText(request.prompt)).not.toContain('first turn');
+
+    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
     await turns.settle({ messageId: 'a-first', text: 'ok' });
+    await harness.agent.harnessChatLoop.pumpPromise;
+    await cardWithdrawn;
+
+    // The offer yielded at its slot: nothing of it ran, and the ledger says
+    // why. The operator's message is the one turn that ran.
+    expect(turnsRun(harness.agent).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
     expect(turnsRun(harness.agent).map((turn) => turn.text)).toEqual(['Summarize the incident timeline first.']);
+    expect(activityEvents(harness.db)).toContain('genesis.yielded_to_message');
     harness.db.close();
   });
 
