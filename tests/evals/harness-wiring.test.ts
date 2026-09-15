@@ -121,7 +121,7 @@ type StreamPartV2 =
  * One turn, many steps, nobody replying — the long-episode shape in miniature,
  * which is the only shape in which the in-episode craft loop can close.
  */
-function scripted(steps: readonly ScriptedStep[]): LanguageModel {
+function scripted(steps: readonly ScriptedStep[], answer: { readonly finishReason: 'stop' | 'length' } = { finishReason: 'stop' }): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let index = 0;
 
@@ -152,7 +152,10 @@ function scripted(steps: readonly ScriptedStep[]): LanguageModel {
               controller.enqueue({ type: 'text-start', id: '0' });
               controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
               controller.enqueue({ type: 'text-end', id: '0' });
-              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              // Every answer after the script — the turn's own and the one
+              // continuation a cut answer is owed — ends the way the fixture
+              // says, so a capped episode stays capped through its continuation.
+              controller.enqueue({ type: 'finish', finishReason: answer.finishReason, usage });
             }
 
             controller.close();
@@ -196,10 +199,10 @@ function scoreOf(scores: readonly BehaviourScoreJson[], name: string): Behaviour
 }
 
 async function runCase(
-  task: EvalCase, steps: readonly ScriptedStep[],
+  task: EvalCase, steps: readonly ScriptedStep[], answer?: { readonly finishReason: 'stop' | 'length' },
 ): Promise<readonly BehaviourScoreJson[]> {
   const out = await runBehaviourTask(task, {
-    dir, model: scripted(steps), llm: LLM, arm: ARM, opened,
+    dir, model: scripted(steps, answer), llm: LLM, arm: ARM, opened,
   });
 
   return out.scores;
@@ -592,23 +595,34 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
       { tool: 'file', input: { action: 'write', path: 'capped.txt', content: 'done' } },
     ]);
 
-    // The row LANDS. Dropping it from the arm's array is the plausible bug this
-    // guards: nothing else in the record would go missing, and the tier would
-    // quietly stop reporting the share of attempts an output limit ended — the
-    // one statistic that says whether the cap costs anything.
+    // The row LANDS, and it is MEASURED: the loop's step-finish carries the
+    // SDK's mapped finish reason off the step it closed, so the episode's last
+    // step has a reason to read. Dropping the row from the arm's array is the
+    // plausible bug this guards — nothing else in the record would go missing,
+    // and the tier would quietly stop reporting the share of attempts an
+    // output limit ended, the one statistic that says whether the cap costs
+    // anything. (This row read `eligible: 0` while the runner's step-finish
+    // carried no reason; that was the instrument, not the episode.)
     const cap = scoreOf(scores, 'output_cap');
+    expect(cap.eligible).toBe(1);
+    expect(cap.rate).toBe(1);
+    expect(cap.detail).toContain("finished 'stop'");
+  }, 0);
 
-    // UNMEASURED under a scripted provider, and that is the honest verdict
-    // rather than a gap in this test: the fixture supplies the PROVIDER-level
-    // finish shape, so nothing reaches the accumulator's `lastFinishReason` and
-    // the episode closes no step with a reason to read (target-seam.test.ts says
-    // the same about the same field). A `1` here would be the failure the
-    // asymmetry exists to prevent — a clean cap verdict over an episode nobody
-    // measured — so the assertion is that it declines to score, not that it
-    // passes.
-    expect(cap.eligible).toBe(0);
-    expect(cap.rate).toBeNull();
-    expect(cap.detail).toContain('UNMEASURED');
+  test('output_cap: an answer the provider cut at its limit is reported as cut, not as a miss', async () => {
+    // The provider ends every answer at its output limit — the turn's own and
+    // the one continuation the loop owes a cut answer — so the episode's LAST
+    // step is the cut one. The red direction of the row above: an arm that
+    // read no reason, or read an earlier step's, could not tell this episode
+    // from the clean one.
+    const scores = await runCase({ id: 'wiring-cap-cut', task: 'do the task' }, [
+      { tool: 'file', input: { action: 'write', path: 'capped.txt', content: 'done' } },
+    ], { finishReason: 'length' });
+
+    const cap = scoreOf(scores, 'output_cap');
+    expect(cap.eligible).toBe(1);
+    expect(cap.rate).toBe(0);
+    expect(cap.detail).toContain('CUT AT THE OUTPUT LIMIT');
   }, 0);
 
   test('the harness REFUSES a runtime with no executor surface, before spending anything', async () => {
