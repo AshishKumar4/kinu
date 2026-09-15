@@ -45,7 +45,7 @@ import {
 } from '@kinu.run/core';
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
-import { LIVE_MODEL_ENV } from './ambient-env';
+import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 import { EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict } from './eval-identity';
 
 /** Which of the two resolution paths produced a target. */
@@ -88,7 +88,7 @@ function bearer(token: string): string {
  * Pure over its environment so the resolver itself is testable without any
  * credential — the gate that proves the gate works.
  */
-export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolution {
+export function resolveLiveModel(env: EnvSource = ambientByName(Object.values(LIVE_MODEL_ENV).flat())): LiveModelResolution {
   const origin = env[LIVE_MODEL_ENV.origin]?.trim();
   const token = env[LIVE_MODEL_ENV.token]?.trim();
   const gatewayURL = first(env, LIVE_MODEL_ENV.gatewayURL);

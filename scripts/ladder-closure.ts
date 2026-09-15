@@ -199,6 +199,27 @@ function scanMarkers(root: SyntaxNode, edges: readonly string[]): Scan {
     if (!isEnvObject) return;
     const parent = node.parent?.raw;
 
+    // `const { A, B } = process.env` reads exactly A and B. A rest element or
+    // a computed key reads the object whole, and falls through to enumeration.
+    if (parent?.type === 'VariableDeclarator' && parent.init === raw && parent.id.type === 'ObjectPattern') {
+      const names: string[] = [];
+
+      for (const property of parent.id.properties) {
+        if (property.type !== 'Property' || property.computed || property.key.type !== 'Identifier') {
+          names.length = 0;
+          break;
+        }
+
+        names.push(property.key.name);
+      }
+
+      if (names.length > 0) {
+        env.push(...names);
+
+        return;
+      }
+    }
+
     // The parent is a member access ON this env object: a named or computed
     // read — unless it is the target of an assignment or a `delete`, which
     // is a write and reads nothing.

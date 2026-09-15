@@ -155,6 +155,12 @@ describe('ladder-closure — what a closure holds', () => {
     expect(closure.kind === 'derived' ? closure.env : []).toEqual(['ALPHA', 'BETA', 'DELTA', 'GAMMA']);
   });
 
+  test('destructuring the environment reads exactly the named keys', () => {
+    const repo = fixture({ 'scripts/g.ts': 'const { PATH, HOME } = process.env;\nexport const g = [PATH, HOME];' });
+    const closure = deriveClosure('bun scripts/g.ts', DERIVED, repo);
+    expect(closure.kind === 'derived' ? closure.env : ['refused']).toEqual(['HOME', 'PATH']);
+  });
+
   test('a write to the environment is not a read', () => {
     const repo = fixture({
       'scripts/g.ts': "process.env.HOME = '/x';\ndelete process.env.OTHER;\nexport const g = 1;",
@@ -216,6 +222,8 @@ describe('ladder-closure — red in every direction it refuses', () => {
       'export const g = Object.entries(process.env);',
       'export const g = (env = process.env) => env;',
       "export const g = 'X' in Bun.env;",
+      'const { PATH, ...rest } = process.env;\nexport const g = [PATH, rest];',
+      "const k = 'X';\nconst { [k]: v } = process.env;\nexport const g = v;",
     ]) {
       const repo = fixture({ 'scripts/g.ts': body });
       expect(refused(deriveClosure('bun scripts/g.ts', DECLARED, repo))).toContain('reads the environment whole');

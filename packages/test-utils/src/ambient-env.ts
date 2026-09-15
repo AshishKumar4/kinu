@@ -107,6 +107,15 @@ export function stripAmbientCredentials(env: EnvByName): readonly string[] {
   return removed;
 }
 
+/** The process environment projected onto `names`, by name. The one way a
+ *  resolver in this package reads the ambient environment: a default
+ *  parameter of `process.env` hands the object over whole, which the ladder's
+ *  closure walker cannot bound, and this projection reads each name through a
+ *  computed key it can. */
+export function ambientByName(names: readonly string[]): Record<string, string | undefined> {
+  return Object.fromEntries(names.map((name) => [name, process.env[name]]));
+}
+
 /** A plain object as {@link EnvByName}. Presence is the test, never
  *  truthiness: `KINU_BASE_URL=` is what someone trying to CLEAR the variable
  *  produces, and an empty string is not absence. */

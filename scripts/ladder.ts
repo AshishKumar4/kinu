@@ -38,6 +38,9 @@ import { resolve } from 'node:path';
 import { arch, cpus, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
+import { repoAt } from './ladder-closure';
+import type { Inputs } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isPythonSuite, isRunnableSuite, isVitestEvalSuite, trackedFiles,
 } from './sources';
@@ -90,6 +93,11 @@ export interface Gate {
    *  trusted for things it never looked at — which this repo has shipped three
    *  times. */
   readonly blind: string;
+  /** What the gate's verdict can depend on, for the cache: `derived` from the
+   *  module graph plus the declared `reads` and `env`, or `live` with the
+   *  reason a hash over the tree cannot stand for it. See
+   *  `scripts/ladder-closure.ts`. */
+  readonly inputs: Inputs;
 }
 
 /** Gates that run before the deploy tier. The deploy tier is parsed from
@@ -105,6 +113,7 @@ export const LADDER: readonly Gate[] = [
       + 'unbounded. Both had already turned deploy gate 6 red for reasons unrelated to '
       + 'any change under test, and both presented as "this test timed out after 5000ms".',
     blind: 'anything inside the repository. It only reads the machine.',
+    inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
     run: 'bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
@@ -112,6 +121,7 @@ export const LADDER: readonly Gate[] = [
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
     catches: 'a pattern census that mistakes strings for regexes or a JSONC parser that changes data',
     blind: 'semantic quality of a reviewed parser candidate',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun scripts/pattern-inventory.ts',
@@ -119,6 +129,7 @@ export const LADDER: readonly Gate[] = [
     seconds: 2.5, // Measured 2026-09-06 on the 24-thread workstation.
     catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
     blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run check',
@@ -130,6 +141,7 @@ export const LADDER: readonly Gate[] = [
     catches: `type errors and the ${String(ANTI_SLOP_RULE_COUNT)} anti-slop rules across all 11 `
       + 'projects. The largest defect class by volume and the only total one — every file, every line.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:do-init',
@@ -140,6 +152,7 @@ export const LADDER: readonly Gate[] = [
       + 'at 25s and, past 31s, RESET the object. That invariant held at the method and '
       + 'was defeated at the object.',
     blind: 'I/O added on any other DO lifecycle path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:duplication',
@@ -150,6 +163,7 @@ export const LADDER: readonly Gate[] = [
       + 'every identifier renamed — the mechanism behind "X never worked in Y backend".',
     blind: 'duplication refactored enough to differ structurally, and duplicated '
       + '*policy* expressed in different code.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:reachability',
@@ -159,6 +173,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'an @callable RPC no caller reaches — the "correct, wired, dead" class this '
       + 'codebase has shipped at least ten times.',
     blind: 'a reachable RPC whose result nobody reads.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:platform',
@@ -168,6 +183,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a platform number stated in prose with no catalog id behind it, and a '
       + 'catalog entry with no evidence label or provenance.',
     blind: 'whether the catalogued number is still true.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:egress-interception',
@@ -182,6 +198,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether interception actually engages at runtime, and DNS, which '
       + 'leaves regardless and which the gate reports as a known residual '
       + 'rather than closing.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:typecheck-coverage',
@@ -199,6 +216,7 @@ export const LADDER: readonly Gate[] = [
       + 'neither side can be quietly narrowed.',
     blind: 'whether the tests in a covered directory assert anything. It proves they '
       + 'compile, which is exactly the signal that was missing.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:set-equality',
@@ -220,6 +238,7 @@ export const LADDER: readonly Gate[] = [
       + 'relayed rather than read. Three of the fifteen were each of those and no set-equality '
       + 'assertion reaches them. Also blind to the 2 shell gate programs, which it counts and '
       + 'never parses.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:literature-citations',
@@ -258,6 +277,7 @@ export const LADDER: readonly Gate[] = [
       + 'cannot see a compressed QUOTATION, which is the one defect in this family that needed a '
       + 'human and the recorded source. It prints all of this on the GREEN path, because a blind '
       + 'spot visible only in red output is invisible exactly when the tree is clean.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:commit-message',
@@ -297,6 +317,7 @@ export const LADDER: readonly Gate[] = [
       + 'describing a different commit passes every rule, and so does a pasted requester quotation '
       + 'with no attributing verb. History is not read as a standard: the '
       + 'governed range starts at the commit that added the gate.',
+    inputs: { kind: 'live', why: 'reads git history from the gate-adding commit to HEAD; a new commit changes the verdict with no tracked file changed.' },
   },
   {
     run: 'bun run gate:install-scripts',
@@ -317,6 +338,7 @@ export const LADDER: readonly Gate[] = [
       + 'only forces the set to be a decision. Also blind to what a script does at runtime, to '
       + 'transitive `bun.lock` integrity, and to CVEs — `bun run gate:dependency-advisories` '
       + 'is the gate for the last, and shares the reviewed-set shape with this one.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:patch-parity',
@@ -336,6 +358,7 @@ export const LADDER: readonly Gate[] = [
       + "checkout's, so one shared directory serves every worktree while `patches/` is per-commit, "
       + 'and at most one checkout can be truthful at a time. The gate prints its full blind-spot '
       + 'list on the GREEN path, where it is actually needed.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:ladder-budget',
@@ -355,6 +378,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the wall clock itself. This compares declarations to the lock; a gate that '
       + 'slows without its row updated passes until somebody re-measures. Shrinkage '
       + 'passes deliberately: a faster tier is the ratchet working.',
+    inputs: { kind: 'derived' },
   },
 
   {
@@ -382,6 +406,7 @@ export const LADDER: readonly Gate[] = [
       + 'somewhere the defect no longer bites, and only `bun scripts/bench.ts validate --id '
       + '<id>` (one task, 93s, no model) answers that. Also whether the defect is still the '
       + 'one the task PROMPT describes, which no mechanical check can decide.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:skip-ratchet',
@@ -410,6 +435,7 @@ export const LADDER: readonly Gate[] = [
       + "for the other's.",
     blind: 'whether a running test asserts anything real. A skip is visible now; a '
       + 'vacuous pass is the next tier\'s problem.',
+    inputs: { kind: 'derived' },
   },
 
   {
@@ -442,6 +468,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a symbol referenced from live code that does nothing, and a dependency imported '
       + 'only through a runtime-computed specifier — the census reads import FORMS, so '
       + '`await import(name)` over a variable is invisible to it.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:undeclared-imports',
@@ -484,6 +511,7 @@ export const LADDER: readonly Gate[] = [
       + 'and an ambient `@types/…` the compiler loads by `types`. Also version RANGES: a '
       + 'declaration is judged present, never correct. It prints all four on the GREEN path with '
       + 'the count of locked edges still outstanding.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:wired',
@@ -528,6 +556,7 @@ export const LADDER: readonly Gate[] = [
       + 'reached symbol does anything at all. It prints every one of these on the GREEN path, '
       + 'with the count of locked findings still outstanding, because debt visible only in red '
       + 'output is invisible exactly when somebody is deciding how far to trust the tree.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:client-graph',
@@ -549,6 +578,7 @@ export const LADDER: readonly Gate[] = [
       + 'literal carries it; a direct `node:` builtin import in client code, a '
       + 'different edge with the same symptom; and any resolution Vite sees '
       + 'that the walk does not model. It prints all three on the GREEN path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:core-layering',
@@ -563,6 +593,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the layer map itself is an assertion, a cross-package edge is '
       + '`gate:undeclared-imports`\'s, and a literal `import(…)` is not read. '
       + 'It prints all three on the GREEN path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:vendor-schema',
@@ -581,6 +612,7 @@ export const LADDER: readonly Gate[] = [
       + 'the gate cannot parse, and a column that exists with a different TYPE '
       + 'or DEFAULT — prepare checks names, not semantics. It prints all three '
       + 'on the GREEN path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun scripts/test-census.ts --ratchet',
@@ -624,6 +656,7 @@ export const LADDER: readonly Gate[] = [
       + 'SHAPE GATE from a coupled test: whether a source-text assertion guards a rule no '
       + 'behavioural test can express is a judgement, so the reach is reported and the ruling '
       + 'left to the reviewer.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:complexity',
@@ -660,6 +693,7 @@ export const LADDER: readonly Gate[] = [
       + '51 at or above 39 are pinned and 232 functions sit at 20 or more. A file\'s total, a '
       + 'type-level union, and runtime cost — one branch around a quadratic scan scores 2. All '
       + 'of them are printed on the gate\'s GREEN path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:silent-drop',
@@ -675,6 +709,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a rejection handler passed by NAME, a promise stored and never awaited (a '
       + 'type-level fact, and oxlint\'s type-aware pass is not enabled here), and a wrapper '
       + 'factory that drops `cause` inside itself.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun scripts/secret-scan.ts',
@@ -690,6 +725,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'unreachable or reflog-only objects, and blobs containing NUL or exceeding 1 MiB. '
       + 'The latter two are counted in the green denominator but not decoded; a number is a '
       + 'visible blind spot, not evidence that their contents were scanned.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun scripts/schema-drift.ts',
@@ -713,6 +749,7 @@ export const LADDER: readonly Gate[] = [
       + 'live storage still has — both dead-field territory. Column TYPES and CONSTRAINTS '
       + 'too: ALTER TABLE cannot repair either, so neither is checked. The gate prints all '
       + 'six of its blind spots on its own green path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
@@ -781,6 +818,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
@@ -795,18 +833,25 @@ export const LADDER: readonly Gate[] = [
       + 'direction still teaches people to silence it.',
     blind: 'whether the locked skips are the RIGHT skips. That is a judgement in the '
       + 'lock\'s reason strings, which is why each entry has to carry one.',
+    inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts',
+    run: 'bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
     tier: 'push',
-    // Measured 2026-09-16 on the 24-thread workstation: 0.3 s and 0.6 s solo.
-    seconds: 1,
+    // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
+    // for the three files together. Replaces 1 s for the single file.
+    seconds: 1.3,
     catches: 'a gate that runs at only one tier by accident, a deploy gate CI silently '
       + 'skips, and a test file no tier claims. The defect this whole file addresses. Beside '
-      + 'it, the closure proof the cache will stand on: a closure that errs narrow refuses '
-      + 'rather than shrinks.',
+      + 'it, the two proofs the cache stands on: a closure that errs narrow (a computed import, '
+      + 'an environment read whole, an undeclared path read or an untracked file each refuse '
+      + 'rather than shrink), and a store that never hits across a touched closure file, a red '
+      + 'result, a tool version change, a live row or a closure that moved mid-run.',
     blind: 'whether any individual gate can actually fail. That is each gate\'s own '
-      + 'self-test, and the seeded tier nobody has paid for yet.',
+      + 'self-test, and the seeded tier nobody has paid for yet. For the cache: a `reads` or '
+      + '`env` declaration is a claim these suites cannot check against a live gate; '
+      + '`--audit-closure` is the measurement for that.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/deploy.test.ts',
@@ -818,6 +863,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails.',
     blind: 'whether the gates it enumerates pass.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts',
@@ -841,6 +887,7 @@ export const LADDER: readonly Gate[] = [
       + 'intentionally counts but cannot decode because it contains NUL or exceeds its size cap. '
       + 'The remaining headroom under a per-user quota: the probe writes 1 MiB, so only an '
       + 'exhausted quota is red.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/gate-set-equality.test.ts',
@@ -857,6 +904,7 @@ export const LADDER: readonly Gate[] = [
       + 'gate whose output is mostly noise trains people to ignore it.',
     blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
       + 'else re-spells them.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/wired.test.ts',
@@ -880,6 +928,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the census is COMPLETE. Every case proves the gate does not lie about '
       + 'what it reports; none of them can prove it reports everything, and the blind-spot '
       + 'list the gate prints on its green path is the honest answer to that.',
+    inputs: { kind: 'derived' },
   },
   {
     // Measured 2026-08-22 on the 24-thread workstation: 33.15s with four
@@ -905,6 +954,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'both backend composition roots, and every subprocess path. It also covers '
       + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
       + 'which pins the other 5 by equality with the gate that does run each.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:python-suites',
@@ -929,6 +979,7 @@ export const LADDER: readonly Gate[] = [
       + 'builder, the trajectory writer and the agent adapter have no suites at all, so '
       + 'this gate governs four files out of eleven. It is also blind to type errors: '
       + 'there is no Python typechecker in this repository.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test packages/devbox/',
@@ -945,6 +996,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything that needs a real container: the mounts themselves, the object store, '
       + 'and the platform lifecycle. Those are the bench app under `packages/devbox/bench` '
       + 'and an ephemeral deployed Worker, not this gate.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test packages/test-utils/',
@@ -956,6 +1008,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
       + 'whole files instead of the members they named because this was untested.',
     blind: 'the suites that use it.',
+    inputs: { kind: 'derived' },
   },
   {
     // Measured 2026-08-22: 6.43s, four isolated workers. Re-measured 2026-09-05 on the
@@ -969,6 +1022,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything needing a Workers runtime rather than a composition root — every '
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
+    inputs: { kind: 'derived' },
   },
 
   {
@@ -986,6 +1040,7 @@ export const LADDER: readonly Gate[] = [
       + 'still cannot reach main.',
     blind: 'whether the bundled decoder BEHAVES as the source over a real feed answer — that '
       + 'is gate:dependency-advisories below, over a real `bun pm scan`, at the ci tier.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:dependency-advisories',
@@ -1007,6 +1062,7 @@ export const LADDER: readonly Gate[] = [
       + 'malicious package with no advisory filed, to anything the npm feed does not carry, and '
       + 'to what an install script DOES once bun runs it, which is `gate:install-scripts` above. '
       + 'An unreachable feed is reported as `unknown` via `blocked()`, never as a clean tree.',
+    inputs: { kind: 'live', why: 'runs `bun pm scan`, which asks an advisory feed over the network; a new advisory changes the verdict with no file changed.' },
   },
   {
     // Measured 2026-08-22: 18.42s, four isolated workers.
@@ -1016,6 +1072,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
+    inputs: { kind: 'derived' },
   },
   {
     // Measured 2026-08-23: 40.0s. `behavior.test.ts` alone took 23.36s and
@@ -1032,6 +1089,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the deployed CLI archive and a real person\'s terminal outside the synthetic PTY. '
       + 'The download smoke and asset-integrity gates own the archive; neither proves terminal '
       + 'rendering on a user\'s emulator.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test packages/pc-agent/',
@@ -1042,6 +1100,7 @@ export const LADDER: readonly Gate[] = [
       + '`node --check`s this package\'s syntax, so the suite is the only thing that '
       + 'reads it.',
     blind: 'the pairing and transport it talks to.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun scripts/tracing-gate.ts',
@@ -1057,6 +1116,7 @@ export const LADDER: readonly Gate[] = [
       + 'the script and its fixture existed and nothing invoked either.',
     blind: 'whether the platform RETAINED what it ingested. It observes the producing '
       + 'side only — the sink can still throw while the traced worker returns 200.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test ./tests/',
@@ -1077,6 +1137,7 @@ export const LADDER: readonly Gate[] = [
       + 'cannot see a suite whose code no longer compiles, because bun strips types; '
       + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '
       + 'is how these four suites came to call two deleted APIs.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run test:eval',
@@ -1128,6 +1189,7 @@ export const LADDER: readonly Gate[] = [
       + 'they pass on any prose the model returns. And it cannot tell contention from a '
       + 'deployment fault: two live tiers on one account produce the same '
       + '`detached_work_failed / Request Timeout` signature as an outage.',
+    inputs: { kind: 'live', why: 'spends live model turns as the eval identity; its evidence is behavioural and dated, never a function of the tree alone.' },
   },
   {
     run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
@@ -1145,6 +1207,7 @@ export const LADDER: readonly Gate[] = [
       + 'scripts/eval-triage.verdicts.json is right. A verdict is a written argument about a '
       + 'trajectory, so nothing here can check one; what is checked is that a stale verdict '
       + 'and an unverified group both print.',
+    inputs: { kind: 'derived' },
   },
   {
     // The COMMAND deploy.sh runs, spelled identically. Stopping at the
@@ -1188,6 +1251,7 @@ export const LADDER: readonly Gate[] = [
       + 'suites drive planners, decisions, manifests and fixtures, never a real '
       + 'deploy or container. It only guards the instrument, which is what four '
       + 'independent instrument bugs cost us to learn.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts',
@@ -1261,6 +1325,7 @@ export const LADDER: readonly Gate[] = [
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
       + 'three variants of it, so the annotation ENGINE — selection, offsets, save, '
       + 'export — is exercised only as far as one stored anchor painting.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
@@ -1284,6 +1349,7 @@ export const LADDER: readonly Gate[] = [
       + 'The old product name is not grepped here at all: that gate is '
       + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
       + 'documents rather than the rendered page.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts',
@@ -1302,6 +1368,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a local browser over a locally built bundle. A stale asset served from the '
       + 'edge, a real network stall that never delivers headers, and whether the '
       + 'report reaches a deployed sink are all outside it. Nothing compares pixels.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/react-runtime-identity.test.ts',
@@ -1318,6 +1385,7 @@ export const LADDER: readonly Gate[] = [
       + 'and to every source-reading instrument here.',
     blind: 'the locally built artifact, not the object the edge serves. It cannot see a '
       + 'CDN serving an older bundle, and it says nothing about render correctness.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/nested-container-resolution.test.ts',
@@ -1334,6 +1402,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'module resolution, not runtime. A container cold start is a different '
       + 'premise and needs an image build. It reads the installed tree, so it cannot '
       + 'see what a fresh install on another lockfile resolution would produce.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/swarm-tree-geometry.test.ts',
@@ -1359,6 +1428,7 @@ export const LADDER: readonly Gate[] = [
       + '— the refused run, the named preset, the fan-in composition — is proven to mount '
       + 'by `gate:computed-style` and measured by nothing. Chrome cost keeps it out of '
       + 'the commit tier, so a geometry regression reaches a branch before it is caught.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/chat-scroll.test.ts',
@@ -1383,6 +1453,7 @@ export const LADDER: readonly Gate[] = [
       + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run layergate',
@@ -1391,6 +1462,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers.',
     blind: '`tool-construction`, declared and measured at 0/0 — and all three tool-surface '
       + 'defects live exactly there.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run layergate --matrix',
@@ -1399,6 +1471,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a layer whose probes cannot localise a fault to it — cross-talk. Without '
       + 'this a layer at 100% may be scoring another layer\'s behaviour.',
     blind: 'a layer with no probes, which scores null and localises nothing.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:capability-parity',
@@ -1417,6 +1490,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a platform GLOBAL reached with no import — measured at zero occurrences over '
       + 'the reported modules, and caught in one second by `tsc -p packages/core` the '
       + 'moment anyone acts on the finding.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run test:workerd',
@@ -1456,6 +1530,7 @@ export const LADDER: readonly Gate[] = [
       + 'ran for two months is still only a regex\'s problem. And '
       + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
       + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:policy-drift',
@@ -1472,6 +1547,7 @@ export const LADDER: readonly Gate[] = [
       + 'only PARTIALLY match a constant — the partial-match version reported 12 and '
       + 'every one was two unrelated decisions picking the same round number, so exact '
       + 'is the rule and 0 is the honest count.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:scratch-ownership',
@@ -1491,6 +1567,7 @@ export const LADDER: readonly Gate[] = [
       + '`agent-core-*`), and the runtime COUNT, deliberately: preflight already argues '
       + 'that a ceiling on live scratch gets raised the first time it fires and deleted '
       + 'the second, so free inodes stay its invariant and ownership is this one.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:agents-fields',
@@ -1515,6 +1592,7 @@ export const LADDER: readonly Gate[] = [
       + 'TYPES entirely. The advertised JSON Schema is bound to the same map at compile time '
       + '(the property types are derived from it) and asserted under full deps in '
       + 'unit-agents-tool.test.ts, so this gate deliberately does not build a tool.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts',
@@ -1533,6 +1611,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the fences and the suite are the RIGHT ones to hammer. That is a '
       + 'judgement in the declarations, which is why each fence carries a `why` and the '
       + 'hammer prints its blind spots on the green path.',
+    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run gate:mutation-fences',
@@ -1555,6 +1634,7 @@ export const LADDER: readonly Gate[] = [
       + 'is the worst reading, and only that ONE test catches it. The copy is HEAD, so a '
       + 'fence in uncommitted work is invisible until it lands, and the owners run under bun, '
       + 'so an interleaving that needs workerd belongs to `bun run test:workerd`.',
+    inputs: { kind: 'live', why: 'materialises `git worktree add --detach` at HEAD and runs suites there, so its subject is the commit, never the working tree the key hashes.' },
   },
   {
     run: 'bun run gate:hammer',
@@ -1582,6 +1662,7 @@ export const LADDER: readonly Gate[] = [
       + 'never picks is unmeasured — measured, a deliberately race-prone fixture PAIR passed '
       + 'because the two files were never co-scheduled, while an intermittently failing '
       + 'single file was caught on run 2 of 2.',
+    inputs: { kind: 'live', why: 'measures the Cloudflare suite under deliberate CPU contention; its subject is the box\'s load at the moment it runs.' },
   },
   {
     run: 'bun run verify:lean',
@@ -1609,6 +1690,7 @@ export const LADDER: readonly Gate[] = [
       + 'checked, and a line citation is checked only for both endpoints being inside the '
       + 'module — an insertion above a cited range slides it onto different code and stays '
       + 'green. A theorem NAME is the only citation shape this can verify.',
+    inputs: { kind: 'live', why: 'runs the elan/lake toolchain over the Lean tree, a compiler the key does not version and a shell entry the resolver does not read.' },
   },
   {
     run: 'bun run gate:infra',
@@ -1651,6 +1733,7 @@ export const LADDER: readonly Gate[] = [
       + 'rather than the wrangler login, which has no Access scope; without one they report '
       + 'UNKNOWN and fail, because a machine that could not look at the admin plane\'s outer gate '
       + 'has not verified it.',
+    inputs: { kind: 'live', why: 'talks to the Cloudflare account through a wrangler session and proves resources exist there now.' },
   },
   {
     run: 'bun run gate:first-run',
@@ -1689,6 +1772,7 @@ export const LADDER: readonly Gate[] = [
       + 'six mechanisms work, never that the deploy is good. And its model cases depend on a '
       + 'model choosing to use the capability it was asked for, so a refusal is red and reads '
       + 'identically to a broken one until somebody reads the transcript the record keeps.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build with real machines, a real browser and live model turns.' },
   },
   {
     run: 'bun run gate:trajectory',
@@ -1719,6 +1803,7 @@ export const LADDER: readonly Gate[] = [
       + 'model choosing to use the tool it was asked for, so a refusal reads as a broken '
       + 'tool until the retained transcript is opened. One model only, by design: the flash '
       + 'and pro arms are the eval tier\'s and a green here says nothing about them.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED product on its default model over the public API.' },
   },
 ];
 
@@ -2124,6 +2209,7 @@ export function gatesFor(tier: Tier, deploy: readonly string[]): Gate[] {
       run, tier: 'deploy', seconds: 0,
       catches: 'declared by scripts/deploy.sh and not yet described in LADDER',
       blind: 'unknown — see scripts/deploy.sh',
+      inputs: { kind: 'live', why: 'undescribed in LADDER, so nothing declares what it reads; never cached until it is' },
     })),
   ];
 }
@@ -2662,7 +2748,7 @@ if (import.meta.main) {
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
@@ -2695,14 +2781,60 @@ if (import.meta.main) {
   const started = performance.now();
   const tracked = trackedTestFiles();
 
+  // THE CACHE. A green gate is skipped only on a proof that nothing it can
+  // read has changed: a content hash over its derived input closure
+  // (`ladder-closure.ts`) looked up in a store outside the tree
+  // (`ladder-cache.ts`). `--no-cache` runs every gate regardless; nothing
+  // else does, and there is no per-gate switch. A row declared `live`, or
+  // whose closure cannot be computed, runs every time and the reason is
+  // printed beside it, so an uncached gate is a visible fact rather than a
+  // quiet one.
+  const caching = !process.argv.includes('--no-cache');
+  const repo = repoAt(root, (run, files) => claims(run, files));
+  const tools = toolVersions(root);
+  const store = storeAt(defaultStoreDirectory());
+  const revision = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+  const skipped: string[] = [];
+  const uncached: string[] = [];
+  const recorded: string[] = [];
+  const notes = new Set<string>();
+
   for (const [index, gate] of gates.entries()) {
     console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
+    const plan = caching ? planGate(gate.run, gate.inputs, repo, tools, store) : undefined;
+
+    if (plan?.kind === 'hit') {
+      console.log(
+        `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
+        + `(${String(plan.entry.closureSize)} files in the closure, ${plan.entry.seconds.toFixed(1)}s then)`,
+      );
+      skipped.push(gate.run);
+      continue;
+    }
+
+    if (plan?.kind === 'uncacheable') {
+      console.log(`      never cached: ${plan.closure.why}`);
+      uncached.push(`${gate.run} — ${plan.closure.why}`);
+    } else if (plan?.kind === 'miss') {
+      console.log(`      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure)`);
+
+      for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
+    }
+
     const at = performance.now();
     const proc = Bun.spawnSync(runnableArgv(gate.run, tracked), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
     const seconds = (performance.now() - at) / 1000;
 
     if (proc.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
+
+      if (plan?.kind === 'miss') {
+        const refused = recordGreen(plan, gate.run, gate.inputs, repoAt(root, (run, files) => claims(run, files)), tools, store, { seconds, revision });
+
+        if (refused === undefined) recorded.push(gate.run);
+        else console.log(`      not recorded: ${refused}`);
+      }
+
       continue;
     }
 
@@ -2715,6 +2847,19 @@ if (import.meta.main) {
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
     process.exit(1);
+  }
+
+  if (caching) {
+    console.log(
+      `\ncache: ${String(skipped.length)} hit, ${String(recorded.length)} recorded, `
+      + `${String(uncached.length)} never cached, store ${store.directory}`,
+    );
+
+    for (const line of uncached) console.log(`  never: ${line}`);
+
+    for (const note of notes) console.log(`  note: ${note}`);
+
+    for (const spot of CACHE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
 
   console.log(
