@@ -11,7 +11,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { ListIcon, PlusIcon, SquaresFourIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { APP_ROUTES, type WorkspaceOverview } from "@kinu.run/core";
+import { APP_ROUTES, workspaceDisplayTitle, type WorkspaceOverview } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useOverviewReads } from "@/hooks/use-workspace-overviews";
 import { lastValue } from "@/hooks/use-async-resource";
@@ -74,7 +74,8 @@ export default function WorkspacesPage() {
   const needle = query.trim().toLowerCase();
 
   const shown = entries.filter((workspace) => {
-    if (needle !== "" && !(workspace.displayName || workspace.name).toLowerCase().includes(needle)) return false;
+    if (needle !== "" && !workspaceDisplayTitle(workspace).toLowerCase().includes(needle)
+        && !workspace.name.toLowerCase().includes(needle)) return false;
 
     if (filter === "all") return true;
 

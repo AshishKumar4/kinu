@@ -230,6 +230,7 @@ import {
   buildWorkspaceOverview, type WorkspaceOverview,
   projectJsonValue,
   type AgentSignal,
+  isPlaceholderWorkspaceTitle,
 } from "@kinu.run/core";
 import * as v from 'valibot';
 import {
@@ -3736,7 +3737,13 @@ export class OrchestratorAgent extends ActorAgent {
   // ── Callable RPC methods ───────────────────────────────────────
 
   private getDisplayName(): string {
-    return this.titleState().displayName || this.name;
+    // The title, not the slug: an untitled workspace answers "" here and every
+    // surface names it "Untitled workspace" through workspaceDisplayTitle —
+    // returning `this.name` put the slug back on screen as the workspace's name.
+
+    const state = this.titleState();
+
+    return isPlaceholderWorkspaceTitle(state.displayName, this.name) ? '' : state.displayName;
   }
 
   @callable()
