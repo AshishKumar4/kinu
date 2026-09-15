@@ -500,6 +500,16 @@ export const McpServerSummarySchema = v.object({
 
 export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
 
+/** One preset's deploy-time availability, as UserDO reports it — whether its
+ *  registered OAuth app is configured, which decides sign-in vs fallback. */
+export interface McpPresetAvailability {
+  id: string;
+  appConfigured: boolean;
+}
+
+export const listMcpPresets = () =>
+  api(v.array(v.object({ id: v.string(), appConfigured: v.boolean() })), 'GET', '/mcp/presets');
+
 export const addMcpServer   = (input: McpServerInput) =>
   api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input);
 

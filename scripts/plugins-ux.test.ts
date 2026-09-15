@@ -127,7 +127,9 @@ describe('MCP presets', () => {
 
   test('a token preset opens one field and posts it as the bearer header', async () => {
     await withGallery(async (gallery) => {
-      const page = await freshPage(gallery, 'plugins&mcp-preset=open', 'dark', 'desktop');
+      // GitHub without its app: the card falls back to the PAT field. Google
+      // stays configured so the split is observable on one page.
+      const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=google', 'dark', 'desktop');
 
       try {
         await page.waitForSelector('[data-mcp-preset="github"]', { timeout: 10_000 });
@@ -158,6 +160,64 @@ describe('MCP presets', () => {
         expect(await presetStatus(page, 'github')).toBe('Connected');
         expect(await page.$eval('[data-plugin="GitHub"]', (el) => el.textContent ?? ''))
           .toContain('api.githubcopilot.com');
+      } finally {
+        await page.close();
+      }
+    });
+  }, 60_000);
+
+  test('an oauth-app card signs in under its app, and hides when it has neither app nor fallback', async () => {
+    await withGallery(async (gallery) => {
+      // Only GitHub's app is configured: Google has no registered client and
+      // no token fallback, so its card is not rendered at all.
+      const page = await freshPage(gallery, 'plugins&mcp-preset=open&mcp-secrets=github', 'dark', 'desktop');
+
+      try {
+        await page.waitForSelector('[data-mcp-preset="github"]', { timeout: 10_000 });
+        await page.waitForFunction(
+          () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Not added',
+          { timeout: 10_000 },
+        );
+
+        expect(await page.$('[data-mcp-preset="google"]')).toBeNull();
+
+        await page.evaluate(() => {
+          localStorage.setItem('gallery-mcp-opened', '');
+          window.open = (url?: string | URL) => {
+            localStorage.setItem('gallery-mcp-opened',
+              `${localStorage.getItem('gallery-mcp-opened') ?? ''}${String(url)}\n`);
+
+            return null;
+          };
+        });
+
+        // GitHub's Connect is a sign-in, not a token prompt: no field opens
+        // and the add posts the preset id alone.
+        await page.click('[data-mcp-preset="github"] button');
+
+        const add = v.parse(
+          v.object({ presetId: v.literal('github') }),
+          await lastMcpAdd(page),
+        );
+
+        expect(add.presetId).toBe('github');
+
+        await page.waitForFunction(
+          () => localStorage.getItem('gallery-mcp-opened') !== '',
+          { timeout: 10_000 },
+        );
+
+        const opened = v.parse(
+          v.string(),
+          await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
+        );
+
+        expect(opened.trim()).toBe('https://api.githubcopilot.com/authorize?srv-add-2');
+
+        await page.waitForFunction(
+          () => document.querySelector('[data-mcp-preset-status="github"]')?.textContent === 'Needs sign-in',
+          { timeout: 10_000 },
+        );
       } finally {
         await page.close();
       }
