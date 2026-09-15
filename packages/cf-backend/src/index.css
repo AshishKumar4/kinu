@@ -920,6 +920,17 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
+/* The workspace thread column: centred at 780px with the chat's side gutter.
+   The message list, the device-consent rail below it and the composer all sit
+   on this one column — a consent card that ran the container's full width
+   beside a bounded thread read as a banner, not a message. */
+.p-thread-column {
+  padding-inline: calc(var(--spacing) * 6);
+  & > * { max-width: 780px; margin-inline: auto; }
+
+  @media (min-width: 64rem) { padding-inline: calc(var(--spacing) * 8); }
+}
+
 /* The streaming caret, drawn INSIDE the last block the markdown emitted.
 
    Markdown emits block-level elements, so a sibling <span> placed after the

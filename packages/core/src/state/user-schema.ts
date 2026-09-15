@@ -399,6 +399,20 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  // Workspaces with a provisioning card open RIGHT NOW — one row per ask, so
+  // a second device call while one waits joins rather than stacking. The
+  // connect path reads it: a daemon accept settles every card here as
+  // `connected`, the condition the card asked for. Written when the card is
+  // raised, deleted when it settles for any reason — an answer, a lapse, or
+  // the connect itself.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS device_provision_pending (
+      agent_name TEXT PRIMARY KEY,
+      consent_id TEXT NOT NULL,
+      raised_at INTEGER NOT NULL
+    )
+  `);
+
   // Short-lived, single-use WebSocket tickets for device daemon reconnects.
   // The daemon exchanges its long-lived local device token over HTTPS, then
   // connects the WebSocket with this scoped ticket in the URL. That keeps raw

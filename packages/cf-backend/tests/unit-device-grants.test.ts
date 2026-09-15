@@ -1122,6 +1122,100 @@ describe('asking for a machine when there is none', () => {
     await harness.joinFibers();
     harness.close();
   });
+  test('a daemon connecting while the card is up settles the call waiting on it', async () => {
+    // The keepalive gap reproduced as a flow: the call is parked on the
+    // provisioning card when the machine's socket lands, and that accept IS
+    // the card's answer — the waiting call re-reads liveness, reaches the
+    // per-workspace grant card, and runs when the owner binds it.
+    const harness = createTestUserDO();
+    const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+    const caller: UserCaller = { workspaceToken: token };
+    harness.consentDecision = 'hold';
+
+    const openRows = () => harness.db.prepare<{ n: number }, []>(
+      'SELECT count(*) AS n FROM device_provision_pending',
+    ).get()!.n;
+
+    const call = harness.userDO.deviceRpc(caller, 'exec', ['make build'], { agentName: WORKSPACE });
+    const settled = Promise.allSettled([call]);
+
+    for (let turn = 0; turn < 100 && harness.consentPrompts.length === 0; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+
+    expect(harness.consentPrompts.map((p) => p.method)).toEqual([DEVICE_PROVISION_METHOD]);
+    expect(harness.pendingConsents(WORKSPACE).map((c) => c.consentId)).toEqual(['cons-1']);
+    // The hub's half of the card, durable: which workspace waits on which id —
+    // the row an accept reads to know whose card the connect answers.
+    expect(openRows()).toBe(1);
+
+    // The machine links and its daemon dials in — the real accept path, not
+    // attachDevice: the settle lives on it.
+    const { deviceId, token: deviceToken } = await harness.userDO.registerDevice(await testOwner(), 'ashish@studio');
+    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), deviceToken);
+
+    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
+
+    const upgrade = await harness.userDO.fetch(new Request(
+      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
+      { headers: { Upgrade: 'websocket' } },
+    ));
+
+    expect(upgrade.status).toBe(101);
+    const device = harness.acceptedSockets.at(-1);
+
+    if (!device) throw new Error('the device upgrade produced no socket');
+    // A daemon says what it proved on connect; without the HELLO this machine
+    // stays files_only and the exec is refused on the sandbox switch, which
+    // is not the seam under test.
+    await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
+
+    // The call that was parked on the provisioning card did not fail — it
+    // went on to ask the workspace's binding for the machine that just
+    // arrived. What a client re-renders now is THAT card, up on the same
+    // workspace: the ask moved forward rather than repeating itself.
+    for (let turn = 0; turn < 100 && harness.consentPrompts.length < 2; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+
+    expect(harness.consentPrompts[1]).toMatchObject({
+      workspace: WORKSPACE, method: 'exec', command: 'make build', workspaceName: WORKSPACE,
+    });
+    expect(harness.pendingConsents(WORKSPACE).map((c) => c.consentId)).toEqual(['cons-2']);
+    expect(harness.consentPrompts.filter((p) => p.method === DEVICE_PROVISION_METHOD)).toHaveLength(1);
+
+    // The card's question is answered by the connect itself: its row went
+    // with the settle, and the table holds nothing still waiting.
+    expect(openRows()).toBe(0);
+
+    // The owner binds the workspace to the machine; the command runs.
+    harness.answerConsent('always');
+
+    for (let turn = 0; turn < 100; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      const execRaw = device.sent.find((raw) => raw.includes('"method":"exec"'));
+
+      if (execRaw) {
+        const execId = v.parse(v.object({ id: v.string() }), JSON.parse(execRaw)).id;
+        await harness.userDO.webSocketMessage(device.ws, JSON.stringify({
+          id: execId, result: { stdout: 'ok', stderr: '', exitCode: 0 },
+        }));
+        break;
+      }
+    }
+
+    const [outcome] = await settled;
+    expect(outcome?.status).toBe('fulfilled');
+    // The command left the hub on the machine's own socket.
+    expect(device.sent.some((raw) => raw.includes('"method":"exec"'))).toBe(true);
+    expect((await harness.userDO.listDeviceConsents(await testOwner()))).toEqual([
+      expect.objectContaining({ agentName: WORKSPACE, deviceId, policy: 'allow' }),
+    ]);
+
+    await harness.joinFibers();
+    harness.close();
+  });
+
 });
 
 /**

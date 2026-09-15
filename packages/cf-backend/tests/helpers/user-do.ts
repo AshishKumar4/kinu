@@ -252,6 +252,9 @@ interface TestUserEnvironment {
       repushWorkspaceCapability(): Promise<{ missed: number }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
       awaitDeviceConsent(request: DeviceConsentRequest): Promise<DeviceConsentDecision>;
+      raiseDeviceConsent(request: DeviceConsentRequest): Promise<string>;
+      waitDeviceConsentSettled(consentId: string): Promise<void>;
+      settleDeviceConsent(consentId: string, decision: DeviceConsentDecision): Promise<{ ok: boolean }>;
       closeRevokedCliSockets(generation: number): Promise<{ closed: number }>;
       closeRevokedSessionSockets(tokenHash: string): Promise<{ closed: number }>;
     };
@@ -549,6 +552,15 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         },
         awaitDeviceConsent(request: DeviceConsentRequest) {
           return registryFor(name).request(request);
+        },
+        raiseDeviceConsent(request: DeviceConsentRequest) {
+          return Promise.resolve(registryFor(name).raise(request));
+        },
+        waitDeviceConsentSettled(consentId: string) {
+          return registryFor(name).waitSettled(consentId);
+        },
+        async settleDeviceConsent(consentId: string, decision: DeviceConsentDecision) {
+          return { ok: registryFor(name).settle(consentId, decision) };
         },
         async closeRevokedCliSockets(generation: number) {
           revokedSocketPushes.push(`${name}:${generation}`);

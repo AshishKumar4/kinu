@@ -8,11 +8,15 @@ import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do'
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  DEVICE_CONNECT_PATH, DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
+  DEVICE_CONNECT_PATH, DEVICE_TERMINAL_PATH,
+  DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD,
+  DEVICE_TOOLCHAIN_TTL_MS, DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_UNKNOWN_METHOD, TOOLCHAIN_PROBE_BINARIES,
   type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
+import { CAPABLE_HELLO, WORKSPACE } from './helpers/device-harness';
+import { provisionTestWorkspace } from './helpers/user-do';
 import {
   DeviceSocketHub,
   deviceIdFromSocket,
@@ -425,6 +429,125 @@ describe('device links expire on an absolute window, renewed by rotation', () =>
       toolchain: null,
       devices: [{ id: deviceId, name: 'studio tower', os: null, hostname: null, connected: false }],
     });
+    harness.close();
+  });
+});
+
+/**
+ * The daemon's keepalive, answered by the hub: 30s after open the machine
+ * sends a bare `ping` text frame and closes the socket when no `pong` returns
+ * within 10s. Unanswered, every device link drops once a minute and a command
+ * landing in the gap reads "no device connected". These drive the REAL accept
+ * and message paths — a `ping` through the upgrade, and a pasted "ping" on a
+ * terminal pane that must NOT be answered, because the platform's
+ * auto-response cannot tell the two sockets apart and the hub's answer is
+ * deliberately narrower.
+ */
+describe('the daemon keepalive, answered by the hub', () => {
+  /** One connected device through the real upgrade path: registered, ticketed,
+   *  accepted — the same socket the hub then hears frames on. */
+  async function connectDevice(harness: TestUserDO) {
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'studio tower');
+    const issued = await harness.userDO.issueDeviceConnectTicket(await testOwner(), token);
+
+    if (!issued.ok || !issued.ticket) throw new Error('the owner could not mint a connect ticket');
+
+    const response = await harness.userDO.fetch(new Request(
+      `https://kinu.example.com${DEVICE_CONNECT_PATH}?ticket=${issued.ticket}`,
+      { headers: { Upgrade: 'websocket' } },
+    ));
+
+    if (response.status !== 101) throw new Error(`the device upgrade was refused with ${response.status}`);
+
+    const device = harness.acceptedSockets.at(-1);
+
+    if (!device) throw new Error('the upgrade produced no socket');
+
+    return { deviceId, device };
+  }
+
+  test('a device socket that pings is answered and stays connected', async () => {
+    const harness = createTestUserDO();
+    const { deviceId, device } = await connectDevice(harness);
+
+    // Exactly what the daemon sends and expects back: the bare text frames
+    // `ping` and `pong` — the wire contract is the literals, not our names.
+    const before = device.sent.length;
+    await harness.userDO.webSocketMessage(device.ws, 'ping');
+    expect(device.sent.slice(before)).toEqual(['pong']);
+    expect(device.ws.readyState).toBe(1);
+
+    // The socket is still live — a second beat is answered again, and the
+    // hub still reports the machine connected.
+    await harness.userDO.webSocketMessage(device.ws, 'ping');
+    expect(device.sent.slice(before)).toEqual(['pong', 'pong']);
+    expect(device.ws.readyState).toBe(1);
+    expect(await harness.userDO.deviceRuntimeStatus(await testOwner()))
+      .toMatchObject({ connected: true, devices: [{ id: deviceId, connected: true }] });
+
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a pasted "ping" on a terminal pane is keystrokes, never an answered probe', async () => {
+    const harness = createTestUserDO();
+    const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+    const { device } = await connectDevice(harness);
+    await harness.userDO.webSocketMessage(device.ws, JSON.stringify(CAPABLE_HELLO));
+    harness.consentDecision = 'always';
+
+    // The pane exists because the workspace opened a real terminal on this
+    // machine. The open frame is answered by hand: this socket pair has no
+    // far end to respond with.
+    const opening = harness.userDO.openDeviceTerminal({ workspaceToken: workspace }, WORKSPACE, { cols: 80, rows: 24 });
+
+    for (let turn = 0; turn < 100; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      const openRaw = device.sent.find((raw) => raw.includes(`"${DEVICE_PTY_OPEN_METHOD}"`));
+
+      if (openRaw) {
+        const openId = v.parse(v.object({ id: v.string() }), JSON.parse(openRaw)).id;
+        await harness.userDO.webSocketMessage(device.ws, JSON.stringify({ id: openId, result: {} }));
+        break;
+      }
+    }
+
+    const { session } = await opening;
+
+    const paneUpgrade = await harness.userDO.fetch(new Request(
+      `https://kinu.example.com${DEVICE_TERMINAL_PATH}?session=${session}`,
+      { headers: { Upgrade: 'websocket' } },
+    ));
+
+    expect(paneUpgrade.status).toBe(101);
+    const pane = harness.acceptedSockets.at(-1);
+
+    if (!pane) throw new Error('the pane upgrade produced no socket');
+
+    // The pane announced itself with `ready`; nothing else may arrive on it.
+    expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);
+    const framesBefore = device.sent.length;
+
+    // Text first: not a control frame, so it is recorded unreadable and
+    // dropped — the one thing it may NOT do is come back as `pong`.
+    await harness.userDO.webSocketMessage(pane.ws, 'ping');
+    expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);
+    expect(device.sent.length).toBe(framesBefore);
+
+    // Bytes are keystrokes: the same word as input reaches the machine as
+    // terminal input, and the pane is still answered with nothing.
+    await harness.userDO.webSocketMessage(pane.ws, new TextEncoder().encode('ping'));
+
+    expect(pane.sent).toEqual([JSON.stringify({ type: 'ready' })]);
+
+    const typed = device.sent.slice(framesBefore).map((raw) => v.parse(
+      v.object({ type: v.literal(DEVICE_PTY_INPUT), session: v.string(), data: v.string() }),
+      JSON.parse(raw),
+    ));
+
+    expect(typed).toEqual([{ type: DEVICE_PTY_INPUT, session, data: 'cGluZw==' }]);
+
+    await harness.joinFibers();
     harness.close();
   });
 });
