@@ -59,10 +59,7 @@ describe('run-events SSE client disconnect', () => {
     const after = pollCount();
     await sleep(1200);
     expect(pollCount()).toBe(after); // loop is dead — no further DO requests
-  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test('cancelling the response stream stops the DO poll loop', async () => {
     const { env, pollCount } = sseEnv();
@@ -81,10 +78,7 @@ describe('run-events SSE client disconnect', () => {
     const after = pollCount();
     await sleep(1200);
     expect(pollCount()).toBe(after);
-  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test('a run that already ended closes after the replay instead of polling dead reads', async () => {
     // The poll loop tests only batches it fetched itself, so a run_end in the
@@ -119,5 +113,5 @@ describe('run-events SSE client disconnect', () => {
     expect(body).toContain('run_end'); // the replay still reaches the reader
     expect(finished).toBe(true); // the stream ended instead of polling dead reads
     expect(pollCount()).toBe(1);
-  }, 15_000);
+  });
 });
