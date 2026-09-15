@@ -454,9 +454,10 @@ export function DeviceRow({
         <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>
         {/* The machine's software beside its link state: one word when the
             daemon is behind the served build (the hub pushes the update and
-            the daemon restarts itself) or when its owner turned that off. A
-            current or unreporting daemon says nothing here. */}
-        {(device.update === "behind" || device.update === "off") && (
+            the daemon restarts itself), when its owner turned that off, or
+            when the build is a source install the hub leaves alone. A current
+            or unreporting daemon says nothing here. */}
+        {(device.update === "behind" || device.update === "off" || device.update === "unstamped") && (
           <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}
             className={`px-2 py-0.5 ${device.update === "behind" ? "p-badge-warning" : "p-badge-neutral"}`}>
             {DEVICE_UPDATE_COPY[device.update]}

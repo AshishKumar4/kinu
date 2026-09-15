@@ -12,6 +12,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { DEVICE_UPDATE, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
+import { DEVICE_UPDATE_COPY } from '../src/hooks/use-device-roster';
 
 const SERVED = '0.3.0+served1';
 
@@ -101,6 +102,29 @@ describe('the UPDATE frame a HELLO earns', () => {
     expect(harness.devicePushes).toEqual([]);
     const [row] = await devices(harness);
     expect(row).toMatchObject({ version: '0.2.0+older', servedVersion: null, update: 'current' });
+  });
+
+  test('a source install — a version with no build stamp — is left alone and read as a dev build', async () => {
+    const harness = await connected();
+    await harness.sendDeviceHello(hello({ version: '0.2.0', updateCheck: true }));
+
+    // An unstamped report is not a build the deploy published, so the hub
+    // must never push the production build over it.
+    expect(harness.devicePushes).toEqual([]);
+
+    const [row] = await devices(harness);
+    expect(row).toMatchObject({ version: '0.2.0', update: 'unstamped' });
+    // The badge the Devices card shows is the exported copy constant, keyed
+    // by this same state — never a literal the page invented for itself.
+    expect(DEVICE_UPDATE_COPY).toHaveProperty('unstamped');
+  });
+
+  test('an owner opt-out on a source install still reads off — intent beats the build stamp', async () => {
+    const harness = await connected();
+    await harness.sendDeviceHello(hello({ version: '0.2.0', updateCheck: false }));
+    expect(harness.devicePushes).toEqual([]);
+    const [row] = await devices(harness);
+    expect(row?.update).toBe('off');
   });
 
   test('a deployment with a stamp but no checksum for the artifact pushes nothing', async () => {
