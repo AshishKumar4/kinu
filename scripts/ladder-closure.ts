@@ -466,6 +466,54 @@ function configsOnPath(file: string, universe: ReadonlySet<string>): string[] {
   return out;
 }
 
+/** The declaration a derived row carries, with every list present. */
+type Declared = Extract<Inputs, { kind: 'derived' }>;
+
+/**
+ * Why a walked graph cannot be cached under its declaration, or nothing.
+ *
+ * Each rule is fail-closed: the closure is a proof that nothing the gate can
+ * read has changed, and a graph that reads the environment whole, imports by
+ * a computed specifier, reads through a computed key, or opens the tree by an
+ * undeclared path has inputs no hash over the module graph stands for. A path
+ * read on a CORPUS gate is bounded by the corpus — every tracked file is
+ * already in the closure, and what it opens outside the tree is the cache's
+ * stated blind spot — so only a non-corpus gate must declare one.
+ */
+function refusal(run: string, walked: Walk, inputs: Declared, corpus: boolean): string | undefined {
+  const [computedImport] = walked.computedImports;
+
+  if (computedImport !== undefined && inputs.imports === undefined) {
+    return `${run}: ${computedImport} imports by a computed specifier the walker cannot follow`;
+  }
+
+  if (computedImport === undefined && inputs.imports !== undefined) {
+    return `${run}: the row declares \`imports\` and the graph has no computed import — a stale declaration`;
+  }
+
+  const [enumerated] = walked.envEnumerated;
+
+  if (enumerated !== undefined) {
+    return `${run}: ${enumerated} reads the environment whole (spread, enumerated or passed as a value), `
+      + `so no list of names bounds what the gate can see (${String(walked.envEnumerated.length)} such file(s))`;
+  }
+
+  const [computedEnv] = walked.envComputed;
+
+  if (computedEnv !== undefined && inputs.env === undefined) {
+    return `${run}: ${computedEnv} reads the environment through a computed key and the row declares no \`env\``;
+  }
+
+  const [pathReader] = walked.readsByPath;
+
+  if (pathReader !== undefined && inputs.reads === undefined && !corpus) {
+    return `${run}: ${pathReader} reads by path or spawns and the row declares no \`reads\` `
+      + `(${String(walked.readsByPath.length)} such file(s) in the graph)`;
+  }
+
+  return undefined;
+}
+
 /** The closure of one gate command under its row's declaration. */
 export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure {
   if (inputs.kind === 'live') return { kind: 'live', why: inputs.why };
@@ -480,67 +528,22 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   const walked = walkGraph(form.entries, repo);
 
   if (walked.failure !== undefined) return { kind: 'uncomputable', why: `${run}: ${walked.failure}` };
+  const corpus = form.corpus || walked.corpus;
+  const refused = refusal(run, walked, inputs, corpus);
+
+  if (refused !== undefined) return { kind: 'uncomputable', why: refused };
   const [computedImport] = walked.computedImports;
-
-  if (computedImport !== undefined && inputs.imports === undefined) {
-    return { kind: 'uncomputable', why: `${run}: ${computedImport} imports by a computed specifier the walker cannot follow` };
-  }
-
-  if (computedImport === undefined && inputs.imports !== undefined) {
-    return { kind: 'uncomputable', why: `${run}: the row declares \`imports\` and the graph has no computed import — a stale declaration` };
-  }
-
+  const [computedEnv] = walked.envComputed;
+  const [pathReader] = walked.readsByPath;
   const notes: string[] = [];
   const universe = new Set(repo.files);
   const files = new Set<string>(walked.files);
-  const corpus = form.corpus || walked.corpus;
 
   if (corpus) {
     for (const file of repo.files) files.add(file);
     notes.push(walked.corpus
       ? `reads the corpus through ${CORPUS_MODULE}: every tracked file is an input`
       : 'reads the whole corpus: every tracked file is an input');
-  }
-
-  // Effects the walker cannot bound. Each is fail-closed: the closure is a
-  // proof that nothing the gate can read has changed, and a graph that reads
-  // the environment whole, opens the tree by an undeclared path, or spawns a
-  // process has inputs no hash over the module graph stands for. The corpus
-  // case does not excuse a path read either — a corpus gate that also opens
-  // a file OUTSIDE the corpus (a generated bundle, `node_modules`) is exactly
-  // as unbounded as any other.
-  const [enumerated] = walked.envEnumerated;
-
-  if (enumerated !== undefined) {
-    return {
-      kind: 'uncomputable',
-      why: `${run}: ${enumerated} reads the environment whole (spread, enumerated or passed as a value), `
-        + `so no list of names bounds what the gate can see (${String(walked.envEnumerated.length)} such file(s))`,
-    };
-  }
-
-  const [computedEnv] = walked.envComputed;
-
-  if (computedEnv !== undefined && inputs.env === undefined) {
-    return {
-      kind: 'uncomputable',
-      why: `${run}: ${computedEnv} reads the environment through a computed key and the row declares no \`env\``,
-    };
-  }
-
-  const [pathReader] = walked.readsByPath;
-
-  // A path read on a CORPUS gate is bounded by the corpus: every tracked file
-  // is already in the closure, so a `reads` list could add nothing inside the
-  // tree, and what it opens outside the tree is the cache's stated blind spot
-  // (`node_modules` stands behind the lock). A non-corpus gate has no such
-  // bound and must declare.
-  if (pathReader !== undefined && inputs.reads === undefined && !corpus) {
-    return {
-      kind: 'uncomputable',
-      why: `${run}: ${pathReader} reads by path or spawns and the row declares no \`reads\` `
-        + `(${String(walked.readsByPath.length)} such file(s) in the graph)`,
-    };
   }
 
   for (const prefix of [...form.reads, ...(inputs.reads ?? []), ...(inputs.imports ?? [])]) {
