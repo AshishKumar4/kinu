@@ -66,7 +66,6 @@ import type { ActivitySnapshot, TabPresence } from "@kinu.run/core";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { teamPeers } from "./lib/workspace-roster";
 import { nextAlarmTime } from '@kinu.run/core';
-import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
@@ -120,7 +119,7 @@ import {
   listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type CompletedTurn, type ToolCallRecord, type SettledSignals,
+  type ToolCallRecord,
   type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
@@ -171,7 +170,6 @@ import {
   type CheckpointAvailability, type FileCheckpointListing,
   type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
-  snapshotCompletedTurn, creditedTurnId, 
   runSleepTimeCompute, applySleepTimeUpdate,
   SleepTimeUpdateSchema, type SleepTimeUpdate,
   effectAlreadyDone, recordEffectDone,
@@ -221,7 +219,7 @@ import {
   JsonValueSchema, type JsonValue, type KinuEvent,
   // The one declaration of the event-variant set, and the one classifier that
   // names how a run ended. Both were hand-mirrored here.
-  EVENT_VARIANTS, type RunEndReason,
+  EVENT_VARIANTS,
   // The one bound an untrusted caller's event-log page passes through.
   boundEventQuery,
   type WorkMode,
@@ -275,7 +273,7 @@ import { sandboxPreviewExposures } from "@kinu.run/core";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
   takesTerminalEffect, branchesTerminalEffect,
-  type OwedEffect, type TerminalEffectTable, type TerminalTurnParts,
+  type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnParts,
 } from "@kinu.run/core";
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
@@ -397,31 +395,6 @@ export type RecentEventRow = Pick<
   'id' | 'trace_id' | 'caused_by' | 'ingress' | 'variant' | 'trust' | 'priority'
   | 'payload_visibility' | 'payload' | 'received_at'
 >;
-
-/**
- * Every synthetic drain turn one settled turn answered, deduped.
- *
- * A drain reaches a turn two ways and the ids come back from two places: the
- * queued turn carries `drainTurnId` on its own metadata, a mid-turn splice
- * reports `replyTurnId` on the absorbed signal. A turn can hold both (a queued
- * drain that absorbed a second batch at a step boundary), and a re-delivered
- * signal can name an id the queued turn already carries — so the set, not two
- * loops, is what makes the settle exactly-once per delivery.
- */
-function drainTurnsAnswered(
-  drainTurnId: string | undefined,
-  injected: SettledSignals,
-): ReadonlySet<string> {
-  const answered = new Set<string>();
-
-  if (drainTurnId) answered.add(drainTurnId);
-
-  for (const signal of injected.absorbed) {
-    if (signal.replyTurnId) answered.add(signal.replyTurnId);
-  }
-
-  return answered;
-}
 
 /** A caller-supplied row limit, clamped to [1, max]. */
 function clampLimit(requested: number | undefined, max: number): number {
@@ -1196,8 +1169,7 @@ export class OrchestratorAgent extends ActorAgent {
   protected override turnWorkMode(): WorkMode {
     const requested = super.turnWorkMode();
 
-    const approvedHandoff = this._activeProgrammaticUserMessage !== null
-      && this.turnUserMessageEvent(this._activeProgrammaticUserMessage) === 'plan_approved';
+    const approvedHandoff = this.turnUserMessageEvent() === 'plan_approved';
 
     return requested === 'build'
       && !approvedHandoff
@@ -1283,7 +1255,10 @@ export class OrchestratorAgent extends ActorAgent {
       || this.actorHost().resumable(1).length > 0
       // The same question for work ADMITTED but never started. `resumable`
       // covers claims; a delegated task that no turn has taken yet holds none.
-      || this.hasAdmittedDelegations();
+      || this.hasAdmittedDelegations()
+      // And the root's own loop: a turn the last process died inside, or a
+      // send it acknowledged and never drained.
+      || this.chatLoopOwesWork();
   }
   /**
    * Whether ANY actor in this workspace holds an admitted delegation nothing
@@ -2414,20 +2389,10 @@ export class OrchestratorAgent extends ActorAgent {
    * gate is core's {@link declareTerminalRoster}, because the workspace root, the
    * subordinate facet and the CLI must not answer those questions three ways.
    */
-  private owedTerminalEffects(input: {
-    readonly result: ChatResponseResult;
-    readonly turnMode: WorkMode;
-    readonly credited: string | null;
-    readonly userText: string;
-    readonly assistantText: string;
-    readonly turn: CompletedTurn;
-    readonly status: RunEndReason;
-    readonly answeredDrains: ReadonlySet<string>;
-    readonly overflowRetry: boolean;
-    readonly outputContinuation: boolean;
-  }): OwedEffect[] {
-    const messageId = input.result.message.id;
-    const completed = input.result.status === 'completed';
+  protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] {
+    const messageId = input.messageId;
+    const completed = input.completed;
+    const turnMode = this.turnWorkMode();
     // SCOPED once, here: the mission labels the turn ran under have to travel
     // with every recording, and a cold replay has no active governor scope.
     const scopedTurn = projectJsonValue({ value: this.orch.scopedTurn(input.turn) });
@@ -2437,14 +2402,14 @@ export class OrchestratorAgent extends ActorAgent {
     // turn rather than rolled — `queueTurnShadowTrial` re-reads the pending
     // version on every call, so a replay would otherwise score this turn against
     // a candidate that was not under trial when it ran.
-    const sampledVersion = completed && input.turnMode !== 'plan'
+    const sampledVersion = completed && turnMode !== 'plan'
       ? shadowTrialPlan(this.scaffoldControl, messageId)
       : null;
 
     return declareTerminalRoster({
       messageId,
       status: input.status,
-      workMode: input.turnMode,
+      workMode: turnMode,
       continuity: this._turnContinuity,
       completed,
       userText: input.userText,
@@ -2459,26 +2424,21 @@ export class OrchestratorAgent extends ActorAgent {
    *  this turn earned it — the caller-side decision the roster's own type leaves
    *  to the backend that knows its lifetime. */
   private rosterParts(
-    input: {
-      readonly result: ChatResponseResult;
-      readonly credited: string | null;
-      readonly userText: string;
-      readonly assistantText: string;
-      readonly turn: CompletedTurn;
-      readonly answeredDrains: ReadonlySet<string>;
-      readonly overflowRetry: boolean;
-      readonly outputContinuation: boolean;
-    }, sampledVersion: number | null, mission: string | null,
+    input: OwedTerminalEffectsInput, sampledVersion: number | null, mission: string | null,
   ): TerminalTurnParts {
     const parts: TerminalTurnParts = {
-      turnEndExtensions: { message: projectJsonValue({ value: input.result.message }) },
+      // Over the row the transcript is about to persist, so the announcement a
+      // cut turn still owes replays from what the row holds.
+      turnEndExtensions: {
+        message: projectJsonValue({ value: this.chatTranscript.recordedAssistant(input.messageId, input.assistantText) }),
+      },
       takes: {
         credited: input.credited,
-        startedAt: this.acc.startedAt,
+        startedAt: input.startedAt,
         takeIds: unclaimedAlternateTakeIds(this.boundSql, this.actorHandle()),
       },
       craftedToolsUsed: this.acc.craftedToolsUsed(),
-      eventReplies: { answered: input.answeredDrains, requestId: input.result.requestId },
+      eventReplies: { answered: input.answeredDeliveries, requestId: input.messageId },
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
       overflowRetry: input.overflowRetry,
       outputContinuation: input.outputContinuation,
@@ -2495,7 +2455,7 @@ export class OrchestratorAgent extends ActorAgent {
         // million-token turn fails its insert partway through a claimed
         // sequence, leaving a prefix recovery reads as the whole roster.
         trialContext: projectJsonValue({
-          value: trimTrialContext(this._lastTurnOpts?.messages ?? []),
+          value: trimTrialContext([...input.trialContext]),
         }),
       },
     };
@@ -2543,15 +2503,10 @@ export class OrchestratorAgent extends ActorAgent {
         // the SAME message on the wire and the receiver treats it as the one it
         // already has. A batch whose channel is still open reports `owed` and
         // keeps both its lease and its row, which is what leaves it recoverable.
-        run: async ({ drainTurnId, answer, requestId }) => {
-          this._pendingDrainReplyTurns.set(requestId, drainTurnId);
+        run: async ({ drainTurnId, answer }) => {
           const closed = await this.completeEventBatch(drainTurnId, answer);
 
           if (!closed) return { status: 'owed', detail: 'a reply channel is still open' };
-
-          if (this._pendingDrainReplyTurns.get(requestId) === drainTurnId) {
-            this._pendingDrainReplyTurns.delete(requestId);
-          }
 
           return { status: 'completed' };
         },
@@ -2623,87 +2578,6 @@ export class OrchestratorAgent extends ActorAgent {
         },
       }),
     };
-  }
-
-
-  async onChatResponse(result: ChatResponseResult) {
-    const turnMode = this.turnWorkMode();
-
-    // The actor-generic settle spine lives on ActorAgent; everything after it
-    // here is orchestrator sequencing (takes, branches, evolution, naming).
-    const {
-      drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
-      outputContinuation,
-    } = await this.settleTurnEvents(result);
-
-    // The run is sealed here, and the name it was sealed with comes back rather
-    // than being classified again below for the roster: one turn, one reading of
-    // how it ended.
-    const { overflowRecovery, end } =
-      this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage, workMode: turnMode });
-
-    // The identity of THIS terminal sequence comes from the shared helper, so
-    // the root and its facets key one response the same way.
-    //
-    // NOTHING FROM HERE TO `settle` MAY AWAIT. Think has already persisted the
-    // assistant message, so an await before the claim exists is a window where a
-    // durable answer has no incomplete transition and `resumeAll()` finds nothing
-    // to replay — the whole suffix is simply lost. The response-to-model-message
-    // conversion therefore sits inside the `turn_end_extensions` body, where the
-    // claim already exists, and not here: here it is exactly that window.
-    const transition = this.transitionFor(result);
-    const { userText, assistantText } = this.turnTextParts(result, programmaticUserMessage);
-    // Read for every status: an aborted turn carries a message too, and its
-    // text and its user turn are what make it evidence.
-
-    // The turn record, for every status. `hadError` comes off the accumulator's
-    // per-step flag, and core's settle corrects it on the `'error'` arm — a turn
-    // can throw outside the accumulator's view, and the driver's own verdict is
-    // the better witness there.
-    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
-      userMessage: userText,
-      assistantResponse: assistantText,
-      turnId: result.message.id,
-      sessionId: 'default',
-      origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
-    });
-
-    // The same name the durable run carries — the classifier ran once, over the
-    // facts the seal used (including the model's last word, which is the only
-    // thing that separates a finished turn from one Think's stop condition cut).
-    const status = end.reason;
-
-    // Alternate Takes and steer branches were both captured mid-turn, before
-    // this id existed, and both are attributed to it — one decision, made by
-    // core (orchestrator/turn-lifecycle.ts `creditedTurnId`) rather than once
-    // here and again in the CLI's runTurn.
-    const credited = result.status === 'completed'
-      ? creditedTurnId({ messageId: result.message.id, completed: true, workMode: turnMode })
-      : null;
-
-    // Core drives it from here: the in-process guard, the durable claim, the
-    // roster, the run and the close are ONE state machine, and this backend
-    // supplies only what it owns — the effect bodies above, and the fiber that
-    // keeps the isolate alive for the detached tail.
-    //
-    // The roster is a THUNK because core calls it only on a first attempt. A
-    // resumed response replays the rows it already claimed: re-declaring reads
-    // live state that has moved on — a scaffold candidate that did not exist
-    // when the turn ran, a config flag since flipped — and would append rows to
-    // a sequence already under way.
-    await this.terminal.settle({
-      transition,
-      declare: () => this.owedTerminalEffects({
-        result, turnMode, credited, userText, assistantText, turn, status,
-        // Mission Inbox: a drain reaches a turn two ways and the ids come back
-        // from two places, so the SET is what makes the settle exactly-once per
-        // delivery.
-        overflowRetry: overflowRecovery?.enqueueRetry === true,
-        outputContinuation,
-        answeredDrains: drainTurnsAnswered(drainTurnId, injectedSignals),
-      }),
-      hold: (claimed, close) => { this.holdTerminalClose(claimed, close, result.requestId); },
-    });
   }
 
 
@@ -3014,7 +2888,6 @@ export class OrchestratorAgent extends ActorAgent {
   /** The orchestrator's half of the shared Stop: settle the turn that was
    *  cancelled. The call itself is ActorAgent's. */
   protected override onWorkCancelled({ abortedTools }: Omit<CancelWorkOutcome, 'ok'>): void {
-    this._inFlight = false;
     this.logActivity('work_cancelled', `${abortedTools} foreground aborted`);
   }
 
@@ -3454,6 +3327,11 @@ export class OrchestratorAgent extends ActorAgent {
    *  already drives is skipped. */
 
   protected override async maintenanceWork(): Promise<boolean> {
+    // The root's own loop first: a turn the last process died inside continues
+    // from its ledger, and the sends it acknowledged rerun, before anything
+    // else the wake finishes on their behalf.
+    this.resumeChatLoop();
+
     for (const pending of this.workspaceActors().retirements()) {
       await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });
     }
