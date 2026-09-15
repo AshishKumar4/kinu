@@ -18,7 +18,7 @@ import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { LanguageModel } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
-import { makeEnv, orchestratorHarness, thinkTurns } from './helpers/actor-harness';
+import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, thinkTurns } from './helpers/actor-harness';
 
 /** A turn the suite runs end to end answers one scripted line: no provider,
  *  no harness UserDO credential, so the admission is what the test measures
@@ -93,6 +93,16 @@ function doneFrames(sent: readonly string[]): Array<{ id: string; error?: string
   });
 }
 
+/** The kind each fleet row was written under: `turn` for the loop's own
+ *  seal, anything else for the harness plane's own notices. */
+function fleetRowKinds(agent: { harnessFleetTurnRows(): object[] }): string[] {
+  return agent.harnessFleetTurnRows().flatMap((row) => {
+    const parsed = v.safeParse(v.object({ blobs: v.array(v.string()) }), row);
+
+    return parsed.success ? [parsed.output.blobs[0]] : [];
+  });
+}
+
 function userRows(agent: { harnessTranscript: { history(): SessionMessage[] } }): string[] {
   return agent.harnessTranscript.history()
     .filter((message) => message.role === 'user')
@@ -107,9 +117,6 @@ describe('a chat request through the production gate', () => {
     const gate = agent.harnessChatGate();
 
     agent.harnessSupplyTurnModel(scriptedAnswer('hello back'));
-    agent.harnessNameWorkspace('Titled');
-    // The auto-title effect's suggest call would reach the harness's
-    // recording UserDO and refuse; the suite pins admission, not the title.
 
     await gate(wire, chatRequest('req-idle', 'hello'));
 
@@ -198,18 +205,13 @@ describe('a chat request through the production gate', () => {
     // And the close half of the same wiring: a resuming socket that goes
     // away releases the resume the handshake held for it.
     await agent.onClose(second.wire, 1000, 'gone', true);
-
-    // And the close half of the same wiring: a resuming socket that goes
-    // away releases the resume the handshake held for it.
-    await agent.onClose(second.wire, 1000, 'gone', true);
   });
 
   test('a live turn records its fleet row at its own seal', async () => {
     const { agent } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
     await agent.activateActor();
-    agent.harnessObserveFleetPlane();
+    agent.harnessOpenFleetWindow();
     agent.harnessSupplyTurnModel(scriptedAnswer('hello back'));
-    agent.harnessNameWorkspace('Titled');
 
     const gate = agent.harnessChatGate();
     const { wire } = connection(agent);
@@ -219,44 +221,39 @@ describe('a chat request through the production gate', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 10));
     }
 
-
-
     // The turn's own row, and only one of it — the positive half of the
     // gate below, so a future change that drops ALL rows reds here rather
     // than passing vacuously beside it. The sink's own install notice is the
     // harness's, not the turn's.
-    const kinds = agent.harnessFleetTurnRows().flatMap((row) => {
-      const parsed = v.safeParse(v.object({ blobs: v.array(v.string()) }), row);
-
-      return parsed.success ? [parsed.output.blobs[0]] : [];
-    });
-
-    expect(kinds.filter((kind) => kind === 'turn')).toHaveLength(1);
+    expect(fleetRowKinds(agent).filter((kind) => kind === 'turn')).toHaveLength(1);
   });
 
-
-
   test('a reconciled interrupted run records no fleet row', async () => {
-    const { agent } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
-    await agent.activateActor();
+    const env = fleetEnvForTest(makeEnv());
+    const dead = orchestratorHarness(undefined, undefined, env);
+    await dead.agent.activateActor();
 
-    // Exactly what a dead activation leaves: a run the loop opened and never
-    // closed — openTurnRun's run_start with no run_end.
-    agent.harnessOpenDanglingRun('run-dead-activation');
-    agent.harnessObserveFleetPlane();
-
-    // The wake reconcile seals what the dead activation left, and the seal is
-    // not a turn the loop ran: no turn row for it. The sink's own install
-    // notice is the harness's, not a turn's.
-    await agent.harnessReconcileInterruptedRuns();
-
-    const kinds = agent.harnessFleetTurnRows().flatMap((row) => {
-      const parsed = v.safeParse(v.object({ blobs: v.array(v.string()) }), row);
-
-      return parsed.success ? [parsed.output.blobs[0]] : [];
+    // A run some earlier activation opened and never closed — a run_start
+    // with no run_end and no turn identity, so the loop the wake builds has
+    // nothing to continue and the reconcile is what seals it. Written by the
+    // activation that dies, since the reconcile seals only what predates the
+    // activation that runs it.
+    dead.agent.harnessEventRecorder.emit('run-dead-activation', {
+      type: 'run_start', agentId: 'harness-actor', caused_by: 'chat',
+      userMessage: 'the turn the last process died inside',
     });
+    await new Promise<void>((resolve) => setTimeout(resolve, 2));
 
-    expect(kinds).not.toContain('turn');
+    // The eviction, then the wake itself on the fresh activation: it builds
+    // the loop (which subscribes the observer) and then seals what the dead
+    // activation left. The seal is not a turn the loop ran, so no turn row.
+    const { agent } = await reactivateOrchestratorHarness(dead.db, undefined, { env });
+    await agent.activateActor();
+    agent.harnessOpenFleetWindow();
+    await agent._kinuTerminalRetryTick();
+
+    expect(agent.harnessEventRecorder.unterminatedRuns()).toEqual([]);
+    expect(fleetRowKinds(agent)).not.toContain('turn');
   });
 
   test('a refused send closes the request with the refusal and leaves nothing', async () => {
