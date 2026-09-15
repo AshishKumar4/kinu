@@ -1552,9 +1552,14 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The reconnect snapshot reads SQL, not the RAM drain: RAM vanishes on an
    *  eviction while these rows are the acknowledged steers still awaiting a
-   *  step boundary. */
+   *  step boundary. A STEER is a row bound to a turn — accepted mid-turn, or
+   *  swept to a rerun of a dead one. The unbound rows are the loop's own
+   *  sends: the message a running or queued turn was admitted from, which the
+   *  transport already wrote to the transcript and the tab already shows as
+   *  the message it is, never as a chip. */
   protected pendingSteerRuns(): InlineSteer[] {
     return this.pendingSends.restore()
+      .filter((row) => row.turnId !== null)
       .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null }));
   }
 

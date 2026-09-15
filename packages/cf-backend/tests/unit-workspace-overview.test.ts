@@ -125,19 +125,23 @@ describe('getWorkspaceOverview', () => {
     expect(overview.latestRun).toEqual({ status: 'error', task: 'latest task' });
   });
 
-  test('a live turn beside a completed last run still reads working', async () => {
+  test('a live turn beside a completed last run reads working, and the run line is the live run', async () => {
     const { agent } = orchestratorHarness();
     const recorder = new RunEventRecorder(agent.observeRuntime().storage.sql, agent.observeRuntime().actor);
 
     recorder.emit('run-1', { type: 'run_start', agentId: 'main', userMessage: 'done' });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
+    // A live turn IS a run in the ledger — opened, not yet sealed — so the run
+    // line is that run, with no status yet, and the card's lead is the
+    // activity, which is what a reader of a working workspace is told first.
     await agent.declareTurnInFlight(true);
 
     const overview = await agent.getWorkspaceOverview();
 
     expect(overview.activity).toBe('working');
-    expect(overview.latestRun?.status).toBe('completed');
+    expect(overview.latestRun).toEqual({ status: null, task: 'a live turn' });
 
     await agent.declareTurnInFlight(false);
+    expect((await agent.getWorkspaceOverview()).latestRun).toEqual({ status: 'completed', task: 'a live turn' });
   });
 });
