@@ -106,3 +106,15 @@ describe('a throwing host-background check holds the box', () => {
     expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
   });
 });
+
+describe('every admitted operation is an interaction', () => {
+  test('a file write on an admitted box stamps the lease the heartbeat reads', async () => {
+    const { box } = harness(TestBox);
+    await box.devboxStartup();
+    expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
+
+    await box.writeFile('/workspace/witness.txt', 'bytes a caller put there');
+
+    expect((await box.devboxState()).lastInteractionAt).toEqual(expect.any(Number));
+  });
+});
