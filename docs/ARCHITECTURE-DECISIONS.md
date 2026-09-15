@@ -127,6 +127,25 @@ memory, root-only RPC and the shared approval ladder), `unit-slate-project`,
 and workerd's `plan-code` (a declared crafted binding runs live source with no
 delegation globals). O3 closed.
 
+M4. A slate's durable application is a journalled launch of the workspace's
+one facet manager, and the journal re-drives it on the wake after a reset or
+a hibernation. Decided 2026-09-15 with Nimbus worker 0.7 (`composeFacetManager`,
+`spawnWorker`). Reversed: the hosted workspace's rule that "an object that
+is never asked never boots anything" (a resident was re-driven only on the
+next request for its URL, `workspace-host.ts` at `92c769b6b`). The launch
+journal recovers on the first pump of an incarnation, which the hosted
+workspace runs from `waitUntil` when it composes the manager, because its one
+alarm slot is the SDK scheduler's. The recipe carries digests, port and cwd
+and never a launch's inputs; a slate's bindings are minted per caller and its
+modules compiled from the tree as it is now, so the embedder's
+`resolveWorkerLaunch` answers null and brings the slate back through the
+slate host's own boot, which also replaces a process whose source changed.
+Measured 2026-09-15 by `unit-workspace-locality`'s "a launch a hibernation
+interrupted is re-driven through the slate host on the next wake": a
+`resident-launch` row below the wake's pid floor drives one `ensureSlate` of
+its owner and is released; red with the hook answering null alone. The
+URL-on-request path stays and is pinned by workerd `slate-durability`.
+
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),

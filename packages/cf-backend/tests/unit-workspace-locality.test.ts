@@ -50,6 +50,9 @@ interface ActorObject {
   readonly database: Database;
   readonly ctx: DurableObjectState;
   tables(): string[];
+  /** Every promise the object was asked to hold open, in order — a wake's
+   *  background work, so a test can await what production only retains. */
+  readonly held: Promise<unknown>[];
 }
 
 /**
@@ -84,10 +87,12 @@ function actorObject(): ActorObject {
     deleteAlarm: async () => {},
   };
 
+  const held: Promise<unknown>[] = [];
+
   const context = {
     storage,
     id: { toString: () => 'locality-actor', name: 'locality-actor' },
-    waitUntil: () => {},
+    waitUntil: (promise: Promise<unknown>) => { held.push(promise); },
     getWebSockets: () => [],
   };
 
@@ -100,6 +105,7 @@ function actorObject(): ActorObject {
   return {
     database,
     ctx,
+    held,
     tables: () => database
       .prepare<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all()
@@ -557,5 +563,45 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const ordinary = activate();
     await ordinary.registerPort(9003, 20000, { handleHttpRequest: async () => new Response('ordinary port') }, 'workspace/slate-Z');
     expect((await ordinary.routePreview(20000, handle, new Request('https://preview.test/'), '/')).status).toBe(404);
+  });
+
+  test('a launch a hibernation interrupted is re-driven through the slate host on the next wake', async () => {
+    const actor = actorObject();
+    const kv = new Map<string, JsonValue>();
+    Object.assign(actor.ctx.storage, kvBackedStorage(kv));
+    // The row the previous incarnation's manager journalled for a slate's
+    // durable application, exactly as `spawnWorker` writes it: a pid of a
+    // generation below this wake's floor, the recipe with no interpreter
+    // resident — an embedder's own worker launch, which re-drives through the
+    // embedder — and the launch still in flight when the object went away.
+    kv.set('resident-launch:41', {
+      pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
+      recipe: {
+        kind: 'worker', owner: 'keeper', port: 20000, cwd: '/home/user/slates/keeper', mainModule: 'runner.js',
+        image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'],
+      },
+    });
+    const redriven: string[] = [];
+
+    const workspace = createHostedWorkspace({
+      ctx: actor.ctx, env: strictEnv(workspaceBindings()),
+      previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
+      ensureSlate: async (owner) => {
+        redriven.push(owner);
+
+        return null;
+      },
+    });
+
+    // The wake: composing the manager is what drains the journal's recovery,
+    // and every background turn it started is held by the object.
+    await workspace.facetManager();
+
+    while (actor.held.length > 0) await Promise.all(actor.held.splice(0));
+
+    expect(redriven).toEqual(['keeper']);
+    // The row this re-drive was owed on is released: the slate host's own boot
+    // journals the launch it made under a fresh pid.
+    expect(kv.has('resident-launch:41')).toBe(false);
   });
 });
