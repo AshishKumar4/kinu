@@ -619,6 +619,10 @@
       },
       {
         "type": "run-event",
+        "event": "model_operation"
+      },
+      {
+        "type": "run-event",
         "event": "step_partial"
       },
       {
@@ -632,6 +636,10 @@
       {
         "type": "run-event",
         "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
@@ -665,6 +673,10 @@
       {
         "type": "run-event",
         "event": "profile_resolution"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
@@ -715,6 +727,10 @@
       },
       {
         "type": "run-event",
+        "event": "model_operation"
+      },
+      {
+        "type": "run-event",
         "event": "turn_end"
       },
       {
@@ -748,6 +764,10 @@
       },
       {
         "type": "run-event",
+        "event": "model_operation"
+      },
+      {
+        "type": "run-event",
         "event": "step_partial"
       },
       {
@@ -761,6 +781,10 @@
       {
         "type": "broadcast",
         "event": "steer_status"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "error",
@@ -798,6 +822,10 @@
       {
         "type": "run-event",
         "event": "profile_resolution"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
@@ -840,11 +868,19 @@
       },
       {
         "type": "run-event",
+        "event": "model_operation"
+      },
+      {
+        "type": "run-event",
         "event": "step_partial"
       },
       {
         "type": "run-event",
         "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
@@ -868,11 +904,19 @@
       },
       {
         "type": "run-event",
+        "event": "model_operation"
+      },
+      {
+        "type": "run-event",
         "event": "step_partial"
       },
       {
         "type": "run-event",
         "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
@@ -913,6 +957,10 @@
         "event": "profile_resolution"
       },
       {
+        "type": "run-event",
+        "event": "model_operation"
+      },
+      {
         "type": "broadcast",
         "event": "steer_status"
       },
@@ -931,6 +979,10 @@
       {
         "type": "run-event",
         "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
@@ -967,6 +1019,10 @@
       },
       {
         "type": "run-event",
+        "event": "model_operation"
+      },
+      {
+        "type": "run-event",
         "event": "step_partial"
       },
       {
@@ -980,6 +1036,10 @@
       {
         "type": "run-event",
         "event": "step_finish"
+      },
+      {
+        "type": "run-event",
+        "event": "model_operation"
       },
       {
         "type": "run-event",
