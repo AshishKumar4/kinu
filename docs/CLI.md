@@ -512,7 +512,7 @@ Link this computer as the desktop execution daemon.
 
 | Option | What it does |
 | --- | --- |
-| `--label <name>` | Name for this device (default: user@hostname); skips the name prompt |
+| `--label <name>` | Name for this device (default: hostname); skips the name prompt |
 
 ### kinu desktop [action]
 
@@ -520,7 +520,7 @@ Connect or inspect the local desktop execution daemon.
 
 | Option | What it does |
 | --- | --- |
-| `--label <name>` | Name for this device (default: user@hostname); skips the name prompt |
+| `--label <name>` | Name for this device (default: hostname); skips the name prompt |
 
 ### kinu daemon [action] [workspace]
 
