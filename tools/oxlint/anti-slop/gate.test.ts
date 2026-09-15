@@ -353,13 +353,15 @@ assert.doesNotMatch(packageJson.scripts.lint, /--quiet|--allow|--fix|baseline/u)
 
 // The strict gate must provably run in CI. ci.yml does not enumerate commands — it delegates to
 // the ladder — so read the property through the ladder instead of grepping ci.yml for a literal.
-// Both halves are needed: CI runs the ci tier, and the ci tier claims `bun run check`.
+// Both halves are needed: CI runs the ci tier, and the ci tier claims `bun run lint`
+// (the lint half of `bun run check`, its own ladder row since 2026-09-15 so its
+// closure is keyed apart from the typecheck's).
 const ladder = readFileSync("scripts/ladder.ts", "utf8");
 assert.match(ci, /run: bun scripts\/ladder\.ts --tier=ci/u, "CI must run the ladder's ci tier");
 assert.match(
   ladder,
-  /run: 'bun run check',\s*\n\s*tier: '(?:commit|push|ci)',/u,
-  "the ladder must claim `bun run check` at or before the ci tier",
+  /run: 'bun run lint',\s*\n\s*tier: '(?:commit|push|ci)',/u,
+  "the ladder must claim `bun run lint` at or before the ci tier",
 );
 
 function isForbiddenLintDirective(line: string): boolean {

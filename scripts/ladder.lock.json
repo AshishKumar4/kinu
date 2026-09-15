@@ -1,13 +1,15 @@
 {
-  "reason": "the cache soundness proof joined the ladder wiring row; file composition, 1.25s measured for the three files",
+  "reason": "check split into lint, drift and typecheck rows and test into core and spine, each keyed by its own closure; measured 2026-09-15, same total cost",
   "tiers": {
     "commit": {
-      "seconds": 82.24,
+      "seconds": 78.74,
       "measuredAt": "2026-09-15",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
-        "bun run check": 37,
+        "bun run lint": 21.4,
+        "bun test packages/agent-core/drift.test.ts": 0.1,
+        "bun run typecheck": 12,
         "bun run gate:do-init": 0.71,
         "bun run gate:duplication": 1.7,
         "bun run gate:reachability": 2.27,
@@ -33,14 +35,16 @@
       }
     },
     "push": {
-      "seconds": 400.65,
+      "seconds": 397.65,
       "measuredAt": "2026-09-15",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
         "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts": 0.2,
         "bun scripts/pattern-inventory.ts": 2.5,
-        "bun run check": 37,
+        "bun run lint": 21.4,
+        "bun test packages/agent-core/drift.test.ts": 0.1,
+        "bun run typecheck": 12,
         "bun run gate:do-init": 0.71,
         "bun run gate:duplication": 1.7,
         "bun run gate:reachability": 2.27,
@@ -73,7 +77,8 @@
         "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts": 19,
         "bun test scripts/gate-set-equality.test.ts": 1.1,
         "bun test scripts/wired.test.ts": 5,
-        "bun run test": 44,
+        "bun run test:core": 43,
+        "bun run test:spine": 1.5,
         "bun run gate:python-suites": 0.3,
         "bun test packages/devbox/": 74,
         "bun test packages/test-utils/": 7,

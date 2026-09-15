@@ -785,14 +785,16 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
       'bun test --parallel=4 packages/cf-backend/',
       'bun test --parallel=4 packages/cli-backend/',
       'bun run test:cli',
+      'bun run test:core',
     ]) {
       expect(atCi.some((gate) => gate.run === run), `${run} is not a gate at ci`).toBeTrue();
     }
 
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
-    expect(packageJson).toContain(
-      '"test": "bun test --parallel=4 packages/agent-core/ packages/agent-utils/ packages/core/ packages/compaction/"',
-    );
+    expect(packageJson).toContain('"test:core": "bun test --parallel=4 packages/core/"');
+    // The root script still fans out to every spine package, so `bun run test`
+    // stays the most-typed command and `claims()` keeps resolving it whole.
+    expect(packageJson).toContain('"test": "bun run test:core && bun run test:spine"');
   });
 });
 
