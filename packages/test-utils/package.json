@@ -10,7 +10,8 @@
     "./parity-normalizer": "./src/parity-normalizer.ts"
   },
   "dependencies": {
-    "@kinu.run/core": "workspace:*"
+    "@kinu.run/core": "workspace:*",
+    "capnweb": "0.8.0"
   },
   "scripts": {
     "check": "tsc --noEmit"

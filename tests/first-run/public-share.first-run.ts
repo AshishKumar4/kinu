@@ -6,8 +6,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { newHttpBatchRpcSession } from 'capnweb';
-import type { EvalObservation } from '@kinu.run/test-utils';
+import { callSharedSlate, type EvalObservation, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { FIRST_RUN_DEFECTS, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
@@ -28,26 +27,11 @@ const Refused = v.object({ ok: v.literal(false), reason: v.string(), error: v.st
 
 const SLATE = 'public-share';
 
-/** What one visitor call settled to: the answer the guest returned, parsed as
- *  JSON, or the message of the refusal its binding proxy threw. */
-interface ViewerAnswer {
-  readonly value?: JsonValue;
-  readonly error?: string;
-}
-
 afterAll(() => publishFirstRunRecord(SUITE, undefined, [CASE], observations));
 
-/** The visitor's Cap'n Web batch against the share origin: one call, one
- *  settled answer — a refusal arrives as the rejection the guest's binding
- *  proxy threw, whose message names the share's own reason. */
-async function viewerCall(url: string, method: 'probe' | 'mutate'): Promise<ViewerAnswer> {
-  const stub = newHttpBatchRpcSession<Record<'probe' | 'mutate', () => Promise<JsonValue>>>(new URL('/__rpc', url).toString());
-
-  try {
-    return { value: v.parse(JsonValueSchema, await stub[method]()) };
-  } catch (cause) {
-    return { error: cause instanceof Error ? cause.message : String(cause) };
-  }
+/** The visitor's Cap'n Web batch against the share origin, parsed as JSON. */
+function viewerCall(url: string, method: 'probe' | 'mutate'): Promise<SlateViewerAnswer<JsonValue>> {
+  return callSharedSlate(url, method, JsonValueSchema);
 }
 
 describe(SUITE, () => {
@@ -78,8 +62,8 @@ END`]));
         const url = created?.success === true ? created.output.url : null;
         const refusal = v.safeParse(Refused, shared);
         let served: { status: number; body: string } | null = null;
-        let probe: ViewerAnswer | null = null;
-        let mutate: ViewerAnswer | null = null;
+        let probe: SlateViewerAnswer<JsonValue> | null = null;
+        let mutate: SlateViewerAnswer<JsonValue> | null = null;
 
         if (url !== null) {
           // Signed out: no cookie, no bearer, the bare share origin.
@@ -94,9 +78,9 @@ END`]));
             detail: JSON.stringify({ deployedSha: session.deployedSha, refused: refusal.success ? refusal.output : null, url: url !== null }) },
           { what: 'public-share-serves-signed-out', reached: served?.status === 200 && served.body === 'public-share-probe-ok',
             detail: JSON.stringify(served) },
-          { what: 'read-only-member-answers', reached: v.is(v.object({ exists: v.literal(true) }), probe?.value),
+          { what: 'read-only-member-answers', reached: probe !== null && 'value' in probe && v.is(v.object({ exists: v.literal(true) }), probe.value),
             detail: JSON.stringify(probe) },
-          { what: 'mutating-member-refused', reached: mutate?.error?.includes('does not grant') === true,
+          { what: 'mutating-member-refused', reached: mutate !== null && 'error' in mutate && mutate.error.includes('does not grant'),
             detail: JSON.stringify(mutate) },
         ];
       },

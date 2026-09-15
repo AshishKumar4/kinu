@@ -391,10 +391,12 @@ describe("kinu exec (headless)", () => {
 
       // Profile resolution lands before the step. The mock answers in one step
       // and nothing repeats, fails or stalls, so no `turn_steering` row is
-      // written at all. Pin the whole sequence so a row that appears or
-      // vanishes here cannot pass while the turn still looks complete.
+      // written at all; the step's first delta writes the partial ledger row a
+      // continuation would resume from, then the finished step supersedes it.
+      // Pin the whole sequence so a row that appears or vanishes here cannot
+      // pass while the turn still looks complete.
       expect(ledger.map((e) => e.type)).toEqual([
-        "run_start", "turn_start", "profile_resolution", "step_finish",
+        "run_start", "turn_start", "profile_resolution", "step_partial", "step_finish",
         "turn_end", "run_end",
       ]);
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
