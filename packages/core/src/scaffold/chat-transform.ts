@@ -67,6 +67,8 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
     stepIndex: v.number(),
     responseMessages: ModelMessagesSchema,
     usage: v.optional(UsageSchema),
+    finishReason: v.optional(v.string()),
+    text: v.optional(v.string()),
   }),
   v.object({ type: v.literal('error'), message: v.string() }),
   v.object({
