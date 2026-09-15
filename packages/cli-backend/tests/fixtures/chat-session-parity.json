@@ -7,7 +7,10 @@
         "parentId": null,
         "role": "user",
         "content": "one",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<uuid#2>",
@@ -23,7 +26,10 @@
         "parentId": null,
         "role": "user",
         "content": "two",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<steer#4>",
@@ -253,7 +259,10 @@
         "parentId": null,
         "role": "user",
         "content": "one",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<uuid#2>",
@@ -269,7 +278,10 @@
         "parentId": null,
         "role": "user",
         "content": "two",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<steer#4>",
@@ -296,7 +308,10 @@
         "parentId": null,
         "role": "user",
         "content": "three",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<uuid#7>",
@@ -312,7 +327,10 @@
         "parentId": null,
         "role": "user",
         "content": "four",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       }
     ],
     "pendingSteers": [
@@ -348,7 +366,10 @@
         "parentId": null,
         "role": "user",
         "content": "one",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<uuid#2>",
@@ -364,7 +385,10 @@
         "parentId": null,
         "role": "user",
         "content": "two",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<steer#4>",
@@ -391,7 +415,10 @@
         "parentId": null,
         "role": "user",
         "content": "three",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<uuid#7>",
@@ -407,7 +434,10 @@
         "parentId": null,
         "role": "user",
         "content": "four",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<steer#10>",
@@ -434,7 +464,10 @@
         "parentId": null,
         "role": "user",
         "content": "five",
-        "metadata": null
+        "metadata": {
+          "kinuMode": "build",
+          "kinuAuthor": "operator"
+        }
       },
       {
         "id": "<uuid#13>",
@@ -856,14 +889,6 @@
       },
       {
         "type": "run-event",
-        "event": "run_start"
-      },
-      {
-        "type": "run-event",
-        "event": "turn_start"
-      },
-      {
-        "type": "run-event",
         "event": "profile_resolution"
       },
       {
@@ -943,14 +968,6 @@
         "kind": "user",
         "text": "four",
         "workMode": "build"
-      },
-      {
-        "type": "run-event",
-        "event": "run_start"
-      },
-      {
-        "type": "run-event",
-        "event": "turn_start"
       },
       {
         "type": "run-event",

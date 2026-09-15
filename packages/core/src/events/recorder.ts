@@ -776,9 +776,12 @@ export class RunEventRecorder {
     const row = rows[0];
 
     if (row === undefined) return null;
-    const start = parseStoredRunEvent(row.payload);
+    // A start row this ledger cannot read names no turn to re-open: an open
+    // run without a turn identity is a run some other writer opened, and the
+    // read here is what decides whether a process continues something.
+    const start = v.safeParse(RunEventSchema, JSON.parse(row.payload));
 
-    if (start.type !== 'run_start' || start.turn === undefined) return null;
+    if (!start.success || start.output.type !== 'run_start' || start.output.turn === undefined) return null;
 
     const steps = this.transcript(row.run_id);
 
@@ -795,7 +798,7 @@ export class RunEventRecorder {
     // A partial of a step that later finished is superseded by that step's row.
     const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
 
-    return { runId: row.run_id, turn: start.turn, steps, partial };
+    return { runId: row.run_id, turn: start.output.turn, steps, partial };
   }
 
   /**

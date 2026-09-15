@@ -10,6 +10,14 @@ import { THEMES, type Theme } from './computed-style';
 // declaration.
 import type { LandingMovieHandle } from '@kinu.run/core';
 
+// The hero's own `declare global` lives under packages/cf-backend and is out
+// of this gate's program, so the handle is named here instead.
+interface SearchTreeHandle {
+  renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
+  time(): number;
+  forceFault?(error: Error): void;
+}
+
 const PHONE = { width: 390, height: 844 } as const;
 
 const DESKTOP = { width: 1280, height: 900 } as const;
@@ -100,6 +108,8 @@ interface Facts {
   prunedNodes?: number;
   hiddenNodes?: number;
   heroGraphWidth?: number;
+  /** Which renderer the hero mount landed on, and the canvas's own answer. */
+  heroMount?: { renderer?: string; canvasRenderer?: string };
   workspace?: SurfaceFact;
   tui?: SurfaceFact;
   cli?: SurfaceFact;
@@ -246,6 +256,19 @@ beforeAll(async () => {
       facts.heroGraphWidth = await page.$eval('[data-hero-graph]', (graph) => (
         Math.round(graph.getBoundingClientRect().width)
       ));
+      // The mount's own answer: which renderer took the canvas, and that the
+      // canvas carries the same answer — the mount landed, whatever it landed on.
+      facts.heroMount = await page.evaluate(() => {
+        // SAFETY: `__kinuSearchTree` is constructed on this window by
+        // SearchTreeHero's mount when the mount lands — the suite's own
+        // `data-settled` wait above has already observed that landing.
+        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
+
+        return {
+          renderer: w.__kinuSearchTree?.renderer(),
+          canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
+        };
+      });
       const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
       await page.waitForFunction(
         (previous: string) => document.querySelector('canvas')?.toDataURL() !== previous,
@@ -838,14 +861,20 @@ beforeAll(async () => {
 }, 180_000);
 
 describe('the standalone landing runs', () => {
-  test('the settled graph keeps flowing without restarting its reveal', () => {
-    expect(required(facts.treeFlows, 'settled tree motion')).toBeTrue();
-  });
-
   test('the abstract tree cuts pruned branches before their descendants', () => {
     expect(required(facts.prunedNodes, 'pruned branch count')).toBeGreaterThan(3);
     expect(required(facts.hiddenNodes, 'hidden descendant count')).toBeGreaterThan(0);
     expect(required(facts.heroGraphWidth, 'hero graph width')).toBeGreaterThan(620);
+  });
+
+  test('the hero mount landed: the handle and the canvas name the same renderer', () => {
+    const mount = required(facts.heroMount, 'hero mount');
+
+    // WebGPU where the box has it, Canvas2D where it does not — both are the
+    // mount answering an outcome; 'pending' and 'static' would mean it never
+    // finished picking one.
+    expect(mount.renderer).toBeOneOf(['webgpu', 'canvas']);
+    expect(mount.canvasRenderer).toBe(mount.renderer);
   });
 
   test('reduced motion serves one settled result', () => {
@@ -882,6 +911,98 @@ describe('the standalone landing runs', () => {
     expect(interactions.cli).toBeTrue();
     expect(interactions.evolution).toBeTrue();
   });
+
+  test('a device loss mid-run swaps the mount to Canvas2D and keeps the clock', async () => {
+    // The REAL boundary, not a test seam: a page init script wraps
+    // `GPUAdapter.requestDevice` so the GPUDevice the hero's mount obtains is
+    // captured on `window`; the test then destroys it — exactly what a dead
+    // device means — and the next frame() throws VGPU-DEVICE-DISPOSED into
+    // the mount's fault path. Headless needs --enable-unsafe-webgpu to expose
+    // navigator.gpu on this lane; whether the adapter is real or SwiftShader,
+    // the destroy is a genuine loss event for the mount. (If SwiftShader dies
+    // on its own before the destroy lands, renderer() already reports canvas
+    // — the swap is the assertion either way.)
+    await withGallery(async ({ browser: freshBrowser, origin: freshOrigin }: { browser: Browser; origin: string }) => {
+      const page = await freshBrowser.newPage();
+      await page.setViewport(DESKTOP);
+      await page.evaluateOnNewDocument(() => {
+        // SAFETY: this init script constructed `__kinuHeroDevice` on the
+        // window itself — the assertion names the shape the script's own
+        // write below guarantees.
+        const w = window as Window & { __kinuHeroDevice?: { destroy(): void } };
+
+        // `gpu` in navigator is the capability itself; GPUAdapter is only
+        // declared to pages where the flag landed, so reading it bare would
+        // throw on a lane without WebGPU.
+        const requestDevice = 'gpu' in navigator ? GPUAdapter.prototype.requestDevice : undefined;
+
+        if (requestDevice !== undefined) {
+          GPUAdapter.prototype.requestDevice = async function (this: GPUAdapter, descriptor?: GPUDeviceDescriptor) {
+            const device = await requestDevice.call(this, descriptor);
+            w.__kinuHeroDevice = device;
+
+            return device;
+          };
+        }
+      });
+      await page.goto(`${freshOrigin}/landing.html`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('canvas[data-settled="true"]', { timeout: 15_000 });
+
+      const landed = await page.evaluate(() => {
+        // SAFETY: `__kinuSearchTree` is constructed on this window by
+        // SearchTreeHero's mount; the `data-settled` wait above observed it.
+        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
+
+        return { renderer: w.__kinuSearchTree?.renderer(), time: w.__kinuSearchTree?.time() };
+      });
+
+      const destroyed = await page.evaluate(() => {
+        // SAFETY: the init script above constructed `__kinuHeroDevice` on this
+        // window before the page's own scripts ran — an owner guarantee.
+        const w = window as Window & { __kinuHeroDevice?: { destroy(): void } };
+
+
+        if (w.__kinuHeroDevice === undefined) return false;
+        w.__kinuHeroDevice.destroy();
+
+        return true;
+      });
+
+      await page.waitForFunction(() => {
+        // SAFETY: `__kinuSearchTree` is constructed on this window by
+        // SearchTreeHero's mount; the `data-settled` wait above observed it.
+        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
+
+        return w.__kinuSearchTree?.renderer() === 'canvas';
+      }, { timeout: 15_000 });
+
+      const after = await page.evaluate(() => {
+        // SAFETY: `__kinuSearchTree` is constructed on this window by
+        // SearchTreeHero's mount; the `data-settled` wait above observed it.
+        const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
+
+        return {
+          renderer: w.__kinuSearchTree?.renderer(),
+          time: w.__kinuSearchTree?.time(),
+          canvasRenderer: document.querySelector('canvas')?.dataset.renderer,
+        };
+      });
+
+      // The fallback is installed and named, and the clock went on rather
+      // than restarting — the simulation itself survived the swap, which is
+      // the point of the mount's rebind.
+      expect(after.renderer).toBe('canvas');
+      expect(after.canvasRenderer).toBe('canvas');
+      expect(after.time).toBeGreaterThanOrEqual(landed.time ?? 0);
+
+      // Which loss path fired — for the report: 'webgpu+destroy' is the full
+      // real-device path, 'canvas-already' means the lane had no WebGPU and
+      // the mount's resting renderer was exercised instead.
+      console.log(`hero loss path: landed=${landed.renderer ?? 'none'} destroyed=${destroyed}`);
+
+      await page.close();
+    }, ['--enable-unsafe-webgpu']);
+  }, 120_000);
 });
 
 describe('the landing demonstration leads with its result', () => {

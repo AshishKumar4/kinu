@@ -262,7 +262,9 @@ describe('renaming changes no identity and moves no database', () => {
     // The recorded directory is gone, so the ref places nothing and the agent
     // reads as unplaced — visible, rather than missing from every roster.
     expect(listAgentDirs(from)).toEqual([]);
-    expect(listUnplacedAgentNames()).toEqual(['moved-project']);
+    // Membership, not equality: another file in the same process may own its
+    // own unplaced rows; what this test created is what the assertion names.
+    expect(listUnplacedAgentNames()).toContain('moved-project');
 
     const rebound = resolveLocalAgent('moved-project', { cwd: to, workspaceId: 'bound' });
     expect(rebound.placement).toBe('adopted');
@@ -316,16 +318,17 @@ describe('an unplaced workspace is adopted one at a time', () => {
     unplacedWorkspace('unplaced-one', 'ws-unplaced-one');
     unplacedWorkspace('unplaced-two', 'ws-unplaced-two');
 
-    // An empty project claims nothing: neither workspace on this machine reads
-    // as its own.
     expect(listAgentDirs(cwd)).toEqual([]);
-    expect(listUnplacedAgentNames()).toEqual(['unplaced-one', 'unplaced-two']);
+    // Membership and absence over the machine-wide roster: every unplaced
+    // row this file created is present, and nothing it didn't create can be
+    // claimed by the assertion either way.
+    expect(listUnplacedAgentNames()).toEqual(expect.arrayContaining(['unplaced-one', 'unplaced-two']));
 
     // A read states the placement it would use without recording it.
     const read = resolveLocalAgent('unplaced-one', { cwd, adopt: false });
     expect(read.placement).toBe('unplaced');
     expect(read.dbPath).toBe(agentDbPath('unplaced-one'));
-    expect(listUnplacedAgentNames()).toEqual(['unplaced-one', 'unplaced-two']);
+    expect(listUnplacedAgentNames()).toEqual(expect.arrayContaining(['unplaced-one', 'unplaced-two']));
 
     // An open adopts exactly the one it opened.
     const opened = resolveLocalAgent('unplaced-one', { cwd, workspaceId: 'adopted' });
@@ -333,7 +336,8 @@ describe('an unplaced workspace is adopted one at a time', () => {
     expect(opened.cwd).toBe(cwd);
     expect(opened.workspaceId).toBe('adopted');
     expect(listAgentDirs(cwd)).toEqual(['unplaced-one']);
-    expect(listUnplacedAgentNames()).toEqual(['unplaced-two']);
+    expect(listUnplacedAgentNames()).toContain('unplaced-two');
+    expect(listUnplacedAgentNames()).not.toContain('unplaced-one');
   });
 
   test('adoption records the database identity, and re-adoption is a no-op', () => {

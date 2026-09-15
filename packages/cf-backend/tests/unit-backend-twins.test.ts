@@ -130,6 +130,14 @@ const KNOWN_TWINS: readonly string[] = [
   // (`PromptIdentity`, prompt.ts renderAgentNames), so neither body decides
   // anything. Not expected to shrink.
   'promptIdentity',
+  // The loop's preparation port — the seam itself, not duplication. Core's
+  // ChatSession asks each backend for one admitted turn's assembly through
+  // `ChatSessionPorts.prepareTurn`, and each answers from what it alone owns:
+  // its reads (MCP tools, device status, the owner's profile inputs), its
+  // tool surface, its prompt, its dynamic context. What the answer MEANS —
+  // the PreparedTurn shape, the profile binding, the step pipeline the
+  // assembly feeds — is core's. Not expected to shrink.
+  'prepareTurn',
 ];
 
 /**

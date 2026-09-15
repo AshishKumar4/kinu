@@ -33,7 +33,7 @@ import {
 } from './helpers/user-do';
 import { CAPABLE_HELLO, daemon, type DeviceResponder } from './helpers/device-harness';
 import {
-  orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent,
+  orchestratorHarness, thinkTurns, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 
 const OWNER_USER_ID = '0123456789abcdef0123456789abcdef';
@@ -97,7 +97,7 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   await actor.agent.harnessRefreshDeviceStatus();
   // The turn the command belongs to, opened through the same seam production
   // opens it with, so the durable row carries a turn a Stop can name.
-  actor.agent.harnessBeginTurn(TURN);
+  await thinkTurns(actor.agent).openInFlight(TURN);
   const broadcasts: string[] = [];
   Reflect.set(actor.agent, 'broadcast', (payload: string) => { broadcasts.push(payload); });
 

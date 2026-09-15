@@ -27,7 +27,7 @@ import { mock } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 
-import { describeThrown } from '../../src/lifecycle';
+import { describeThrown, type StartClock } from '../../src/lifecycle';
 import type { StoredValue } from '../../src/storage';
 import { sessionShellRefusal } from './session-shell';
 
@@ -68,6 +68,63 @@ export interface Gate {
   readonly promise: Promise<void>;
   enter(): void;
   release(): void;
+}
+
+/** A start clock the test advances. Timers fire in due order, each at its
+ *  own due time, and only when the test moves the clock past them — so a
+ *  budget property is proven by the arithmetic of the budget, never by how
+ *  fast the machine got to the parked step. */
+export interface ManualStartClock extends StartClock {
+  /** Move the clock forward, firing every timer that comes due on the way. */
+  advance(ms: number): void;
+  /** Move the clock to the earliest armed timer and fire it alone. */
+  tick(): void;
+  /** Timers armed and not yet fired or disarmed. */
+  armed(): number;
+}
+
+export function manualStartClock(startAt = 1_000_000): ManualStartClock {
+  let now = startAt;
+  let sequence = 0;
+  const timers = new Map<number, { readonly due: number; readonly fire: () => void }>();
+
+  const earliest = (): [number, { readonly due: number; readonly fire: () => void }] | undefined => {
+    let found: [number, { readonly due: number; readonly fire: () => void }] | undefined;
+
+    for (const entry of timers) {
+      if (found === undefined || entry[1].due < found[1].due) found = entry;
+    }
+
+    return found;
+  };
+
+  const fire = (entry: [number, { readonly due: number; readonly fire: () => void }]): void => {
+    timers.delete(entry[0]);
+    now = Math.max(now, entry[1].due);
+    entry[1].fire();
+  };
+
+  return {
+    now: () => now,
+    after: (ms, callback) => {
+      const id = sequence += 1;
+      timers.set(id, { due: now + Math.max(0, ms), fire: callback });
+
+      return () => { timers.delete(id); };
+    },
+    advance: (ms) => {
+      const target = now + ms;
+
+      for (let next = earliest(); next !== undefined && next[1].due <= target; next = earliest()) fire(next);
+      now = target;
+    },
+    tick: () => {
+      const next = earliest();
+
+      if (next !== undefined) fire(next);
+    },
+    armed: () => timers.size,
+  };
 }
 
 export function gate(): Gate {

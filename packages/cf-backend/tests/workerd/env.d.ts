@@ -16,7 +16,6 @@ import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
-import type { SendAdmissionProbeDO } from './send-admission-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { FilesEioProbeDO } from './files-eio-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
@@ -25,8 +24,8 @@ import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
-  InputReceipt, PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
-  ParityCompleted, ParityPrepared,
+  PendingSteer, PendingSteerFile, PreparedConversation, QueueProbeMode,
+  ParityCompleted, ParityPrepared, WakeDriveResult, WakeHoldPlacement,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -66,18 +65,18 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
   queuedConversation(mode: QueueProbeMode): Promise<HttpCall[]>;
   prepareQueuedConversation(mode: QueueProbeMode): Promise<PreparedConversation>;
-  replayQueuedConversation(prepared: PreparedConversation): Promise<{ receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
-  completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
-  inputReceiptsFor(workspace: string): Promise<InputReceipt[]>;
+  replayQueuedConversation(prepared: PreparedConversation): Promise<{ steers: PendingSteer[]; steerFiles: PendingSteerFile[] }>;
+  completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: Array<{ id: string; role: string }> }>;
   pendingSteersFor(workspace: string): Promise<PendingSteer[]>;
   claimEventWorkspace(): Promise<{ workspace: string; owner: string }>;
   agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]>;
   seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
   runEventWakeFor(workspace: string, marker: string): Promise<void>;
-  firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; factsCompressed: number }>;
-  firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; submissions: Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>; failures: Array<{ event: string; code: string; cause: string }> }>;
+  firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; factsCompressed: number }>;
+  firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
+  backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
@@ -153,7 +152,6 @@ declare global {
       FORK_SOURCE: DurableObjectNamespace<ForkSourceProbeDO>;
       FORK_TARGET: DurableObjectNamespace<ForkTargetProbeDO>;
       STREAM_LIFECYCLE: DurableObjectNamespace<StreamLifecycleDO>;
-      SEND_ADMISSION_PROBE: DurableObjectNamespace<SendAdmissionProbeDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
