@@ -6173,6 +6173,16 @@ async function mount() {
       // On its own route, so the rail's primary nav lights Shared and not Home.
       entries: [APP_ROUTES.shared],
     }],
+    // The same page before anything is shared: every list shows its empty line.
+    ["shared-empty", {
+      node: (
+        <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
+          <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
+          <main className="min-h-0 min-w-0 flex-1 overflow-hidden"><SharedPage fixture={{ mine: [], received: [], public: [], known: [] }} workspaces={STOCK_ROSTER.entries} /></main>
+        </div>
+      ),
+      entries: [APP_ROUTES.shared],
+    }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
     ["unmapped", {

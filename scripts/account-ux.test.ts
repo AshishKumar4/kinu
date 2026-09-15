@@ -393,12 +393,23 @@ describe('account panels', () => {
             const body = await shared.evaluate(() => document.body.innerText);
 
             for (const heading of ['My shared', 'Shared with me', 'Public', 'From people I know']) expect(body).toContain(heading);
-            expect(body).toContain('Nothing public yet');
 
             if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Shared');
             shots.push(await shoot(shared, `shared-four-${viewport}-${theme}`));
           } finally {
             await shared.close();
+          }
+
+          // Before anything is shared, each list says so rather than sitting blank.
+          const empty = await freshPage(gallery, 'shared-empty', theme, viewport);
+
+          try {
+            const body = await empty.evaluate(() => document.body.innerText);
+
+            expect(body).toContain('Nothing is public yet.');
+            expect(await empty.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(0);
+          } finally {
+            await empty.close();
           }
         }
       }
