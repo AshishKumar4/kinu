@@ -161,7 +161,7 @@ import SharedPage from "@/pages/SharedPage";
 import BlueprintPage from "@/pages/BlueprintPage";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
-import type { BlueprintInspection, BlueprintView, SharedLibrary, SlateBindingDeclaration } from "@kinu.run/core";
+import type { BlueprintInspection, BlueprintView, LiveShareRecord, SharedLibrary, SlateBindingDeclaration, SlateCapabilityGraph } from "@kinu.run/core";
 import UserSettingsPage, { DeviceRow } from "@/pages/UserSettingsPage";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
 import {
@@ -4232,27 +4232,87 @@ const BLUEPRINT_INSPECTION: BlueprintInspection = {
   bindings: BLUEPRINT_BINDINGS, credentialed: BLUEPRINT_VIEW.credentialed, warnings: BLUEPRINT_VIEW.warnings,
 };
 
-const SHARED_LIBRARY: SharedLibrary = {
-  mine: [
-    { id: BLUEPRINT_ID, kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
-    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", kind: "blueprint", share: "h2Lm9sQ4dF7gJ1kP", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
-    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Triage board", description: "The running issue triage slate.", createdAt: NOW - 864e5, bindings: 3, visibility: "users", workspace: "checkout-fixes", users: ["pat@example.com"] },
+/** What a viewer of the Issue triage slate would reach, as core draws it:
+ *  every member classified, the risk of each mutating one worded for the
+ *  visibility, and the digest slate behind the PEER hop. */
+const RISK = (body: string) => ({ public: `${body} Anyone who opens this share can trigger it.`, users: `${body} Anyone you named on this share can trigger it.` });
+
+const NO_RISK = { public: "", users: "" };
+
+const SHARE_GRAPH: SlateCapabilityGraph = {
+  slate: "issue-triage",
+  slates: ["issue-triage", "digest"],
+  bindings: [
+    { slate: "issue-triage", name: "GITHUB", kind: "mcp", capability: { kind: "mcp", server: "github", title: "GitHub" }, members: [
+      { member: "read_issue", effect: "read", risk: NO_RISK },
+      { member: "create_issue", effect: "mutate", risk: RISK("Calls create_issue on GitHub with your credentials. The server does not mark it read-only, so it can create or change data there.") },
+    ] },
+    { slate: "issue-triage", name: "FILES", kind: "namespace", capability: { kind: "executor", namespace: "workspace" }, members: [
+      { member: "readFile", effect: "read", risk: NO_RISK },
+      { member: "writeFile", effect: "mutate", risk: RISK("Writes, edits or deletes files in workspace checkout-fixes as you.") },
+    ] },
+    { slate: "issue-triage", name: "NOTES", kind: "memory", capability: { kind: "memory" }, members: [
+      { member: "recall", effect: "read", risk: NO_RISK },
+      { member: "remember", effect: "mutate", risk: RISK("Changes your workspace memory as you: notes and remembered facts your agent reads back later.") },
+    ] },
+    { slate: "issue-triage", name: "ASK", kind: "agent", capability: { kind: "agent" }, members: [
+      { member: "send", effect: "mutate", risk: RISK("Sends a message to your agent's inbox as this slate. Your agent reads it and acts on it in workspace checkout-fixes.") },
+    ] },
+    { slate: "issue-triage", name: "BRAIN", kind: "ai", capability: { kind: "model", tier: "fast" }, members: [
+      { member: "run", effect: "mutate", risk: RISK("Runs a model call on your fast tier. Every call spends your inference.") },
+    ] },
+    { slate: "issue-triage", name: "PEER", kind: "app", capability: { kind: "slate", id: "digest" }, members: [] },
+    { slate: "digest", name: "DIGEST_FILES", kind: "namespace", capability: { kind: "executor", namespace: "workspace" }, members: [
+      { member: "readFile", effect: "read", risk: NO_RISK },
+    ] },
   ],
-  received: [
-    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, workspace: "sam-mail", owner: "sam@example.com" },
-  ],
-  public: [],
-  known: [],
 };
 
-/** The share dialog over the Issue triage slate, at the inspection step. */
-function ShareDialogFrame() {
+const LIVE_SHARE: LiveShareRecord = {
+  id: "live-board-1", slate: "issue-triage", visibility: "public", handle: "3f9a1c7e02",
+  grant: { slates: ["issue-triage", "digest"], members: [
+    { slate: "issue-triage", binding: "GITHUB", member: "read_issue", effect: "read" },
+    { slate: "issue-triage", binding: "FILES", member: "readFile", effect: "read" },
+    { slate: "issue-triage", binding: "NOTES", member: "recall", effect: "read" },
+    { slate: "digest", binding: "DIGEST_FILES", member: "readFile", effect: "read" },
+  ] },
+  createdAt: NOW - 864e5, revokedAt: null, users: [],
+};
+
+const SHARED_LIBRARY: SharedLibrary = {
+  mine: [
+    { id: "live-board-1", kind: "live", share: "live-board-1", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 864e5, bindings: 4, visibility: "public", workspace: "checkout-fixes", users: [] },
+    { id: BLUEPRINT_ID, kind: "blueprint", share: "k7Qm2pV9xRt3aB4c", title: "Issue triage", description: BLUEPRINT_VIEW.description, createdAt: NOW - 3 * 864e5, bindings: 4, workspace: "checkout-fixes", users: ["pat@example.com"] },
+    { id: "perf-audit~h2Lm9sQ4dF7gJ1kP~q2wz5m7xk3rp6ha", kind: "blueprint", share: "h2Lm9sQ4dF7gJ1kP", title: "Landing perf report", description: "Runs Lighthouse against the landing page and posts the score.", createdAt: NOW - 12 * 864e5, bindings: 1, workspace: "perf-audit", users: [] },
+  ],
+  received: [
+    { id: "live-mail-9", kind: "live", share: "live-mail-9", title: "Inbox digest", description: "Summarises unread mail into one morning note, live from Sam's workspace.", createdAt: NOW - 2 * 3600e3, bindings: 2, visibility: "users", workspace: "sam-mail", owner: "sam@example.com" },
+    { id: "email-triage~z8Xc4vB2nM6qW3eR~a7bn3kd9pq2xw5ha", kind: "blueprint", share: "z8Xc4vB2nM6qW3eR", title: "Inbox digest", description: "Summarises unread mail into one morning note.", createdAt: NOW - 864e5, bindings: 2, workspace: "sam-mail", owner: "sam@example.com" },
+  ],
+  public: [
+    { id: "live-status-2", kind: "live", share: "live-status-2", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 5 * 864e5, bindings: 2, visibility: "public", workspace: "ops-board", owner: "lee@example.com" },
+    { id: "wordle~a1b2c3d4e5f6g7h8~zq2wm7xk3rp6hab", kind: "blueprint", share: "a1b2c3d4e5f6g7h8", title: "Standup notes", description: "Turns a channel's last day into three bullets.", createdAt: NOW - 9 * 864e5, bindings: 1, workspace: "notes", owner: "kim@example.com" },
+  ],
+  known: [
+    { id: "live-status-2", kind: "live", share: "live-status-2", title: "Deploy status board", description: "Every service, its last deploy and who shipped it.", createdAt: NOW - 5 * 864e5, bindings: 2, visibility: "public", workspace: "ops-board", owner: "lee@example.com" },
+  ],
+};
+
+/** The share dialog over the Issue triage slate: the live mode with the
+ *  capability graph and one public share already open, or the blueprint mode
+ *  at the inspection step (`sharedialog-blueprint`). */
+function ShareDialogFrame({ mode }: { mode: "live" | "blueprint" }) {
+
   return (
     <div className="h-screen p-bg p-text">
       <ShareSlateDialog workspace="checkout-fixes" slate="issue-triage" title="Issue triage" rpc={workRpc} onClose={() => {}}
-        fixture={{ versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
-          { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
-        ] }} />
+        fixture={{
+          mode,
+          live: { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE] },
+          blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
+            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", kind: "blueprint", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+          ] },
+        }} />
     </div>
   );
 }
@@ -6113,7 +6173,8 @@ async function mount() {
       // On its own route, so the rail's primary nav lights Shared and not Home.
       entries: [APP_ROUTES.shared],
     }],
-    ["sharedialog", { node: <ShareDialogFrame />, entries: ["/"] }],
+    ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
+    ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
     ["unmapped", {
       node: (
         <div className="h-screen w-[720px] p-sidebar p-text">
