@@ -146,6 +146,28 @@ describe('quiesce timing matrix — three gates and a confirmed quiet window', (
       .toEqual({ action: 'hold', quietSince: undefined });
   });
 
+  // Run `20260914234711`, segment git/1/1: quietSince 1789430330189, a
+  // caller's stamp at 1789430354094, a 72 s checkpoint tick holding the alarm,
+  // and the first beat afterwards (1789430427189) read an idle lease and a
+  // confirmed stretch that had begun before the caller touched the box.
+  test('a quiet stretch older than the last interaction ended with it, however long ago it began', () => {
+    const step = quiesceStep({
+      ...base,
+      lastInteractionAt: T - DEFAULT_DEVBOX_POLICY.idleMs - 13_000,
+      quietSince: T - DEFAULT_DEVBOX_POLICY.idleMs - 13_000 - 24_000,
+    });
+
+    expect(step).toEqual({ action: 'hold', quietSince: T });
+  });
+
+  test('a quiet stretch that began after the last interaction still confirms', () => {
+    expect(quiesceStep({
+      ...base,
+      lastInteractionAt: T - DEFAULT_DEVBOX_POLICY.idleMs - DEFAULT_DEVBOX_POLICY.quietConfirmMs,
+      quietSince: T - DEFAULT_DEVBOX_POLICY.quietConfirmMs,
+    }).action).toBe('quiesce');
+  });
+
   test('the heartbeat samples often enough for both windows to be observable', () => {
     const beat = DEFAULT_DEVBOX_POLICY.heartbeatSeconds * 1_000;
     // Each window has to span several heartbeats or "confirmed across
