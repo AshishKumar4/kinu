@@ -2442,7 +2442,7 @@ export class OrchestratorAgent extends ActorAgent {
       branches: this._pendingBranches.map((branch) => ({ id: branch.id, task: branch.task })),
       overflowRetry: input.overflowRetry,
       outputContinuation: input.outputContinuation,
-      advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn)) }),
+      advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) }),
       sleepTime: { toolCalls: projectJsonValue({ value: this.acc.toolCalls }) },
       autoTitle: isPlaceholderMission(mission) || mission === null
         ? { subject: input.userText }

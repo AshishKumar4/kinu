@@ -1040,7 +1040,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       status: input.status,
       turn: projectJsonValue({ value: input.turn }),
       workMode: input.workMode ?? this.turnWorkMode(),
-      advisor: projectJsonValue({ value: this.advisorSnapshotFor(input.turn) }),
+      advisor: projectJsonValue({ value: this.advisorSnapshotFor(input.turn, Object.keys(this.harnessPreparedTools())) }),
     }, input.turn.turnId ?? '');
 
     return outcome.status === 'completed' && outcome.detail === undefined;
