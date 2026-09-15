@@ -1,14 +1,13 @@
 /**
- * Scaffold-as-inference-loop on the LOCAL turn seam.
+ * Scaffold-as-inference-loop on THE turn seam.
  *
- * The peer of `inference-transform.ts`. Both answer the same question — "does
- * this agent have an evolved scaffold, and if so does the scaffold, not the
- * default loop, drive this turn?" — and both delegate to `runScaffold` with
- * `host.defaultInference()` bound to the stream the backend already prepared.
- * They differ only in the stream vocabulary the backend speaks: the DO renders
- * an AI-SDK UI message stream, a local turn consumes `runChat`'s `ChatEvent`s.
+ * The one answer to "does this agent have an evolved scaffold, and if so does
+ * the scaffold, not the default loop, drive this turn?" — for every backend,
+ * since every backend's turn is core's ChatSession over `runChat`'s
+ * `ChatEvent`s. Delegates to `runScaffold` with `host.defaultInference()`
+ * bound to the default turn the loop already prepared.
  *
- * Semantics (identical to the DO seam):
+ * Semantics:
  * - Un-evolved agent (current scaffold version <= 0): the default stream is
  *   returned UNTOUCHED — same object, zero overhead.
  * - Evolved scaffold: `runScaffold` becomes the turn's inference loop, and
