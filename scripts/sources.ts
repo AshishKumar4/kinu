@@ -136,6 +136,10 @@ export interface Enumeration {
   /** Every file a gate governs: all tracked paths, plus untracked additions the
    *  ignore rules do not cover. */
   files: readonly string[];
+  /** The tracked subset of `files`: what a push ships. A cache key over
+   *  content must know which of `files` git can name and which are additions
+   *  the working tree happens to hold. */
+  tracked: readonly string[];
   /** Tracked paths an ignore rule also matches. Each is an anomaly: ignore rules
    *  exist to exclude untracked noise, never to hide something git ships. */
   trackedIgnored: readonly string[];
@@ -175,7 +179,7 @@ export function enumerateRepository(repoRoot: string): Enumeration {
 
   if (files.length === 0) throw new Error('sources: git ls-files enumerated no file');
 
-  return { files, trackedIgnored };
+  return { files, tracked: [...tracked].sort(), trackedIgnored };
 }
 
 /** Every file in this repository a gate may hold to a standard, memoised over
