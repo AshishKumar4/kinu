@@ -1,7 +1,8 @@
 import { asFetchFunction } from './fetch-shim';
 import * as v from 'valibot';
-import { diagnostics, KinuError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
+import type { ProviderWaitInfo } from './types';
 
 
 /**
@@ -44,6 +45,16 @@ export interface RateLimitRetryOptions {
   /** The isolate's provider pacer. Injectable so a suite can drive lanes and
    *  cooldowns without reaching into the shared one. */
   pacer?: ProviderPacer;
+  /** The provider this wrapper serves — carried into every wait notice. */
+  provider?: string;
+  /** The model the request is for, when the caller knows it (a count-endpoint
+   *  wrapper has none). */
+  modelId?: string;
+  /** Called just before each sleep this wrapper takes — a refused attempt's
+   *  declared wait and any join onto the pacer's cooldown. A listener that
+   *  throws is reported and ignored: a UI notification must never kill a
+   *  request it is describing. */
+  onWait?: (info: ProviderWaitInfo) => void;
 }
 
 /**
@@ -85,13 +96,51 @@ export function withRateLimitRetry(
     const host = providerHost(input);
     const signal = init?.signal ?? undefined;
 
+    // A throwing listener describes nothing: its own fault is reported and the
+    // request it was annotating goes on sleeping out the same wait.
+    const reportWait = (waitMs: number, attempt: number, source: ProviderWaitInfo['source'], status?: number): void => {
+      if (opts.onWait === undefined) return;
+
+      try {
+        const info: ProviderWaitInfo = {
+          provider: opts.provider ?? host,
+          waitMs,
+          attempt,
+          source,
+          ...(opts.modelId !== undefined && { modelId: opts.modelId }),
+          ...(status !== undefined && { status }),
+        };
+
+        opts.onWait(info);
+      } catch (cause) {
+        diagnostics.failure('provider.wait_notify_failed', toKinuError({
+          doing: 'reporting a provider wait',
+          cause,
+          otherwise: 'io',
+        }));
+      }
+    };
+
+    // A cooldown this request declared itself is the same wait it already
+    // reported — re-announcing it would tell a surface "wait 60s" twice for one
+    // sleep. Only a cooldown ANOTHER request left is a fresh wait for this one;
+    // the declared deadline identifies it.
+    const ownedCooldownUntil = { ms: 0 };
+
     for (let attempt = 1; ; attempt++) {
       // THE LANE IS HELD ONLY WHILE THE REQUEST IS AWAITING HEADERS, which is the
       // same boundary Cloudflare's own connection budget frees at, and it is
       // released before any wait below: a request sleeping out a Retry-After must
       // not occupy capacity a sibling could be using. Streaming bodies are
       // untouched — five nodes still stream their answers in parallel.
-      const release = await pacer.admit(host, signal);
+      const release = await pacer.admit(host, signal, {
+        onCooldown: (waitMs, untilMs) => {
+          if (untilMs === ownedCooldownUntil.ms) return;
+
+          reportWait(waitMs, 0, 'cooldown');
+        },
+      });
+
       let response: Response;
 
       try {
@@ -100,7 +149,9 @@ export function withRateLimitRetry(
         release();
       }
 
-      if (!(await isRateLimited(response))) return response;
+      const limited = await rateLimitStatus(response);
+
+      if (limited === null) return response;
 
       const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'), now());
 
@@ -113,11 +164,14 @@ export function withRateLimitRetry(
 
       // Declare the provider cooldown before this request sleeps so siblings
       // join the same wait rather than starting another request immediately.
+      const untilMs = now() + waitMs;
       pacer.declareWait(host, waitMs);
+      ownedCooldownUntil.ms = untilMs;
       warn(
         `[kinu] ${host} rate-limited — waiting ${formatSeconds(waitMs)}s `
         + `(attempt ${String(attempt)})`,
       );
+      reportWait(waitMs, attempt, retryAfterMs !== null ? 'header' : 'backoff', limited);
       await sleep(waitMs, signal);
     }
   });
@@ -130,17 +184,18 @@ function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefin
 }
 
 /**
- * Whether `response` is the provider saying "slow down".
+ * Whether `response` is the provider saying "slow down" — and if so, which
+ * status said it (the wait notice carries it).
  *
  * The 503 branch needs the body to decide, so a body it cannot read is not a
  * decision — it propagates. Reporting "not rate-limited" there would retire the
  * retry budget on the strength of an error nobody ever saw, and the SDK is
  * handed the same unreadable body a moment later regardless.
  */
-async function isRateLimited(response: Response): Promise<boolean> {
-  if (response.status === 429 || response.status === 529) return true;
+async function rateLimitStatus(response: Response): Promise<number | null> {
+  if (response.status === 429 || response.status === 529) return response.status;
 
-  if (response.status !== 503) return false;
+  if (response.status !== 503) return null;
 
   const detail = [
     response.statusText,
@@ -148,7 +203,9 @@ async function isRateLimited(response: Response): Promise<boolean> {
     await response.clone().text(),
   ].join(' ');
 
-  return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit/i.test(detail);
+  return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit/i.test(detail)
+    ? response.status
+    : null;
 }
 
 function parseRetryAfter(value: string | null, nowMs: number): number | null {

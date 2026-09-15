@@ -33,6 +33,7 @@ import {
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
+  type ProviderWaitInfo,
   type ModelCallSpend,
   countRequestInputTokens,
   type CountableRequest,
@@ -143,6 +144,21 @@ export interface LocalModelResolver {
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
+  /**
+   * Install the sink every wait notice flows to — the `provider_wait` run
+   * events and, through the session's event rail, the surface that says the
+   * turn is waiting on a provider rather than thinking.
+   *
+   * A setter rather than a config field because the sink belongs to the
+   * session, and the resolver is built before the session that holds it:
+   * wiring it at construction would need the session to exist first. The
+   * resolver is shared across the sessions a client opens, so the install is
+   * last-writer-wins — the live session's sink is the one that answers.
+   *
+   * Optional: a hand-built resolver fixture has nothing to report to, and
+   * absent here is the same as absent on the deps — waits go unreported.
+   */
+  setProviderWaitSink?(sink: ((info: ProviderWaitInfo) => void) | undefined): void;
 }
 
 export interface LocalModelResolverConfig {
@@ -165,6 +181,10 @@ export interface LocalModelResolverConfig {
    *  `claude` binary). Production leaves this undefined — the provider spawns
    *  the real binary and probes `claude auth status`. */
   claudeCli?: ClaudeCliProviderOptions;
+  /** Called the moment a resolved model's request sleeps on a provider wait.
+   *  Read per call by the deps object below so {@link LocalModelResolver.setProviderWaitSink}
+   *  can install the session's sink after construction. */
+  onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
 /** One shape for both paths of the seam below, so a source label and a spec
@@ -405,6 +425,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
       return [...keys];
     },
+    onProviderWait: (info) => { opts.onProviderWait?.(info); },
   };
 
   /** What a bare model id falls to. Null endpoint = no honest default: the
@@ -481,6 +502,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       return countRequestInputTokens(registry.get(provider), modelId, deps, request);
     },
     getAuth: deps.getAuth,
+    setProviderWaitSink(sink) {
+      opts.onProviderWait = sink;
+    },
   };
 }
 
@@ -531,7 +555,7 @@ function createGatewayBackedProvider(opts: {
         capabilities: model.capabilities ? [...model.capabilities] : undefined,
       }));
     },
-    createModel(modelId): LanguageModel {
+    createModel(modelId, deps): LanguageModel {
       return createChatModel({
         kind: 'openai-compat',
         name: opts.id,
@@ -539,6 +563,7 @@ function createGatewayBackedProvider(opts: {
         headers: opts.llm.headers,
         modelId,
         fetch: opts.fetch,
+        onWait: deps.onProviderWait,
       });
     },
   };
@@ -730,7 +755,7 @@ function createCloudProxyProvider(opts: {
           reasoningEfforts: entry.reasoningEfforts,
         }));
     },
-    createModel(modelId): LanguageModel {
+    createModel(modelId, deps): LanguageModel {
       return createChatModel({
         kind: 'openai-compat',
         name: opts.id,
@@ -738,6 +763,7 @@ function createCloudProxyProvider(opts: {
         headers,
         modelId,
         fetch: opts.fetch,
+        onWait: deps.onProviderWait,
       });
     },
   };

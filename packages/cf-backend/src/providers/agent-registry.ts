@@ -20,6 +20,7 @@ import {
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider,
   createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
+  type ProviderWaitInfo,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from '@kinu.run/core';
@@ -59,6 +60,12 @@ export interface AgentProviderDeps {
    *  usable. */
   userDO?: UserCredentialSource | null;
   fetch?: typeof fetch;
+  /** Called the moment one of this registry's models is about to sleep on a
+   *  provider-mandated wait — rate-limit retry, backoff, or a pacer cooldown a
+   *  sibling declared. The actor turns each notice into a `provider_wait` run
+   *  event, which is how a rate-limited turn reads as waiting rather than
+   *  silent. */
+  onProviderWait?: (info: ProviderWaitInfo) => void;
   appTitle?: string;
   workersAI?: WorkersAIOptions;
 }
@@ -153,6 +160,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     hasCredential: async (key: string) => (await credentialKeys()).includes(key),
     listCredentialKeys: credentialKeys,
     fetch: opts.fetch,
+    onProviderWait: opts.onProviderWait,
   };
 
   // Model construction is sync, but credential access is not: providers that

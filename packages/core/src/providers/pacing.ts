@@ -119,9 +119,16 @@ export class ProviderPacer {
    * instruction FIRST, because a lane that were granted during a cooldown would
    * spend the cooldown holding capacity nobody may use, and only then the lane.
    *
+   * `opts.onCooldown` fires each time a provider-declared cooldown is joined —
+   * the wait a request takes for a cooldown a SIBLING earned, which never
+   * passes through the caller's own retry path and would otherwise be invisible
+   * to any surface reporting why the stream is quiet. It is handed the
+   * remaining wait AND the cooldown's deadline so a request that declared this
+   * very cooldown can decline to hear it announced twice.
+   *
    * The release MUST be called — every caller does it in a `finally`.
    */
-  async admit(host: string, signal?: AbortSignal): Promise<() => void> {
+  async admit(host: string, signal?: AbortSignal, opts?: { onCooldown?: (waitMs: number, untilMs: number) => void }): Promise<() => void> {
     const lane = this.laneFor(host);
 
     for (;;) {
@@ -129,6 +136,7 @@ export class ProviderPacer {
       const cooling = lane.coolUntilMs - this.now();
 
       if (cooling > 0) {
+        opts?.onCooldown?.(cooling, lane.coolUntilMs);
         await this.sleep(cooling, signal);
         continue;
       }

@@ -14,7 +14,7 @@ import { synthesizeToolFallback } from './prompts/evidence-window';
 import type { LLM } from './types/primitives';
 import { beginModelOperation, type ModelCallSpend } from './events/model-call';
 import { normalizeUsage } from './usage';
-import { parseModelSpec } from './providers/types';
+import { parseModelSpec, type ProviderWaitInfo } from './providers/types';
 import { withRateLimitRetry } from './providers/rate-limit-retry';
 import {
   reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE, type InferenceStage,
@@ -327,6 +327,9 @@ export type ChatModelConfig =
       headers: Record<string, string>;
       modelId: string;
       fetch?: typeof fetch;
+      /** Listener for the rate-limit waits this model's requests take —
+       *  what a surface reads to say the turn is waiting, not thinking. */
+      onWait?: (info: ProviderWaitInfo) => void;
     }
   | {
       kind: 'anthropic';
@@ -334,6 +337,7 @@ export type ChatModelConfig =
       headers: Record<string, string>;
       modelId: string;
       fetch?: typeof fetch;
+      onWait?: (info: ProviderWaitInfo) => void;
     };
 
 export function createChatModel(config: ChatModelConfig): LanguageModel {
@@ -344,6 +348,7 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
       headers: config.headers,
       model: config.modelId,
       fetch: config.fetch,
+      onWait: config.onWait,
     });
   }
 
@@ -351,7 +356,11 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
     name: config.name ?? 'openai-compat',
     baseURL: config.baseURL,
     headers: config.headers,
-    fetch: withRateLimitRetry(config.fetch ?? fetch),
+    fetch: withRateLimitRetry(config.fetch ?? fetch, {
+      provider: config.name ?? 'openai-compat',
+      modelId: config.modelId,
+      ...(config.onWait !== undefined && { onWait: config.onWait }),
+    }),
   }).chatModel(config.modelId);
 }
 
@@ -367,7 +376,10 @@ function createModelFromLLMConfig(config: LLMProviderConfig): LanguageModel {
 }
 
 function createAnthropicModel(
-  config: Pick<LLMProviderConfig, 'name' | 'baseURL' | 'headers' | 'model'> & { fetch?: typeof fetch },
+  config: Pick<LLMProviderConfig, 'name' | 'baseURL' | 'headers' | 'model'> & {
+    fetch?: typeof fetch;
+    onWait?: (info: ProviderWaitInfo) => void;
+  },
 ): LanguageModel {
   const headers = { ...config.headers };
   const apiKey = headers['x-api-key'] ?? headers['X-Api-Key'];
@@ -388,7 +400,11 @@ function createAnthropicModel(
     apiKey: apiKey || undefined,
     authToken: authToken || undefined,
     headers,
-    fetch: withRateLimitRetry(config.fetch ?? fetch),
+    fetch: withRateLimitRetry(config.fetch ?? fetch, {
+      provider: config.name,
+      modelId: config.model,
+      ...(config.onWait !== undefined && { onWait: config.onWait }),
+    }),
   });
 
   return provider.languageModel(config.model);

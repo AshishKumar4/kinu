@@ -4737,11 +4737,15 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const events = session.getRunEvents(runs[0]!.runId);
     // Profile resolution lands before the step. A first turn records no
     // steering row: the step-0 delegation hint is gone, so nothing is spliced
-    // and nothing is counted. The step's first delta writes the partial the
-    // continuation invariant reads back (AN INTERRUPTED TURN CONTINUES), and
-    // the step's own finish row supersedes it.
+    // and nothing is counted. The provider call's `model_operation` pair
+    // brackets its step: opened before the first delta, closed once the call
+    // returns, so a call that never returned names itself in the ledger. The
+    // step's first delta writes the partial the continuation invariant reads
+    // back (AN INTERRUPTED TURN CONTINUES), and the step's own finish row
+    // supersedes it.
     expect(events.map((e) => e.type)).toEqual([
-      'run_start', 'turn_start', 'profile_resolution', 'step_partial', 'step_finish',
+      'run_start', 'turn_start', 'profile_resolution', 'model_operation',
+      'step_partial', 'step_finish', 'model_operation',
       'turn_end', 'run_end',
     ]);
 
@@ -4760,10 +4764,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(end.reason).toBe('completed');
     expect(end.error).toBeUndefined();
 
-    // Monotonic indices are what makes a resume possible at all.
-    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(events.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
     // …and `since` replays the tail, exactly as an SSE Last-Event-ID does.
-    expect(session.getRunEvents(runs[0]!.runId, { since: 5 }).map((e) => e.type))
+    expect(session.getRunEvents(runs[0]!.runId, { since: 7 }).map((e) => e.type))
       .toEqual(['turn_end', 'run_end']);
 
     await session.end();

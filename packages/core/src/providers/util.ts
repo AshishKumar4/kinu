@@ -13,6 +13,12 @@ import {
 export interface AuthedFetchOptions {
   /** Credential key passed to the AuthResolver on every request. */
   credKey: string;
+  /** The provider this fetch serves — the name its rate-limit wait notices
+   *  carry, so a surface can say WHO is being waited on rather than a host. */
+  provider: string;
+  /** The model the requests are for — carried into the same notices. Optional:
+   *  the one count-endpoint wrapper builds ahead of a resolved model. */
+  modelId?: string;
   /** 401 JSON body `error` text when no credential is configured. */
   missingCredentialError: string;
   /** Reject (401) when the credential lacks a baseURL (openai-compat). */
@@ -71,7 +77,13 @@ export function copyHeaders(init: HeadersInit | undefined): Headers {
  * changes take effect without rebuilding the model.
  */
 export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions): typeof globalThis.fetch {
-  const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
+  const waitListener = deps.onProviderWait;
+
+  const baseFetch = withRateLimitRetry(deps.fetch ?? fetch, {
+    provider: opts.provider,
+    ...(opts.modelId !== undefined && { modelId: opts.modelId }),
+    ...(waitListener !== undefined && { onWait: waitListener }),
+  });
 
   return asFetchFunction(async (input, init) => {
     const resolved = await deps.getAuth(opts.credKey);
