@@ -662,7 +662,7 @@ describe('LocalAgentHost', () => {
 
     if (!tool) throw new Error('The first child turn has no tool response.');
     expect(tool).toMatchObject({ content: [{ toolName: 'memory', output: {
-      type: 'json', value: { ok: true, key: 'CHILD-ONLY-TOOL-CONTEXT' },
+      type: 'json', value: { ok: true, key: 'child-only-tool-context' },
     } }] });
     const { host: restored } = makeHost(state, model, refs);
 
