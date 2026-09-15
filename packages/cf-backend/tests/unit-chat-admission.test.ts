@@ -170,6 +170,39 @@ describe('a chat request through the production gate', () => {
     expect(bodies.filter((text) => text.includes('check staging'))).toHaveLength(0);
   });
 
+  test('a second connection mid-turn is told what is resuming and reads the fresh transcript', async () => {
+    const { agent } = orchestratorHarness();
+    const { wire } = connection(agent);
+    await agent.activateActor();
+    const gate = agent.harnessChatGate();
+
+    // Production opens a turn through prepare; driving the same entry point
+    // gives the step the prepared snapshot it refuses without, and the inbox
+    // reads busy off this open turn. The LIVE text is the step's input; the
+    // gold is what the SECOND socket sees while the turn is still running.
+    await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'the long job' }] });
+    await gate(wire, chatRequest('req-live', 'the long job'));
+    const [liveRow] = agent.harnessTranscript.history().filter((m) => m.role === 'user').map((m) => m.id);
+
+    const second = connection(agent);
+    await agent.onConnect(second.wire, { request: new Request('https://agent/connect') });
+    const frames = second.sent.map((raw) => v.parse(v.looseObject({ type: v.string(), messages: v.optional(v.array(v.object({ id: v.string() }))) }), JSON.parse(raw)));
+
+    // Resuming first — the tab replays the stream it is still owed — then
+    // the transcript as it is NOW, the live turn's opening row included.
+    expect(frames[0]?.type).toBe('cf_agent_stream_resuming');
+    const seed = frames.find((frame) => frame.type === 'cf_agent_chat_messages');
+    expect(seed?.messages?.map((m) => m.id)).toContain(liveRow);
+
+    // And the close half of the same wiring: a resuming socket that goes
+    // away releases the resume the handshake held for it.
+    await agent.onClose(second.wire, 1000, 'gone', true);
+
+    // And the close half of the same wiring: a resuming socket that goes
+    // away releases the resume the handshake held for it.
+    await agent.onClose(second.wire, 1000, 'gone', true);
+  });
+
   test('a refused send closes the request with the refusal and leaves nothing', async () => {
     const { agent } = orchestratorHarness();
     const { wire, sent } = connection(agent);

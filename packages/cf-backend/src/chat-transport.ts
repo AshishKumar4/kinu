@@ -163,9 +163,14 @@ export class ChatWireTransport implements ChatTransport {
 
   // ── Connections ─────────────────────────────────────────────────────
 
+  /** A socket that opens while a turn is running is told what is resuming
+   *  AND reads the transcript as it is now: the seed and the socket connect
+   *  are separate fetches, and a turn that started between them would
+   *  otherwise leave the tab without the opening row until the turn ends. */
   onConnect(connection: Connection): void {
     if (this.resumable.hasActiveStream()) {
       this.handshake.notifyStreamResuming(connection);
+      sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_CHAT_MESSAGES, messages: this.wire.history() }));
 
       return;
     }
