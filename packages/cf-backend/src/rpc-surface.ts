@@ -309,6 +309,7 @@ const USER_DO_METHODS = [
   'userMcp_callTool',
   'userMcp_handleOAuthCallback',
   'userMcp_list',
+  'userMcp_presets',
   'userMcp_remove',
   'userMcp_toolDescriptors',
   'userMcp_update',

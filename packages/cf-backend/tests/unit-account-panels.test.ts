@@ -40,7 +40,7 @@ describe("account panels are shared, not copied", () => {
     expect(settings).toContain("ProvidersPanel");
   });
 
-  test("each panel has exactly its render sites: a host surface, the modal, the wizard", () => {
+  test("each panel has exactly its render sites: a host surface, the modal, the wizard's providers step", () => {
     expect(renderers("ProvidersPanel")).toEqual([
       "src/components/account/AccountPanelModal.tsx",
       "src/pages/UserSettingsPage.tsx",
@@ -49,12 +49,10 @@ describe("account panels are shared, not copied", () => {
     expect(renderers("McpServersPanel")).toEqual([
       "src/components/account/AccountPanelModal.tsx",
       "src/pages/UserMcpPage.tsx",
-      "src/pages/WelcomePage.tsx",
     ]);
     expect(renderers("CliInstallCard")).toEqual([
       "src/components/account/AccountPanelModal.tsx",
       "src/pages/UserSettingsPage.tsx",
-      "src/pages/WelcomePage.tsx",
     ]);
     expect(renderers("SetupCard")).toEqual(["src/pages/HomePage.tsx"]);
   });

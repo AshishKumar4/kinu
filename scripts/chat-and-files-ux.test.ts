@@ -1809,9 +1809,9 @@ describe('linking a machine happens on the surface that asked for it', () => {
       expect(new URL(page.url()).pathname).toBe('/gallery.html');
       // The disclosure is on screen BEFORE anything is installed.
       expect(await page.$eval('[role="dialog"]', (d) => d.textContent ?? ''))
-        // 162182954 cut the line to "The daemon dials out and opens no
-        // inbound ports."
-        .toContain('The daemon dials out and opens no inbound ports.');
+        // 98caa7776 cut the disclosure to three lines, ending on "The daemon
+        // only dials out. Revoke it any time under Account settings → Devices."
+        .toContain('The daemon only dials out. Revoke it any time under Account settings → Devices.');
 
       await page.click('[role="dialog"] [data-connect-start]');
       await page.waitForSelector('[data-connect-command]');
