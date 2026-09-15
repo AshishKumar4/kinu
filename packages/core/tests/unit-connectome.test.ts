@@ -16,28 +16,57 @@ function cpuMillisSince(since: NodeJS.CpuUsage): number {
   return (spent.user + spent.system) / 1000;
 }
 
-/** The picture's cost per frame, read off the CHEAPEST of `batches` runs of
- *  `frames` frames each. Contention on a loaded box only ever adds CPU time
- *  (a sibling on the same core, a cache the deploy tier's other suites keep
- *  cold), so the cheapest batch is the picture's own cost and a picture that
- *  got slower raises it just the same: 3,600 frames in one run read 610 ms
- *  against a 600 ms budget on 2026-09-15 under seven parallel suites, while
- *  the same frames cost under 400 ms alone. */
-function cheapestFrameMillis(connectome: Connectome, batches: number, frames: number): number {
-  let cheapest = Number.POSITIVE_INFINITY;
+/** A fixed unit of arithmetic, run in the same loop as the picture so the two
+ *  are measured under the same contention. Its size is chosen so one unit
+ *  costs about one canvas frame on the reference box; the value is never a
+ *  pin, only a yardstick. `Math.fround` and the seed keep the loop from being
+ *  folded away. */
+function calibrationUnit(seed: number): number {
+  let acc = Math.fround(seed);
+
+  for (let index = 0; index < 20_000; index += 1) {
+    acc = Math.fround(acc * 1.000_001 + Math.sin(index) * 0.5);
+  }
+
+  return acc;
+}
+
+/** The picture's cost per frame AS A RATIO of one calibration unit, each read
+ *  off the CHEAPEST of `batches` interleaved runs.
+ *
+ *  Why a ratio, measured 2026-09-15 on the 24-thread deploy box. An absolute
+ *  CPU-time pin is not contention-invariant here: a sibling thread on the same
+ *  physical core, a cold cache, or a lower turbo bin all inflate CPU time, and
+ *  the cheapest of twelve batches read 1.60 ms against a 1.5 ms pin under one
+ *  deploy wave and passed alone. The same contention inflates a pure
+ *  arithmetic loop in the same process by the same factor, so the ratio of
+ *  the two holds where the absolute did not; 3,600 frames in one run had
+ *  already read 610 ms against a 600 ms budget under seven parallel suites.
+ *  Interleaved batch by batch so a load spike hits both halves alike. A
+ *  picture that got slower raises the ratio just the same, and the red
+ *  direction is proved below by running ten times the frames. */
+function cheapestFrameRatio(connectome: Connectome, batches: number, frames: number, stepsPerFrame = 1): number {
+  let cheapestFrame = Number.POSITIVE_INFINITY;
+  let cheapestUnit = Number.POSITIVE_INFINITY;
+  let sink = 0;
 
   for (let batch = 0; batch < batches; batch += 1) {
-    const began = process.cpuUsage();
+    const frameBegan = process.cpuUsage();
 
     for (let index = 0; index < frames; index += 1) {
-      connectome.step(DT);
+      for (let step = 0; step < stepsPerFrame; step += 1) connectome.step(DT);
       connectome.frame();
     }
 
-    cheapest = Math.min(cheapest, cpuMillisSince(began) / frames);
+    cheapestFrame = Math.min(cheapestFrame, cpuMillisSince(frameBegan) / frames);
+    const unitBegan = process.cpuUsage();
+    sink += calibrationUnit(batch);
+    cheapestUnit = Math.min(cheapestUnit, cpuMillisSince(unitBegan));
   }
 
-  return cheapest;
+  if (!Number.isFinite(sink)) throw new Error('calibration overflowed');
+
+  return cheapestFrame / cheapestUnit;
 }
 
 const ASPECT = 900 / 1440;
@@ -479,19 +508,40 @@ describe('the tissue keeps out of the copy', () => {
 });
 
 describe('the picture stays cheap', () => {
+  // THE PINS ARE RATIOS, NOT MILLISECONDS. Measured 2026-09-15 on the 24-thread
+  // deploy box, quiet (load 0.6): a canvas frame is 0.75 of a calibration unit
+  // (0.089 ms against 0.118 ms) and a mesh frame 5.2 units (0.61 ms), three
+  // reads each within 3%. Under twelve busy-loop threads the same run read
+  // the mesh frame at 1.13 ms — the absolute pin of 1.5 ms it replaced went
+  // red under one deploy wave on this figure — while the ratio read 3.9 to
+  // 5.2, and the canvas ratio 0.51 to 0.77. The budgets keep the headroom the
+  // millisecond pins had: 2x for the canvas (0.167 ms over 0.089), 2.4x for
+  // the mesh (1.5 ms over 0.61).
   test('an hour of canvas frames costs less than a blink', () => {
     const connectome = run(1729, 0);
     connectome.setActivity({ working: true, decisions: 0 });
 
-    // An hour is 3,600 frames; the budget is a blink, 600 ms, so a sixth of
-    // a millisecond per frame.
-    expect(cheapestFrameMillis(connectome, 12, 300)).toBeLessThan(600 / 3600);
+    // An hour is 3,600 frames and the budget a blink, 600 ms: a sixth of a
+    // millisecond per frame, which is 1.5 calibration units on the reference box.
+    expect(cheapestFrameRatio(connectome, 12, 300)).toBeLessThan(1.5);
   });
 
-  test('a mesh frame costs well under a millisecond and a half', () => {
+  test('a mesh frame costs well under two and a half canvas budgets', () => {
     const connectome = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
     connectome.setActivity({ working: true, decisions: 0 });
 
-    expect(cheapestFrameMillis(connectome, 6, 100)).toBeLessThan(1.5);
+    expect(cheapestFrameRatio(connectome, 6, 100)).toBeLessThan(12.5);
+  });
+
+  // THE RED DIRECTION: ten steps per frame is what a picture ten times as
+  // expensive costs, measured by the same loop against the same yardstick.
+  test('the ratio pins go red on a picture that costs ten times as much', () => {
+    const canvas = run(1729, 0);
+    canvas.setActivity({ working: true, decisions: 0 });
+    expect(cheapestFrameRatio(canvas, 12, 300, 10)).toBeGreaterThan(1.5);
+
+    const mesh = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
+    mesh.setActivity({ working: true, decisions: 0 });
+    expect(cheapestFrameRatio(mesh, 6, 100, 10)).toBeGreaterThan(12.5);
   });
 });
