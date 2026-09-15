@@ -775,7 +775,29 @@ describe('the decided layout, through the page hook', () => {
   });
 });
 
-describe('the first-visit policy, through the page hook', () => {
+describe('the worth-showing signal, through the page hook', () => {
+  test('a workspace with outputs but no decision waiting stays closed', () => {
+    // The signal the page computes names six inputs — a decision or consent
+    // waiting, a slate or preview, a pinned port, an active plan. Produced
+    // outputs are not one of them; every command run would otherwise open
+    // the pane on a fresh workspace.
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      worthShowing: false,
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        emit(layout, stub, 0);
+      }],
+    });
+
+    expect(stub.state.collapsed).toBe(true);
+    expect(mounted.html).toContain('data-collapsed="true"');
+    expect(mounted.html).toContain('data-expand-visible="true"');
+  });
+
   test('nothing stored collapses the column — and the collapse writes nothing', () => {
     const stub = panelStub(340);
 
