@@ -472,12 +472,18 @@ export class ActorSession {
       const admitted = this.context.startTurn({ turnId: lease.turnId, history: this.messages });
       this.messages.splice(0, this.messages.length, ...admitted.messages);
 
+      // The claim records the REQUEST, not the history alone: the turn-local
+      // tail (unapproved instruction files, activation reasons) is spliced
+      // after the history at prompt assembly and never enters the working
+      // history, so a claim naming the history alone would understate what
+      // the model saw — and the shadow trial that replays the claim's context
+      // would score a narrower prompt than the live turn ran.
       const claim = this.options.claims.admit({
         runId: lease.runId,
         turnId: lease.turnId,
         workMode: this.mode,
         program: programIdentityOf(program, this.options.installedBuild),
-        context: this.messages,
+        context: [...this.messages, ...(input.chat.turnLocal ?? [])],
         workingRevision: admitted.workingRevision,
       });
 
