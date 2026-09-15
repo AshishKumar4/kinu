@@ -3342,20 +3342,30 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** The fleet row, at the run ledger's own seal. Separate from the durable
-   *  run the loop just closed and deliberately not a projection of it:
-   *  `closeTurnRun` writes one workspace's own history, which is only readable
-   *  by opening that workspace, and the question this answers — are turns
-   *  getting slower, is one model failing, what is the fleet spending — cannot
-   *  be asked of a per-workspace log at all. It carries no message and no
-   *  error text; the classification and the numbers are the whole row. Read
-   *  at the `run_end` event itself, which the loop emits synchronously while
-   *  the accumulator still holds the turn's numbers. */
+   * run the loop just closed and deliberately not a projection of it:
+   * `closeTurnRun` writes one workspace's own history, which is only readable
+   * by opening that workspace, and the question this answers — are turns
+   * getting slower, is one model failing, what is the fleet spending — cannot
+   * be asked of a per-workspace log at all. It carries no message and no
+   * error text; the classification and the numbers are the whole row. Read
+   * at the `run_end` event itself, which the loop emits synchronously while
+   * the accumulator still holds the turn's numbers.
+   *
+   * Only for runs the loop itself ran: the wake reconcile seals runs a dead
+   * activation left open (`closeUnterminatedRuns`), and those seals carry no
+   * turn — no accumulator numbers, no `startedAt` — so a row for one is a row
+   * about whatever turn happens to be live. The loop's current run is the
+   * membership: `closeRun` seals through this same event path while it is
+   * still the current run, and a reconcile seal names a run the loop never
+   * opened. */
   private _fleetRowsObserved = false;
   protected observeFleetRows(): void {
     if (this._fleetRowsObserved) return;
     this._fleetRowsObserved = true;
     this.eventRecorder.observe((event) => {
       if (event.type !== 'run_end') return;
+
+      if (event.runId !== this._chatLoop?.currentRunId) return;
       recordTurnRow(this.env, {
         workspace: this.workspaceName(),
         agentKind: this.actorKind(),

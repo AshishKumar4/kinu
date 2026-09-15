@@ -52,6 +52,7 @@ import {
   type AgentSignal, type SendOutcome, type ReleaseBoard,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { fleetPlaneForTest, fleetStatsForTest, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { platformGatewayEnv } from './platform-gateway';
 import {
   TerminalEffectInterrupt,
@@ -600,6 +601,52 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessNameWorkspace(displayName: string): void {
     this.config.setDisplayName(displayName);
     this.config.setDisplayNameOrigin(displayName, 'user');
+  }
+  /** The analytics plane's write stats: what the writer accepted, refused, or
+   *  skipped — the second half of what `harnessFleetTurnRows` pins. */
+  harnessFleetStats(): { written: number; refused: number; skipped: number } {
+    return fleetStatsForTest(this.env);
+  }
+  /** A run the loop opened and a dead activation never closed: openTurnRun's
+   *  run_start with no run_end, written the way the loop writes one. For
+   *  suites that reconcile what the last process left.
+   *
+   *  The run id is stated, not minted, so the assertion reads the exact run
+   *  the reconcile seals. */
+  harnessOpenDanglingRun(runId: string): void {
+    this.eventRecorder.emit(runId, {
+      type: 'run_start', agentId: this.actorHandle().actorId, caused_by: 'chat',
+      userMessage: 'the turn the last process died inside',
+    });
+  }
+  /** The wake reconcile's own entry for interrupted runs: what seals a run a
+   *  dead activation left open, beside the fork journal it also sweeps. Runs
+   *  synchronously, as the wake runs it — no alarm, no fork journal needed
+   *  for the seal the fleet gate reads. */
+  harnessReconcileInterruptedRuns(): void {
+    // The reconcile's own first act, alone: seal the runs a dead activation
+    // left open. The fork-journal half needs no run for this; the seal is
+    // what the fleet gate reads.
+    const open = this.eventRecorder.unterminatedRuns(undefined, Date.now());
+
+    for (const runId of open) this.eventRecorder.emit(runId, { type: 'run_end', reason: 'interrupted' });
+  }
+  /** The fleet dataset's turn rows, in write order: what observeFleetRows
+   *  recorded. Empty in this harness unless a suite installs the plane. */
+  harnessFleetTurnRows(): FleetPoint[] {
+    return fleetPlaneForTest(this.env).agent.points.map((point) => ({ ...point }));
+  }
+  /** Open the plane's write window and subscribe the fleet observer, for
+   *  suites that pin fleet rows. No-op unless the suite built this actor over
+   *  the fleet env: the plane memoises on the env object, so the capture must
+   *  be the env the actor was constructed over. Suites that pin fleet rows
+   *  pass `fleetEnvForTest(makeEnv())` as the harness env; the window
+   *  production opens at the invocation seam is opened here, since without it
+   *  the writer refuses every row and the suite would pin refusal, not the
+   *  gate. */
+  harnessObserveFleetPlane(): void {
+    openAnalyticsWindowForTest(this.env);
+    this.observeFleetRows();
   }
   /** The live turn's step boundary, for a suite that splices the loop's own
    *  admission into it: the extension host production composes, so a steer's
@@ -1984,8 +2031,9 @@ function ensureActorSchema(agent: InstanceType<typeof OrchestratorAgent>): void 
 export function orchestratorHarness(
   userPlane?: RecordedUserPlaneCalls,
   world?: HarnessActorWorld,
+  env?: Env,
 ): ActorHarness<HarnessOrchestratorAgent> {
-  const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, userPlane, world);
+  const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'), undefined, userPlane, world, undefined, env);
   ensureActorSchema(harness.agent);
   harness.db.prepare(
     'UPDATE workspace_identity SET owner_user_id = ? WHERE id = ?',
