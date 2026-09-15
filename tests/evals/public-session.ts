@@ -98,7 +98,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, STEER_STEP_METADATA_KEY, initRunEventTables,
   parseJsonValue, renderSoulMarkdown, CommandResultSchema,
-  type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
+  type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -699,6 +699,14 @@ const DeferredApprovalSchema = v.object({
   status: v.string(),
 });
 
+/** The device consent cards `listPendingConsents` serves — the bind prompt a
+ *  workspace's first call on a machine raises (`core/src/safety/
+ *  device-consent.ts`), narrowed to what a caller answers on: which machine
+ *  asks, and the id the answer is addressed to. */
+const PendingConsentsSchema = v.array(v.object({ consentId: v.string(), deviceId: v.string() }));
+
+const ResolveConsentSchema = v.object({ ok: v.boolean() });
+
 const WorkspaceSnapshotSchema = v.object({
   status: v.object({ messageCount: v.number(), model: v.string() }),
 });
@@ -1086,15 +1094,52 @@ export class KinuPublicSession {
    * statement about the surface a person uses. The answer is returned whole
    * rather than reduced to stdout: a refusal arrives as `{error}` or as a
    * classified payload on the stdout channel, and which one it is is the finding
-   * a device case reads.
+   * a device case reads. `device` is the fleet member the call names — the
+   * same third argument the RPC carries for the laptop executor, left absent
+   * rather than defaulted so an unnamed call keeps its own answer.
    */
-  async execute(executor: string, command: string): Promise<PublicExecutorResult> {
+  async execute(executor: string, command: string, device?: string): Promise<PublicExecutorResult> {
+    const args: JsonValue[] = device === undefined ? [executor, command] : [executor, command, device];
+
     const result = await infraBoundary(
       `executeInExecutor(${executor}) on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('executeInExecutor', [executor, command]),
+      () => this.rpc('executeInExecutor', args),
     );
 
     return v.parse(ExecutorCommandSchema, result);
+  }
+
+  /**
+   * The pending device bind prompts, as the consent card's own list serves
+   *  them — `listPendingConsents`, the RPC the chat calls to re-render cards
+   *  (use-kinu.ts). A workspace's first call on a machine parks inside the
+   *  device hub until one of these is answered, so a caller that needs the
+   *  call's result must answer the card rather than out-wait it.
+   */
+  async pendingConsents(): Promise<readonly Pick<PendingDeviceConsent, 'consentId' | 'deviceId'>[]> {
+    const rows = await infraBoundary(
+      `listPendingConsents on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listPendingConsents', []),
+    );
+
+    return v.parse(PendingConsentsSchema, rows);
+  }
+
+  /**
+   * Answer one device consent card — `resolveDeviceConsent`, the RPC the
+   * card's own button calls. The decision is the product's vocabulary:
+   * `once` unblocks only the parked call, `always` writes the
+   * (workspace, device) binding, `deny` refuses it.
+   */
+  async resolveConsent(
+    consentId: string, decision: 'once' | 'always' | 'deny',
+  ): Promise<{ ok: boolean }> {
+    const answer = await infraBoundary(
+      `resolveDeviceConsent on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('resolveDeviceConsent', [consentId, decision]),
+    );
+
+    return v.parse(ResolveConsentSchema, answer);
   }
 
   /**
