@@ -17,8 +17,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import {
-  BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME,
-  type AdvisorRecoverySnapshot, type AgentSignal, type JsonValue,
+  BACKGROUND_FIBER_PREFIX, ChatSession, SEARCH_FIBER_NAME,
+  type AdvisorRecoverySnapshot, type AgentSignal, type EnqueueTurnResult, type JsonValue, type ProgrammaticTurn,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
@@ -59,43 +59,44 @@ async function recover(
   return result;
 }
 
-/** The slice of the SDK's `SubmitMessagesResult` the recovery seam reads:
- *  identity, the idempotency-key echo, and admission status. */
-interface RecordedSubmission {
-  submissionId: string;
-  idempotencyKey?: string;
-  status: 'pending';
-  createdAt: number;
-  accepted: boolean;
-}
-
-/** Every programmatic turn the actor admitted, by the message id the seam
- *  derives from a producer's idempotency key. Recorded on the instance because
- *  a durable submission needs a platform this suite does not have; the vendor's
- *  own dedupe over the same key is proven in the workerd layer. */
-function recordSubmissions(agent: HarnessOrchestratorAgent): string[] {
+/** Every programmatic turn the loop admitted, by the producer's own name for
+ *  the fact it announces (its idempotency key) — recorded at the one seam the
+ *  host's `enqueueTurn` reaches, and called through, so the turn still runs. */
+function recordAdmissions(agent: HarnessOrchestratorAgent): string[] {
   const seen: string[] = [];
-  Object.defineProperty(agent, 'submitMessages', {
+  const loop = agent.harnessChatLoop;
+  // The loop's OWN admission, whatever a case installed on the instance before.
+  const admit = ChatSession.prototype.enqueueTurn.bind(loop);
+
+  Object.defineProperty(loop, 'enqueueTurn', {
     configurable: true,
-    value: async (messages: { id: string }[], options?: { idempotencyKey?: string }) => {
-      const id = messages[0]?.id ?? '(none)';
-      const first = !seen.includes(id);
-      seen.push(id);
+    value: async (input: ProgrammaticTurn) => {
+      seen.push(input.idempotencyKey ?? input.text);
 
-      const submission: RecordedSubmission = {
-        submissionId: `sub-${String(seen.length)}`,
-        status: 'pending',
-        createdAt: Date.now(),
-        accepted: first,
-      };
-
-      if (options?.idempotencyKey !== undefined) submission.idempotencyKey = options.idempotencyKey;
-
-      return submission;
+      return admit(input);
     },
   });
 
   return seen;
+}
+
+/** The texts the loop was asked to open programmatic turns for. */
+function recordAdmittedTexts(agent: HarnessOrchestratorAgent): string[] {
+  const texts: string[] = [];
+  const loop = agent.harnessChatLoop;
+  // The loop's OWN admission, whatever a case installed on the instance before.
+  const admit = ChatSession.prototype.enqueueTurn.bind(loop);
+
+  Object.defineProperty(loop, 'enqueueTurn', {
+    configurable: true,
+    value: async (input: ProgrammaticTurn) => {
+      texts.push(input.text);
+
+      return admit(input);
+    },
+  });
+
+  return texts;
 }
 
 /** The snapshot an interrupted advisor lane stashed — the complete turn plus
@@ -497,7 +498,7 @@ describe('a sandbox lifecycle failure', () => {
 
   test('becomes ONE blocker turn however many times the container retries', async () => {
     const { agent } = orchestratorHarness();
-    const submitted = recordSubmissions(agent);
+    const submitted = recordAdmissions(agent);
 
     const first = await agent.acceptSandboxLifecycleFailure(incident);
     const second = await agent.acceptSandboxLifecycleFailure(incident);
@@ -514,12 +515,13 @@ describe('a sandbox lifecycle failure', () => {
 
   test('a delivery that never landed is re-deliverable, which is what ends the retry loop', async () => {
     const { agent } = orchestratorHarness();
-    // The seam's `undelivered` outcome: the host pre-empted the turn.
-    Object.defineProperty(agent, 'submitMessages', {
+    // The seam's `undelivered` outcome: the loop pre-empted the turn — its
+    // admission answered 'skipped', which is what another driver holding the
+    // lease answers.
+    const loop = agent.harnessChatLoop;
+    Object.defineProperty(loop, 'enqueueTurn', {
       configurable: true,
-      value: async () => ({
-        submissionId: 'sub-x', status: 'aborted' as const, createdAt: Date.now(), accepted: true,
-      }),
+      value: async (): Promise<EnqueueTurnResult> => ({ status: 'skipped' }),
     });
 
     const refused = await agent.acceptSandboxLifecycleFailure(incident);
@@ -529,7 +531,7 @@ describe('a sandbox lifecycle failure', () => {
     // ledger still held it as re-deliverable.
     expect(refused).toMatchObject({ status: 'undelivered', duplicate: false });
 
-    const submitted = recordSubmissions(agent);
+    const submitted = recordAdmissions(agent);
     const retried = await agent.acceptSandboxLifecycleFailure(incident);
 
     // NOT reported as a duplicate: nothing had been announced, so the retry is
@@ -540,15 +542,7 @@ describe('a sandbox lifecycle failure', () => {
 
   test('the agent is told what the stage costs it, and the incident id, and nothing else', async () => {
     const { agent } = orchestratorHarness();
-    const texts: string[] = [];
-    Object.defineProperty(agent, 'submitMessages', {
-      configurable: true,
-      value: async (messages: { parts: { text?: string }[] }[]) => {
-        texts.push(messages[0]?.parts[0]?.text ?? '');
-
-        return { submissionId: 's', status: 'pending' as const, createdAt: Date.now(), accepted: true };
-      },
-    });
+    const texts = recordAdmittedTexts(agent);
 
     await agent.acceptSandboxLifecycleFailure({
       version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
@@ -569,7 +563,7 @@ describe('a sandbox lifecycle failure', () => {
 
   test('an envelope that invents a field is REFUSED, not silently stripped', async () => {
     const { agent } = orchestratorHarness();
-    const submitted = recordSubmissions(agent);
+    const submitted = recordAdmissions(agent);
 
     // The shape a caller reaches for when it wants to pass something the
     // contract has no field for. Stripping it would let the caller believe the
@@ -592,15 +586,7 @@ describe('a sandbox lifecycle failure', () => {
     // defect, never retried and never seen by the agent. A test that iterated
     // the CONSUMER's list would agree with itself and see none of it.
     const { agent } = orchestratorHarness();
-    const texts: string[] = [];
-    Object.defineProperty(agent, 'submitMessages', {
-      configurable: true,
-      value: async (messages: { parts: { text?: string }[] }[]) => {
-        texts.push(messages[0]?.parts[0]?.text ?? '');
-
-        return { submissionId: 's', status: 'pending' as const, createdAt: Date.now(), accepted: true };
-      },
-    });
+    const texts = recordAdmittedTexts(agent);
 
     for (const stage of INCIDENT_STAGES) {
       const answer = await agent.acceptSandboxLifecycleFailure({

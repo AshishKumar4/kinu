@@ -4793,9 +4793,11 @@ export class OrchestratorAgent extends ActorAgent {
       model: child.stores.config.getModel(),
       activePlan: child.stores.planReviews.getActive('default'),
       // The child's OWN acknowledged-but-not-landed steers, read with the
-      // child's actor id rather than this root's — the same rows and the same
-      // ordering `pendingSteerRuns()` reads for the workspace actor.
+      // child's actor id rather than this root's — the same rows, the same
+      // rule and the same ordering `pendingSteerRuns()` reads for the
+      // workspace actor: a steer is a row bound to a turn.
       pendingSteers: new PendingSendStore(this.boundSql, child.handle.actorId).restore()
+        .filter((row) => row.turnId !== null)
         .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null })),
     };
   }
