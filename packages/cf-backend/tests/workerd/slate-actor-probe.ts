@@ -87,10 +87,9 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     });
 
     const host = new SlateHost({
-      ctx: this.ctx, env: this.env, workspace: 'binding-probe',
+      ctx: this.ctx, workspace: 'binding-probe',
       session: async () => ({ vfs, processes: new SessionProcessSupervisor() }),
-      registerPort: async () => { throw new Error('binding probe does not boot a process'); },
-      unregisterPorts: () => { throw new Error('binding probe does not register a port'); },
+      facetManager: async () => { throw new Error('binding probe does not boot a process'); },
       apps: {
         ensure: async () => { throw new Error('binding probe does not boot a process'); },
         remove: async () => { throw new Error('binding probe does not keep durable applications'); },
