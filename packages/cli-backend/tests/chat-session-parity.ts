@@ -186,20 +186,33 @@ async function waitFor(pred: () => boolean, timeoutMs = 5000): Promise<void> {
   }
 }
 
+/** The harness-authored blocks a request carries beside the conversation —
+ *  runtime state and instruction material, whose wording is the harness's to
+ *  change and not a fact the loop decides. */
+const HARNESS_BLOCK = /^<(dynamic_context|workspace_instructions|unverified_instructions)\b/u;
+
 /** One model call as the script decides it: each message's role and, for the
- *  assistant and tool messages a continuation re-enters, what they carry. */
+ *  assistant and tool messages a continuation re-enters, what they carry. A
+ *  harness block is named by its tag, never by its prose. */
 function promptView(prompt: readonly PromptMessage[]): JsonValue {
   return prompt.map((message): JsonValue => {
     if (message.role === 'system') return { role: 'system' };
 
     const parts: JsonValue[] = message.content.map((part): JsonValue => {
       switch (part.type) {
-        case 'text': return { type: 'text', text: part.text };
+        case 'text': {
+          const block = HARNESS_BLOCK.exec(part.text)?.[1];
+
+          return block === undefined ? { type: 'text', text: part.text } : { type: 'text', block };
+        }
+
         case 'tool-call': return { type: 'tool-call', toolName: part.toolName, toolCallId: part.toolCallId };
+
         case 'tool-result': return {
           type: 'tool-result', toolCallId: part.toolCallId,
           output: part.output.type === 'text' || part.output.type === 'error-text' ? part.output.value : part.output.type,
         };
+
         default: return { type: part.type };
       }
     });

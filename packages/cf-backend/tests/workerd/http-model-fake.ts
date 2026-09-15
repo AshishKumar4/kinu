@@ -420,6 +420,37 @@ async function modelsBody(): Promise<Response> {
  * Answers fake-model and probe-control hosts; records and throws everything
  * else — the "no passthrough" half of the contract.
  */
+/** The parity lane's three controls: arm a hold, wait for the parked call to
+ *  arrive, release it. Its own dispatch, beside the queue lane's. */
+async function parityControl(pathname: string, request: Request): Promise<Response> {
+  if (pathname === '/parity/hold' && request.method === 'POST') {
+    const spec = v.parse(v.object({ parkAt: v.picklist(['first', 'partial']) }), await request.json());
+    parityHold = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, parkAt: spec.parkAt };
+
+    return Response.json({ ok: true });
+  }
+
+  if (pathname === '/parity/arrived' && request.method === 'GET') {
+    const gate = parityHold?.gate ?? parityParked;
+
+    if (gate === null || gate === undefined) throw new Error('parity model hold was not armed');
+    await gate.arrived.promise;
+
+    return Response.json({ ok: true });
+  }
+
+  if (pathname === '/parity/release' && request.method === 'POST') {
+    parityParked?.release.resolve();
+    parityHold?.gate.release.resolve();
+    parityParked = null;
+    parityHold = null;
+
+    return Response.json({ ok: true });
+  }
+
+  throw new Error(`probe-control: unhandled ${request.method} ${pathname}`);
+}
+
 export async function probeOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
@@ -446,30 +477,7 @@ export async function probeOutbound(request: Request): Promise<Response> {
       return Response.json({ ok: true });
     }
 
-    if (url.pathname === '/parity/hold' && request.method === 'POST') {
-      const spec = v.parse(v.object({ parkAt: v.picklist(['first', 'partial']) }), await request.json());
-      parityHold = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, parkAt: spec.parkAt };
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/parity/arrived' && request.method === 'GET') {
-      const gate = parityHold?.gate ?? parityParked;
-
-      if (gate === null || gate === undefined) throw new Error('parity model hold was not armed');
-      await gate.arrived.promise;
-
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === '/parity/release' && request.method === 'POST') {
-      parityParked?.release.resolve();
-      parityHold?.gate.release.resolve();
-      parityParked = null;
-      parityHold = null;
-
-      return Response.json({ ok: true });
-    }
+    if (url.pathname.startsWith('/parity/')) return parityControl(url.pathname, request);
 
     if (url.pathname === '/log' && request.method === 'GET') {
       return Response.json({ calls: [...log] });
