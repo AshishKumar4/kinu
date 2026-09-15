@@ -1659,7 +1659,16 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run test:workerd',
     label: 'Durable Object semantics under workerd',
     tier: 'ci',
-    seconds: 12.7,
+    // Measured 2026-09-15 on the 24-thread workstation: 439 s (load 1.8) and
+    // 399 s (load 9.6) solo, 36 files serial by design (`fileParallelism:
+    // false`, wall-time gates), 139 to 159 s of it module import. Replaces
+    // 12.7 s, which named five surfaces and 18 tests; the tier has 144. The
+    // same day the probe's outbound started answering `models.dev/api.json`
+    // from a fixture: refused, it surfaced as HTTP 500 and every provider fell
+    // back on each listing sweep — 51 fallbacks per run — and the gate ran 160
+    // to 398 s with them and 399 to 439 s without, so the fallbacks were a
+    // network dependency, not the wall. The wall is the serial import cost.
+    seconds: 420,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
       + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
