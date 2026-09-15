@@ -30,9 +30,9 @@
  * not. One tree reached by two identities was the bug. In this isolate the
  * credentialed plane is `SqliteVFS.as(cred)` and the credentialed shell is a
  * second `Shell` over the SAME filesystem (`vfs/nimbus-workspace.ts`
- * `asAgent`). On a remote Nimbus session the file RPCs are pid-less and carry
- * no credential at all, so there the plane is the session's own coreutils run
- * as the node (`execution/nimbus-agent-files.ts`) — same session, same bytes,
+ * `asAgent`). On a Nimbus session handle the plane is `files.as(cred)` — the
+ * session's pid-less file RPCs bound to the node's credential
+ * (`execution/nimbus.ts`, `nimbusSessionFiles`) — same session, same bytes,
  * one identity.
  *
  * `shared-origin-plane` is neither a confession nor the hosted backend's state.

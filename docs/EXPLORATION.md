@@ -487,9 +487,9 @@ pinned to the session user refuses a node's writes inside its own home. I measur
 `EACCES` on `/home/node-aX9`. It cannot refuse a sibling's, because every
 pid-less filesystem call is the same identity. So the local backend gives a node
 `SqliteVFS.as(cred)` and a second `Shell` over the SAME filesystem
-(`WorkspaceBundle.asAgent`), and the hosted backend runs ONE fixed program as the
-node inside the same session (`nimbusSessionFiles(box, cred)` →
-`execution/nimbus-agent-files.ts`), with `withHostedNodeExecution` for its
+(`WorkspaceBundle.asAgent`), and the hosted backend binds the session's own file plane to the
+node (`nimbusSessionFiles(box, cred)` → `box.files.as(cred)`, `execution/nimbus.ts`),
+with `withHostedNodeExecution` for its
 commands. `NodeAgentDeps.runtimeForWorkspace` is where a backend hands that
 runtime back; `runNodeAgent` uses it for a loop that runs in this isolate, and a
 hosted actor rebuilds the same thing from `HostedNodeHome`.

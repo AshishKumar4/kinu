@@ -47,8 +47,8 @@ import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, WorkspacePreviewUrl,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, tolerate, type Refusal } from '@kinu.run/core/obs';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { composeFacetManager, type ComposedFacetManager, type WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
@@ -84,25 +84,30 @@ function absentAsNull<T>(read: () => T): T | null {
  * a recursive removal and a byte-exact read are native operations here rather
  * than the shell-outs a remote handle needs.
  */
-function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxHandle['files'] {
+function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_SESSION_USER): NimbusSandboxHandle['files'] {
+  const view = async (): Promise<CredentialedVfs> => (await open()).as(cred);
+
   return {
+    // The same rows as one agent: the raw filesystem credentialed to it,
+    // exactly the view its commands run under.
+    as: (agent) => workspaceBoxFiles(open, agent),
     async read(path) {
-      const vfs = await open();
+      const vfs = await view();
 
       return absentAsNull(() => vfs.readFileString(path));
     },
     async readBytes(path) {
-      const vfs = await open();
+      const vfs = await view();
 
       return absentAsNull(() => vfs.readFile(path));
     },
     async readRange(path, offset, length) {
-      const vfs = await open();
+      const vfs = await view();
 
       return absentAsNull(() => vfs.readRange(path, offset, length));
     },
     async write(path, content) {
-      const vfs = await open();
+      const vfs = await view();
       // The SDK write contract creates missing parents — the remote session's
       // pid-less write always did, and bootstrapScaffold writes
       // `scaffold/agent.js` into a fresh workspace with no mkdir of its own.
@@ -117,7 +122,7 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
       vfs.writeFile(path, content);
     },
     async stat(path) {
-      const vfs = await open();
+      const vfs = await view();
 
       return absentAsNull(() => {
         const stat = vfs.stat(path);
@@ -126,7 +131,7 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
       });
     },
     async lstat(path) {
-      const vfs = await open();
+      const vfs = await view();
 
       return absentAsNull(() => {
         const stat = vfs.lstat(path);
@@ -134,15 +139,15 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
         return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
       });
     },
-    async rename(from, to) { (await open()).rename(from, to); },
-    async chmod(path, mode) { (await open()).chmod(path, mode); },
+    async rename(from, to) { (await view()).rename(from, to); },
+    async chmod(path, mode) { (await view()).chmod(path, mode); },
     async list(path) {
-      return (await open()).readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type }));
+      return (await view()).readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type }));
     },
-    async exists(path) { return (await open()).exists(path); },
-    async mkdir(path) { (await open()).mkdir(path, { recursive: true }); },
+    async exists(path) { return (await view()).exists(path); },
+    async mkdir(path) { (await view()).mkdir(path, { recursive: true }); },
     async delete(path, options) {
-      const vfs = await open();
+      const vfs = await view();
 
       if (options?.recursive) {
         vfs.removeRecursive(path);
@@ -395,7 +400,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
   const host = async (): Promise<ProgrammaticHost> => (await compose()).programmatic;
 
-  const files = workspaceBoxFiles(async () => (await bundle.session()).vfs.as(CRED_SESSION_USER));
+  const files = workspaceBoxFiles(async () => (await bundle.session()).vfs);
   const boxes = new Map<string, NimbusSandboxHandle>();
 
   return {
