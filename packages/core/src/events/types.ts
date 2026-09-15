@@ -49,6 +49,7 @@ export type RunEventType =
   | 'step_finish'
   | 'step_partial'
   | 'model_call'
+  | 'provider_wait'
   | 'model_operation'
   | 'head_split'
   | 'head_merge'
@@ -257,6 +258,33 @@ export type RunEvent =
       modelId?: string;
       /** Failed end rows only: the cause chain, bounded by the producer. */
       error?: string;
+    })
+  /** The turn is not thinking — it is WAITING. One row per declared sleep the
+   *  model's transport is about to take: a 429/529's Retry-After, this layer's
+   *  backoff when the refusal carried none, or the shared pacer's join onto a
+   *  cooldown a sibling request earned (`source` says which, `status` the
+   *  refusing status when there was a response at all).
+   *
+   *  Without these rows a rate-limited turn is indistinguishable from a slow
+   *  one: the stream is simply quiet, the recorder writes nothing, and a
+   *  reader watching for stalls would call it stuck. The row is what lets a
+   *  surface say "waiting on {provider}" — the wait is real, measured, and
+   *  attributed, never guessed from silence. */
+  | (RunEventBase & {
+      type: 'provider_wait';
+      provider: string;
+      modelId?: string;
+      /** How long the request sleeps, in ms. */
+      waitMs: number;
+      /** Which attempt was refused, 1-based — 0 when the wait is a pacer
+       *  cooldown join taken before this request's first attempt. */
+      attempt: number;
+      /** The upstream status that caused the wait, when one was seen. */
+      status?: number;
+      /** `header`: the provider's own Retry-After. `backoff`: a refusal with
+       *  none. `cooldown`: a wait declared by a sibling, joined before this
+       *  request's first send. */
+      source: 'header' | 'backoff' | 'cooldown';
     })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** A split settled. `headsWithFindings` vs `headCount` is how many forks came

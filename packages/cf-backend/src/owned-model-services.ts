@@ -3,6 +3,7 @@ import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
   buildProviderCatalogSnapshot, ProviderListingCache,
   type ProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
+  type ProviderWaitInfo,
   type WebSearchProvider,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
@@ -33,6 +34,10 @@ export interface OwnedModelServicesOptions {
    *  because refusing a turn over a cache-freshness question would trade a
    *  stale catalog for a dead agent. */
   readonly getCredentialsRevision: () => Promise<number>;
+  /** Called the moment a request this actor's model makes is about to sleep on
+   *  a provider wait — the actor emits it as a `provider_wait` run event.
+   *  Invoked at wait time, so the callback may read live turn state. */
+  readonly onProviderWait?: (info: ProviderWaitInfo) => void;
 }
 
 /** Owner-scoped provider, model, affinity, and web services shared by CF agents. */
@@ -92,6 +97,7 @@ export class OwnedModelServices {
       userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
       appTitle: this.options.appTitle,
       workersAI: { sessionAffinity: this.affinityKey },
+      onProviderWait: this.options.onProviderWait,
     });
 
     return this.providerRegistryCache;

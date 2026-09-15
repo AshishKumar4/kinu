@@ -98,6 +98,8 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
 
   const aiFetch = createCloudflareAIFetch({
     credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
+    provider: workersAI ? 'workers-ai' : 'my-gateway',
+    modelId: model,
     getAuth: createUserDOAuthResolver({ stub: userDO, caller: await ownerCaller(env) }),
     placeholder: PROXY_PLACEHOLDER,
     missingCredentialMessage: workersAI

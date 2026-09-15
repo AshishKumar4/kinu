@@ -14,6 +14,10 @@
  *   /gallery.html?frame=composer → the composer alone: at rest, mid-turn
  *                                  (Stop/Branch/Steer), and with a status row
  *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
+ *   /gallery.html?frame=providerwait → an in-flight turn sleeping out a
+ *                                  provider-mandated wait: the task indicator
+ *                                  names the provider and the retry window
+ *                                  instead of reading "working" over silence.
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
  *                                    group)
@@ -2733,13 +2737,14 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
 
 /* The one identity row, as the app renders it — the real component, not a
    copy of it: the whole point of the row is that there is exactly one. */
-function GalleryWorkspaceBar() {
+function GalleryWorkspaceBar({ providerWait }: { providerWait?: { provider: string; waitMs: number } | null }) {
   return (
     <WorkspaceBar
       title="Checkout coupon bug"
       onRename={async (name) => name}
       connectionStatus="connected"
       working
+      providerWait={providerWait ?? null}
       altitude="run"
       onAltitude={() => {}}
     />
@@ -2827,7 +2832,7 @@ function ChatMessages() {
 function Shell(
   {
     surface = "Work", mctsTrees = EMPTY_TREES, rpc = workRpc, pendingActions = SHELL_PENDING_ACTIONS,
-    headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS, notices = [],
+    headActivity = NO_HEAD_ACTIVITY, backgroundJobs = BACKGROUND_JOBS, notices = [], providerWait = null,
   }:
   {
     surface?: SurfaceKind; mctsTrees?: ReadonlyMap<string, ForkNode>; rpc?: Rpc;
@@ -2839,6 +2844,13 @@ function Shell(
      *  running job and no streaming turn the fork list drops to its idle
      *  cadence, which is the condition a new search would be invisible under. */
     backgroundJobs?: BackgroundJob[];
+    /**
+     * A model call sleeping out a provider-mandated wait — what the task
+     *  indicator reads instead of "working" while it lasts. EMPTY by default:
+     *  a frame photographs the surface it is named for, and a bar pinned to a
+     *  wait in every other frame would say one turn is rate-limited forever.
+     */
+    providerWait?: { provider: string; waitMs: number } | null;
     /**
      * The composer's status rows. EMPTY by default, and that is the rule
      * rather than a preference: a frame photographs the surface it is named
@@ -2857,7 +2869,7 @@ function Shell(
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
-          <GalleryWorkspaceBar />
+          <GalleryWorkspaceBar providerWait={providerWait} />
           <div className="flex-1 flex min-h-0">
             <div className="@container flex min-w-0 flex-1 flex-col h-full border-r p-border">
               <GalleryChatTabs />
@@ -3047,6 +3059,16 @@ function ChatEmptyFrame() {
       </div>
     </div>
   );
+}
+
+/* A turn IN FLIGHT, WAITING ON THE PROVIDER. The stream is quiet because the
+   model endpoint refused the request — the wait is measured and named on the
+   task indicator rather than guessed from silence. This is the frame that
+   could never exist before `provider_wait`: a rate-limited turn used to be
+   indistinguishable from a slow one, the bar reading "working" the whole time
+   the provider slept it out. */
+function ProviderWaitFrame() {
+  return <Shell providerWait={{ provider: "anthropic", waitMs: 45_000 }} />;
 }
 
 /* What EVERY workspace with a history opens on, for as long as the wake and the
@@ -6214,6 +6236,9 @@ async function mount() {
       ),
       entries: [APP_ROUTES.shared],
     }],
+    // The task indicator mid-wait: the model call is sleeping out the
+    // provider's declared window and the bar names it instead of "working".
+    ["providerwait", { node: <ProviderWaitFrame />, entries: ["/"] }],
     ["sharedialog", { node: <ShareDialogFrame mode="live" />, entries: ["/"] }],
     ["sharedialog-blueprint", { node: <ShareDialogFrame mode="blueprint" />, entries: ["/"] }],
     ["unmapped", {

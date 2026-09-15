@@ -45,6 +45,10 @@ export interface WorkspaceBarProps {
   connectionStatus: ConnectionStatus;
   /** The agent is mid-turn — the pulse the whole workspace shares. */
   working: boolean;
+  /** The provider wait a model call is sleeping out right now — what the
+   *  indicator says instead of a bare "working", because a rate-limited turn
+   *  is waiting, not thinking. Null = nothing is being waited on. */
+  providerWait?: { provider: string; waitMs: number } | null;
   /** An approval the agent cannot proceed without: actions, consents, or both. */
   waitingOnYou?: boolean;
   /** The resolved model spec for the next turn, when the workspace has one. */
@@ -84,15 +88,20 @@ function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
 }
 
 // No stopped state: the runtime sends no stopped event, so not-working is only idle.
-function TaskIndicator({ working, waitingOnYou }: { working: boolean; waitingOnYou: boolean }) {
+function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boolean; providerWait: { provider: string; waitMs: number } | null; waitingOnYou: boolean }) {
   const tone = waitingOnYou
     ? { cls: "p-warning border p-border p-fill", dot: "p-dot-warning", word: "waiting on you" }
-    : working
-      ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" }
-      : { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
+    : providerWait
+      ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: `waiting on ${providerWait.provider} · ${Math.ceil(providerWait.waitMs / 1000)}s` }
+      : working
+        ? { cls: "text-[var(--c-accent)] border-[rgba(224,164,88,.28)] bg-[rgba(224,164,88,.1)]", dot: "p-dot-accent p-dot-pulse", word: "working" }
+        : { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral", word: "idle" };
 
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}>
+    <span
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}
+      title={providerWait ? `Retry in ${Math.ceil(providerWait.waitMs / 1000)}s` : undefined}
+    >
       <span className={`size-1.5 rounded-full ${tone.dot}`} />
       {tone.word}
     </span>
@@ -100,7 +109,7 @@ function TaskIndicator({ working, waitingOnYou }: { working: boolean; waitingOnY
 }
 
 export function WorkspaceBar({
-  title, onRename, connectionStatus, working, waitingOnYou = false, model, forkParent,
+  title, onRename, connectionStatus, working, providerWait = null, waitingOnYou = false, model, forkParent,
   altitude, onAltitude,
 }: WorkspaceBarProps) {
   const { mode } = useTheme();
@@ -112,7 +121,7 @@ export function WorkspaceBar({
       <div className="flex min-w-0 basis-full items-center gap-3 @[30rem]:basis-0 @[30rem]:flex-1">
         <InlineRenameTitle title={title} onRename={onRename} subject="workspace" />
         <ConnectionIndicator status={connectionStatus} />
-        <TaskIndicator working={working} waitingOnYou={waitingOnYou} />
+        <TaskIndicator working={working} providerWait={providerWait} waitingOnYou={waitingOnYou} />
         {model && (
           <span
             className="hidden max-w-48 truncate rounded-full border p-border p-fill px-3 py-1 font-mono text-[11px] p-text-4 sm:inline"

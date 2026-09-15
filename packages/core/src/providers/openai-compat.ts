@@ -61,6 +61,8 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
       const placeholder = 'https://openai-compat.invalid';
 
       const customFetch = createAuthedFetch(deps, {
+        provider: providerId,
+        modelId,
         credKey,
         missingCredentialError: `openai-compat credential ${credKey} not configured (baseURL required)`,
         requireBaseURL: true,

@@ -4,7 +4,7 @@
 // proxy. One implementation of resolve-auth → placeholder-URL rewrite →
 // refresh-on-401 retry → error mapping, so the request shape cannot drift
 // between the three consumers.
-import type { AuthResolution, AuthResolver } from './types';
+import type { AuthResolution, AuthResolver, ProviderWaitInfo } from './types';
 import { asFetchFunction } from './fetch-shim';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { diagnostics, tolerate, toKinuError } from '../obs/index';
@@ -31,6 +31,13 @@ export interface CloudflareAIFetchOptions {
   credKey: string;
   getAuth: AuthResolver;
   fetch?: typeof fetch;
+  /** The provider id the model was resolved under (`workers-ai`,
+   *  `my-gateway`) — the name its wait notices carry. */
+  provider: string;
+  /** The model the requests are for — carried into the same notices. */
+  modelId?: string;
+  /** The rate-limit wait listener (ProviderDeps.onProviderWait). */
+  onProviderWait?: (info: ProviderWaitInfo) => void;
   /** Placeholder base URL rewritten to the credential's account-scoped
    *  baseURL on every request (the credential can rotate mid-session). */
   placeholder: string;
@@ -53,7 +60,11 @@ const DEAD_CLOUDFLARE_LOGIN =
 export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof globalThis.fetch {
   // Retry the raw provider response before auth/error/stream processing so
   // usage repair only ever sees the final response selected by this layer.
-  const baseFetch = withRateLimitRetry(opts.fetch ?? fetch);
+  const baseFetch = withRateLimitRetry(opts.fetch ?? fetch, {
+    provider: opts.provider,
+    ...(opts.modelId !== undefined && { modelId: opts.modelId }),
+    ...(opts.onProviderWait !== undefined && { onWait: opts.onProviderWait }),
+  });
 
   return asFetchFunction(async (input, init) => {
     const auth = await opts.getAuth(opts.credKey);
