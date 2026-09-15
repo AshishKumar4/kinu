@@ -1318,17 +1318,74 @@ const AckReplySchema: v.GenericSchema<AckReply> = v.looseObject({
   error: v.optional(v.string()),
 });
 
+/**
+ * Ask the box again while it says to.
+ *
+ * ONE RULE FOR EVERY OPERATION ROUTE. `ensureReady()` answers a request that
+ * arrives in the boot window with the refusal `isRearmableStartupRefusal`
+ * reads, and nothing ran: the command, write or read behind the request never
+ * reached the container, so asking again cannot double-apply it. Every
+ * operation route shares that gate, so every caller shares this rule, and the
+ * readiness drive is not a special case of it — it goes through `execInBox`
+ * like the rest.
+ *
+ * MEASURED, run `20260914234711` (D17's settlement): eight decisive segments
+ * asked a box that had just been quiesced, read its `A startup is armed, so
+ * ask again` after the box's own 6,000 ms admission window, and were recorded
+ * as `unobserved execution` while `pollForAttach` beside them re-drove the
+ * same refusal. The chunked-absorption cell's setup exec and the fault-cut
+ * cell's witness write were refused the same way and their replies were not
+ * read at all.
+ *
+ * `untilMs` is the startup observation ceiling, `CELL_STARTUP_MS`: a box that
+ * still says "ask again" after it has not started, and the last refusal is
+ * returned as the box's own words. It is not a new budget and not a transport
+ * timeout — `timeoutMs` on the attempt stays what it was.
+ */
+export async function askWhileStarting<Reply extends { ok?: boolean; error?: string }>(
+  operation: string,
+  ask: () => Promise<Reply>,
+  untilMs: number = CELL_STARTUP_MS,
+): Promise<Reply> {
+  const since = Date.now();
+  let asked = 0;
+
+  for (;;) {
+    const reply = await ask();
+    asked += 1;
+
+    if (reply.ok === true || !isRearmableStartupRefusal(reply.error)) {
+      if (asked > 1) log(`${operation}: answered on ask ${String(asked)}, ${String(Date.now() - since)} ms after the first`);
+
+      return reply;
+    }
+
+    if (Date.now() - since >= untilMs) {
+      log(`${operation}: still starting after ${String(asked)} ask(s) and ${String(Date.now() - since)} ms; the last refusal stands`);
+
+      return reply;
+    }
+
+    if (asked === 1) log(`${operation}: the box is starting (${reply.error ?? 'no reason'}); asking again`);
+    await delay(STARTUP_POLL_INTERVAL_MS);
+  }
+}
+
 /** One command inside the box, through the fixture's own `/exec` route.
  *
  *  `timeoutMs` is per attempt and defaults to the shared transport deadline. A
  *  caller whose own window is smaller than that — the startup readiness drive,
  *  bounded by the ceiling it is helping to decide — supplies it, because
  *  `/exec` waits on `ensureReady()` and a slow restoration otherwise holds the
- *  request open for the whole default budget. */
+ *  request open for the whole default budget. A box that says to ask again is
+ *  asked again: see `askWhileStarting`. */
 export async function execInBox(
   fixture: Fixture, box: string, command: string, timeoutMs?: number,
 ): Promise<ExecReply> {
-  return await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command }, timeoutMs);
+  return await askWhileStarting(
+    `exec ${command.length > 48 ? `${command.slice(0, 48)}…` : command}`,
+    async () => await call(fixture, 'POST', `/exec?box=${box}`, ExecReplySchema, { command }, timeoutMs),
+  );
 }
 
 export interface BarrierWitness {
@@ -1414,7 +1471,16 @@ export async function readBoxFile(fixture: Fixture, box: string, path: string, h
 export async function writeFileInBox(
   fixture: Fixture, box: string, path: string, content: string,
 ): Promise<void> {
-  await call(fixture, 'POST', `/write?box=${box}`, AckReplySchema, { path, content });
+  const reply = await askWhileStarting(
+    `write ${path}`,
+    async () => await call(fixture, 'POST', `/write?box=${box}`, AckReplySchema, { path, content }),
+  );
+
+  // A REFUSED WRITE IS NOT A WRITE. The fault-cut cell of run `20260914234711`
+  // wrote its witness into a box that answered "ask again", read the file
+  // back through a wake, and reported "bytes differ" for a file it never put
+  // there.
+  if (reply.ok !== true) throw new Error(`write ${path} was refused: ${reply.error ?? 'the box did not acknowledge it'}`);
 }
 
 const TRANSIENT_REPLACEMENT = /OperationInterrupted|runtime connection was closing|broken\.constructorFailed|container.*(?:replac|restart)/i;
@@ -3586,12 +3652,21 @@ async function observeChunkedAbsorption(
 
   facts.chunkedAbsorption = sample;
   const harness = basename(HARNESS);
-  await execInBox(
+
+  // A SETUP THAT DID NOT RUN IS THE CELL'S OWN REFUSAL. In run `20260914234711`
+  // this exec was answered "ask again" by a box that had just been quiesced,
+  // the reply went unread, and the witness then judged a marker nobody wrote.
+  const seededMarker = await execInBox(
     fixture,
     box,
     `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
     + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
   );
+
+  if (seededMarker.ok !== true || seededMarker.exitCode !== 0) {
+    throw new Error(`the marker was not written: ${seededMarker.error ?? seededMarker.stderr ?? `exit ${String(seededMarker.exitCode ?? -1)}`}`);
+  }
+
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
 
   // A tick preserves the base; this cell needs a delta sidecar to restore.
@@ -3647,9 +3722,14 @@ async function observeChunkedAbsorption(
   sample.markerInUpper = await readBoxFile(fixture, box, `${CHAIN_UPPER_DIR}/${markerFile}`);
 
   // A new write makes the next publication observable rather than a no-op.
-  await execInBox(
+  const nextWrite = await execInBox(
     fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
   );
+
+  if (nextWrite.ok !== true || nextWrite.exitCode !== 0) {
+    throw new Error(`the post-wake write did not run: ${nextWrite.error ?? nextWrite.stderr ?? `exit ${String(nextWrite.exitCode ?? -1)}`}`);
+  }
+
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
   sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
   sample.afterState = await boxState(fixture, box);
