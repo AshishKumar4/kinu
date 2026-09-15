@@ -3608,7 +3608,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       deleteObjects: async (keys) => {
         await store.bucket.delete([...keys]);
       },
-      countEntries: async (dir) => (await this.listFiles(dir)).files.length,
+      // THE SDK'S OWN LISTING, NOT THE PUBLIC ROUTE. The override above it
+      // is a caller's entry: it waits on `ensureReady`, which stamps the
+      // lease, and a checkpoint that counted its upper through it stamped an
+      // interaction on itself and then refused its own stop as "a caller
+      // interacted 9 ms ago" (`tests/stop-under-caller.test.ts`, the
+      // no-caller control). Storage work is maintenance and reaches the SDK
+      // directly, the way `#rawExec` does.
+      countEntries: async (dir) => (await super.listFiles(dir)).files.length,
       restoreExtract: async (backup) => await this.restoreBackup(backup),
       createExtractSnapshot: async (options) =>
         await this.createBackup(mutableBackupOptions(options)),
