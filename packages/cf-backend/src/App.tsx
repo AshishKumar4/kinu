@@ -76,22 +76,18 @@ function TriggersRedirect() {
   return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
 }
 
-// An account that has never finished setup lands on the wizard no matter
-// which URL it arrived at, and an onboarded account that wanders to
-// `/welcome` comes home — the two redirect halves live on one route element
-// so they can never both fire. A profile that failed to read gates nothing:
-// the read may be wrong, but the account's data is still there.
+// An account that still needs setup — the wizard never finished and not one
+// workspace exists — lands on it no matter which URL it arrived at. The
+// wizard itself stays reachable for anyone: an established account that opens
+// /welcome on purpose sees it, never a bounce. A profile that failed to read
+// gates nothing: the read may be wrong, but the account's data is still there.
 function OnboardingGate() {
   const { profile } = useAccount();
   const at = useLocation().pathname;
 
   if (profile.status === "loading") return <LazyFallback />;
 
-  const gate = needsOnboarding(lastValue(profile));
-
-  if (at === APP_ROUTES.welcome) {
-    if (!gate) return <Navigate to={APP_ROUTES.home} replace />;
-  } else if (gate) {
+  if (at !== APP_ROUTES.welcome && needsOnboarding(lastValue(profile))) {
     return <Navigate to={APP_ROUTES.welcome} replace />;
   }
 

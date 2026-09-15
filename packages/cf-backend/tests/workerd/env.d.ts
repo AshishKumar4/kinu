@@ -99,7 +99,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   counts(): Promise<Record<string, number>>;
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
-  freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null } | null>;
+  freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
 }
 
 interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
