@@ -74,8 +74,10 @@ const RUNTIME_DIR = '/usr/lib/kinu/slate';
 /** The ES module text of `runner.js`, the dynamic worker's main module. Its
  *  `vfsTextModules` siblings — `application.js`, `capnweb.js`, `server.js`,
  *  `react-stub.js`, `vendor.js` — arrive content-addressed; only this text
- *  is generated. */
-function runner(assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined): string {
+ *  is generated. Exported because the runner's own contract — a re-created
+ *  instance starts its process before it serves — is asserted on the module
+ *  text itself. */
+export function slateRunnerSource(assets: readonly { readonly path: string; readonly contents: string }[], shell: string | undefined): string {
   const raw: Record<string, { body: string; immutable: boolean }> = {};
 
   for (const asset of assets) raw[asset.path] = { body: asset.contents, immutable: false };
@@ -166,8 +168,28 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     'export class NimbusProcess extends DurableObject {',
     '  #slate;',
     '  #forwarder;',
+    // The process is this instance's own state: the platform can re-create the
+    // object under an already-"running" process row (eviction, re-drive), and
+    // spawn's one startProcess call belongs to the instance it ran on. Every
+    // request path therefore starts through the memo — the spawn call and a
+    // first fetch share one boot; a failed boot clears it so the next request
+    // retries rather than serving a stale refusal forever.
+    '  #started;',
     '  constructor(ctx, env) { super(ctx, env); }',
-    '  async startProcess() {',
+    '  startProcess() { return this.#ensureStarted(); }',
+    '  #ensureStarted() {',
+    '    if (this.#started === undefined) {',
+    '      const started = this.#bootProcess();',
+    '      this.#started = started;',
+    '      started.then((result) => {',
+    '        if (result.ok === false && this.#started === started) this.#started = undefined;',
+    '      }, () => {',
+    '        if (this.#started === started) this.#started = undefined;',
+    '      });',
+    '    }',
+    '    return this.#started;',
+    '  }',
+    '  async #bootProcess() {',
     '    // The authored module is imported here, not at the top: a static import',
     '    // evaluates during worker boot, where a throw in authored source (say a',
     '    // missing SlateObject import) surfaces as an io fault instead of the',
@@ -244,6 +266,11 @@ function runner(assets: readonly { readonly path: string; readonly contents: str
     '    catch (cause) { return Response.json({ reason: cause instanceof SlateRefusal ? cause.reason : "io", error: errorText(cause) }, { status: 500 }); }',
     '  }',
     '  async respond(request) {',
+    '    const started = await this.#ensureStarted();',
+    // A start that failed is retried by the next request (the memo cleared
+    // itself); THIS request reports it the way the host's previewUnavailable
+    // does — the failure is the slate's, not the route's.
+    '    if (!started.ok) return Response.json({ reason: started.error, error: started.error }, { status: 503, headers: { "cache-control": "no-store", "retry-after": "3", "x-slate-runner": "start-failed" } });',
     '    const url = new URL(request.url);',
     '    const path = url.pathname;',
     '    if (path === "/__rpc") {',
@@ -469,7 +496,7 @@ export class ResidentSlateProcesses {
     }
 
     const modules = {
-      'runner.js': runner(assets, shell),
+      'runner.js': slateRunnerSource(assets, shell),
       // The application bundle's surviving bare specifiers are rewritten onto
       // these module-map paths — the map's names must end `.js`.
       'application.js': rewriteModuleSpecifiers(application.contents),
