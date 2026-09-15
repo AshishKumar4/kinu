@@ -141,14 +141,18 @@ export function report(
  * in the invocation, that they know it is blocked and why — which puts the
  * acknowledgement in the command that ran rather than in a comment nobody
  * reads. `acknowledgedBy` is the environment variable that carries it; naming
- * the variable in the failure output is the whole affordance.
+ * the variable in the failure output is the whole affordance. The CALLER reads
+ * the variable and passes its value: a read by computed key here would put
+ * this module's every importer beyond what the ladder's closure walker can
+ * bound, and every corpus gate imports this module.
  */
 export function blocked(
   gate: string,
   reason: string,
   acknowledgedBy: string,
+  acknowledged: string | undefined,
 ): number {
-  const acknowledgement = (process.env[acknowledgedBy] ?? '').trim();
+  const acknowledgement = (acknowledged ?? '').trim();
 
   if (acknowledgement.length > 0) {
     console.log(`${gate}: BLOCKED and acknowledged — ${reason} (${acknowledgedBy}=${acknowledgement})`);

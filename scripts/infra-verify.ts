@@ -767,7 +767,7 @@ async function main(): Promise<number> {
   const session = authenticated();
 
   if (session.state !== 'present') {
-    return blocked(label, `no Cloudflare session — ${session.state === 'unknown' ? session.reason : 'wrangler is logged out'}`, ACK);
+    return blocked(label, `no Cloudflare session — ${session.state === 'unknown' ? session.reason : 'wrangler is logged out'}`, ACK, process.env.KINU_INFRA_ACK);
   }
 
   const infrastructure = deriveInfrastructure();

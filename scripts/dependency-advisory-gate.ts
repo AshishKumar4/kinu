@@ -265,6 +265,7 @@ function main(): number {
       + `so none of the ${String(scan.scanned)} lockfile package(s) was checked. The reviewed set `
       + 'could not be compared against anything — this is `unknown`, not `clean`',
       UNREACHABLE_ACK,
+      process.env.KINU_ADVISORY_FEED_BLOCKED,
     );
   }
 

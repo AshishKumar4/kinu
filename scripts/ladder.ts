@@ -39,12 +39,14 @@ import { arch, cpus, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
-import { repoAt } from './ladder-closure';
+import { auditClosure } from './ladder-audit';
+import { deriveClosure, repoAt } from './ladder-closure';
 import type { Inputs } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isPythonSuite, isRunnableSuite, isVitestEvalSuite, trackedFiles,
 } from './sources';
 import { CLI_TEST_ROOT } from './test-cli';
+import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
@@ -100,6 +102,21 @@ export interface Gate {
   readonly inputs: Inputs;
 }
 
+/** The environment names the by-name projections in `packages/test-utils`
+ *  can reach: the preload's credential strip, `ambientByName`, and the live
+ *  model and eval identity resolvers. Every `bun test` gate loads the preload,
+ *  so every such row declares this set, DERIVED from the lists those
+ *  projections read rather than restated — a name added to `LIVE_MODEL_ENV`
+ *  widens the cache key by itself. `KINU_EVAL_LIVE` is the preload's own
+ *  consent switch. */
+const AMBIENT_BY_NAME: Inputs = {
+  kind: 'derived',
+  env: [
+    ...AMBIENT_CREDENTIAL_ENV, ...AMBIENT_DECORATION_ENV, ...Object.values(EVAL_IDENTITY_ENV),
+    ...Object.values(LIVE_MODEL_ENV).flat(), 'KINU_EVAL_LIVE', 'KINU_EVAL_BACKEND',
+  ],
+};
+
 /** Gates that run before the deploy tier. The deploy tier is parsed from
  *  deploy.sh — see the header. Cheapest first inside each tier, so the first
  *  failure is also the fastest to reproduce. */
@@ -121,7 +138,7 @@ export const LADDER: readonly Gate[] = [
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
     catches: 'a pattern census that mistakes strings for regexes or a JSONC parser that changes data',
     blind: 'semantic quality of a reviewed parser candidate',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun scripts/pattern-inventory.ts',
@@ -238,7 +255,7 @@ export const LADDER: readonly Gate[] = [
       + 'relayed rather than read. Three of the fifteen were each of those and no set-equality '
       + 'assertion reaches them. Also blind to the 2 shell gate programs, which it counts and '
       + 'never parses.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:literature-citations',
@@ -338,7 +355,7 @@ export const LADDER: readonly Gate[] = [
       + 'only forces the set to be a decision. Also blind to what a script does at runtime, to '
       + 'transitive `bun.lock` integrity, and to CVEs — `bun run gate:dependency-advisories` '
       + 'is the gate for the last, and shares the reviewed-set shape with this one.',
-    inputs: { kind: 'derived' },
+    inputs: { kind: 'derived', reads: [] },
   },
   {
     run: 'bun run gate:patch-parity',
@@ -358,7 +375,7 @@ export const LADDER: readonly Gate[] = [
       + "checkout's, so one shared directory serves every worktree while `patches/` is per-commit, "
       + 'and at most one checkout can be truthful at a time. The gate prints its full blind-spot '
       + 'list on the GREEN path, where it is actually needed.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:ladder-budget',
@@ -378,7 +395,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the wall clock itself. This compares declarations to the lock; a gate that '
       + 'slows without its row updated passes until somebody re-measures. Shrinkage '
       + 'passes deliberately: a faster tier is the ratchet working.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
 
   {
@@ -406,7 +423,7 @@ export const LADDER: readonly Gate[] = [
       + 'somewhere the defect no longer bites, and only `bun scripts/bench.ts validate --id '
       + '<id>` (one task, 93s, no model) answers that. Also whether the defect is still the '
       + 'one the task PROMPT describes, which no mechanical check can decide.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:skip-ratchet',
@@ -435,7 +452,7 @@ export const LADDER: readonly Gate[] = [
       + "for the other's.",
     blind: 'whether a running test asserts anything real. A skip is visible now; a '
       + 'vacuous pass is the next tier\'s problem.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
 
   {
@@ -818,7 +835,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the gates are wired into any tier at all — that is ladder.test.ts. For infra, '
       + 'everything that needs an account: no test here proves a `wrangler r2 bucket create` '
       + 'creates a bucket.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
@@ -833,7 +850,7 @@ export const LADDER: readonly Gate[] = [
       + 'direction still teaches people to silence it.',
     blind: 'whether the locked skips are the RIGHT skips. That is a judgement in the '
       + 'lock\'s reason strings, which is why each entry has to carry one.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
@@ -851,7 +868,7 @@ export const LADDER: readonly Gate[] = [
       + 'self-test, and the seeded tier nobody has paid for yet. For the cache: a `reads` or '
       + '`env` declaration is a claim these suites cannot check against a live gate; '
       + '`--audit-closure` is the measurement for that.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/deploy.test.ts',
@@ -863,7 +880,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails.',
     blind: 'whether the gates it enumerates pass.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts',
@@ -887,7 +904,7 @@ export const LADDER: readonly Gate[] = [
       + 'intentionally counts but cannot decode because it contains NUL or exceeds its size cap. '
       + 'The remaining headroom under a per-user quota: the probe writes 1 MiB, so only an '
       + 'exhausted quota is red.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/gate-set-equality.test.ts',
@@ -904,7 +921,7 @@ export const LADDER: readonly Gate[] = [
       + 'gate whose output is mostly noise trains people to ignore it.',
     blind: 'whether the predicates in sources.ts describe the right sets. It proves nothing '
       + 'else re-spells them.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/wired.test.ts',
@@ -928,7 +945,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the census is COMPLETE. Every case proves the gate does not lie about '
       + 'what it reports; none of them can prove it reports everything, and the blind-spot '
       + 'list the gate prints on its green path is the honest answer to that.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     // Measured 2026-08-22 on the 24-thread workstation: 33.15s with four
@@ -954,7 +971,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'both backend composition roots, and every subprocess path. It also covers '
       + 'only 3 of the 8 workspace packages — see ROOT_TEST_OMISSIONS in ladder.test.ts, '
       + 'which pins the other 5 by equality with the gate that does run each.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:python-suites',
@@ -996,7 +1013,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything that needs a real container: the mounts themselves, the object store, '
       + 'and the platform lifecycle. Those are the bench app under `packages/devbox/bench` '
       + 'and an ephemeral deployed Worker, not this gate.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test packages/test-utils/',
@@ -1008,7 +1025,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'a broken source-slicing helper. Three wiring suites once asserted against '
       + 'whole files instead of the members they named because this was untested.',
     blind: 'the suites that use it.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     // Measured 2026-08-22: 6.43s, four isolated workers. Re-measured 2026-09-05 on the
@@ -1022,7 +1039,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'anything needing a Workers runtime rather than a composition root — every '
       + 'test here mocks the Agent SDK (`tests/helpers/agents-sdk.ts`) and runs under '
       + 'bun, which is why `bun run test:workerd` exists below.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
 
   {
@@ -1040,7 +1057,9 @@ export const LADDER: readonly Gate[] = [
       + 'still cannot reach main.',
     blind: 'whether the bundled decoder BEHAVES as the source over a real feed answer — that '
       + 'is gate:dependency-advisories below, over a real `bun pm scan`, at the ci tier.',
-    inputs: { kind: 'derived' },
+    // Measured by `--audit-closure` 2026-09-15: the gate rebuilds the scanner
+    // source and reads the committed bundle, neither an import edge.
+    inputs: { kind: 'derived', reads: ['scripts/security-scanner.ts', 'scripts/security-scanner.bundle.js'] },
   },
   {
     run: 'bun run gate:dependency-advisories',
@@ -1072,7 +1091,7 @@ export const LADDER: readonly Gate[] = [
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     // Measured 2026-08-23: 40.0s. `behavior.test.ts` alone took 23.36s and
@@ -1089,7 +1108,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'the deployed CLI archive and a real person\'s terminal outside the synthetic PTY. '
       + 'The download smoke and asset-integrity gates own the archive; neither proves terminal '
       + 'rendering on a user\'s emulator.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test packages/pc-agent/',
@@ -1100,7 +1119,7 @@ export const LADDER: readonly Gate[] = [
       + '`node --check`s this package\'s syntax, so the suite is the only thing that '
       + 'reads it.',
     blind: 'the pairing and transport it talks to.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun scripts/tracing-gate.ts',
@@ -1137,7 +1156,7 @@ export const LADDER: readonly Gate[] = [
       + 'cannot see a suite whose code no longer compiles, because bun strips types; '
       + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '
       + 'is how these four suites came to call two deleted APIs.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run test:eval',
@@ -1207,7 +1226,7 @@ export const LADDER: readonly Gate[] = [
       + 'scripts/eval-triage.verdicts.json is right. A verdict is a written argument about a '
       + 'trajectory, so nothing here can check one; what is checked is that a stale verdict '
       + 'and an unverified group both print.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     // The COMMAND deploy.sh runs, spelled identically. Stopping at the
@@ -1251,7 +1270,7 @@ export const LADDER: readonly Gate[] = [
       + 'suites drive planners, decisions, manifests and fixtures, never a real '
       + 'deploy or container. It only guards the instrument, which is what four '
       + 'independent instrument bugs cost us to learn.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts',
@@ -1325,7 +1344,7 @@ export const LADDER: readonly Gate[] = [
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
       + 'three variants of it, so the annotation ENGINE — selection, offsets, save, '
       + 'export — is exercised only as far as one stored anchor painting.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
@@ -1349,7 +1368,7 @@ export const LADDER: readonly Gate[] = [
       + 'The old product name is not grepped here at all: that gate is '
       + 'packages/cf-backend/tests/unit-public-shell.test.ts, over the worker-built '
       + 'documents rather than the rendered page.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts',
@@ -1368,7 +1387,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'a local browser over a locally built bundle. A stale asset served from the '
       + 'edge, a real network stall that never delivers headers, and whether the '
       + 'report reaches a deployed sink are all outside it. Nothing compares pixels.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/react-runtime-identity.test.ts',
@@ -1385,7 +1404,7 @@ export const LADDER: readonly Gate[] = [
       + 'and to every source-reading instrument here.',
     blind: 'the locally built artifact, not the object the edge serves. It cannot see a '
       + 'CDN serving an older bundle, and it says nothing about render correctness.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/nested-container-resolution.test.ts',
@@ -1402,7 +1421,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'module resolution, not runtime. A container cold start is a different '
       + 'premise and needs an image build. It reads the installed tree, so it cannot '
       + 'see what a fresh install on another lockfile resolution would produce.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/swarm-tree-geometry.test.ts',
@@ -1428,7 +1447,7 @@ export const LADDER: readonly Gate[] = [
       + '— the refused run, the named preset, the fan-in composition — is proven to mount '
       + 'by `gate:computed-style` and measured by nothing. Chrome cost keeps it out of '
       + 'the commit tier, so a geometry regression reaches a branch before it is caught.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/chat-scroll.test.ts',
@@ -1453,7 +1472,7 @@ export const LADDER: readonly Gate[] = [
       + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run layergate',
@@ -1530,7 +1549,7 @@ export const LADDER: readonly Gate[] = [
       + 'ran for two months is still only a regex\'s problem. And '
       + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
       + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:policy-drift',
@@ -1567,7 +1586,7 @@ export const LADDER: readonly Gate[] = [
       + '`agent-core-*`), and the runtime COUNT, deliberately: preflight already argues '
       + 'that a ceiling on live scratch gets raised the first time it fires and deleted '
       + 'the second, so free inodes stay its invariant and ownership is this one.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:agents-fields',
@@ -1611,7 +1630,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'whether the fences and the suite are the RIGHT ones to hammer. That is a '
       + 'judgement in the declarations, which is why each fence carries a `why` and the '
       + 'hammer prints its blind spots on the green path.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:mutation-fences',
@@ -2648,6 +2667,46 @@ if (import.meta.main) {
     process.exit(0);
   }
 
+  // THE CLOSURE AUDIT. Every cacheable gate in the tier runs once under
+  // strace, and every tree file it opened that its closure does not hold is
+  // a finding. This is the measurement behind a `reads` declaration, and the
+  // red direction of the cache's soundness: a closure that errs narrow is a
+  // stale green, and this is the one place that can see it.
+  if (process.argv.includes('--audit-closure')) {
+    const flag = process.argv.find((argument) => argument.startsWith('--tier='));
+    const tier = TIERS.find((candidate) => candidate === flag?.slice('--tier='.length)) ?? 'push';
+    const repo = repoAt(root, (run, files) => claims(run, files));
+    const tracked = trackedTestFiles();
+    const gates = gatesFor(tier, deploy).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+    let holes = 0;
+    let audited = 0;
+
+    for (const gate of gates) {
+      const closure = deriveClosure(gate.run, gate.inputs, repo);
+
+      if (closure.kind !== 'derived') {
+        console.log(`skip  ${gate.run}  (${closure.kind}: ${closure.why})`);
+        continue;
+      }
+
+      const audit = auditClosure(runnableArgv(gate.run, tracked), root, closure);
+      audited += 1;
+
+      if (audit.undeclared.length === 0) {
+        console.log(`ok    ${gate.run}  (${String(audit.covered)} closure files opened, ${String(audit.outside)} outside the tree)`);
+        continue;
+      }
+
+      holes += 1;
+      console.error(`HOLE  ${gate.run}  opened ${String(audit.undeclared.length)} file(s) its closure does not hold:`);
+
+      for (const file of audit.undeclared) console.error(`        ${file}`);
+    }
+
+    console.log(`\naudit-closure --tier=${tier}: ${String(audited)} gate(s) audited, ${String(holes)} with undeclared reads`);
+    process.exit(holes === 0 ? 0 : 1);
+  }
+
   if (process.argv.includes('--check-budget')) {
     const budget = readBudget();
 
@@ -2748,7 +2807,7 @@ if (import.meta.main) {
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --audit-closure [--tier=<tier>] | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }

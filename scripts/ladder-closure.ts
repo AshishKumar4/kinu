@@ -179,6 +179,22 @@ function scanMarkers(root: SyntaxNode, edges: readonly string[]): Scan {
   let envComputed = false;
   let envEnumerated = false;
   const env: string[] = [];
+  // `const NAME = 'LITERAL'` at module scope, so `process.env[NAME]` in the
+  // same file is a read by literal. A binding from another file is not
+  // followed: the row declares it.
+  const constants = new Map<string, string>();
+
+  for (const statement of root.children) {
+    const declaration = statement.raw.type === 'ExportNamedDeclaration' ? statement.raw.declaration : statement.raw;
+
+    if (declaration?.type !== 'VariableDeclaration' || declaration.kind !== 'const') continue;
+
+    for (const declarator of declaration.declarations) {
+      const value = declarator.init === null || declarator.init === undefined ? undefined : literalString(declarator.init);
+
+      if (declarator.id.type === 'Identifier' && value !== undefined) constants.set(declarator.id.name, value);
+    }
+  }
 
   walk(root, (node) => {
     const { raw } = node;
@@ -229,7 +245,9 @@ function scanMarkers(root: SyntaxNode, edges: readonly string[]): Scan {
       if ((above?.type === 'AssignmentExpression' && above.left === parent)
         || (above?.type === 'UnaryExpression' && above.operator === 'delete')) return;
 
-      const literal = parent.computed ? literalString(parent.property) : undefined;
+      const literal = parent.computed
+        ? literalString(parent.property) ?? (parent.property.type === 'Identifier' ? constants.get(parent.property.name) : undefined)
+        : undefined;
 
       if (!parent.computed && parent.property.type === 'Identifier') env.push(parent.property.name);
       else if (literal !== undefined) env.push(literal);
@@ -479,7 +497,12 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
 
   const [pathReader] = walked.readsByPath;
 
-  if (pathReader !== undefined && inputs.reads === undefined) {
+  // A path read on a CORPUS gate is bounded by the corpus: every tracked file
+  // is already in the closure, so a `reads` list could add nothing inside the
+  // tree, and what it opens outside the tree is the cache's stated blind spot
+  // (`node_modules` stands behind the lock). A non-corpus gate has no such
+  // bound and must declare.
+  if (pathReader !== undefined && inputs.reads === undefined && !corpus) {
     return {
       kind: 'uncomputable',
       why: `${run}: ${pathReader} reads by path or spawns and the row declares no \`reads\` `
@@ -506,8 +529,9 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   }
 
   if (pathReader !== undefined) {
-    notes.push(`${String(walked.readsByPath.length)} file(s) in the graph read by path or spawn; the row declares `
-      + `reads [${(inputs.reads ?? []).join(', ')}] — checked by --audit-closure, not by the walker`);
+    notes.push(`${String(walked.readsByPath.length)} file(s) in the graph read by path or spawn; `
+      + (corpus ? 'bounded by the corpus inside the tree' : `the row declares reads [${(inputs.reads ?? []).join(', ')}]`)
+      + ' — checked by --audit-closure, not by the walker');
   }
 
   if (computedEnv !== undefined) {
