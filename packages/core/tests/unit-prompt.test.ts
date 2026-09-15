@@ -774,14 +774,13 @@ describe('buildSystemPromptSync', () => {
     expect(containerPreviewsOnly).not.toMatch(/is a Worker slate/);
   });
 
-  test('every runtime is its own machine, on every backend, with mounts named', () => {
-    // The workspace is its own durable filesystem on BOTH backends, so this is
-    // unconditional — no per-backend exception for a cli-local host shell
-    // shared with the device executor, which is the one shape that would make
-    // "separate filesystems" false.
+  test('every runtime is its own machine, with mounts named', () => {
+    // The workspace is its own durable filesystem, so this is unconditional.
     // The mount doctrine rides beside it: a live machine's files also appear
-    // in the agent's own plane at /pc (and /sandbox where a container binds),
-    // while the shell stays over workspace bytes only.
+    // in the agent's own plane at /pc/<name> (and /sandbox where a container
+    // binds), while the shell stays over workspace bytes only.
+    // cli-local is excluded: it offers no device runtime — the machine IS the
+    // workspace, so no device row and no separate-machines paragraph there.
     const { rt } = createTestRuntime();
 
     const executors: PromptExecutorInfo[] = [
@@ -789,13 +788,11 @@ describe('buildSystemPromptSync', () => {
       { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
     ];
 
-    for (const backend of ['cli-local', 'cf'] as const) {
-      const prompt = buildSystemPromptSync(rt, { backend, executors });
-      expect(prompt).toMatch(/separate machines/i);
-      expect(prompt).not.toContain('the same machine and see the same files');
-      expect(prompt).toContain('/pc');
-      expect(prompt).toMatch(/cannot see mount points/);
-    }
+    const prompt = buildSystemPromptSync(rt, { backend: 'cf', executors });
+    expect(prompt).toMatch(/separate machines/i);
+    expect(prompt).not.toContain('the same machine and see the same files');
+    expect(prompt).toContain('/pc');
+    expect(prompt).toMatch(/cannot see mount points/);
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -970,7 +967,7 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
-      backend: 'cli-local',
+      backend: 'cf',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'device', kind: 'device', available: true, configured: true, active: true, status: 'active' },
