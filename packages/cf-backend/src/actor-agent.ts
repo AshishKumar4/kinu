@@ -235,7 +235,7 @@ import {
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, renderToolResult, successfulToolOutcome,
   toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
-  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
+  type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount, type DeviceStatus,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
@@ -342,8 +342,17 @@ interface SettledTurnEvents {
  *  `outputContinuation` above is derived once for both actors to avoid. It is
  *  also what makes the ledger and the roster agree by construction: the terminal
  *  roster's `status` IS this reason, not a parallel reading of the same turn. */
+/** What {@link ActorAgent.readTurnInputs} answers: the owner-side reads a
+ *  turn is assembled from, taken before the turn opens. */
+interface TurnReads {
+  readonly profileInputs: ProfileAuthorityInputs;
+  readonly mcpTools: ToolSet;
+  readonly deviceStatus: DeviceStatus;
+  readonly identity: PromptIdentity;
+}
+
 /** What {@link ActorAgent.assembleTurn} reads: the turn's history, the raw
- *  tool surface for its work mode, and the chat request's body. */
+ *  tool surface for its work mode, the chat request's body, and the reads. */
 interface TurnAssemblyInput {
   /** The durable history the turn runs on. */
   readonly history: readonly ModelMessage[];
@@ -351,6 +360,7 @@ interface TurnAssemblyInput {
   readonly tools: ToolSet;
   /** The chat request's body — the CLI's cwd and the tier ride on it. */
   readonly body: JsonObject;
+  readonly reads: TurnReads;
 }
 
 /**
@@ -6416,6 +6426,7 @@ export abstract class ActorAgent extends Think<Env> {
       const turnMessages = await this.turnInputHistory(ctx);
       this._turnProgram = null;
       ctx.signal?.throwIfAborted();
+      const reads = await this.readTurnInputs(ctx.tools);
       // Per-turn accounting reset + the turn's mission scope, together: what the
       // turn is allowed to spend is part of what the turn is.
       // The continuation flag resets mid-turn signal splice state: a continuation
@@ -6457,7 +6468,7 @@ export abstract class ActorAgent extends Think<Env> {
       });
 
 
-      const assembled = await this.assembleTurn({ history: turnMessages, tools: ctx.tools, body });
+      const assembled = await this.assembleTurn({ history: turnMessages, tools: ctx.tools, body, reads });
       const { system: systemOverride, turnLocal } = assembled;
 
       const cfg: TurnConfig = {
@@ -6588,16 +6599,13 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * One turn's surface, assembled: the profile, the skills and MCP tools on
-   * this surface, the device presence, AGENTS.md, the prompt, the model, the
-   * active tools, the cache plan and the measured compaction trigger.
-   *
-   * Everything here is this backend's composition of the turn; the loop that
-   * runs it is core's, and reads the result in its own vocabulary. Runs after
-   * the turn is open (`orch.beginTurn`, the run row) and before the first
-   * model call.
+   * Everything a turn reads BEFORE it opens: the scaffold and the soul, then
+   * the four owner-side reads. Awaited ahead of `orch.beginTurn`, so a send
+   * that arrives during a cold workspace's bootstrap is routed as it was
+   * before the assembly moved — the turn is not in flight until the reads are
+   * back.
    */
-  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
+  private async readTurnInputs(tools: ToolSet): Promise<TurnReads> {
     // The scaffold and the soul are both files this turn is about to read, and
     // this is the first place with a promise to await them on.
     await this.ensureOwnedScaffold();
@@ -6611,11 +6619,11 @@ export abstract class ActorAgent extends Think<Env> {
     // pays one hop of latency instead of four. Each keeps its own failure arm.
     const [profileInputs, mcpTools, deviceStatus, identity] = await Promise.all([
       this.profileInputs(),
-      // `input.tools` is the actor's own surface, handed over because the remote
+      // `tools` is the actor's own surface, handed over because the remote
       // catalog is admitted against what the step context limit has LEFT after
       // it: the builtins are not negotiable, so they are priced first. A failed
       // read answers no tools and records why; the turn runs on builtins.
-      this.buildUserMcpTools(input.tools),
+      this.buildUserMcpTools(tools),
       // One authoritative hub check so the executor list reflects the CURRENT
       // device state; the transport's TTL-cached snapshot can lag a mid-session
       // `kinu connect` by a turn. `refreshStatus` records its own failure and
@@ -6626,6 +6634,21 @@ export abstract class ActorAgent extends Think<Env> {
       this.promptIdentity(),
     ]);
 
+    return { profileInputs, mcpTools, deviceStatus, identity };
+  }
+
+  /**
+   * One turn's surface, assembled: the profile, the skills and MCP tools on
+   * this surface, the device presence, AGENTS.md, the prompt, the model, the
+   * active tools, the cache plan and the measured compaction trigger.
+   *
+   * Everything here is this backend's composition of the turn; the loop that
+   * runs it is core's, and reads the result in its own vocabulary. Runs after
+   * the turn is open (`orch.beginTurn`, the run row) and before the first
+   * model call.
+   */
+  private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
+    const { profileInputs, mcpTools, deviceStatus, identity } = input.reads;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     this._workspaceInstructionApprovals = null;
