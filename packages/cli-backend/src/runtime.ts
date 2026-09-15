@@ -43,7 +43,7 @@ import {
 import {
   createWorkspace as createWorkspaceFilesystem,
   type WorkspaceOptions,
-  nextWorkspaceGeneration,
+  workspaceGenerationStorage,
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
 import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
@@ -565,7 +565,7 @@ export function createCLIRuntime(
   const workspace = createWorkspaceFilesystem({
     sql: workspaceSql,
     transactions: localTransactions(db),
-    generation: nextWorkspaceGeneration(workspaceSql),
+    generation: workspaceGenerationStorage(workspaceSql),
     runtimes: WORKSPACE_RUNTIMES,
     runtimeFacets: localFacetHost(),
   } satisfies WorkspaceOptions);

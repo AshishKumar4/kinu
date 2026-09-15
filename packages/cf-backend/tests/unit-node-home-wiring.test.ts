@@ -36,7 +36,7 @@ import {
 } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
 import { nimbusSessionFiles } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
   ensureProgrammaticReady,
   rpcDeleteFile,
@@ -666,7 +666,9 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     databases.push(database);
     const sql = hostedSql(database);
     const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
-    const first = createWorkspace({ sql, transactions, generation: 1 });
+    // One counter row, adopted and bumped by each open: the second workspace
+    // is the next generation of the same database, as a reset is.
+    const first = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
     const identity = await provision(headAgentName(node('reset').nodeId));
 
@@ -676,7 +678,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     expect(await child.shell.exec('echo node > /tmp/note')).toMatchObject({ exitCode: 0 });
     expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/user /tmp/main');
     // A reset discards the instance and keeps its database.
-    const second = createWorkspace({ sql, transactions, generation: 2 });
+    const second = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const restored = await second.asAgent(identity);
     expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
     expect((await restored.shell.exec('cat /tmp/note')).stdout).toBe('node\n');
@@ -693,7 +695,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const workspace = createWorkspace({
       sql,
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
-      generation: 1,
+      generation: workspaceGenerationStorage(sql),
     });
 
     const provision = facetHomeProvisioner(

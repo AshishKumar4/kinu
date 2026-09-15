@@ -40,6 +40,7 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PID_GEN_STRIDE } from '@nimbus-sh/core/runtime/process-table.js';
 import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { adoptGeneration, GENERATION_KEY, generation, type GenerationContext } from '@nimbus-sh/fabric/generation.js';
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
@@ -49,7 +50,7 @@ import { provisionWorkspaceRuntimes, workspaceCommandNotFound } from './workspac
 import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, toKinuError } from '../obs/index';
 import { isVfsError } from './errno';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
@@ -354,12 +355,15 @@ export interface WorkspaceOptions {
    *  in the filesystem rests on this being a real transaction. */
   transactions: { readonly storage?: { transactionSync<T>(cb: () => T): T } };
   /**
-   * Process-id generation, which must never repeat for a given database: the
-   * workspace revokes every append capability at or below `generation *
-   * 1_000_000` before serving anything, so a repeating value hands a dead
-   * process live write authority. Use {@link nextWorkspaceGeneration}.
+   * Where the process-id generation is kept, which must never repeat for a
+   * given database: the workspace revokes every append capability at or below
+   * `generation * 1_000_000` before serving anything, so a repeating value
+   * hands a dead process live write authority. Fabric's own allocator
+   * (`adoptGeneration`) reads the persisted counter and bumps it once per
+   * incarnation; this is the storage it does that in. Use
+   * {@link workspaceGenerationStorage} for a host whose counter is a row.
    */
-  generation: number;
+  generation: GenerationContext;
   /**
    * Language runtimes this host can install into the workspace, as the npm
    * packages that hold them (`@nimbus-sh/runtime-bash`,
@@ -405,11 +409,25 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       booting = (async (): Promise<NimbusWorkspace> => {
         try {
           const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
+          // The pid base is THIS generation's floor, adopted before anything
+          // spawns: opening the filesystem revokes every append writer at or
+          // below `generation * PID_GEN_STRIDE`, so a supervisor left at zero
+          // would hand out pids whose write authority the boot has withdrawn.
+          // Fabric's allocator swallows a storage failure and stays on the
+          // previous value; a read of the counter first lets the storage's
+          // own error surface, and zero after the adopt means the bump could
+          // not be persisted — a floor that cannot be trusted is refused.
+          await opts.generation.storage.get(GENERATION_KEY);
+          await adoptGeneration(opts.generation);
+          const generationNow = generation(opts.generation);
+
+          if (generationNow === 0) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
+          processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
           const workspace = await NimbusWorkspace.create({
             sql: opts.sql,
             transactions: opts.transactions,
-            generation: opts.generation,
+            generation: generationNow,
             cwd: WORKSPACE_ROOT,
             env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
             // The embedder's fabric, stated once per isolate. A workspace
@@ -473,14 +491,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   // REAL pid: `ShellCommandIdentity` carries one, append capabilities are keyed
   // by it, and a number invented locally would collide with a live writer. One
   // supervisor for this filesystem, so two agents — or an agent and a host's
-  // background process — can never be handed the same pid.
-  //
-  // The pid base is THIS generation's floor. Opening the filesystem revokes
-  // every append writer at or below `generation * PID_GEN_STRIDE`, so a
-  // supervisor left at zero hands out pids whose write authority the very next
-  // boot has already withdrawn.
+  // background process — can never be handed the same pid. Its pid base is
+  // set by `open`, which every spawn awaits first.
   const processes = new SessionProcessSupervisor();
-  processes.setPidBase(opts.generation * PID_GEN_STRIDE);
   const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
 
   return {
@@ -567,18 +580,28 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
 /**
- * The next never-repeating process generation for this database.
- *
- * Durable because it is a row, not a field — a Durable Object that is evicted
- * and re-created must not restart the count.
+ * The generation counter as a row, for a host whose durable state is its
+ * SQLite: the storage fabric's allocator persists the counter in. One row,
+ * whatever key the allocator names — the table is the counter, so a Durable
+ * Object evicted and re-created and a CLI restarted both continue the count
+ * rather than restart it.
  */
-export function nextWorkspaceGeneration(sql: SqlDatabase): number {
+export function workspaceGenerationStorage(sql: SqlDatabase): GenerationContext {
   sql.exec(`CREATE TABLE IF NOT EXISTS ${GENERATION_TABLE} (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)`);
-  sql.exec(
-    `INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1)
-     ON CONFLICT(id) DO UPDATE SET value = value + 1`,
-  );
-  const [row] = [...sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)];
 
-  return Number(row?.value ?? 1);
+  return {
+    storage: {
+      async get() {
+        const [row] = [...sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)];
+
+        return row === undefined ? undefined : Number(row.value);
+      },
+      async put(_key, value) {
+        sql.exec(
+          `INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET value = excluded.value`,
+          Number(value),
+        );
+      },
+    },
+  };
 }

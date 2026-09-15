@@ -146,6 +146,26 @@ interrupted is re-driven through the slate host on the next wake": a
 its owner and is released; red with the hook answering null alone. The
 URL-on-request path stays and is pinned by workerd `slate-durability`.
 
+## Workspace
+
+W1. The workspace's process generation is allocated by fabric's own
+`adoptGeneration`, over a storage the host supplies; Kinu keeps no allocator.
+Decided 2026-09-15 with Nimbus fabric 0.5. Reversed: `nextWorkspaceGeneration`
+(`core/src/vfs/nimbus-workspace.ts` at `92c769b6b`), a SQL upsert that bumped
+`kinu_workspace_generation` once per `createWorkspace`. The row stays: on both
+backends the storage is `workspaceGenerationStorage(sql)`, one row in that
+same table, so the counter continues rather than restarts and the pid floor
+(`generation * 1_000_000`, below which every append writer is revoked at open)
+never repeats across the switch. The adopt is async, so the supervisor's pid
+base is set inside the first open, which every spawn awaits; a counter read
+that fails surfaces the storage's own error (fabric's adopt would swallow it),
+and a bump that did not persist refuses the open rather than serving pids at
+floor zero. Measured 2026-09-15 by `unit-nimbus-workspace-executor`'s "each
+open of the same database adopts the next generation": two opens over one
+`bun:sqlite` file hand out pids a million apart and leave the row at 2; the
+revocation invariant is pinned by workerd `slate-durability` and the
+workspace-reset case of `unit-node-home-wiring`.
+
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
