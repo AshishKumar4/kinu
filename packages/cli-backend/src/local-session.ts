@@ -910,6 +910,8 @@ export class LocalAgentSession implements BackendHost {
       transport: { deliver: opts.onEvent },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+        // No review surface here: a plan is reviewed in the hosted workspace UI.
+        planTurnRefusal: () => 'Plan review is available in the hosted workspace UI; this local session has no review surface.',
         owedTerminalEffects: (input) => this.owedTerminalEffects(input),
         terminal: () => this.terminal,
         holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },

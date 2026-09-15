@@ -24,14 +24,15 @@ import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from '
 import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost } from '@kinu.run/core';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { AssistantMessagesTranscript } from '../../src/chat-transcript';
+import { OwnedModelServices } from '../../src/owned-model-services';
 import type { ChatTurnInput, ActorTurnLease, PreparedTurn, RunEventRecorder } from '@kinu.run/core';
 import type { ChatWireTransport } from '../../src/chat-transport';
-import { isWorkMode, workModeForTurnMetadata, ExtensionHost, PendingSendStore, type KinuExtension } from '@kinu.run/core';
+import { isWorkMode, workModeForTurnMetadata, ChatSession, ExtensionHost, PendingSendStore, type KinuExtension } from '@kinu.run/core';
 import { createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError } from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
 import type { SlateHost } from '../../src/slates/host';
 import {
-  shadowTrialPlan, claimToolEffect, actorReferenceOf, type ChatSession,
+  shadowTrialPlan, claimToolEffect, actorReferenceOf, 
   type ActorHost, type HostedActor, type SubordinateSeed, type HeadStreamFrame,
 } from '@kinu.run/core';
 import {
@@ -96,14 +97,22 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return this.modelFactory?.() ?? super.turnModel(spec);
   }
   /** Every routed side model (the titler's 'fast', the advisor's, the judge's)
-   *  is a scripted one: the suite's when it scripted the side sources, a
-   *  silent one otherwise. No harness actor holds provider credentials, and a
-   *  terminal effect that reached a real provider would fail on auth rather
-   *  than on what the suite is pinning. Never the TURN model: the driver parks
-   *  a turn at its first model call, and a titling call is not that. */
+   *  the route cannot build is a silent scripted one: no harness actor holds
+   *  provider credentials, and a terminal effect that reached a real provider
+   *  would fail on auth rather than on what the suite is pinning. A route the
+   *  suite DID script — its own resolver on the owned model services — is
+   *  honoured, since that route is what the suite is pinning. Never the TURN
+   *  model: the driver parks a turn at its first model call, and a titling
+   *  call is not that. */
   sideModelFactory?: () => LanguageModel;
   protected override async modelForSource(source: SpendSource) {
     const routed = await super.modelForSource(source);
+    // The suite scripted the route's own resolver: the model it built is the
+    // one the route is pinned on. The production services are a class
+    // instance; a scripted resolver is a plain object the suite assigned.
+    const scriptedRoute = !(this.ownedModelServices instanceof OwnedModelServices);
+
+    if (scriptedRoute) return routed;
 
     return { ...routed, model: this.sideModelFactory?.() ?? SILENT_SIDE_MODEL };
   }
@@ -117,6 +126,21 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** The loop and the transcript, for the turn seam's driver. */
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
+  /** The conversation a stated turn is admitted OVER — what the actor's
+   *  working history holds before the turn's own message is appended, as a
+   *  restored revision holds it on a live workspace. A suite's statement
+   *  stands only where the actor holds NO conversation of its own yet: an
+   *  actor whose working history has been written — by a turn it ran, by an
+   *  authored edit — keeps it, since that history is what such a suite is
+   *  asserting on. */
+  harnessSeedHistory(messages: readonly ModelMessage[]): void {
+    if (this.actorSession.history.length > 0) return;
+    this.actorSession.restoreHistory(messages);
+  }
+  /** An observer on the actor's own extension host — the seam the loop's chat
+   *  runner reports each tool call and result through, in the order the
+   *  tools settled. A suite that watches completion order registers here. */
+  harnessRegisterExtension(extension: KinuExtension): void { this.extensions.register(extension); }
   get harnessTranscript(): AssistantMessagesTranscript { return this.chatTranscript; }
   /** A programmatic turn admitted the way every producer admits one. */
   harnessEnqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> { return this.chatLoop.enqueueTurn(input); }
@@ -477,7 +501,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     extensions.register(this.orch.turnExtension);
 
     const result = await composePrepareStep(
-      { extensions, dynamic: { ledger: this.dynamicLedger, snapshot: () => dynamic(profile, this._preparedTools) } },
+      {
+        extensions,
+        dynamic: { ledger: this.dynamicLedger, snapshot: () => dynamic(profile, this._preparedTools) },
+        // The provider this request is bound for — the destination boundary a
+        // replay from another provider is re-keyed at, read as the loop reads it.
+        destinationProviderId: this.promptModelContext().provider,
+      },
       { stepNumber, messages: [...messages], steps: [] },
     );
 
@@ -495,7 +525,12 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return failure;
   }
+  /** Told each lease the loop hands a preparation: the turn's ids and its
+   *  abort signal, which a suite that stops the turn reads the cause off. */
+  private _leaseObservers: Array<(lease: ActorTurnLease) => void> = [];
+  harnessObserveLease(observe: (lease: ActorTurnLease) => void): void { this._leaseObservers.push(observe); }
   protected override async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+    for (const observe of this._leaseObservers) observe(lease);
     this._prepareFailure = null;
 
     try {
@@ -909,6 +944,26 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
     };
   }
+  /** Script the loop's NEXT programmatic admissions, one answer per call, in
+   *  order — a thrown admission, a refusal, a durable status — the outcomes a
+   *  producer's retry policy is pinned on. Exhausted, the loop's own admission
+   *  answers again. Every admission asked, scripted or not, is recorded. */
+  private _scriptedAdmissions: Array<() => Promise<EnqueueTurnResult>> = [];
+  readonly harnessAdmissionsAsked: ProgrammaticTurn[] = [];
+  harnessScriptAdmissions(answers: Array<() => Promise<EnqueueTurnResult>>): void {
+    this._scriptedAdmissions.push(...answers);
+    const loop = this.chatLoop;
+    const admit = ChatSession.prototype.enqueueTurn.bind(loop);
+    Object.defineProperty(loop, 'enqueueTurn', {
+      configurable: true,
+      value: async (input: ProgrammaticTurn): Promise<EnqueueTurnResult> => {
+        this.harnessAdmissionsAsked.push(input);
+        const scripted = this._scriptedAdmissions.shift();
+
+        return scripted === undefined ? admit(input) : scripted();
+      },
+    });
+  }
   /** The one refusal the loop answers a send with: this process may not
    *  drive. Armed, every admission is refused with it until disarmed. */
   private _driverRefusal: Refusal | null = null;
@@ -1266,6 +1321,11 @@ const parkedTurns = new WeakMap<HarnessOrchestratorAgent, ParkedTurn>();
  *  name; the loop admits a send under the id the client minted. */
 const openedTurns = new WeakMap<HarnessOrchestratorAgent, string>();
 
+/** The model factories this seam installed itself — so a factory a SUITE
+ *  installed is told apart from them, and a run over it is a real turn on the
+ *  suite's model rather than one the seam scripts. */
+const seamFactories = new WeakSet<() => LanguageModel>();
+
 export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
   /** A model that parks on its first call until the answer is scripted, then
    *  answers every later call at once with the same text. */
@@ -1351,7 +1411,9 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     const arrived = Promise.withResolvers<ScriptedTurnOptions>();
     const answer = Promise.withResolvers<ScriptedAnswer>();
     const model = parkingModel(arrived, answer.promise);
-    agent.modelFactory = () => model;
+    const factory = () => model;
+    seamFactories.add(factory);
+    agent.modelFactory = factory;
 
     if (answerId !== undefined) agent.harnessNameNextAnswer(answerId);
     const driving = agent.harnessTakeDrivingMessage(openedTurns.get(agent));
@@ -1449,6 +1511,19 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
   return {
     async run(text, options) {
+      const installed = agent.modelFactory;
+
+      // A suite that installed its own model runs the turn ON that model: the
+      // tool calls it scripts are the turn's, and the answer is whatever it
+      // streams. The seam scripts 'ok' only when nobody supplied a model.
+      if (installed !== undefined && !seamFactories.has(installed)) {
+        const landing = await agent.harnessChatLoop.send(text);
+        await agent.harnessChatLoop.pumpPromise;
+        const last = agent.harnessTranscript.history().at(-1);
+
+        return { status: landing === 'turn' ? 'completed' : 'skipped', message: last?.role === 'assistant' ? last : undefined };
+      }
+
       const parked = await admit(text, undefined, undefined, options?.signal);
       parked.answer.resolve({ messageId: parked.identity.messageId, text: 'ok' });
       const landing = await parked.landed;
@@ -1474,11 +1549,35 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       await agent.harnessChatLoop.pumpPromise;
     },
 
+    async park() {
+      const arrived = Promise.withResolvers<ScriptedTurnOptions>();
+      const answer = Promise.withResolvers<ScriptedAnswer>();
+      const model = parkingModel(arrived, answer.promise);
+      const factory = () => model;
+      seamFactories.add(factory);
+      agent.modelFactory = factory;
+      const request = await arrived.promise;
+      const started = agent.harnessLastTurnStart();
+      const identity: SettledTurn = started ?? { turnId: '', messageId: '' };
+      const landed: Promise<SendLanding> = (agent.harnessChatLoop.pumpPromise ?? Promise.resolve()).then(() => 'turn' as const);
+
+      const parked: ParkedTurn = {
+        request: requestView(request, model, identity, agent.harnessPreparedTools(), agent.harnessAdmittedHistory()),
+        answer, landed, identity,
+      };
+
+      parkedTurns.set(agent, parked);
+
+      return parked.request;
+    },
+
     async resume() {
       const arrived = Promise.withResolvers<ScriptedTurnOptions>();
       const answer = Promise.withResolvers<ScriptedAnswer>();
       const model = parkingModel(arrived, answer.promise);
-      agent.modelFactory = () => model;
+      const factory = () => model;
+      seamFactories.add(factory);
+      agent.modelFactory = factory;
       agent.harnessResumeChatLoop();
       const request = await arrived.promise;
       const started = agent.harnessLastTurnStart();
@@ -1496,7 +1595,14 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
     },
 
     async prepare(input) {
-      const user = [...input.messages].reverse().find((message) => message.role === 'user');
+      const lastUser = input.messages.map((message) => message.role).lastIndexOf('user');
+      const user = lastUser === -1 ? undefined : input.messages[lastUser];
+      // Everything before the driving message is the conversation the turn
+      // is admitted over: the actor's working history, as a restored
+      // revision holds it.
+      const prior = lastUser === -1 ? [...input.messages] : input.messages.slice(0, lastUser);
+
+      if (prior.length > 0) agent.harnessSeedHistory(prior);
       const content = user?.content;
       const text = content === undefined ? '' : v.is(v.string(), content) ? content : content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
       const mode = v.safeParse(v.object({ kinuMode: v.string() }), input.body);
@@ -1530,8 +1636,9 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
       openedTurns.set(agent, turnId);
     },
 
-    openInFlight(turnId) {
+    async openInFlight(turnId) {
       openedTurns.set(agent, turnId);
+      await admit('a live turn', undefined, undefined);
     },
   };
 }

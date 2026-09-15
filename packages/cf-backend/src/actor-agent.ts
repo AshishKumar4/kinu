@@ -57,7 +57,6 @@ import {
 } from "./user/mcp";
 
 import type {
-  ToolCallContext as ThinkToolCallContext,
   ChatRecoveryConfig,
   StreamableResult,
 } from "@cloudflare/think";
@@ -439,10 +438,10 @@ function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
   return recorded;
 }
 
-const PlanApprovalMetadataSchema = v.pipe(v.string(), v.parseJson(), v.object({
+const PlanApprovalMetadataSchema = v.looseObject({
   kinuEvent: v.literal('plan_approved'), planId: v.string(),
   revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
-}));
+});
 
 /** Extract plain text from the last user message in a ModelMessage[]. Used
  *  by skills resolution to look for `/skill-name` invocations and keyword
@@ -886,30 +885,26 @@ export abstract class ActorAgent extends Think<Env> {
   // agent does; a task delegated by its parent keeps the report lane instead.
 
   private _turnTaskPlan: TaskPlanContext | undefined;
-  private approvedTaskPlan(messageId: string | null): TaskPlan | null {
-    const sql = this.boundSql;
+  /** The approved plan the running turn implements, when the turn IS a plan
+   *  approval's handoff: read off the admitted item — its metadata names the
+   *  plan, its idempotency key is the decision's — and honoured only while
+   *  the row still says approved. Null for every other turn. */
+  private approvedTaskPlan(): TaskPlan | null {
+    const item = this._turnItem;
 
-    if (messageId === null || !tableExists(sql, 'cf_think_submissions')) return null;
+    if (item === null || item.kind !== 'programmatic') return null;
+    const parsed = v.safeParse(PlanApprovalMetadataSchema, item.metadata);
 
-    const rows = sql<{ metadata_json: string | null; idempotency_key: string | null }>
-      `SELECT metadata_json,idempotency_key FROM cf_think_submissions
-       WHERE status='running' AND EXISTS
-         (SELECT 1 FROM json_each(messages_json) WHERE json_extract(value,'$.id')=${messageId})`;
+    if (!parsed.success) return null;
+    const input = parsed.output;
+    const prefix = `plan:${input.planId}:${input.revision}:approve:`;
+    const key = item.idempotencyKey ?? '';
 
-    for (const row of rows) {
-      if (row.idempotency_key === null) continue;
-      const parsed = v.safeParse(PlanApprovalMetadataSchema, row.metadata_json);
+    if (!key.startsWith(prefix) || !/^\d+$/.test(key.slice(prefix.length))) return null;
+    const plan = this.planReviews.get(input.planId, input.revision);
 
-      if (!parsed.success) continue;
-      const input = parsed.output;
-      const prefix = `plan:${input.planId}:${input.revision}:approve:`;
-
-      if (!row.idempotency_key.startsWith(prefix) || !/^\d+$/.test(row.idempotency_key.slice(prefix.length))) continue;
-      const plan = this.planReviews.get(input.planId, input.revision);
-
-      if (plan?.status === 'approved' && plan.sessionId === 'default') {
-        return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
-      }
+    if (plan?.status === 'approved' && plan.sessionId === 'default') {
+      return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
     }
 
     return null;
@@ -1465,16 +1460,6 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
-    // The orchestrator's per-turn extension: the turn steering's observation
-    // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
-    // through closures because `orch` is built lazily and this runs in the
-    // constructor.
-    this.extensions.register({
-      name: 'kinu.inbox',
-      onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
-      onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
-      prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
-    });
   }
   /** Think installs protocol dispatch before the actor onStart callback. */
   protected installClientMessageGate(): void {
@@ -2476,6 +2461,8 @@ export abstract class ActorAgent extends Think<Env> {
           terminal: () => this.terminal,
           holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
           driverGate: () => this.driverGate(),
+          // The workspace UI IS the review surface: a plan turn is admitted.
+          planTurnRefusal: () => null,
           modelWindow: () => ({
             contextWindow: this.sessionContextWindow(),
             modelOutputLimit: this.modelCatalog.modelOutputLimit(),
@@ -3926,8 +3913,12 @@ export abstract class ActorAgent extends Think<Env> {
     return deps;
   }
 
-  /** Convenience: current runId for event emission. One run per turn. */
-  protected _currentRunId = '';
+  /** The run the loop holds open right now, for event emission — one run per
+   *  turn, minted by the loop; empty between turns and before the loop exists,
+   *  so a between-turn emit files under the workspace aggregate. */
+  protected get _currentRunId(): string {
+    return this._chatLoop?.currentRunId ?? '';
+  }
 
   // ── Skills (turn-scoped) ───────────────────────────────────────
   /** Immutable role/tier/tool profile resolved once for the active turn. */
@@ -4173,7 +4164,12 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
-    return this._turnCheckpoint;
+    // The turn a device command belongs to is the loop's live turn: the id a
+    // Stop sweep names, and the key the daemon's pre-mutation checkpoint is
+    // filed under. A declared checkpoint stands in where no loop runs.
+    const turnId = this._chatLoop?.currentTurnId ?? this._turnCheckpoint?.turnId;
+
+    return turnId === undefined || turnId === null ? null : { turnId, sessionId: 'default' };
   }
 
   // ── Bound SQL executor ────────────────────────────────────────────────
@@ -5603,15 +5599,18 @@ export abstract class ActorAgent extends Think<Env> {
 
     type Row = { id: string; role: string; content: string; created_at: string };
 
+    // `created_at` is second-grained, and a turn writes its rows inside one
+    // second: the rowid is the order they were written in, and the only
+    // order two rows of one second have.
     const rows = this.sql<Row>`
       SELECT id, role, content, created_at
       FROM (
-        SELECT id, role, content, created_at
+        SELECT id, role, content, created_at, rowid AS written
         FROM assistant_messages
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT ${INHERITED_CONTEXT_CAP}
       ) sub
-      ORDER BY created_at ASC`;
+      ORDER BY created_at ASC, written ASC`;
 
     // The SAME predicate on the total: a count over every actor's transcript
     // beside a page from one actor's would report a fork inheriting context it
@@ -5730,7 +5729,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  on default-configured agents, which leaves model-family guidance
    *  inert on the primary hosted path without it — the same raw-spec class
    *  of bug effectiveModelSpec() fixes for the compaction threshold. */
-  private promptModelContext(): PromptModelContext {
+  protected promptModelContext(): PromptModelContext {
     const spec = this.effectiveModelSpec();
 
     if (!spec) return {};
@@ -5856,7 +5855,6 @@ export abstract class ActorAgent extends Think<Env> {
     // at `beginTurn`, and the recorded turn carries it so a recovering host's
     // own engine cannot re-judge a turn it did not run.
     this._turnEvolutionEnabled = this.turnRecordsEvolution();
-    this._turnOriginContext = Object.freeze(structuredClone([...this.actorSession.history]));
 
     // A real user message is the verdict on the previous turn — dispatch the
     // detached outcome review. Programmatic turns (reactor / job wake) are not
@@ -5881,6 +5879,10 @@ export abstract class ActorAgent extends Think<Env> {
     if (item.priorOutput !== undefined) this.actorSession.appendPriorOutput(lease, item.priorOutput);
 
     const history = this.actorSession.history;
+    // The conversation this turn was opened over, its own message included —
+    // what a hire with context:'inherit' is born from, frozen here so a
+    // background re-drive carries the conversation the caller actually had.
+    this._turnOriginContext = Object.freeze(structuredClone([...history]));
     const assembled = await this.assembleTurn({ history, tools, body, reads });
     this._turnDurableLength = assembled.rawMessages.length;
     // The profile the turn runs under, bound exactly once before execution —
@@ -5929,7 +5931,9 @@ export abstract class ActorAgent extends Think<Env> {
       execution: {
         loopVersion: await runtime.identity.scaffold.version(),
         chat: liveTurn,
-        extensions: this._compactionExtension === null ? [] : [this._compactionExtension],
+        // This actor's registered extensions, every one: the turn composes its
+        // own host over them and adds the orchestrator's inbox extension itself.
+        extensions: this.extensions.list(),
         dynamic: (profile, tools) => this.dynamicContextSnapshot(profile, tools, assembled.memoryTail),
         scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
       },
@@ -6253,7 +6257,7 @@ export abstract class ActorAgent extends Think<Env> {
       providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
     );
 
-    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
+    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan() });
     this._turnTaskPlan = taskPlan;
     const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
 
@@ -6410,16 +6414,6 @@ export abstract class ActorAgent extends Think<Env> {
     const parsed = v.safeParse(JsonObjectSchema, metadata);
 
     return parsed.success ? parsed.output : undefined;
-  }
-
-  async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
-    // Extension observation before the tool's execute runs (returning void =
-    // allow with the original input — the seam observes, it does not gate).
-    await this.extensions.emitToolCall({
-      toolName: ctx.toolName,
-      toolCallId: ctx.toolCallId,
-      args: jsonObject(ctx.input),
-    });
   }
 
   /** The shared background wrap (core jobs/background-wrap): shallow clone, 30s

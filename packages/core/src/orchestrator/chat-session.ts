@@ -279,6 +279,10 @@ export interface ChatTurnInput {
   readonly text: string;
   readonly files?: ReadonlyArray<PromptFile>;
   readonly metadata?: ProgrammaticTurn['metadata'];
+  /** The producer's name for the fact a programmatic turn announces, when it
+   *  named one: what a backend reads to know WHICH decision this turn is the
+   *  handoff of. Absent on a user turn. */
+  readonly idempotencyKey?: string;
   /** What the turn had already produced when the last process died — the
    *  assistant's own prior output, placed after the input on the working
    *  history so the model continues rather than starts over. Absent on a
@@ -352,6 +356,11 @@ export interface ChatSessionPorts {
   driverGate(): Refusal | null;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
+  /** Why a programmatic PLAN turn cannot be admitted here, or null when it
+   *  can: a plan turn ends in a review the operator decides on, and a backend
+   *  with no review surface refuses the turn at admission rather than run a
+   *  plan nobody can approve. */
+  planTurnRefusal(): string | null;
 }
 
 export interface ChatSessionOptions {
@@ -530,9 +539,9 @@ export class ChatSession {
     }
 
     if (workModeForTurnMetadata(input.metadata) === 'plan') {
-      return Promise.reject(new Error(
-        'Plan review is available in the hosted workspace UI; this local session has no review surface.',
-      ));
+      const refusal = this.ports.planTurnRefusal();
+
+      if (refusal !== null) return Promise.reject(new Error(refusal));
     }
 
     // A job settling during shutdown must not start a turn the ending session
@@ -869,6 +878,8 @@ export class ChatSession {
           diagnostics.event('genesis.yielded_to_message', {
             signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
           });
+          // Durable beside the event: the ledger a reader opens after the fact.
+          this.actorSession.orchestrator.logActivity('genesis.yielded_to_message');
           item.settle(null, true);
           continue;
         }
