@@ -459,14 +459,14 @@ export function buildProgram(): Command {
     .command('connect')
     .helpGroup(THIS_COMPUTER)
     .description('Link this computer as the desktop execution daemon')
-    .option('--label <name>', 'Name for this device (default: user@hostname); skips the name prompt')
+    .option('--label <name>', 'Name for this device (default: hostname); skips the name prompt')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 
   program
     .command('desktop [action]')
     .helpGroup(THIS_COMPUTER)
     .description('Connect or inspect the local desktop execution daemon')
-    .option('--label <name>', 'Name for this device (default: user@hostname); skips the name prompt')
+    .option('--label <name>', 'Name for this device (default: hostname); skips the name prompt')
     .action(wrapAction(desktopCommand));
 
   program
