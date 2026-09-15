@@ -50,9 +50,8 @@ export function DeleteAccountCard({ email }: { email: string }) {
   };
 
   return (
-    <Card title="Delete this account" icon={WarningIcon}
-      description="Every workspace, connection, device link and credential goes. The next time you sign in, this account starts from the beginning.">
-      <Field inline label="Start over" hint="Deleting asks for your email first.">
+    <Card title="Delete this account" icon={WarningIcon}>
+      <Field inline label="Start over">
         <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Delete account…</Button>
       </Field>
       {open && (
@@ -67,11 +66,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
             </>
           }
         >
-          <p className="p-row-text p-text-3">
-            This deletes <span className="font-medium p-text">{email}</span> and everything it owns:
-            workspaces, credentials, devices, MCP servers and the agents on them. It cannot be undone.
-          </p>
-          <Field label="Type your email to confirm" hint={email}>
+          <Field label="Type your email to confirm">
             <input
               autoFocus
               autoComplete="off"
