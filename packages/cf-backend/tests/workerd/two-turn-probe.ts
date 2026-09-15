@@ -84,7 +84,6 @@ import type {
   DriveOnceResult,
   ExerciseResult,
   HttpCall,
-  InputReceipt,
   ParityCompleted,
   ParityFrame,
   ParityPrepared,
@@ -104,9 +103,16 @@ import {
   ParityPreparedSchema,
   ParityRowsSchema,
   PreparedConversationSchema,
+  WakeDriveResultSchema,
+  WakeRowsSchema,
+  WAKE_MARKER,
+  type WakeDriveResult,
+  type WakeHoldPlacement,
+  type WakeRows,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
-import { ownerCaller } from '@kinu.run/core';
+import { ownerCaller, type WorkMode } from '@kinu.run/core';
+import type { ToolSet } from 'ai';
 
 // Re-exported under their production names so the auxiliary worker's
 // durableObjects bind the classes themselves — the same mechanism
@@ -114,11 +120,11 @@ import { ownerCaller } from '@kinu.run/core';
 // the class measures its own fixture, not the shipped surface.
 export { UserDO } from '../../src/user/user-do';
 
-/** The production orchestrator, sealed with its own surface plus the one
- *  fixture read, bound under the production name so the same service-binding
+/** The production orchestrator, sealed with its own surface plus the fixture
+ *  reads, bound under the production name so the same service-binding
  *  wiring runs the actual production lifecycle. It adds NO production method
  *  and no state: the constructor only retains the given DurableObjectState so
- *  `inputReceipts` can observe the actor's durable input ledger — the rows the
+ *  `pendingSteers` can observe the actor's durable send ledger — the rows the
  *  real socket path writes — as legitimate external storage, never reaching a
  *  protected member or a made-up setter. */
 export class ObservedOrchestrator extends ProductionOrchestrator {
@@ -127,30 +133,84 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   constructor(ctx: AgentContext, env: ProbeEnv) {
     super(ctx, env);
     this.actorState = ctx;
-    Reflect.deleteProperty(this, 'inputReceipts');
     Reflect.deleteProperty(this, 'pendingSteers');
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
-    Reflect.deleteProperty(this, 'submissionRows');
     Reflect.deleteProperty(this, 'inboxState');
     Reflect.deleteProperty(this, 'seedStaleDrainEvent');
     Reflect.deleteProperty(this, 'runEventWake');
     Reflect.deleteProperty(this, 'parityRows');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'submissionRows', 'inboxState', 'seedStaleDrainEvent', 'runEventWake', 'parityRows']);
+    Reflect.deleteProperty(this, 'wakeRows');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows']);
   }
 
-  /** The request-owned input rows the real chat intake persisted, exactly as
-   *  stored — the admission ledger a reset must hand to the next activation. */
-  async inputReceipts(): Promise<InputReceipt[]> {
-    return this.actorState.storage.sql
-      .exec('SELECT actor_id, request_id, message_ids, settled FROM actor_turn_inputs ORDER BY actor_id, request_id')
-      .toArray()
-      .map((row) => ({
-        actorId: String(row.actor_id),
-        requestId: String(row.request_id),
-        messageIds: v.parse(v.array(v.string()), JSON.parse(String(row.message_ids))),
-        settled: row.settled === 1,
-      }));
+  /** The wake proof's hold on the SETTLE WINDOW: a turn-end extension is run
+   *  by the inline `turn_end_extensions` effect, between the answer's commit
+   *  and the pump's next item, so a hook that parks there holds the settle
+   *  open. Parks over `/wake/wait` while a settle-placed hold is armed. */
+  private _settleHoldInstalled = false;
+  private installSettleHold(): void {
+    if (this._settleHoldInstalled) return;
+    this._settleHoldInstalled = true;
+    this.extensions.register({
+      name: 'probe.settle-hold',
+      onTurnEnd: async () => {
+        await fetch('http://probe-control.invalid/wake/wait');
+      },
+    });
+  }
+
+  /** The `run` tool, for the wake proof: the command sleeps past the detach
+   *  window and prints the marker — no container, the same wrap. Only the
+   *  execute is the probe's; the schema, the wrap and the runner are the
+   *  product's, which is what the detach and the settle are proven on. */
+  protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
+    this.installSettleHold();
+    const tools = super.getRawToolsForWorkMode(mode, claimScope);
+    const run = tools.run;
+
+    if (run === undefined) return tools;
+
+    return {
+      ...tools,
+      run: {
+        ...run,
+        execute: async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, WAKE_RUN_SLEEP_MS));
+
+          return `${WAKE_MARKER}\n`;
+        },
+      },
+    };
+  }
+
+  /** The durable rows the wake proof reads: the job, the runs, the answers. */
+  async wakeRows(): Promise<WakeRows> {
+    const sql = this.actorState.storage.sql;
+
+    return v.parse(WakeRowsSchema, {
+      jobs: sql.exec('SELECT id, kind, status, result, settled_at FROM background_jobs ORDER BY created_at').toArray()
+        .map((row) => ({
+          id: String(row.id), kind: String(row.kind), status: String(row.status),
+          result: row.result === null ? null : String(row.result), settledAt: row.settled_at === null ? null : Number(row.settled_at),
+        })),
+      runs: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid").toArray()
+        .reduce<Array<{ runId: string; userMessage: string; reason: string | null }>>((runs, row) => {
+          const payload = v.parse(v.looseObject({ userMessage: v.optional(v.string()), reason: v.optional(v.string()) }), JSON.parse(String(row.payload)));
+
+          if (String(row.type) === 'run_start') runs.push({ runId: String(row.run_id), userMessage: payload.userMessage ?? '', reason: null });
+          else {
+            const run = runs.find((candidate) => candidate.runId === String(row.run_id));
+
+            if (run !== undefined) run.reason = payload.reason ?? null;
+          }
+
+          return runs;
+        }, []),
+      assistantTexts: sql.exec("SELECT content FROM assistant_messages WHERE role = 'assistant' ORDER BY rowid").toArray()
+        .map((row) => v.parse(v.object({ parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })) }), JSON.parse(String(row.content))).parts
+          .flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('')),
+    });
   }
 
   /** The durable reservations a mid-turn send leaves: each accepted message's
@@ -198,22 +258,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
       }));
   }
 
-
-  /** The durable submission rows a rerun leaves: whether the resumed turn was
-   *  admitted (`accepted`), and which status it reached — the row that says the
-   *  first prompt's turn ran its model call or never opened one. */
-  async submissionRows(): Promise<Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>> {
-    return this.actorState.storage.sql
-      .exec('SELECT submission_id, idempotency_key, status, messages_applied_at, completed_at FROM cf_think_submissions ORDER BY created_at')
-      .toArray()
-      .map((row) => ({
-        submissionId: String(row.submission_id),
-        idempotencyKey: row.idempotency_key === null ? null : String(row.idempotency_key),
-        status: String(row.status),
-        appliedAt: row.messages_applied_at === null ? null : Number(row.messages_applied_at),
-        completedAt: row.completed_at === null ? null : Number(row.completed_at),
-      }));
-  }
 
   /** Whether the inbox reads a turn in flight — the public `busy` getter the
    *  busy route itself consults, so a probe sees the admission the same way
@@ -440,7 +484,11 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
-  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'submissionRows' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows'>;
+  & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
+
+/** How long the wake proof's command sleeps: past the interactive detach
+ *  window (30 s), so the call detaches and the job settles out of turn. */
+const WAKE_RUN_SLEEP_MS = 40_000;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
@@ -652,6 +700,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
           }),
         factsCompressed: recording.emitted
           .filter((e) => e.event === 'memory.facts_compressed').length,
+        catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
+        catalogHits: (await this.probeLog()).catalogHits,
       });
     } finally {
       restore();
@@ -663,12 +713,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
    *  routes there, so this fetch is the established "pull the pool's log over
    *  the existing RPC" pattern — no new Worker, no cross-worker binding. */
   async httpCalls(): Promise<HttpCall[]> {
+    return (await this.probeLog()).calls;
+  }
+
+  /** The probe's outbound log: every model call, and how many times the
+   *  worker fetched the provider catalog. */
+  async probeLog(): Promise<{ calls: HttpCall[]; catalogHits: number }> {
     const response = await fetch('http://probe-control.invalid/log');
 
-    // SAFETY: the `/log` branch constructs its answer as `{ calls: [...log] }`,
-    // so this object shape is owner-guaranteed by the handler in this tree;
-    // v.parse against the shared array schema names any drift.
-    return v.parse(v.array(HttpCallSchema), (await response.json() as { calls: unknown }).calls);
+    // Parsed at the boundary: the `/log` branch constructs its answer as
+    // `{ calls, catalogHits }`, and the schema names any drift.
+    return v.parse(v.object({ calls: v.array(HttpCallSchema), catalogHits: v.number() }), await response.json());
   }
 
   /** Clear the HTTP log before a drive, so each test's wire proof is its own. */
@@ -809,6 +864,116 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     }
   }
 
+  /**
+   * THE BACKGROUND WAKE, on the loop, with the settle window held.
+   *
+   * The owner asks for a command that sleeps past the detach window. The call
+   * detaches at 30 s and the turn goes on to its reply step. `where` says what
+   * is held while the job settles at 40 s: the reply step itself (the model
+   * call carrying the detach handle parks in the fake — the live incident's
+   * window, the turn still RUNNING when the job settles), or the settle (the
+   * probe's turn-end hook parks after the answer's commit). Either way the
+   * wake asks the loop for a turn while the interactive turn still owns it.
+   * The hold is released only after the job row says settled, and the drive
+   * then waits for the woken turn to reach its reply. On Think's queue this
+   * is the admission that parked forever; on the loop 'queued' means the pump
+   * runs it next.
+   */
+  async backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult> {
+    const workspace = `wake-workspace-${where}`;
+    const owner = `wake-owner-${where}`;
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Wake Probe');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-wake');
+    await target.setSoul('# Wake Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where }) });
+
+    let socket: WebSocket | null = null;
+
+    try {
+      const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+        headers: { Upgrade: 'websocket' },
+      }));
+
+      socket = response.webSocket;
+
+      if (response.status !== 101 || socket === null) throw new Error('wake probe did not receive a real WebSocket');
+      socket.accept();
+      socket.send(JSON.stringify({
+        type: 'cf_agent_use_chat_request', id: 'wake-ask',
+        init: { method: 'POST', body: JSON.stringify({
+          messages: [{ id: 'input-wake-ask', role: 'user', parts: [{ type: 'text', text: 'WAKE-RUN' }] }],
+          trigger: 'submit-message',
+        }) },
+      }));
+
+      // The job settles on its own clock; the title stays held until it has.
+      const began = Date.now();
+      let settledAt: number | null = null;
+
+      for (;;) {
+        const rows = await target.wakeRows();
+        const job = rows.jobs.find((candidate) => candidate.status !== 'running');
+
+        if (job?.settledAt !== null && job?.settledAt !== undefined) {
+          settledAt = job.settledAt;
+          break;
+        }
+
+        if (Date.now() - began > WAKE_RUN_SLEEP_MS + 30_000) {
+          const calls = await this.httpCalls();
+
+          throw new Error(`wake probe: the detached job never settled — rows ${JSON.stringify(rows)}; calls ${JSON.stringify(calls.map((call) => ({ model: call.model, users: call.users, toolCalls: call.toolCalls, toolResults: call.toolResults })))}`);
+        }
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+
+      // The window WAS held when the job settled: the held party arrived at
+      // the hold before now, and is released only here.
+      await fetch('http://probe-control.invalid/wake/arrived');
+      const releasedAt = Date.now();
+      await fetch('http://probe-control.invalid/wake/release', { method: 'POST' });
+
+      // The woken turn: a second run, started for the runner's own message,
+      // closed with a reply.
+      for (;;) {
+        const rows = await target.wakeRows();
+        const woken = rows.runs.filter((run) => run.userMessage.includes('Background run job'));
+
+        if (woken.length > 0 && woken.every((run) => run.reason !== null)) {
+          const calls = await this.httpCalls();
+
+          return v.parse(WakeDriveResultSchema, {
+            where, rows, releasedAt, settledAt,
+            calls: calls.filter((call) => call.model === 'probe-wake')
+              .map((call) => ({ model: call.model, users: call.users, toolResults: call.toolResults })),
+          });
+        }
+
+        if (Date.now() - releasedAt > 45_000) {
+          const calls = await this.httpCalls();
+
+          throw new Error(`wake probe: the woken turn never closed — rows ${JSON.stringify(rows)}; calls ${JSON.stringify(calls.map((call) => ({ model: call.model, users: call.users.map((line) => line.slice(0, 120)), toolCalls: call.toolCalls, toolResults: call.toolResults })))}`);
+        }
+
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+    } finally {
+      await fetch('http://probe-control.invalid/wake/release', { method: 'POST' });
+      socket?.close(1000, 'wake probe complete');
+    }
+  }
+
   /** The shared workspace+owner claim both queue modes open with: a real
    *  UserDO registration, the capability token, the compat credential, and the
    *  queue model pinned so the fake can hold one turn's call. */
@@ -940,19 +1105,18 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
     // Both admissions are durable before the reset: B's and C's mid-turn sends
     // each wrote a pending_steers row bound to the turn they will land in.
-    const receipts = await target.inputReceipts();
     const steers = await target.pendingSteers();
     const steerFiles = await target.pendingSteerFileRows();
 
-    return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, receipts, steers, steerFiles });
+    return v.parse(PreparedConversationSchema, { workspace, owner, bFrame: bWire, cFrame: cWire, steers, steerFiles });
   }
 
   /** The reset half: a fresh socket to the SAME object replays B's and C's
    *  exact frames. Each replay is a re-delivery of a reservation the object
    *  already holds — the durable pending_steers row, not the socket, binds it
-   *  to the turn. Returns the post-reset ledger: input receipts AND the
-   *  pending-steer reservations. */
-  async replayQueuedConversation(prepared: PreparedConversation): Promise<{ receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }> {
+   *  to the turn. Returns the post-reset ledger: the pending-steer
+   *  reservations and their file rows. */
+  async replayQueuedConversation(prepared: PreparedConversation): Promise<{ steers: PendingSteer[]; steerFiles: PendingSteerFile[] }> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
 
     const response = await target.fetch(new Request(
@@ -972,14 +1136,14 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       socket.close(1000, 'replayed');
     }
 
-    return { receipts: await target.inputReceipts(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
+    return { steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
   }
 
   /** The join: release the held model call and wait on the queued turn's own
-   *  completion evidence, then return the wire log and all three durable
-   *  ledgers — input receipts, the pending-steer reservations, and the file
-   *  rows any attachment left beside them. */
-  async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; receipts: InputReceipt[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[] }> {
+   *  completion evidence, then return the wire log, the two durable ledgers —
+   *  the pending-steer reservations and the file rows any attachment left
+   *  beside them — and the transcript the drain wrote the landed sends into. */
+  async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: SocketHistory }> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
 
     const recording = createRecordingLogger();
@@ -990,7 +1154,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       await awaitFactsCompressed(recording, 2); // B's recovered turn + C's own turn
       await awaitQuiet(recording);
 
-      return { http: await this.httpCalls(), receipts: await target.inputReceipts(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
+      return {
+        http: await this.httpCalls(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows(),
+        transcript: await this.socketHistory(target, prepared.workspace),
+      };
     } finally {
       restore();
     }
@@ -1229,7 +1396,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     return getAgentByName<ProbeEnv, ObservedOrchestrator>(
       // SAFETY: the durableObjects binding declares ObservedOrchestrator under
       // the OrchestratorAgent name (the re-export at the top of this file), and
-      // that class extends ProductionOrchestrator and adds inputReceipts, so
+      // that class extends ProductionOrchestrator and adds pendingSteers, so
       // every stub the namespace returns carries the member the production
       // declaration does not name.
       this.env.OrchestratorAgent as DurableObjectNamespace<ObservedOrchestrator>,
@@ -1239,11 +1406,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
 
 
-  async inputReceiptsFor(workspace: string): Promise<InputReceipt[]> {
-    const target: QueueTarget = await this.queueTarget(workspace);
-
-    return await target.inputReceipts();
-  }
 
   /** The durable mid-turn reservations a named workspace's actor holds — the
    *  send-path ledger the warm arm reads to prove each socket input bound its
@@ -1289,7 +1451,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** A fresh workspace's first chat: the claim, the socket's real
    *  first-run bench never saw. Returns the model-call count and the turn's
    *  terminal evidence so the test can say where the drive stopped. */
-  async firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; factsCompressed: number }> {
+  async firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: SocketHistory; factsCompressed: number }> {
     const workspace = 'first-chat-workspace';
     const owner = 'first-chat-owner';
     const target: QueueTarget = await this.queueTarget(workspace);
@@ -1334,7 +1496,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       return {
         http: await this.httpCalls(),
         steers: await target.pendingSteers(),
-        receipts: await target.inputReceipts(),
+        transcript: await this.socketHistory(target, workspace),
         factsCompressed: recording.emitted.filter((e) => e.event === 'memory.facts_compressed').length,
       };
     } finally {
@@ -1346,7 +1508,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** The first-run regression: a workspace born with a mission (genesis turn
    *  running) receives its owner's first chat — which lands as a mid-turn
    *  steer — and the resume after genesis settles must reach the model. */
-  async firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; receipts: InputReceipt[]; inbox: { busy: boolean }; landed: string | null; transcript: SocketHistory; submissions: Array<{ submissionId: string; status: string; idempotencyKey: string | null; appliedAt: number | null; completedAt: number | null }>; failures: Array<{ event: string; code: string; cause: string }> }> {
+  async firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: SocketHistory; failures: Array<{ event: string; code: string; cause: string }> }> {
     const workspace = 'first-gen-workspace';
     const owner = 'first-gen-owner';
     const target: QueueTarget = await this.queueTarget(workspace);
@@ -1394,8 +1556,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     return {
       http: await this.httpCalls(),
       steers: await target.pendingSteers(),
-      receipts: await target.inputReceipts(),
-      submissions: await target.submissionRows(),
       inbox: await target.inboxState(),
       landed,
       transcript: await this.socketHistory(target, workspace),
@@ -1505,6 +1665,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
           }),
         factsCompressed: recording.emitted
           .filter((e) => e.event === 'memory.facts_compressed').length,
+        catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
+        catalogHits: (await this.probeLog()).catalogHits,
       });
     } finally {
       restore();

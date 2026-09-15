@@ -17,7 +17,7 @@ import { NodeTranscript } from "@/components/NodeTranscript";
 import {
   findForkNode, terminalForkNode, treeStats, type ExplorerSelection,
 } from "@kinu.run/core";
-import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
+import { EmptyState, formatScore } from "@/components/surfaces/shared";
 import {
   runStateLine, FrontierPanel, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
 } from "@/components/surfaces/ExplorationSurface";
@@ -102,12 +102,11 @@ export default function MCTSExplorer() {
             </div>
           ) : requestedRunMissing ? (
             <div className="h-full flex items-center justify-center">
-              <EmptyState icon={<GitForkIcon size={28} />} title="Fork not found"
-                hint="This run is not in the workspace's fork history." />
+              <EmptyState icon={<GitForkIcon size={28} />} title="Fork not found" />
             </div>
           ) : (
             <div className="h-full flex items-center justify-center">
-              <EmptyState icon={<GitForkIcon size={28} />} title="No forks yet" hint={EMPTY_HINTS.forks} />
+              <EmptyState icon={<GitForkIcon size={28} />} title="No swarms" />
             </div>
           )}
         </div>
@@ -209,8 +208,7 @@ function ExplorerBody({
               </div>
             ) : (
               <div className="h-full flex items-center justify-center">
-                <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this search"
-                  hint="Neither store holds a row under this run's id." />
+                <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded" />
               </div>
             )
           ) : dims.w > 0 && dims.h > 0 ? (

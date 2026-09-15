@@ -29,7 +29,7 @@ import {
   type WebSearchProvider, type CodemodeProvider, type WorkMode,
   currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
   selectInjectableCraftedTools,
-  withCraftedToolDeclarations,
+  withCraftedToolDeclarations, executeToolsInputSchema,
   withCodemodeProgram, craftedFailureFunctions,
   codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing,
 } from "@kinu.run/core";
@@ -207,7 +207,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
   
-        return createCodeTool({
+        const built = createCodeTool({
           // The docstring is core's (registry.renderExecuteToolsDescription):
           // `{{types}}` is the token createCodeTool substitutes the assembled
           // namespace declarations into.
@@ -239,6 +239,12 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
             },
           },
         });
+
+        // The field label is core's, not codemode's: createCodeTool ships
+        // `code` as "JavaScript async arrow function to execute", while the
+        // docstring and the normalizer both take a plain script body. Every
+        // other property the tool carries passes through untouched.
+        return { ...built, inputSchema: executeToolsInputSchema() };
       };
 
       const unrestricted = build('build');

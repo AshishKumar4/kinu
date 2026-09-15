@@ -66,7 +66,8 @@ describe('AssistantMessagesTranscript', () => {
       parts: [{ type: 'step-start' }, { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' }, { type: 'text', text: 'done' }],
     };
 
-    store.answersFrom((id) => id === 'a1' ? streamed : null);
+    const source = (id: string) => id === 'a1' ? streamed : null;
+    store.answersFrom({ answer: source, streamed: source });
     store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'done' });
     store.appendAssistant({ id: 'a2', parentId: 'a1', text: 'plain' });
 

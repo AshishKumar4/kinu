@@ -101,6 +101,14 @@ declare global {
     GITHUB_OAUTH_CLIENT_ID?: string;
     GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITHUB_OAUTH_SCOPES?: string;
+    /** Registered OAuth apps for `oauth-app` MCP presets — the vendored
+     *  identity the server's sign-in runs under (GitHub's remote MCP, Google
+     *  Workspace MCP). Wrangler secrets on the deployment; either absent ⇒
+     *  that preset falls back to a token, or is not offered. */
+    MCP_GITHUB_CLIENT_ID?: string;
+    MCP_GITHUB_CLIENT_SECRET?: string;
+    MCP_GOOGLE_CLIENT_ID?: string;
+    MCP_GOOGLE_CLIENT_SECRET?: string;
     /** The Worker's root secret for the user plane. A Wrangler secret, never a
      *  var. It seals the credential store (`user_credentials.value`) and, under
      *  a separate label, derives the owner capability every privileged UserDO

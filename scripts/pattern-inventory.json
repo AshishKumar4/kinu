@@ -36,6 +36,13 @@
       "decision": "traversal"
     },
     {
+      "file": "packages/cf-backend/src/components/surfaces/shared.tsx",
+      "kind": "hand-parser",
+      "owner": "split",
+      "sourceSha256": "bc2ecdf7d45222485edc8dd632734f1b6deda7235281b7315c7042cb2ecb6de6",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/cf-backend/src/email/inbound.ts",
       "kind": "hand-parser",
       "owner": "stripQuotedReply",
@@ -76,6 +83,13 @@
       "owner": "parseMemoryContent",
       "sourceSha256": "e98aaef960d0f2cd869c7abeb4b4816e74944bea11b46f9a9134a19459de9258",
       "decision": "framing"
+    },
+    {
+      "file": "packages/cf-backend/src/slates/resident.ts",
+      "kind": "regexp-constructor",
+      "owner": "STATIC_SPECIFIER",
+      "sourceSha256": "7173476f62ac398120293f59a410afa602ff76829ce0bd862ad370e67073b0d5",
+      "decision": "bundleResolver"
     },
     {
       "file": "packages/cf-backend/tests/helpers/declared-members.ts",
@@ -157,13 +171,6 @@
     {
       "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
       "kind": "regex-literal",
-      "owner": "visibleFix",
-      "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
-      "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "eea446c986f70eae716c1a95384c04cb5cf5f390e9efb46289d46498593c38b6",
       "decision": "lexical"
@@ -173,6 +180,13 @@
       "kind": "regex-literal",
       "owner": "buttons",
       "sourceSha256": "f2e28a28d357e04d5c7af9172a1f60e9cdf5ad1af117d62232d684ba0f78f7be",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/cf-backend/tests/unit-device-sandbox-row.test.ts",
+      "kind": "regex-literal",
+      "owner": "match",
+      "sourceSha256": "7c6bf3e688d18df165a15ea7e31935d5e923b14afcf46ecf6350bcafb22c4b01",
       "decision": "lexical"
     },
     {
@@ -244,6 +258,13 @@
       "owner": "classes",
       "sourceSha256": "134153f81fe9fb4f42399c2db73b984cacc92e7fd38fc24e8b6762272ccb7741",
       "decision": "sourceGate"
+    },
+    {
+      "file": "packages/cf-backend/tests/workerd/slate-process.test.ts",
+      "kind": "regex-literal",
+      "owner": "importMap",
+      "sourceSha256": "0682a5b2fbc8da91cd67d0f7740d144767ae0e61f37cdc1786113e3cd4d679d6",
+      "decision": "lexical"
     },
     {
       "file": "packages/cli-backend/src/claude-cli-provider.ts",
@@ -439,6 +460,34 @@
       "kind": "hand-parser",
       "owner": "parseIPv4",
       "sourceSha256": "9ed338a35bca5689a51bc7007d7a8e9daeac0d61153f35c1483f7725ae7e5107",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "25fa2c23200f4ecc3e39864cfaada76677f7ca980f028f9f87bc4e9c08abed04",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "regex-literal",
+      "owner": "benign",
+      "sourceSha256": "394df264fa214db3331303e2960309a1616d285d4104874a71fc9d59533b89d5",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "hand-parser",
+      "owner": "scanText",
+      "sourceSha256": "e08801bf3a414945fbc0c16a9d62ea068bd3503501daa5c5e6e6eef305a46d4c",
+      "decision": "safety"
+    },
+    {
+      "file": "packages/core/src/safety/secret-patterns.ts",
+      "kind": "hand-parser",
+      "owner": "scanText",
+      "sourceSha256": "d0fb3a06bb482d520a53e77f0bc702113b46cad2eea1bffd5e5944f86fe1210a",
       "decision": "safety"
     },
     {
@@ -780,6 +829,20 @@
     {
       "file": "packages/devbox/tests/snapshot-chain.test.ts",
       "kind": "regex-literal",
+      "owner": "relative",
+      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
+      "owner": "egress",
+      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/snapshot-chain.test.ts",
+      "kind": "regex-literal",
       "owner": "published",
       "sourceSha256": "12ca7832be5bf7b8e79c2b1ea805eb0dac380710a3be7270a3cd3eea85fbd6ad",
       "decision": "protected"
@@ -817,6 +880,13 @@
       "kind": "regex-literal",
       "owner": "published",
       "sourceSha256": "12ca7832be5bf7b8e79c2b1ea805eb0dac380710a3be7270a3cd3eea85fbd6ad",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "egress",
+      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
       "decision": "protected"
     },
     {
@@ -906,16 +976,16 @@
     {
       "file": "packages/devbox/tests/support/strategy-machine.ts",
       "kind": "regex-literal",
-      "owner": "packed",
-      "sourceSha256": "5bb82d0eedd6bb9d81ade8e96de2bd4a1ec209a42f01e876cf63404882bdeb37",
+      "owner": "relative",
+      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
       "decision": "protected"
     },
     {
-      "file": "packages/test-utils/src/ambient-env.ts",
-      "kind": "hand-parser",
-      "owner": "stripAmbientCredentials",
-      "sourceSha256": "4af90817440bf579b2a50e5116689652edacc68229054a2435f2018c1e3c4f2f",
-      "decision": "traversal"
+      "file": "packages/devbox/tests/support/strategy-machine.ts",
+      "kind": "regex-literal",
+      "owner": "packed",
+      "sourceSha256": "5bb82d0eedd6bb9d81ade8e96de2bd4a1ec209a42f01e876cf63404882bdeb37",
+      "decision": "protected"
     },
     {
       "file": "packages/test-utils/src/hard-tasks/cost-model.ts",
@@ -1093,34 +1163,6 @@
       "decision": "schema"
     },
     {
-      "file": "packages/core/src/safety/secret-patterns.ts",
-      "kind": "regex-literal",
-      "owner": "benign",
-      "sourceSha256": "25fa2c23200f4ecc3e39864cfaada76677f7ca980f028f9f87bc4e9c08abed04",
-      "decision": "safety"
-    },
-    {
-      "file": "packages/core/src/safety/secret-patterns.ts",
-      "kind": "regex-literal",
-      "owner": "benign",
-      "sourceSha256": "394df264fa214db3331303e2960309a1616d285d4104874a71fc9d59533b89d5",
-      "decision": "safety"
-    },
-    {
-      "file": "packages/core/src/safety/secret-patterns.ts",
-      "kind": "hand-parser",
-      "owner": "scanText",
-      "sourceSha256": "e08801bf3a414945fbc0c16a9d62ea068bd3503501daa5c5e6e6eef305a46d4c",
-      "decision": "safety"
-    },
-    {
-      "file": "packages/core/src/safety/secret-patterns.ts",
-      "kind": "hand-parser",
-      "owner": "scanText",
-      "sourceSha256": "d0fb3a06bb482d520a53e77f0bc702113b46cad2eea1bffd5e5944f86fe1210a",
-      "decision": "safety"
-    },
-    {
       "file": "scripts/silent-drop.ts",
       "kind": "regex-literal",
       "owner": "handlesAnError",
@@ -1202,55 +1244,6 @@
       "kind": "regex-literal",
       "owner": "CJS_IMPORT",
       "sourceSha256": "35649bf934923ae7e10df35684af94ba865b4eefc387701406e8629df4dda392",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
-      "owner": "relative",
-      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/snapshot-chain.test.ts",
-      "kind": "regex-literal",
-      "owner": "egress",
-      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "egress",
-      "sourceSha256": "c4e78de06975f3969bf3b4bcc6fe2ca660aa9f5513e30d30f83da91d54269ab1",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/devbox/tests/support/strategy-machine.ts",
-      "kind": "regex-literal",
-      "owner": "relative",
-      "sourceSha256": "3c4fffb85f411ccf5cf5a7554ee55f4b73da9918d82c22271422c913deae0709",
-      "decision": "protected"
-    },
-    {
-      "file": "packages/cf-backend/src/components/surfaces/shared.tsx",
-      "kind": "hand-parser",
-      "owner": "split",
-      "sourceSha256": "bc2ecdf7d45222485edc8dd632734f1b6deda7235281b7315c7042cb2ecb6de6",
-      "decision": "lexical"
-    },
-    {
-      "file": "packages/cf-backend/src/slates/resident.ts",
-      "kind": "regexp-constructor",
-      "owner": "STATIC_SPECIFIER",
-      "sourceSha256": "7173476f62ac398120293f59a410afa602ff76829ce0bd862ad370e67073b0d5",
-      "decision": "bundleResolver"
-    },
-    {
-      "file": "packages/cf-backend/tests/workerd/slate-process.test.ts",
-      "kind": "regex-literal",
-      "owner": "importMap",
-      "sourceSha256": "0682a5b2fbc8da91cd67d0f7740d144767ae0e61f37cdc1786113e3cd4d679d6",
       "decision": "lexical"
     }
   ]

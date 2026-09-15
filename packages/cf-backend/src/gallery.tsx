@@ -115,6 +115,7 @@ import {
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark } from "@kinu.run/core";
+import { mcpPresetById } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -147,7 +148,7 @@ import { APP_ROUTES } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import type { SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
-import { MessageView, SteerBubble } from "@/components/MessageView";
+import { DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
@@ -188,9 +189,10 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import { McpServerSummarySchema } from "@/lib/user-api";
 import * as v from "valibot";
-import { serveGalleryRpc } from "@/gallery-agent-stub";
+import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
@@ -319,6 +321,71 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
   });
 }
 
+/** The wire shape the plugins page's add call sends — a preset id, or the
+ *  full custom-server form. */
+const GalleryMcpAddSchema = v.object({
+  name: v.optional(v.string()),
+  serverUrl: v.optional(v.string()),
+  transport: v.optional(v.picklist(['auto', 'sse', 'streamable-http'])),
+  headers: v.optional(v.record(v.string(), v.string())),
+  allowedTools: v.optional(v.array(v.string())),
+  presetId: v.optional(v.string()),
+});
+
+/** The MCP server roster, mutable for the page's lifetime so the preset add
+ *  flow is observable: a POST lands here and the next GET — the panel's own
+ *  refresh — shows the row. `mcp-preset=connected` on the frame URL swaps the
+ *  generic github row for the two preset-tagged states a screenshot needs —
+ *  Connected and Needs sign-in; `mcp-preset=open` drops it so every preset is
+ *  unclaimed (its name would refuse the GitHub preset's). */
+let galleryMcpRows: McpServerSummary[] = [
+  {
+    id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
+    transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
+    authUrl: null, error: null, presetId: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+  },
+  {
+    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+    transport: "sse", status: "authenticating", toolsCount: 0,
+    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+    error: null, presetId: null, createdAt: NOW - 864e5, updatedAt: NOW,
+  },
+];
+
+const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
+
+if (mcpPresetVariant === "connected") {
+  galleryMcpRows = [
+    {
+      id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
+      transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
+      authUrl: null, error: null, presetId: "github", createdAt: NOW - 864e5, updatedAt: NOW,
+    },
+    {
+      id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
+      transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
+      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
+      presetId: "cloudflare", createdAt: NOW - 3600e3, updatedAt: NOW,
+    },
+    galleryMcpRows[1]!,
+  ];
+} else if (mcpPresetVariant === "open") {
+  // Every preset unclaimed: the custom github row would refuse the GitHub
+  // preset's name, so this variant keeps only linear.
+  galleryMcpRows = [galleryMcpRows[1]!];
+}
+
+/** Which `oauth-app` presets the frame pretends the deployment carries the
+ *  registered app for. `mcp-secrets=github` means GitHub alone; absent means
+ *  every oauth-app preset is configured, the production-shaped default. */
+const mcpSecrets = (() => {
+  const raw = new URLSearchParams(location.search).get("mcp-secrets");
+
+  const listed = raw === null ? ["github", "google"] : raw.split(",");
+
+  return new Set(listed.filter((entry) => entry.length > 0));
+})();
+
 /** What the plugins page reads beyond the settings reads: the device grants
  *  (one for the plugins frame; the settings frames keep an empty list because
  *  the device-row gate reads the roster without one) and the owner's crafted
@@ -349,7 +416,10 @@ function pluginsFixture(path: string): Response | null {
   return null;
 }
 
-async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
+/** The account slice: onboarding completion, account deletion, and the
+ *  profile GET/PATCH the settings account section and the wizard's name step
+ *  read. */
+function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
   }
@@ -370,12 +440,29 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   }
 
   if (path === "/api/user/profile") {
+    // The wizard's profile step renders only when the profile has no display
+    // name: `&noname=1` on the welcome frame answers the new account, whose
+    // OAuth login seeded no name.
+    if (frame === "welcome" && new URLSearchParams(location.search).get("noname") === "1") {
+      return fixtureJson({
+        email: "new@example.com", displayName: "", createdAt: NOW, lastSeenAt: NOW,
+        onboardedAt: null, workspaceCount: 0,
+      });
+    }
+
     return fixtureJson({
       email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW,
       onboardedAt: ACCOUNT_ONBOARDED_AT, workspaceCount: ACCOUNT_WORKSPACE_COUNT,
     });
   }
 
+  return null;
+}
+
+/** The reads behind the settings sections: credentials, the Codex and
+ *  gateway status rigs, the model list, the provider catalog, the Cloudflare
+ *  account and the CLI install panel. */
+async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([{ key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW }]);
   }
@@ -428,30 +515,104 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     });
   }
 
-  // The setupmodal frame mounts the real HomePage chrome behind the modal, so
-  // the roster and the panel's server list both answer here — a 404 would put
-  // a failure in the sidebar and the Recent section that a real page has
-  // never shown.
-  if (path === "/api/user/workspaces") {
-    return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+  return null;
+}
+
+/* The setupmodal frame mounts the real HomePage chrome behind the modal, so
+   the roster and the panel's server list both answer here — a 404 would put
+   a failure in the sidebar and the Recent section that a real page has
+   never shown. */
+function workspaceRosterFixture(path: string): Response | null {
+  if (path !== "/api/user/workspaces") return null;
+
+  if (EXTRA_WORKSPACE) {
+    const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
+
+    return fixtureJson({
+      entries: [...roster.entries, {
+        name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5,
+        lastVisited: NOW - 36e5, archivedAt: null,
+      }],
+      total: roster.entries.length + 1,
+    });
   }
 
-  if (path === "/api/user/mcp/servers") {
+  return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+}
+
+/** The MCP rows: the preset availability report, the add POST that claims a
+ *  name and answers a sign-in URL where an app exists, and the mutable roster. */
+function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path === "/api/user/mcp/presets") {
     return fixtureJson([
-      {
-        id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
-        transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-        authUrl: null, error: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
-      },
-      {
-        id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
-        transport: "sse", status: "authenticating", toolsCount: 0,
-        allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
-        error: null, createdAt: NOW - 864e5, updatedAt: NOW,
-      },
+      { id: "github", appConfigured: mcpSecrets.has("github") },
+      { id: "cloudflare", appConfigured: true },
+      { id: "google", appConfigured: mcpSecrets.has("google") },
     ]);
   }
 
+  if (path === "/api/user/mcp/servers" && method === "POST") {
+    const addBody = v.safeParse(GalleryMcpAddSchema, JSON.parse(v.parse(v.string(), body)));
+
+    if (!addBody.success) return fixtureJson({ error: "Body must be a JSON object." }, 400);
+
+    const preset = addBody.output.presetId !== undefined
+      ? mcpPresetById(addBody.output.presetId)
+      : undefined;
+
+    const name = preset?.title ?? addBody.output.name ?? "";
+
+    // The claim a second preset add collides with: name is the identity, so
+    // the refusal is the same sentence the UserDO's transaction raises.
+    if (galleryMcpRows.some((row) => String(row.name).toLowerCase() === name.toLowerCase())) {
+      return fixtureJson({ error: `An MCP server named '${name}' already exists.` }, 400);
+    }
+
+    // Sign-in answers only where an authorize URL exists: a DCR server
+    // unconditionally, an oauth-app preset only while the frame claims the
+    // app. Without it, the add needs a token — the same refusal the DO sends.
+    const signIn = preset?.auth === 'oauth'
+      || (preset?.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+
+    if (preset?.auth === 'oauth-app' && !signIn && addBody.output.headers === undefined) {
+      return fixtureJson({ error: `'${preset.title}' needs either the deployment's OAuth app or a token in \`headers\`.` }, 400);
+    }
+
+    const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
+
+    const authUrl = signIn
+      ? `${new URL(preset.serverUrl).origin}/authorize?${id}`
+      : null;
+
+    // The last add body, the way the device fixture hands the gate its state:
+    // a click that posts the wrong payload is what the gate is watching for.
+    localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
+
+    galleryMcpRows = [...galleryMcpRows, {
+      id, name,
+      serverUrl: preset?.serverUrl ?? addBody.output.serverUrl ?? "",
+      transport: preset?.transport ?? addBody.output.transport ?? "auto",
+      status: authUrl === null ? "ready" : "authenticating",
+      toolsCount: authUrl === null ? 21 : 0,
+      allowedTools: addBody.output.allowedTools ?? null,
+      authUrl, error: null,
+      presetId: preset?.id ?? null,
+      createdAt: NOW, updatedAt: NOW,
+    }];
+
+    return fixtureJson({ id, authUrl }, 201);
+  }
+
+  if (path === "/api/user/mcp/servers") {
+    return fixtureJson(v.parse(v.array(McpServerSummarySchema), galleryMcpRows));
+  }
+
+  return null;
+}
+
+/** The device rows: the incident pair (revoke, then acknowledge the unstopped
+ *  commands), the Sandbox switch, the connect POST and the roster GET. */
+function deviceRowsFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/devices/dev-1" && method === "DELETE") {
     localStorage.setItem("gallery-device-incident", "revoked");
 
@@ -495,24 +656,52 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     }]);
   }
 
-  const plugins = pluginsFixture(path);
+  return null;
+}
 
-  if (plugins !== null) return plugins;
+/** The profile-catalog read: the real digest over the real canonical bytes,
+ *  hashed here with WebCrypto because the gallery has no `node:crypto`. */
+async function profileCatalogFixture(path: string): Promise<Response | null> {
+  if (path !== "/api/user/profile-catalog") return null;
 
-  if (path === "/api/user/profile-catalog") {
-    // The real digest over the real canonical bytes, hashed here with
-    // WebCrypto because the gallery has no `node:crypto`.
-    const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
+  const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
 
-    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
-      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
-    return fixtureJson({
-      authority: { kind: "account", accountId: "gallery" },
-      version: 0,
-      digest,
-      catalog: BUILTIN_PROFILE_CATALOG,
-    });
+  return fixtureJson({
+    authority: { kind: "account", accountId: "gallery" },
+    version: 0,
+    digest,
+    catalog: BUILTIN_PROFILE_CATALOG,
+  });
+}
+
+/** One family of the account fixture: answers the paths it owns, `null` for
+ *  every other. Sync or async — the composer awaits either. */
+type SettingsSlice =
+  (path: string, method: string, body: BodyInit | null | undefined)
+    => Response | null | Promise<Response | null>;
+
+/* The families in composition order. Their path sets are disjoint, so the
+   order is a reading order, not routing. */
+const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  accountProfileFixture,
+  settingsSectionsFixture,
+  workspaceRosterFixture,
+  mcpServersFixture,
+  deviceRowsFixture,
+  pluginsFixture,
+  profileCatalogFixture,
+];
+
+/** The account fixture, composed: the first slice that owns the path answers
+ *  it, and a path no family claims is the 404 the stub has always served. */
+async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
+  for (const slice of SETTINGS_SLICES) {
+    const response = await slice(path, method, body);
+
+    if (response !== null) return response;
   }
 
   return fixtureJson({ error: `gallery has no settings fixture for ${path}` }, 404);
@@ -607,6 +796,12 @@ const STOCK_OVERVIEWS = {
   },
 };
 
+/** `?frame=workspaces&extraWorkspace=1` adds a sixth roster entry the stock
+ *  five cannot show: under the one-headline rule a sealed error outranks
+ *  durable leftovers, so 'Unfinished' needs a workspace whose last run is
+ *  quiet. The home roster's pins keep it off the stock five. */
+const EXTRA_WORKSPACE = new URLSearchParams(location.search).get("extraWorkspace") === "1";
+
 const EVIDENCE_OVERVIEWS = {
   "ledger-keeper": {
     observedAt: NOW - 20e3, activity: "working", decisionsWaiting: 2, hasUpdates: true,
@@ -641,6 +836,13 @@ const overviewOutcomes = new Map<string, OverviewOutcome>(
 // gate does not have to race the mount reads to photograph "unavailable".
 for (const name of (new URLSearchParams(location.search).get("overviewErrors") ?? "").split(",")) {
   if (name.trim() !== "") overviewOutcomes.set(name.trim(), { kind: "status", status: 503 });
+}
+
+if (EXTRA_WORKSPACE) {
+  overviewOutcomes.set("audit-sweep", { kind: "body", body: {
+    observedAt: NOW - 60e3, activity: "unfinished", decisionsWaiting: 0, hasUpdates: false,
+    latestRun: { status: "completed", task: "Recount the quarter's shares against the register" },
+  } });
 }
 
 const OVERFLOW_ROSTER = new URLSearchParams(location.search).get("overflowRoster") === "1";
@@ -694,6 +896,17 @@ function MODEL_STUBS(): ModelMenuEntry[] {
 
 const realFetch = window.fetch.bind(window);
 
+// `?frame=workspacepage&anon=1` answers the profile read with null — the
+// schema's nullable arm — so the inspector's account key stays absent and
+// every persist path is a no-op, the state a signed-out session stands in.
+// It lands as stub DATA rather than another branch in galleryFetch: the
+// fetch dispatch is at its complexity budget and the row is read like any
+// other fixture answer.
+const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
+  && new URLSearchParams(location.search).get('anon') === '1';
+
+if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
+
 const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
   const parsedInput = v.safeParse(v.string(), input);
   const parsedUrl = v.safeParse(v.instance(URL), input);
@@ -739,6 +952,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     }));
   }
 
+
   const response = STUB.get(path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
@@ -749,6 +963,12 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     const overview = workspaceOverviewFixture(path);
 
     if (overview !== null) return Promise.resolve(overview);
+  }
+
+  // WorkspacePage records the visit on mount; a 404 here renders a "could not
+  // record this visit" notice that no real page ever shows.
+  if (method === "POST" && /^\/api\/user\/workspaces\/[^/]+\/touch$/.test(path)) {
+    return Promise.resolve(new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } }));
   }
 
   // The two `/api/` prefixes a browser gate answers for itself. The feedback
@@ -946,6 +1166,23 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
 });
 
 const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
+
+/** The workspace `&ws=` opens on the workspacepage frame: the untitled row's
+ *  page is the defect photograph — its own header naming a workspace with no
+ *  title — while the default stays the titled checkout-fixes rig. */
+const WORKSPACE_PAGE_NAME = new URLSearchParams(location.search).get("ws") ?? "checkout-fixes";
+
+// `&ws=handwrought-walnut-4166c321` photographs the untitled workspace: the
+// roster row born with no title, so its snapshot answers a BLANK displayName
+// and the page renders the same first-run state the owner hit.
+if (WORKSPACE_PAGE_NAME === "handwrought-walnut-4166c321") {
+  const snapshot = v.parse(JsonObjectSchema, AGENT_RPC_DATA.getWorkspaceSnapshot);
+
+  AGENT_RPC.set("getWorkspaceSnapshot", {
+    ...snapshot,
+    status: { ...v.parse(JsonObjectSchema, snapshot.status), name: "handwrought-walnut-4166c321", displayName: "", soul: "" },
+  });
+}
 
 class GalleryAgentSocket extends EventTarget implements WebSocket {
   static readonly CONNECTING = 0;
@@ -1337,22 +1574,7 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listSlates: () => ({ slates: [], problems: [] }),
   getActivePlanReview: () => galleryAgentPlan,
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
-  // `?consent=provision` hangs the workspace frame's provisioning card: the
-  // agent asked for a machine and none is connected. The wording mirrors
-  // UserDO.raiseProvisioningRequest, whose string is what the card renders.
-  listPendingConsents: () => (
-    new URLSearchParams(location.search).get("consent") === "provision"
-      ? [{
-        consentId: "cons-gallery-1",
-        deviceId: "",
-        deviceLabel: "this computer",
-        method: "connect",
-        command: "Connect this computer so \"checkout-fixes\" can run commands on it — you will be walked through `kinu connect`.",
-        workspaceName: "checkout-fixes",
-        createdAt: NOW,
-      }]
-      : []
-  ),
+  listPendingConsents: () => [],
 }));
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -2820,6 +3042,7 @@ function ChatMessages() {
         }}
         onResolve={() => {}}
       />
+      <DeviceOfflineRow devices={[{ id: "dev-1", label: "ashish-laptop", lastSeenAt: NOW }]} />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
       {/* The same card re-serving an OLDER turn's outcome. `sunlit-stone-4a20`
           answers a resume ACK with exactly this body today, from a turn that
@@ -2863,11 +3086,11 @@ function Shell(
   },
 ) {
   return (
-    <div className="p-workbench flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+    <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
           different surface than the app renders is worse than no harness. */}
       <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
-      <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
+      <main className="p-workbench min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
           <GalleryWorkspaceBar providerWait={providerWait} />
           <div className="flex-1 flex min-h-0">
@@ -3037,6 +3260,64 @@ function ChatSteerFrame() {
             </div>
           ))}
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
+        </div>
+        <GalleryComposer />
+      </div>
+    </div>
+  );
+}
+
+/* Code fences in chat, the way an answer actually carries them: one ts block,
+   one bash, one json — the three languages a fix reply names most. This is
+   the frame the highlighting change photographs: a fence that renders flat
+   here is the defect. */
+const CODE_THREAD: UIMessage[] = [
+  msg({
+    id: "cu1", role: "user", createdAt: NOW - 4 * 60e3,
+    parts: [{ type: "text", text: "Show me the fix for the SAVE20 coupon, how to run it, and the shape it returns." }],
+  }),
+  msg({
+    id: "ca1", role: "assistant", createdAt: NOW - 3 * 60e3,
+    parts: [
+      { type: "text", text: [
+        "The patch keeps percentage coupons on the branch the migration left null:",
+        "",
+        "```ts",
+        "interface CouponRule { kind: 'fixed' | 'percent'; value: number }",
+        "const rule: CouponRule = rules[coupon.kind ?? inferKind(coupon)];",
+        "export function applyCoupon(cart: Cart, coupon: Coupon): Cart {",
+        "  return rule.kind === 'percent' ? cart.scale(rule.value) : cart.subtract(rule.value);",
+        "}",
+        "```",
+        "",
+        "Run the suite from the package root:",
+        "",
+        "```bash",
+        "bun test packages/checkout --filter coupon-kind",
+        "git diff --stat migrations/0042_coupon_kind.sql",
+        "```",
+        "",
+        "and the handler now answers:",
+        "",
+        "```json",
+        "{ \"code\": \"SAVE20\", \"kind\": \"percent\", \"applied\": true, \"total\": 84.00 }",
+        "```",
+      ].join("\n") },
+    ],
+  }),
+];
+
+function ChatCodeFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs />
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8" data-gallery-chat>
+          {CODE_THREAD.map((m, i) => (
+            <div key={m.id} data-chat-row={m.id}>
+              <MessageView message={m} isLast={i === CODE_THREAD.length - 1} isStreaming={false} onFork={() => {}} />
+            </div>
+          ))}
         </div>
         <GalleryComposer />
       </div>
@@ -4476,17 +4757,19 @@ function ApprovalsFrame() {
  *  and this frame is about one card. */
 const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "deferred_action");
 
+/** A settled-empty lane: no tasks, no journal entries. Both Work frames that
+ *  photograph absence share it, so the second is not a copy of the first. */
+const settledEmptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") return rpcResult([]).json<T>();
+
+  if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
+
+  return stubRpc<T>(method, args);
+};
+
 /** The same column before anything has happened — the state a fresh workspace
  *  opens on, which is the one an empty-state has to earn its copy in. */
 function WorkEmptyFrame() {
-  const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "listAgentTasks") return rpcResult([]).json<T>();
-
-    if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
-
-    return stubRpc<T>(method, args);
-  };
-
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] h-screen border-x p-border">
@@ -4497,7 +4780,7 @@ function WorkEmptyFrame() {
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           tabPresence={{ releases: false, explorations: false }}
-          rpc={emptyRpc}
+          rpc={settledEmptyRpc}
         />
       </div>
     </div>
@@ -6120,6 +6403,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null,
     sandbox,
+    version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };
 }
 
@@ -6189,6 +6473,29 @@ function explore(node: React.ReactNode, entries: string[], frame: string) {
 }
 
 
+/** `&devices=offline|offline-many|none` puts the refused-call notice up on a
+ *  mounted `workspacepage` frame: the socket push is the only way the row
+ *  exists, and the page's connection is the stub's, so the server-side half
+ *  is a pushed frame delivered on a delay the page mounts inside. */
+function scheduleDeviceNotice(devices: string | null): void {
+  const offline = devices === "offline"
+    ? [{ id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 }]
+    : devices === "offline-many"
+      ? [
+          { id: "dev-1", label: "ashish@studio", lastSeenAt: 1_769_000_000_000 },
+          { id: "dev-2", label: "ashish@tower", lastSeenAt: 1_768_999_000_000 },
+        ]
+      : devices === "none"
+        ? []
+        : null;
+
+  if (offline === null) return;
+
+  setTimeout(() => {
+    galleryServerPush(JSON.stringify({ type: "device_unavailable", devices: offline }));
+  }, 300);
+}
+
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
@@ -6256,6 +6563,8 @@ async function mount() {
     // The two primary-nav pages behind the shipped chrome; `&view=tiled`
     // seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
+    // Chat with ts/bash/json fences — the frame the highlighting test shoots.
+    ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
   ]);
 
@@ -6429,7 +6738,8 @@ async function mount() {
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
   else if (frame === "workspacepage") {
     serveGalleryRpc(workspacePageRpc);
-    entries = ["/workspace/checkout-fixes"];
+    entries = [`/workspace/${WORKSPACE_PAGE_NAME}`];
+    scheduleDeviceNotice(new URLSearchParams(location.search).get("devices"));
     // Both app routes, exactly as App.tsx keys them: creating an agent
     // navigates to its conversation, and the frame must be able to land there.
     node = (

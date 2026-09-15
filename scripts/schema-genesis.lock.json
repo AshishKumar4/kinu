@@ -148,14 +148,6 @@
     "created_at",
     "picked_at"
   ],
-  "assistant_messages@packages/core/src/identity/conversation-store.ts": [
-    "id",
-    "session_id",
-    "parent_id",
-    "role",
-    "content",
-    "created_at"
-  ],
   "background_jobs@packages/core/src/jobs/store.ts": [
     "actor_id",
     "id",
@@ -336,6 +328,10 @@
     "background_job_id",
     "cancel_claim",
     "cancel_outcome"
+  ],
+  "device_notice_pending@packages/core/src/state/user-schema.ts": [
+    "agent_name",
+    "announced_at"
   ],
   "device_provision_pending@packages/core/src/state/user-schema.ts": [
     "agent_name",
@@ -654,14 +650,6 @@
     "answer",
     "created_at"
   ],
-  "pending_steer_files@packages/cf-backend/src/actor-agent.ts": [
-    "seq",
-    "actor_id",
-    "steer_id",
-    "filename",
-    "media_type",
-    "url"
-  ],
   "pending_steer_files@packages/core/src/orchestrator/inbox.ts": [
     "seq",
     "actor_id",
@@ -669,14 +657,6 @@
     "filename",
     "media_type",
     "url"
-  ],
-  "pending_steers@packages/cf-backend/src/actor-agent.ts": [
-    "seq",
-    "actor_id",
-    "id",
-    "turn_id",
-    "mode",
-    "text"
   ],
   "pending_steers@packages/core/src/orchestrator/inbox.ts": [
     "seq",
@@ -1219,7 +1199,9 @@
     "sandbox_gpu",
     "agent_root",
     "tier",
-    "unstopped_at"
+    "unstopped_at",
+    "version",
+    "update_check"
   ],
   "user_egress_secrets@packages/core/src/safety/egress-vault.ts": [
     "id",
@@ -1237,6 +1219,7 @@
     "transport",
     "headers",
     "allowed_tools",
+    "preset_id",
     "created_at",
     "updated_at"
   ],

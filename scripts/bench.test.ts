@@ -5,7 +5,7 @@ import { scratchDir } from '../packages/test-utils/src/scratch';
 import { describe, test, expect } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
@@ -568,24 +568,75 @@ describe('sandboxEnv', () => {
 
 describe('createAttemptSandbox', () => {
   const { patches } = loadBenchCorpus(REPO_ROOT);
-  const prepare = (dir: string) => applyPatch(dir, patches.get('ema-alpha-weights')!, { reverse: false });
+  const patch = patches.get('ema-alpha-weights')!;
+  const prepare = (dir: string) => applyPatch(dir, patch, { reverse: false });
+  const target = 'packages/core/src/craft/ema.ts';
 
-  test('applies the defect and keeps the copy independent of the real repo', () => {
+  /** A small repository with the shape every property below is stated over:
+   *  the real defect target at its real path so the corpus patch applies, a
+   *  workspace package and its hoisted scope link, a third-party dependency,
+   *  the sealed `tests/bench` beside an unsealed `tests/eval`, retained
+   *  artifacts, and a `.git`. Copying the REAL repository here cost 5.1 s
+   *  alone and timed out at 5 s under the deploy wave on 2026-09-15: the
+   *  property is about what the copy excludes and re-points, and that is a
+   *  property of shape, not of size. */
+  function fixtureRepo(): string {
+    const root = tempDir('bench-fixture-');
+
+    const write = (file: string, text: string): void => {
+      mkdirSync(join(root, dirname(file)), { recursive: true });
+      writeFileSync(join(root, file), text);
+    };
+
+    write('package.json', JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }));
+    write('packages/core/package.json', JSON.stringify({ name: '@kinu.run/core', main: 'src/index.ts' }));
+    write(target, readFileSync(join(REPO_ROOT, target), 'utf8'));
+    write('tests/bench/tasks.jsonl', '{"taskId":"a-sealed-task"}\n');
+    write('tests/eval/keep.txt', 'the unsealed checks stay');
+    write(join(ARTIFACT_DIRNAME, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
+    write('node_modules/ai/package.json', JSON.stringify({ name: 'ai', main: 'index.js' }));
+    // Every workspace-link shape the real tree has (measured 2026-09-15):
+    // hoisted scope links in the root node_modules under TWO scopes (the
+    // product scope and the vendored `@agent-core` one), each a relative link
+    // into `packages/`, and a per-package nested `node_modules` holding a
+    // third-party entry (cf-backend's `wrangler`), which is copied with the
+    // package rather than re-pointed.
+    write('packages/agent-core/package.json', JSON.stringify({ name: '@agent-core/core', main: 'dist/index.js' }));
+    write('packages/agent-core/dist/index.js', 'export const vendored = true;\n');
+    write('packages/cf-backend/package.json', JSON.stringify({ name: '@kinu.run/cf-backend', main: 'src/index.ts' }));
+    write('packages/cf-backend/src/index.ts', 'export const cf = true;\n');
+    write('packages/cf-backend/node_modules/wrangler/package.json', JSON.stringify({ name: 'wrangler', main: 'index.js' }));
+    mkdirSync(join(root, 'node_modules', '@kinu.run'), { recursive: true });
+    mkdirSync(join(root, 'node_modules', '@agent-core'), { recursive: true });
+    symlinkSync('../../packages/core', join(root, 'node_modules', '@kinu.run', 'core'));
+    symlinkSync('../../packages/cf-backend', join(root, 'node_modules', '@kinu.run', 'cf-backend'));
+    symlinkSync('../../packages/agent-core', join(root, 'node_modules', '@agent-core', 'core'));
+    mkdirSync(join(root, '.git'));
+    writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+
+    return root;
+  }
+
+  test('applies the defect and keeps the copy independent of the repository it copied', () => {
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-sbx-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a1', prepare });
-    const target = 'packages/core/src/craft/ema.ts';
-    expect(readFileSync(join(sandbox.dir, target), 'utf8')).not.toBe(readFileSync(join(REPO_ROOT, target), 'utf8'));
+    const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a1', prepare });
+    expect(readFileSync(join(sandbox.dir, target), 'utf8')).not.toBe(readFileSync(join(repo, target), 'utf8'));
+    // The corpus patch applied to the fixture's copy of the real file: the
+    // defect is the one the task names, not a stand-in.
+    expect(readFileSync(join(sandbox.dir, target), 'utf8')).toContain('alpha * oldScore + (1 - alpha) * newObs');
 
     writeFileSync(join(sandbox.dir, 'SCRATCH.txt'), 'solver wrote this');
-    expect(existsSync(join(REPO_ROOT, 'SCRATCH.txt'))).toBe(false);
+    expect(existsSync(join(repo, 'SCRATCH.txt'))).toBe(false);
     sandbox.dispose();
     expect(existsSync(sandbox.dir)).toBe(false);
   });
 
   test('the task corpus is absent from the sandbox — a solver cannot read any task', () => {
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-seal-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a2', prepare });
-    expect(existsSync(join(REPO_ROOT, 'tests', 'bench', 'tasks.jsonl'))).toBe(true);
+    const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a2', prepare });
+    expect(existsSync(join(repo, 'tests', 'bench', 'tasks.jsonl'))).toBe(true);
     expect(existsSync(join(sandbox.dir, 'tests', 'bench'))).toBe(false);
     // The rest of tests/ is still there, so the checks can run.
     expect(existsSync(join(sandbox.dir, 'tests', 'eval'))).toBe(true);
@@ -596,11 +647,10 @@ describe('createAttemptSandbox', () => {
     // A retained run holds per-trial outcomes and check output for SEALED tasks.
     // Copying bench-artifacts/ into the sandbox would hand a solver the held-out
     // answers by a route that excluding tests/bench does not cover.
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-seal-artifacts-');
-    const leak = scratchDir('seal-probe', join(REPO_ROOT, ARTIFACT_DIRNAME));
-    writeFileSync(join(leak, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a7', prepare });
-    expect(existsSync(join(REPO_ROOT, ARTIFACT_DIRNAME))).toBe(true);
+    const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a7', prepare });
+    expect(existsSync(join(repo, ARTIFACT_DIRNAME, 'attempts.jsonl'))).toBe(true);
     expect(existsSync(join(sandbox.dir, ARTIFACT_DIRNAME))).toBe(false);
     sandbox.dispose();
   });
@@ -609,11 +659,14 @@ describe('createAttemptSandbox', () => {
   // shared read-only (never copied — that is what keeps a sandbox off the
   // multi-gigabyte path), while the workspace scope is re-pointed at the copy.
   test('third-party deps are shared, and .git is not copied', () => {
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-nm-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a3', prepare });
+    const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a3', prepare });
     const shared = join(sandbox.dir, 'node_modules', 'ai');
     expect(lstatSync(shared).isSymbolicLink()).toBe(true);
     expect(realpathSync(shared).startsWith(realpathSync(sandbox.dir))).toBe(false);
+    expect(realpathSync(join(sandbox.dir, 'node_modules', '@kinu.run', 'core')))
+      .toBe(join(realpathSync(sandbox.dir), 'packages', 'core'));
     expect(existsSync(join(sandbox.dir, '.git'))).toBe(false);
     sandbox.dispose();
   });
@@ -628,11 +681,14 @@ describe('createAttemptSandbox', () => {
   // guard uses — never a written-down scope. Spelling '@kinu.run/*' here is how
   // this test passed for months while `@agent-core/core` resolved into the donor
   // checkout: it certified two links out of ten and reported on the sandbox.
-  test('every workspace link resolves inside the copy, not back into the real repo', () => {
+  test('every workspace link resolves inside the copy, not back into the repository it copied', () => {
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-ws-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', prepare });
-    const packages = workspacePackages(REPO_ROOT);
-    expect(packages.size).toBeGreaterThan(1);
+    const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a6', prepare });
+    // The same enumeration `tests/workspace-resolution.test.ts` judges the real
+    // tree by, over the fixture: three packages under two scopes.
+    const packages = workspacePackages(repo);
+    expect([...packages.keys()].sort()).toEqual(['@agent-core/core', '@kinu.run/cf-backend', '@kinu.run/core']);
 
     for (const [name, packageDir] of packages) {
       // Bun hoists workspace links to the ROOT node_modules, so a per-package
@@ -640,9 +696,12 @@ describe('createAttemptSandbox', () => {
       const resolved = realpathSync(join(sandbox.dir, 'node_modules', name));
       // The copy's OWN directory, by equality: `startsWith` alone would accept a
       // link into some other package of the same sandbox.
-      expect(resolved).toBe(join(realpathSync(sandbox.dir), relative(REPO_ROOT, packageDir)));
+      expect(resolved).toBe(join(realpathSync(sandbox.dir), relative(repo, packageDir)));
     }
 
+    // A package's nested node_modules travels with the package: it is inside
+    // the copy and holds the entry the package had.
+    expect(existsSync(join(sandbox.dir, 'packages', 'cf-backend', 'node_modules', 'wrangler', 'package.json'))).toBe(true);
     sandbox.dispose();
   });
 
@@ -690,9 +749,10 @@ describe('createAttemptSandbox', () => {
   });
 
   test('each attempt gets its own KINU_HOME, and it is not the real one', () => {
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-home-');
-    const one = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a4', prepare });
-    const two = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a5', prepare });
+    const one = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a4', prepare });
+    const two = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a5', prepare });
     expect(one.kinuHome).not.toBe(two.kinuHome);
     expect(one.kinuHome.startsWith(runRoot)).toBe(true);
     expect(one.kinuHome).not.toContain(join(homedir(), '.kinu'));

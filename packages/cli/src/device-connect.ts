@@ -15,23 +15,35 @@
 
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { hostname, userInfo } from 'node:os';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { classify, classifyErrorCode, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { classify, classifyErrorCode, diagnostics, KinuError, renderThrownChain, tolerate, toKinuError } from '@kinu.run/core/obs';
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix } from '@kinu.run/core';
 import { enforceOwnerOnly, ensureSecretDir } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, loadConfigFile, requireAuthConfig, resolveCloudSession, updateConfigFile } from './config';
 import { listCloudDevices, registerCloudDevice, type CloudDevice, type CloudDeviceSandbox } from './cloud-api';
-import { rotateDaemonLogIfNeeded } from './daemon-log';
+import { readDaemonLogTail, rotateDaemonLogIfNeeded } from './daemon-log';
 import { waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
+import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
+import { VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
+
+/** The build the installed daemon is, beside it. The daemon reports it in
+ *  HELLO and the hub pushes an update when it is not the served one; the
+ *  daemon's own updater rewrites it when it lands a newer build. */
+const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
+
+/** Written by the daemon from the moment it starts its successor until a
+ *  daemon connects. With a stale pidfile beside it, the successor died before
+ *  the hub saw it, and `.prev` is the build that last ran. */
+const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
 /**
  * Every module the daemon `require`s beside itself, by the name it requires.
@@ -47,6 +59,7 @@ const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
 const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
   { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
   { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
+  { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
 ];
 
 /** The sibling names the daemon source requires — `require('./x.js')`. */
@@ -65,20 +78,9 @@ const AGENT_ROOT = join(AGENT_HOME, 'agents');
 
 const CONNECT_POLL_MS = 1_000;
 
-/** The name a machine has when nobody named it. */
-const UNNAMED_DEVICE_NAME = 'Your PC';
-
-/**
- * What this machine offers as its own name: `user@hostname`, which is what a
- * person recognises in a device list. `os.userInfo()` is the POSIX answer and
- * raises ENOENT when the uid has no passwd entry (a container built without
- * one), so the environment answers second and the neutral name last.
- */
+/** The name a machine offers when nobody named it: the hostname, nothing else. */
 export function defaultDeviceName(): string {
-  const user = (tolerate(() => userInfo().username, 'enoent') ?? process.env.USER ?? '').trim();
-  const host = hostname().trim();
-
-  return user && host ? `${user}@${host}` : UNNAMED_DEVICE_NAME;
+  return hostname().trim();
 }
 
 /**
@@ -92,7 +94,7 @@ function ensureAgentRoot(): void {
 
 /**
  * What linking this machine means. The words live in `@kinu.run/core` because
- * the web connect panel renders the same five sentences; this re-export keeps
+ * the web connect panel renders the same three lines; this re-export keeps
  * every CLI surface importing them from the module it already imports.
  */
 export { DEVICE_CONNECT_DISCLOSURE } from '@kinu.run/core';
@@ -120,7 +122,8 @@ export interface ConnectOutcomeDescription {
 }
 
 export type ConnectDeviceResult =
-  | { kind: 'connected'; deviceId: string; sandbox: CloudDeviceSandbox }
+  /** `label` is the hub roster row's own label — the name that prints. */
+  | { kind: 'connected'; deviceId: string; label: string; sandbox: CloudDeviceSandbox }
   /** The caller's `signal` aborted before the daemon connected. */
   | { kind: 'cancelled'; deviceId: string }
   /** Session mode found a persistent daemon already running and left it alone. */
@@ -146,7 +149,9 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
   anyDeviceConnected = true;
 
-  return { kind: 'connected', deviceId: device.deviceId, sandbox: connected.sandbox };
+  // The ROW's label names the device: the hub is the authority on what this
+  // machine is called, not the name typed at the prompt.
+  return { kind: 'connected', deviceId: device.deviceId, label: connected.label, sandbox: connected.sandbox };
 }
 
 
@@ -157,15 +162,57 @@ export interface DaemonStatus {
   daemonPid: number | null;
   /** Whether this CLI process has a live session daemon child. */
   sessionActive: boolean;
+  /** This read found a self-update whose successor died before connecting,
+   *  put the previous build back, and started it. */
+  restoredPreviousBuild: boolean;
 }
 
 export function daemonStatus(): DaemonStatus {
+  const restoredPreviousBuild = restartFromPreviousBuild();
+
   return {
     deviceConfigPresent: existsSync(DEVICE_CONFIG_PATH),
     logPresent: existsSync(DAEMON_LOG_PATH),
     daemonPid: runningDaemonPid(),
     sessionActive: sessionDaemon !== null && sessionDaemon.exitCode === null && !sessionDaemon.killed,
+    restoredPreviousBuild,
   };
+}
+
+/** The daemon files a self-update lands, in landing order: siblings, the
+ *  daemon, its stamp. Each keeps a `.prev` beside it. */
+function updatedDaemonFiles(): string[] {
+  return [...DAEMON_SIBLINGS.map((sibling) => join(AGENT_HOME, sibling.name)), SCRIPT_PATH, VERSION_STAMP_PATH];
+}
+
+/**
+ * The one failure a self-update cannot recover on its own: a successor that
+ * claimed the machine, then died before the hub marked it connected. Nothing
+ * restarts a daemon today, so this does — from `.prev`, the build that last
+ * ran, restored daemon-first so no moment leaves a newer daemon beside older
+ * siblings. Answers whether it did. A live pidfile, no marker, or no `.prev`
+ * means nothing to recover.
+ */
+function restartFromPreviousBuild(): boolean {
+  const recorded = recordedDaemonPid();
+
+  if (recorded === null || processAlive(recorded)) return false;
+
+  if (!existsSync(UPDATE_PENDING_PATH) || !existsSync(`${SCRIPT_PATH}.prev`)) return false;
+
+  try {
+    for (const file of [SCRIPT_PATH, ...updatedDaemonFiles().filter((file) => file !== SCRIPT_PATH)]) {
+      if (existsSync(`${file}.prev`)) renameSync(`${file}.prev`, file);
+    }
+
+    syncAgentDirectory();
+  } catch (cause) {
+    throw toKinuError({ doing: 'restoring the previous device daemon build', cause, otherwise: 'io' });
+  }
+
+  startInstalledDaemon(false);
+
+  return true;
 }
 
 // ── Connect prompt policy ────────────────────────────────────────
@@ -409,7 +456,21 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     ),
   }));
 
+  const stamp = `${VERSION}\n`;
+
+  const stampTemporary = stageInstallFile(
+    VERSION_STAMP_PATH,
+    stamp,
+    0o600,
+    (temporary) => {
+      if (readFileSync(temporary, 'utf-8') !== stamp) {
+        throw new KinuError('io', 'the staged device daemon version stamp does not match this release');
+      }
+    },
+  );
+
   let scriptPending: string | null = scriptTemporary;
+  let stampPending: string | null = stampTemporary;
   const siblingsPending = new Set(siblingTemporaries.map((entry) => entry.temporary));
   let configPending: string | null = null;
 
@@ -442,13 +503,21 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     renameSync(scriptTemporary, SCRIPT_PATH);
     scriptPending = null;
     enforceOwnerOnly(SCRIPT_PATH, 0o700);
+    // The stamp describes the daemon it sits beside, so it lands after it: a
+    // crash between the two leaves a new daemon under an old stamp, which the
+    // hub reads as behind and the daemon then re-lands as itself.
+    renameSync(stampTemporary, VERSION_STAMP_PATH);
+    stampPending = null;
+    enforceOwnerOnly(VERSION_STAMP_PATH, 0o600);
+    // A fresh install is not a pending update, whatever an earlier one left.
+    rmSync(UPDATE_PENDING_PATH, { force: true });
     renameSync(configTemporary, DEVICE_CONFIG_PATH);
     configPending = null;
     enforceOwnerOnly(DEVICE_CONFIG_PATH, 0o600);
     syncAgentDirectory();
   } catch (cause) {
     try {
-      for (const temporary of [scriptPending, ...siblingsPending, configPending]) {
+      for (const temporary of [scriptPending, stampPending, ...siblingsPending, configPending]) {
         if (temporary !== null) rmSync(temporary, { force: true });
       }
     } catch (cleanup) {
@@ -530,12 +599,14 @@ function syncAgentDirectory(): void {
 }
 
 /**
- * The connected device row the server reports. The wait ends on the daemon's
- * own signals: its row turning connected, or its exit or spawn failure, which
- * is the definitive failure (a daemon that died cannot connect). The caller's
- * `signal` ends it early with `undefined`. There is no clock: a daemon that is
- * still dialling has not failed. The row carries what the machine said about
- * its own sandbox, so the caller states that without a second request.
+ * The connected device row the server reports. The readiness wait ends on
+ * exactly three events: the hub roster row reads connected (success), the
+ * daemon process exits (failure — its last output lines say why), or the
+ * user interrupts. There is no deadline and no clock anywhere: a daemon that
+ * is still dialling has not failed, and a transient GET error while the
+ * daemon is alive is not-yet, not failure. The row carries what the machine
+ * said about its own sandbox, so the caller states that without a second
+ * request.
  */
 async function waitForDeviceConnected(
   auth: DeviceAuth,
@@ -551,7 +622,7 @@ async function waitForDeviceConnected(
     const outcome = signal ?? (code === null ? 'unknown exit' : `exit code ${code}`);
     launch.failure = new KinuError(
       'unavailable',
-      `the device daemon exited before it could connect (${outcome}). See ${DAEMON_LOG_PATH}`,
+      `the device daemon exited before it could connect (${outcome}). Its last lines:\n${daemonTailForFailure()}\nSee ${DAEMON_LOG_PATH}`,
     );
     stop.abort();
   };
@@ -568,9 +639,29 @@ async function waitForDeviceConnected(
 
   try {
     const connected = await waitForAnswer(async () => {
-      const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
+      // A transient GET error while the daemon is alive is not-yet, not
+      // failure: the hub answered nothing, and only the daemon's exit ends
+      // the wait. The miss travels as a SHAPE — a recorded miss that names
+      // what the hub said — never as a sentinel a healthy answer could also
+      // return.
+      let miss: { readonly transient: string } | undefined;
+      let rows: CloudDevice[] | undefined;
 
-      return devices.find((device) => device.id === deviceId && device.connected);
+      try {
+        rows = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
+      } catch (cause) {
+        const failure = toKinuError({ doing: 'checking whether the device daemon connected', cause, otherwise: 'unavailable' });
+        diagnostics.failure('device.connect.list_transient', failure);
+        miss = { transient: renderThrownChain({ cause: failure }) };
+      }
+
+      if (miss !== undefined) {
+        diagnostics.event('device.connect.list_transient_not_yet', { detail: miss.transient });
+
+        return undefined;
+      }
+
+      return rows?.find((device) => device.id === deviceId && device.connected);
     }, wait);
 
     if (connected !== undefined) return connected;
@@ -583,6 +674,12 @@ async function waitForDeviceConnected(
     launch.child.off('error', onError);
     opts.signal?.removeEventListener('abort', stopOnCaller);
   }
+}
+
+/** The daemon's last output lines for a failure that quoted them, or the
+ *  line that says where to look when the log holds nothing yet. */
+function daemonTailForFailure(): string {
+  return readDaemonLogTail(DAEMON_LOG_PATH, 15) ?? `no daemon log yet at ${DAEMON_LOG_PATH}`;
 }
 
 function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch {

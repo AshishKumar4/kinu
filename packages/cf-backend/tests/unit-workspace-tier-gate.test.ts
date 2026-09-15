@@ -106,6 +106,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'mcp.tools', name: 'userMcp_callTool', run: (u, c) => u.userMcp_callTool(c, 'srv', 'tool', {}) },
 
   { capability: 'mcp.manage', name: 'userMcp_list', run: (u, c) => u.userMcp_list(c) },
+  { capability: 'mcp.manage', name: 'userMcp_presets', run: (u, c) => u.userMcp_presets(c) },
   { capability: 'mcp.manage', name: 'userMcp_add', run: (u, c) => u.userMcp_add(c, { name: 'x', serverUrl: 'https://x' }, 'https://app') },
   { capability: 'mcp.manage', name: 'userMcp_remove', run: (u, c) => u.userMcp_remove(c, 'srv') },
   { capability: 'mcp.manage', name: 'userMcp_update', run: (u, c) => u.userMcp_update(c, 'srv', { name: 'y' }) },

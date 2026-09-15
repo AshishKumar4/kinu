@@ -9,6 +9,7 @@ import {
   type AgentMode,
   type KinuAgentConfig,
 } from './config';
+import { workspaceDisplayTitle } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 import { listCloudAgents, type CloudAgent } from './cloud-api';
 
@@ -113,15 +114,15 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   return { projectRoot, workspaces: ordered, unplaced, remote };
 }
 
-/** What an untitled workspace is called on every CLI surface. Not the
- *  directory name: that is the address `kinu chat <name>` takes, and showing it
- *  as a title is what put `handwrought-walnut-4166c321` in front of the owner.
- *  Not "New" either — a workspace nobody named is still untitled a month on. */
-const UNTITLED_WORKSPACE_LABEL = 'Untitled workspace';
-
+/** A local agent's shown title is the shared rule — `workspaceDisplayTitle`
+ *  reads the workspace's own title and answers "Untitled workspace" when the
+ *  stored value is absent or the directory's slug stored in its place. The
+ *  slug is never the label: it is the address `kinu chat <name>` takes, and
+ *  showing it as a title is what put `handwrought-walnut-4166c321` in front
+ *  of the owner. */
 function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'> {
   try {
-    return { label: readWorkspaceDisplayName(agentDbPath(dirName))?.trim() || UNTITLED_WORKSPACE_LABEL };
+    return { label: workspaceDisplayTitle({ name: dirName, displayName: readWorkspaceDisplayName(agentDbPath(dirName)) }) };
   } catch (error) {
     const reason = renderThrownChain({ cause: error });
     diagnostics.failure(
@@ -137,7 +138,7 @@ function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'>
 /** A local agent's row. `dirName` is the `~/.kinu/<name>` directory; the row
  *  opens under the ref's config name when a ref exists, so aliases and cloud
  *  links stay attached. The label is the workspace database's own title — the
- *  one place a rename or auto-title lands — and {@link UNTITLED_WORKSPACE_LABEL}
+ *  one place a rename or auto-title lands — and the shared untitled label
  *  until something names it. */
 function localRow(configured: KinuAgentConfig | undefined, dirName: string): ListedAgent {
   return {
@@ -183,7 +184,7 @@ export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
       .filter((agent) => agent.mode === 'cloud')
       .map((agent) => ({
         name: agent.name,
-        label: agent.displayName?.trim() || UNTITLED_WORKSPACE_LABEL,
+        label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
         mode: 'cloud' as const,
         localName: agent.localName,
         cloudName: agent.cloudName,
@@ -207,7 +208,7 @@ export function reconcileAgentRefs(
 
     return [{
       name: agent.name,
-      label: agent.displayName.trim() || UNTITLED_WORKSPACE_LABEL,
+      label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
       mode: 'cloud' as const,
       cloudName: agent.name,
     }];
@@ -234,7 +235,7 @@ export function listKnownAgents(): ListedAgent[] {
         ? localRow(agent, agent.localName ?? agent.name)
         : {
           name: agent.name,
-          label: agent.displayName?.trim() || UNTITLED_WORKSPACE_LABEL,
+          label: workspaceDisplayTitle({ name: agent.name, displayName: agent.displayName }),
           mode: agent.mode,
           localName: agent.localName,
           cloudName: agent.cloudName,

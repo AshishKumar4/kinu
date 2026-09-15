@@ -12,9 +12,9 @@ import type { ExecutorInfo } from '../execution/types';
 export type { ExecutorInfo };
 
 /**
- * The human name beside each namespace. Not a copy of the namespace — `laptop.*`
- * has always read "Your PC" — because the namespace is the API and this is what
- * the environment IS.
+ * The human name beside each namespace. Not a copy of the namespace — `laptop`
+ * reads "Your PC" — because the namespace is the API and this is the executor
+ * kind.
  *
  * `workspace` is the agent's filesystem and its Nimbus shell, the durable one,
  * so "Agent state" would undersell it into looking like a debug pane.
@@ -29,26 +29,6 @@ const EXECUTOR_LABELS = {
 
 export function executorLabel(name: string): string {
   return Object.entries(EXECUTOR_LABELS).find(([key]) => key === name)?.[1] ?? name;
-}
-
-/**
- * What each environment IS, in one user-facing line — the card description on
- * the Environment tab. What it can RUN is the agent's business (the
- * execution-status block); what the user needs is what lives there and what
- * happens to files they put in it.
- */
-const EXECUTOR_DESCRIPTIONS = {
-  workspace: "The agent's own files and shell — everything it makes lives here.",
-  sandbox: "A full Linux container for builds, servers and heavy work, with live previews.",
-  laptop: "Your own machine over the device tunnel — commands and files run there with your consent.",
-  parent: "The workspace this fork branched from, reached read-mostly over RPC.",
-};
-
-/** The description beside a row's namespace, with the fallback the tab shows
- *  for an environment this build predates. Same contract as executorLabel. */
-export function executorDescription(name: string): string {
-  return Object.entries(EXECUTOR_DESCRIPTIONS).find(([key]) => key === name)?.[1]
-    ?? "An execution environment with its own filesystem.";
 }
 
 const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];

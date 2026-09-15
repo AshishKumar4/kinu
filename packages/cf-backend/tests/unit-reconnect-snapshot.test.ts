@@ -30,11 +30,9 @@
 
 import { describe, expect, test, vi } from 'bun:test';
 import type { ModelMessage } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { PrepareStepContext } from '@cloudflare/think';
 import { BRANCH_RATIONALE } from '@kinu.run/core';
 import {
-  orchestratorHarness, reactivateOrchestratorHarness,
+  orchestratorHarness, reactivateOrchestratorHarness, thinkTurns,
   type ActorHarness, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 
@@ -91,16 +89,10 @@ async function workspaceWithQueuedWork(
   // Production opens a turn through beforeTurn; driving the same entry point
   // gives beforeStep the prepared snapshot it refuses without, and writes the
   // durable turn identity the steer row binds to.
-  await seeded.agent.beforeTurn({
-    system: 'sys',
+  await thinkTurns(seeded.agent).prepare({
     messages: [{ role: 'user', content: 'deploy the api' }, { role: 'assistant', content: 'starting' }],
-    tools: {},
-    model: new MockLanguageModelV3(),
-    continuation: false,
-    body: {},
   });
 
-  seeded.agent.declareTurnInFlight(true);
   expect(await seeded.agent.send(STEER)).toEqual({ landed: 'mid-turn' });
 
   const clock = spawnedAt === undefined
@@ -122,27 +114,14 @@ async function workspaceWithQueuedWork(
 async function landQueuedSteers(agent: HarnessOrchestratorAgent): Promise<void> {
   const messages: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
 
-  const context: PrepareStepContext = {
-    stepNumber: 1,
-    messages,
-    steps: [],
-    model: new MockLanguageModelV3(),
-    experimental_context: undefined,
-  };
-
   // `addMessages` is Think's append-without-a-turn API and needs a live Session,
   // which the harness has none of. The drain's durable half — the DELETE — runs
   // either way, and that is the half a reconnect reads.
   Reflect.set(agent, 'addMessages', async () => { await Promise.resolve(); });
-  // beforeStep refuses an unprepared turn: open it through beforeTurn, the way
-  // production does, so the drain reads a real snapshot.
-  await agent.beforeTurn({
-    system: 'sys', messages, tools: {}, model: new MockLanguageModelV3(),
-    continuation: false, body: {},
-  });
-  const prepared = agent.beforeStep(context);
-
-  if (prepared instanceof Promise) await prepared;
+  // A step refuses an unprepared turn: open it the way production does, so the
+  // drain reads a real snapshot.
+  await thinkTurns(agent).prepare({ messages });
+  await thinkTurns(agent).step(1, messages);
 }
 
 describe('the reconnect snapshot answers from durable rows, not from RAM', () => {

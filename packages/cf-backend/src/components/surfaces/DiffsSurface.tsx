@@ -138,13 +138,9 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
       ) : result.error ? (
         <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (
-        <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
-          hint={`${executorLabel(exec)}'s /workspace is not a Git repository. Run "git init" there, or use ${executorLabel("workspace")}.`} />
+        <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository" />
       ) : files.length === 0 ? (
-        <EmptyState icon={<GitDiffIcon size={28} />} title="No changes"
-          hint={result.mode === "vfs-baseline"
-            ? "Agent file changes appear here. Mark reviewed to set a new baseline."
-            : "Uncommitted changes on this device show as a git diff."} />
+        <EmptyState icon={<GitDiffIcon size={28} />} title="No diffs yet" />
       ) : (
         <div className="space-y-1.5">
           {files.map((f) => {

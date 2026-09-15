@@ -1,14 +1,13 @@
 /**
- * Scaffold-as-inference-loop on the LOCAL turn seam.
+ * Scaffold-as-inference-loop on THE turn seam.
  *
- * The peer of `inference-transform.ts`. Both answer the same question — "does
- * this agent have an evolved scaffold, and if so does the scaffold, not the
- * default loop, drive this turn?" — and both delegate to `runScaffold` with
- * `host.defaultInference()` bound to the stream the backend already prepared.
- * They differ only in the stream vocabulary the backend speaks: the DO renders
- * an AI-SDK UI message stream, a local turn consumes `runChat`'s `ChatEvent`s.
+ * The one answer to "does this agent have an evolved scaffold, and if so does
+ * the scaffold, not the default loop, drive this turn?" — for every backend,
+ * since every backend's turn is core's ChatSession over `runChat`'s
+ * `ChatEvent`s. Delegates to `runScaffold` with `host.defaultInference()`
+ * bound to the default turn the loop already prepared.
  *
- * Semantics (identical to the DO seam):
+ * Semantics:
  * - Un-evolved agent (current scaffold version <= 0): the default stream is
  *   returned UNTOUCHED — same object, zero overhead.
  * - Evolved scaffold: `runScaffold` becomes the turn's inference loop, and
@@ -67,6 +66,8 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
     stepIndex: v.number(),
     responseMessages: ModelMessagesSchema,
     usage: v.optional(UsageSchema),
+    finishReason: v.optional(v.string()),
+    text: v.optional(v.string()),
   }),
   v.object({ type: v.literal('error'), message: v.string() }),
   v.object({
@@ -108,13 +109,11 @@ async function* scaffoldTurn(
   for (;;) {
     const next = await pump.next();
 
-    if (next.done) {
-      if (!next.value.ok && next.value.error) {
-        yield { type: 'error', message: next.value.error };
-      }
-
-      break;
-    }
+    // A failed run has already said so: every `ok: false` return in
+    // `runScaffold` emits its `error` event before returning, and that event
+    // passed through the `error` arm below. Nothing is owed here — a second
+    // event for the same failure was what the client used to get.
+    if (next.done) break;
 
     const ev = next.value;
 

@@ -27,10 +27,9 @@ export function needsOnboarding(profile: AccountOnboarding | null): boolean {
 /** The wizard's steps in order — the indicator and the sliding panel both
  *  read this list, so the two can never disagree about how many there are. */
 export const ONBOARDING_STEPS = [
-  { id: 'profile', title: 'Your name', lede: 'How the app and your agents address you.' },
-  { id: 'model', title: 'Model and providers', lede: 'Connect a provider and pick the model your workspaces start on.' },
-  { id: 'connections', title: 'Connections', lede: 'MCP servers your agents can use, and the CLI that links your machines.' },
-  { id: 'showcase', title: 'What Kinu does', lede: 'Three things to try first.' },
+  { id: 'profile', title: 'Your name' },
+  { id: 'model', title: 'Model and providers' },
+  { id: 'showcase', title: 'What Kinu does' },
 ] as const;
 
 export type OnboardingStepId = (typeof ONBOARDING_STEPS)[number]['id'];
