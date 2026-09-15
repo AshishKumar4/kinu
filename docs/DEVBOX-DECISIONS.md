@@ -442,6 +442,115 @@ restoration:unstarted` reading still ends a full run. Whether the
 timing or a new admission failure is unmeasured. O1 stays open.
 
 
+D17. A fixture is not handed to a driver until its container application
+has a provisioned instance (2026-09-14, `6bcd11b35`). This answers D16's
+open question: the 54,540 ms refusal was neither the D14 alarm shape nor a
+new admission failure. It was the platform's rollout of a freshly deployed
+container application, measured inside the cold attach's own 55 s observer
+ceiling.
+
+The mechanism. `wrangler deploy` returns while the application's one
+instance is still `scheduling` or `starting`, and every `container.start()`
+until it is provisioned answers "There is no container instance that can be
+provided to this Durable Object, try again later". `deployFixture`
+(`scripts/bench-devbox-strategies.ts`) waited only for the Worker to accept
+the run's token, so both drivers kicked `/create` 11 to 24 s after the
+run started and the remaining rollout landed inside `pollForAttach`'s
+55 s window. The box cut that wait into the bench fixture's 6,000 ms admission
+windows (`portWaitMs` in `packages/devbox/bench/worker.ts`, applied at
+`#admitControlListener` in `packages/devbox/src/devbox.ts` as
+`AbortSignal.timeout(portWaitMs)`), each ending in one `Aborted waiting
+for container to start as we received a cancellation signal` incident and
+an immediate re-drive; the incident count is the rollout time divided by
+six seconds and nothing else. The settlement driver and the lifecycle
+driver take the same path (`startupOperation` on `/create`, the same
+generated config, image and instance type): the lifecycle run
+`b20260914073654` needed seven windows and attached at 50,151 ms, 4.4 s
+under the ceiling; the four settlement runs since 2026-09-13 16:10 needed
+eight or nine and were refused. D5's 25,039 ms cold attach was three such
+windows plus the attach, so G6's cold-attach figure has held the rollout
+since the first settlement. D13 and D14 are unchanged and were not
+involved: D13's join returns each drive at the window's end with the box's
+own "ask again", not a client abort, and after every aborted window the
+next flight opened within 300 ms with the retry alarm delivered
+(`lifecycle.jsonl` of `b20260914073654`; today's eight incidents all
+`delivered: true`, `undelivered: 0`).
+
+Measured 2026-09-14 by `scripts/bench-devbox-rollout-probe.ts`, run
+`r20260914233505`, two fresh applications on the bench image, each deleted
+and proved absent afterwards. Passive cell, nothing touching the Durable
+Object: `starting:1` from the first reading until `healthy:1` 37,760 ms
+after the deploy returned; one default `startAndWaitForPorts` then admitted
+in 2,490 ms. Churn cell, the fixture's 6 s windows re-driven back to back
+from the deploy: six refusals, the seventh admitted 39,636 ms after the
+deploy, and the instance read `active:1` from then on. The two clocks agree,
+so the windows neither hurry nor delay the rollout; the churn cell's
+recorded "no healthy instance" error is the probe reading `healthy` where
+a held instance reads `active`, corrected in the same commit's helper.
+Evidence: `bench-artifacts/rollout-probe/r20260914233505/observations.json`.
+The account's two leftover bench applications from 2026-09-10 and
+2026-09-11 predate D5's 25 s attach and are not the cause.
+
+The change. `awaitApplicationRollout` in
+`scripts/fixtures/r2-bench/deploy-substrate.ts` polls `wrangler containers
+info --json` every 2 s until `healthy + active + assigned >= 1`, refusing
+the deployment by name and last reading at the deploy step's existing
+180 s deadline; `deployFixture` runs it after the token is accepted and
+records each arm's rollout in the run identity (`identity.rollouts`). No
+gate, ceiling, budget or workload changed. `scripts/deploy-substrate.test.ts`
+is red when the wait would return on `scheduling` or `starting`, green on
+`healthy` and on `active`, and red past the deadline.
+
+Settlement run `20260914234711`, clean `6bcd11b35`, D5's exact flags (one
+`snapshot-chain` arm, `--decisive`, `--fault-cuts`, seed 20260824, loop
+budget 8,000 ms, two repetitions), Worker version
+`a78f7be4-654b-4302-842d-2d154929d799`, 23:47:12 to 00:50:42 UTC. The
+application was provisioned 18,525 ms after the deploy (readings
+`scheduling:1` until `healthy:1`); the cold attach then attached on its
+first drive in 3,618 ms and the whole ladder ran. It is the first
+settlement since D5 to complete every cell; `admission.admitted` is still
+false. The run's recorded verdicts:
+
+| Gate | Verdict | Deciding evidence |
+| --- | --- | --- |
+| G0 Provenance | Pass | Clean `6bcd11b35`; Worker `a78f7be4-654b-4302-842d-2d154929d799`; pinned image digest `3b11f7bf…` |
+| G1 Mount truth | Pass | Workspace mount, writable upper, named archives and durable bytes verified |
+| G2 Filesystem semantics | Refused | The expected red witness `chunked-absorption` did not fail: chunked manifest unobserved, marker merged=false, upper absent; an expected failure that vanished is instrument drift |
+| G3 Publication safety | Refused | The cut cell threw before judging: the baseline witness was not observed, bytes differ; no cut completion, observer, barrier-ack, sweep or rollback evidence |
+| G4 Security | Pass | F7 stale writer, F10 hostile metadata, F11 capability escape/replay and F12 credential exposure all refused |
+| G5 Restore complexity | Pass | Counted store window and bounded-k archive-depth check passed |
+| G6 Complete cells | Pass | Cold attach 3,618 ms; warm 63 ms; wake 12,107 ms attached; C3 one object attempt (`puts: 1`, 69,632 bytes), cold restore 12,911 ms, correctness passed, zero payload bytes and index pages at attach |
+| G7 Reconciled accounting | Pass | Operation and byte accounting reconciled |
+| G8 Complete cleanup | Pass | All seven teardown entries done; Worker, container application, bucket and generated config absent; zero objects and zero multipart uploads |
+| G9 Statistical validity | Refused | 36 of 40 requested segment observations exist, 24 priced; 12 incomplete |
+
+G9's twelve incomplete segments have three shapes, none of them the initial
+admission this entry closes. Eight (`npm/2/1`, `npm/2/3`, `git/1/2`,
+`git/1/4`, `git/2/2`, `sqlite/1/2`, `sqlite/1/4`, `sqlite/2/2`) ran their
+command against a quiesced box (`running:false, restoration:unstarted`
+before) and recorded the box's own `this devbox is not ready … A startup is
+armed, so ask again` after 6,090 to 6,102 ms as an unobserved execution:
+a warm restart attached 11,223 to 16,472 ms after its kick on this run,
+each through one or two 6,000 ms windows, so the segment's own window ends
+first, and the workload segment path does not ask again where
+`pollForAttach` does. Two
+(`sqlite/1/1`, `git/2/4`) were interrupted by the idle-policy stop while
+executing (`OperationInterruptedError`, attached before, unstarted after).
+One (`npm/2/4`) lost the persistent shell (`SessionTerminatedError`) and one
+(`npm-excluded/2/0`) lost its socket, after which that repetition's four
+remaining segments had no unique priced observation. Teardown:
+`bench-artifacts/teardown/20260914234711.json`, seven entries done, zero
+residue objects and zero multipart uploads; the account lists no Worker,
+application or bucket of this run. Artifacts:
+`bench-artifacts/devbox-strategies-20260914234711.json`,
+`bench-artifacts/20260914234711/snapshot-chain.json`; driver output
+`kinu-logs/devbox-settle/run-20260914234711.log`.
+
+O1 stays open on G2, G3 and G9, each with the red reason above; the
+initial-admission refusal of D5's three post-fix attempts and D16 is
+closed.
+
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
@@ -461,10 +570,17 @@ alarm-starvation fix ran ten `--lifecycle` cycles with zero refusals
 settlement ran on 2026-09-14 (D16, run `20260914220919`, clean
 `e060e360f`): the cold attach was refused at its 54,540 ms ceiling with
 `restoration:unstarted`, no cell ran, and G3, G6 and G9 all scored
-Refused for missing measurements. O1 therefore remains open: the gate
-ladder still has no admitted post-fix settlement, and the cold-attach
-refusal under settlement timing is now the measured blocker.
-Earlier controls follow.
+Refused for missing measurements. D17 measured that refusal as the fresh
+container application's rollout inside the observer ceiling and moved the
+wait into the deploy step; settlement `20260914234711` on clean
+`6bcd11b35` then attached cold in 3,618 ms, completed every cell and
+passed G6 with one C3 object attempt, but refused G2 (the
+`chunked-absorption` witness stopped failing), G3 (the cut cell's baseline
+witness bytes differed before judging) and G9 (24 of 40 segments priced:
+eight post-quiesce segments answered "ask again" at the 6 s window, two
+were interrupted by the idle stop, two lost their shell or socket). O1
+therefore remains open on those three gates; initial container admission
+is no longer among its blockers. Earlier controls follow.
 
 The bounded cloud attempt on 2026-09-13 (`b20260913094839`, source
 `ad8a2346b`, image digest
