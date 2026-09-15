@@ -1,18 +1,18 @@
 // One simulation, two renderers: both read the frame the simulation emits,
-// neither may need anything the other does not get — and when the GPU half
-// cannot start or dies on a live fault, the mount lands on Canvas2D.
-import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+// neither may need anything the other does not get — and the mount's GPU
+// half hands the caller an outcome, never a throw. The mount itself mounts
+// the real component, so it is covered where it can only be true: against
+// the real browser (scripts/public-pages.test.ts reads `__kinuSearchTree`).
+import { VGPUError as CoreVGPUError } from '@vgpu/core';
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import * as realReact from 'react';
 
 import {
   type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE, TONE_ASH, TONE_BRIGHT, TONE_EMBER,
 } from '@kinu.run/core/web/art';
 import { SearchTree } from '@kinu.run/core/web/hero-art';
 import { createCanvasRenderer, type StrokeSurface } from '@kinu.run/core/web/hero-canvas';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
-import { SearchTreeHero, type SearchTreeHandle } from '../src/components/landing/search-tree/SearchTreeHero';
 import { createWebGpuRenderer } from '../src/components/landing/search-tree/renderer-webgpu';
 import { keepOutOf } from '../src/components/landing/search-tree/stage';
 
@@ -288,11 +288,11 @@ describe('the frame is what both renderers read', () => {
   });
 });
 
-/* ── the fallback half: vgpu mocked at its module seam, the DOM faked as
- *  globals. The mount is reached through `SearchTreeHero` with `useRef` and
- *  `useEffect` collected, the same seam unit-inspector-layout proves. ── */
+/* ── the fallback half: vgpu mocked at its module seam. The mount itself
+ *  needs a real DOM, so the mount assertions live in the Chrome suite; what
+ *  this half pins is the outcome contract `createWebGpuRenderer` hands the
+ *  mount, and the live-fault path the renderer takes on `gpu.onError`. ── */
 
-/** The one shape vgpu's `init` rejects with that is not a failure. */
 class MockVGPUError extends Error {
   readonly code: string;
 
@@ -308,6 +308,9 @@ class FakeGpu {
   readonly errorListeners = new Set<(error: Error) => void>();
   frames = 0;
   disposed = false;
+  /** When set, the next `frame()` throws it — the way a dead device throws
+   *  VGPU-DEVICE-LOST out of `frame()` rather than through `onError`. */
+  frameThrows: Error | undefined;
 
   onError(cb: (error: Error) => void): () => void {
     this.errorListeners.add(cb);
@@ -393,6 +396,7 @@ await mock.module('vgpu', () => ({
     set: () => undefined,
   }),
   frame: (gpu: FakeGpu, callback: (pass: FakePass) => void): void => {
+    if (gpu.frameThrows !== undefined) throw gpu.frameThrows;
     gpu.frames += 1;
     callback({
       pass(_spec: FakePassSpec, payload: FakePassPayload): void {
@@ -403,254 +407,15 @@ await mock.module('vgpu', () => ({
   },
 }));
 
-interface FakeCanvasDataset {
-  renderer?: string;
-  pruned?: string;
-  hidden?: string;
-  generation?: string;
-  settled?: string;
-}
-
-interface FakeCanvas {
-  className: string;
-  width: number;
-  height: number;
-  readonly dataset: FakeCanvasDataset;
-  readonly surface: StrokeSurface & Recording;
-  getContext(kind: string): (StrokeSurface & Recording) | null;
-  remove(): void;
-}
-
-interface FakeRect { readonly left: number; readonly top: number; readonly right: number; readonly bottom: number; readonly width: number; readonly height: number }
-
-interface FakeStage {
-  addEventListener(): void;
-  removeEventListener(): void;
-  /** The headline the mount measures for the keep-out; null when the fake has none. */
-  querySelector(selector: string): { getBoundingClientRect(): FakeRect } | null;
-}
-
-interface FakeHost {
-  readonly parentElement: FakeStage;
-  readonly firstChild: FakeCanvas | null;
-  insertBefore(child: FakeCanvas, before: FakeCanvas | null): void;
-  getBoundingClientRect(): FakeRect;
-}
-
-let hostElement: FakeHost;
-
-let pendingEffects: (() => void | (() => void))[];
-
-const cleanups: (() => void)[] = [];
-
-await mock.module('react', () => ({
-  ...realReact,
-  useRef: () => ({ current: hostElement }),
-  useEffect: (cb: () => void | (() => void)): void => {
-    pendingEffects.push(cb);
-  },
-}));
-
-let hostChildren: FakeCanvas[];
-
-let canvases: FakeCanvas[];
-
-let intersection: ((entries: readonly { isIntersecting: boolean }[]) => void) | null;
-
-let reducedMotion: boolean;
-
-let rafQueue: { readonly id: number; readonly cb: (now: number) => void }[];
-
-let rafNext: number;
-
-let clock: number;
-
-type AdapterState = 'absent' | 'null' | 'adapter';
-
-function navigatorWith(state: AdapterState): void {
-  installGlobal('navigator', state === 'absent' ? {} : {
-    gpu: { requestAdapter: (): Promise<object | null> => Promise.resolve(state === 'null' ? null : {}) },
-  });
-}
-
-const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
-
-function installGlobal<Value>(name: string, value: Value): void {
-  if (!savedGlobals.has(name)) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
-}
-
-class FakeIntersectionObserver {
-  constructor(cb: (entries: readonly { isIntersecting: boolean }[]) => void) {
-    intersection = cb;
-  }
-
-  observe(): void {}
-
-  unobserve(): void {}
-
-  disconnect(): void {}
-}
-
-class FakePassiveObserver {
-  constructor(_cb: () => void) {}
-
-  observe(): void {}
-
-  disconnect(): void {}
-}
-
-function fakeCanvas(): FakeCanvas {
-  const surface = recordingSurface();
-
-  const element: FakeCanvas = {
-    className: '',
-    width: 0,
-    height: 0,
-    dataset: {},
-    surface,
-    getContext(kind: string): (StrokeSurface & Recording) | null {
-      return kind === '2d' ? surface : null;
-    },
-    remove(): void {
-      hostChildren = hostChildren.filter((child) => child !== element);
-    },
-  };
-
-  canvases.push(element);
-
-  return element;
-}
-
-const fakeDocument = {
-  hidden: false,
-  documentElement: { dataset: {} },
-  createElement(): FakeCanvas {
-    return fakeCanvas();
-  },
-  addEventListener(): void {},
-  removeEventListener(): void {},
-};
-
-/** The headline's rect the fake stage answers with, in the fake host's page coordinates. */
-let headlineRect: FakeRect | null;
-
-const fakeStage: FakeStage = {
-  addEventListener(): void {},
-  removeEventListener(): void {},
-  querySelector: (selector) => (selector === 'h1' && headlineRect !== null ? { getBoundingClientRect: () => headlineRect ?? { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 } } : null),
-};
-
-interface FakeWindow {
-  __kinuSearchTree?: SearchTreeHandle;
-  devicePixelRatio: number;
-  matchMedia(query: string): { matches: boolean; addEventListener(): void; removeEventListener(): void };
-}
-
-const fakeWindow: FakeWindow = {
-  devicePixelRatio: 1,
-  matchMedia: () => ({ matches: reducedMotion, addEventListener: () => {}, removeEventListener: () => {} }),
-};
-
 beforeEach(() => {
   vgpuInit = () => Promise.resolve(new FakeGpu());
   lastGpu = null;
-  hostChildren = [];
-  canvases = [];
-  intersection = null;
-  pendingEffects = [];
-  reducedMotion = false;
-  rafQueue = [];
-  rafNext = 0;
-  clock = 0;
-  headlineRect = { left: 60, top: 120, right: 780, bottom: 300, width: 720, height: 180 };
-  hostElement = {
-    parentElement: fakeStage,
-    firstChild: null,
-    insertBefore(child: FakeCanvas): void {
-      hostChildren.unshift(child);
-    },
-    getBoundingClientRect: () => ({ left: 0, top: 0, right: 1200, bottom: 600, width: 1200, height: 600 }),
-  };
-  installGlobal('window', fakeWindow);
-  installGlobal('document', fakeDocument);
-  installGlobal('getComputedStyle', (_element: { dataset: FakeCanvasDataset }) => ({ getPropertyValue: () => '' }));
-  installGlobal('requestAnimationFrame', (cb: (now: number) => void): number => {
-    rafNext += 1;
-    rafQueue.push({ id: rafNext, cb });
-
-    return rafNext;
-  });
-  installGlobal('cancelAnimationFrame', (id: number): void => {
-    rafQueue = rafQueue.filter((entry) => entry.id !== id);
-  });
-  installGlobal('IntersectionObserver', FakeIntersectionObserver);
-  installGlobal('ResizeObserver', FakePassiveObserver);
-  installGlobal('MutationObserver', FakePassiveObserver);
-  navigatorWith('adapter');
 });
 
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) cleanup();
-
-  for (const [name, previous] of savedGlobals) {
-    if (previous === undefined) {
-      Reflect.deleteProperty(globalThis, name);
-    } else {
-      Object.defineProperty(globalThis, name, previous);
-    }
-  }
-
-  savedGlobals.clear();
-});
 
 afterAll(() => {
   mock.restore();
 });
-
-/** Run the collected effects; each cleanup is kept so the afterEach unmounts. */
-function flushEffects(): void {
-  const pending = pendingEffects;
-  pendingEffects = [];
-
-  for (const cb of pending) {
-    const cleanup = cb();
-
-    if (cleanup !== undefined) cleanups.push(cleanup);
-  }
-}
-
-/** Every queued animation frame, in order, sixteen wall-milliseconds apart. */
-function drainFrames(): void {
-  const queue = rafQueue;
-  rafQueue = [];
-
-  for (const entry of queue) {
-    clock += 16;
-    entry.cb(clock);
-  }
-}
-
-/** Microtasks and frames until the mount's promises have nowhere left to go. */
-async function flushAll(): Promise<void> {
-  for (let round = 0; round < 6; round += 1) {
-    for (let tick = 0; tick < 8; tick += 1) await Promise.resolve();
-    drainFrames();
-  }
-}
-
-function mountHero(): void {
-  SearchTreeHero();
-  flushEffects();
-}
-
-function searchTreeHandle(): SearchTreeHandle {
-  const handle = fakeWindow.__kinuSearchTree;
-
-  if (handle === undefined) throw new Error('the mount left no handle on window');
-
-  return handle;
-}
 
 describe('the GPU half hands the mount an outcome, never a throw', () => {
   test('a missing adapter answers unsupported', async () => {
@@ -700,71 +465,35 @@ describe('the GPU half hands the mount an outcome, never a throw', () => {
   });
 });
 
-describe('the hero mount lands on Canvas2D whenever the GPU half gives out', () => {
-  test('a failed WebGPU start paints the tree through the canvas renderer', async () => {
-    const logs = createRecordingLogger();
-    const restoreSink = setDiagnosticsSink(logs);
-    vgpuInit = () => Promise.reject(new TypeError('device request was denied'));
+describe('a device loss mid-run is the same fault the listener reports', () => {
+  test('a frame() that throws VGPU-DEVICE-LOST swaps the mount out', async () => {
+    const outcome = await createWebGpuRenderer(Object.create(null), PALETTE, 1200, 600, 1);
 
-    try {
-      mountHero();
-      intersection?.([{ isIntersecting: true }]);
-      await flushAll();
-      const handle = searchTreeHandle();
-      expect(handle.renderer()).toBe('canvas');
-      expect(hostChildren).toHaveLength(1);
-      expect(hostChildren[0]?.dataset.renderer).toBe('canvas');
+    if (outcome.kind !== 'renderer') throw new Error(`expected a renderer, got ${outcome.kind}`);
 
-      // The tree's first strokes land a few ticks in; run the loop a moment.
-      for (let frame = 0; frame < 12; frame += 1) drainFrames();
-
-      expect(hostChildren[0]?.surface.strokes).toBeGreaterThan(0);
-      const reported = logs.emitted.find((entry) => entry.event === 'landing.hero_webgpu_failed');
-
-      expect(reported).toBeDefined();
-      expect(reported?.fields['reason']).toContain('device request was denied');
-    } finally {
-      restoreSink();
-    }
-  });
-
-  test('a device loss mid-run swaps to canvas and keeps the search it had', async () => {
-    mountHero();
-    intersection?.([{ isIntersecting: true }]);
-    await flushAll();
-
-    const handle = searchTreeHandle();
-    expect(handle.renderer()).toBe('webgpu');
     const gpu = lastGpu;
 
-    if (gpu === null) throw new Error('init did not produce the fake gpu');
+    if (gpu === null) throw new Error('init was never called');
 
-    for (let frame = 0; frame < 8; frame += 1) drainFrames();
+    const seen: Error[] = [];
+    outcome.renderer.onFault?.((error) => { seen.push(error); });
 
-    const before = handle.time();
-    expect(before).toBeGreaterThan(0.1);
-    expect(gpu.frames).toBeGreaterThan(0);
+    // One live frame, then the device dies — through `frame()`, the only
+    // channel a real loss has.
+    outcome.renderer.render(frameAfter(4));
+    expect(gpu.frames).toBe(1);
 
-    gpu.emitError(new Error('the device was lost'));
-    await flushAll();
+    // The real class: the renderer names @vgpu/core's base, which is what
+    // the frame guard throws, not vgpu's own subclass.
+    const loss = new CoreVGPUError({ code: 'VGPU-DEVICE-LOST', message: 'the device was lost' });
+    gpu.frameThrows = loss;
 
-    expect(handle.renderer()).toBe('canvas');
+    outcome.renderer.render(frameAfter(4));
+
+    expect(seen).toEqual([loss]);
     expect(gpu.disposed).toBe(true);
 
-    const fallen = hostChildren[0];
-
-    if (fallen === undefined || fallen.dataset.renderer !== 'canvas') {
-      throw new Error('the live canvas is not the canvas renderer');
-    }
-
-    drainFrames();
-    drainFrames();
-
-    expect(fallen.surface.strokes).toBeGreaterThan(0);
-    const after = handle.time();
-
-    // A restarted tree would read a few hundredths here, not before + frames.
-    expect(after).toBeGreaterThan(before);
-    expect(after - before).toBeLessThan(0.4);
+    // The renderer already handed off: a later render is a no-op, never a throw.
+    outcome.renderer.render(frameAfter(4));
   });
 });
