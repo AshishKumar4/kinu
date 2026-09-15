@@ -102,7 +102,49 @@ type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
  * replayed from — so the two never disagree about how much of the answer
  * survived an eviction.
  */
-export const PARTIAL_FLUSH_EVERY = 10;
+const PARTIAL_FLUSH_EVERY = 10;
+
+/** What one chunk of an in-flight answer means to the cadence: content that
+ *  accrues toward the next flush, a settled tool result that flushes at once,
+ *  or nothing the cadence counts. */
+export type PartialFlushSignal = 'content' | 'settled' | 'none';
+
+/**
+ * The ONE decision of when an in-flight answer is made durable, for both
+ * stores the doc above names: the first content chunk flushes, then every
+ * {@link PARTIAL_FLUSH_EVERY} content chunks, and a settled tool result
+ * flushes at once; a step boundary starts the count over. Each stream maps
+ * its own chunk types onto the signal, and the rule is here so the two cannot
+ * drift apart.
+ */
+export interface PartialFlushCadence {
+  /** Whether this chunk makes the partial durable now. Counts it either way. */
+  flushes(signal: PartialFlushSignal): boolean;
+  /** A step boundary: the next content chunk flushes again. */
+  reset(): void;
+}
+
+export function partialFlushCadence(): PartialFlushCadence {
+  let sinceFlush = 0;
+  let flushedContent = false;
+
+  return {
+    flushes: (signal) => {
+      if (signal === 'none') return false;
+      sinceFlush += 1;
+
+      if (signal !== 'settled' && flushedContent && sinceFlush < PARTIAL_FLUSH_EVERY) return false;
+      sinceFlush = 0;
+      flushedContent = true;
+
+      return true;
+    },
+    reset: () => {
+      sinceFlush = 0;
+      flushedContent = false;
+    },
+  };
+}
 
 /**
  * The grace this backend allows a stranded event delivery: none.
@@ -1149,14 +1191,11 @@ export class ChatSession {
     let stepIndex = (continuation?.steps.length ?? 0) + 1;
     let text = '';
     let toolCalls: PartialToolCall[] = [];
-    let sinceFlush = 0;
-    let flushedContent = false;
+    const cadence = partialFlushCadence();
 
-    const flush = (): void => {
-      if (this.runId === null) return;
+    const flush = (signal: PartialFlushSignal): void => {
+      if (!cadence.flushes(signal) || this.runId === null) return;
       this.eventRecorder.emit(this.runId, { type: 'step_partial', stepIndex, text, toolCalls });
-      sinceFlush = 0;
-      flushedContent = true;
     };
 
     return {
@@ -1164,31 +1203,26 @@ export class ChatSession {
         switch (event.type) {
           case 'text-delta':
             text += event.delta;
-            sinceFlush += 1;
-
-            if (!flushedContent || sinceFlush >= PARTIAL_FLUSH_EVERY) flush();
+            flush('content');
 
             return;
           case 'tool-call':
             toolCalls = [...toolCalls, { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args }];
-            sinceFlush += 1;
-
-            if (!flushedContent || sinceFlush >= PARTIAL_FLUSH_EVERY) flush();
+            flush('content');
 
             return;
           case 'tool-result':
             toolCalls = toolCalls.map((call) => call.toolCallId === event.toolCallId
               ? { ...call, ...(event.success ? { result: event.result } : { error: event.error ?? event.result }) }
               : call);
-            flush();
+            flush('settled');
 
             return;
           case 'step-finish':
             stepIndex += 1;
             text = '';
             toolCalls = [];
-            sinceFlush = 0;
-            flushedContent = false;
+            cadence.reset();
 
             return;
           case 'reasoning-delta':

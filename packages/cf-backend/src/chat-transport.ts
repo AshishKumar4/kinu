@@ -38,7 +38,7 @@ import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import {
-  PARTIAL_FLUSH_EVERY, isWorkMode,
+  partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode,
   type ChatTransport, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -89,8 +89,7 @@ interface LiveStream {
   readonly requestId: string;
   readonly streamId: string;
   readonly accumulator: StreamAccumulator;
-  chunksSinceFlush: number;
-  hasFlushedContent: boolean;
+  readonly cadence: PartialFlushCadence;
   /** The transcript spent this answer before `turn-end` closed the stream. */
   taken: boolean;
   /** The relay broke before the stream ended: the parts accumulated so far
@@ -99,17 +98,15 @@ interface LiveStream {
 }
 
 /**
- * Think's durability rule for the chunk store, kept exactly: a settled tool
- * result flushes at once; the first content chunk flushes; after that every
- * {@link PARTIAL_FLUSH_EVERY} chunks — the same cadence the loop's partial
- * ledger row follows, so a reconnecting client and a continuing turn read the
- * same amount of the interrupted answer.
+ * What a wire chunk means to the loop's own flush cadence
+ * (`partialFlushCadence`): a settled tool result, content, or nothing. The
+ * cadence itself is the loop's, so a reconnecting client and a continuing
+ * turn read the same amount of the interrupted answer.
  */
-function flushesNow(chunk: UIMessageChunk, chunksSinceFlush: number, hasFlushedContent: boolean): boolean {
-  if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return true;
+function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
+  if (chunk.type === 'tool-output-available' || chunk.type === 'tool-output-error' || chunk.type === 'tool-output-denied') return 'settled';
 
-  return (chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-available')
-    && (!hasFlushedContent || chunksSinceFlush >= PARTIAL_FLUSH_EVERY);
+  return chunk.type === 'text-delta' || chunk.type === 'reasoning-delta' || chunk.type === 'tool-input-available' ? 'content' : 'none';
 }
 
 export class ChatWireTransport implements ChatTransport {
@@ -322,7 +319,7 @@ export class ChatWireTransport implements ChatTransport {
 
         const streamId = this.resumable.start(requestId, { messageId: event.messageId });
 
-        this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: event.messageId }), chunksSinceFlush: 0, hasFlushedContent: false, taken: false, broken: false };
+        this.live = { requestId, streamId, accumulator: new StreamAccumulator({ messageId: event.messageId }), cadence: partialFlushCadence(), taken: false, broken: false };
 
         // The turn's opening row is on disk before this event: every tab
         // reads the transcript with the operator's message in it, under the id
@@ -405,13 +402,8 @@ export class ChatWireTransport implements ChatTransport {
 
         const body = JSON.stringify(chunk);
         this.resumable.storeChunk(live.streamId, body);
-        live.chunksSinceFlush += 1;
 
-        if (flushesNow(chunk, live.chunksSinceFlush, live.hasFlushedContent)) {
-          this.resumable.flushBuffer();
-          live.chunksSinceFlush = 0;
-          live.hasFlushedContent = true;
-        }
+        if (live.cadence.flushes(flushSignal(chunk))) this.resumable.flushBuffer();
 
         this.wire.broadcast(JSON.stringify({ type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: live.requestId, body, done: false }));
       }
