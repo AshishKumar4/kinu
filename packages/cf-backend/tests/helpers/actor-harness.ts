@@ -953,6 +953,32 @@ const StepOverrideSchema = v.object({ messages: v.array(v.custom<ModelMessage>((
  */
 export function thinkTurns(agent: HarnessOrchestratorAgent): TurnHarness {
   return {
+    async run(text, options) {
+      const result = await agent.runTurn({ input: text, ...(options?.signal !== undefined && { signal: options.signal }) });
+
+      return { status: result.status, message: result.message };
+    },
+
+    async enqueue(text, options) {
+      const message: UIMessage = {
+        id: options?.id ?? `programmatic-${crypto.randomUUID()}`, role: 'user', parts: [{ type: 'text', text }],
+        ...(options?.metadata !== undefined && { metadata: options.metadata }),
+      };
+
+      await agent.submitMessages([message], {
+        ...(options?.idempotencyKey !== undefined && { idempotencyKey: options.idempotencyKey }),
+        ...(options?.metadata !== undefined && { metadata: options.metadata }),
+      });
+    },
+
+    async drainEnqueued() {
+      await agent._drainThinkSubmissions();
+    },
+
+    async runQueuedMessage() {
+      await agent.saveMessages((current) => current.slice(-1));
+    },
+
     async prepare(input) {
       const config = await agent.beforeTurn({
         system: 'sys',
