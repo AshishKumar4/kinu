@@ -59,6 +59,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { childEnv } from '../packages/test-utils/src/ambient-env';
 import { trackedFiles, workspaceScope } from './sources';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -238,7 +239,7 @@ function runSuite(suite: string, grep: string, cwd: string): SuiteRun {
   const result = spawnSync('bun', ['test', suite, '--grep', grep], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, KINU_HOME: join(cwd, '.kinu-test-home') },
+    env: childEnv({ KINU_HOME: join(cwd, '.kinu-test-home') }),
     timeout: 300_000,
   });
 

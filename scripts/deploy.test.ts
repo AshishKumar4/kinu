@@ -3,7 +3,7 @@ import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { scratchDir } from "@kinu.run/test-utils";
+import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
   EXCLUSION_GROUPS, GATE_DEADLINES, GATE_WEIGHTS, SERIAL_GATES, deployDeadlines, deployExclusions,
   deployWaves, deployWeights,
@@ -140,7 +140,7 @@ function freshHome(directory: string) {
   const home = join(directory, "home");
   mkdirSync(home, { recursive: true });
 
-  return { ...process.env, HOME: home, KINU_HOME: join(home, ".kinu") };
+  return childEnv({ HOME: home, KINU_HOME: join(home, ".kinu") });
 }
 
 /** Why a launch failed, in the assertion message. A bare exit code hides a
@@ -269,8 +269,7 @@ exit 87
 
   const run = Bun.spawnSync(argv, {
     cwd: fixture,
-    env: {
-      ...process.env,
+    env: childEnv({
       PATH: `${fixture}:/usr/bin:/bin`,
       KINU_DEPLOY_FAIL: failingGate,
       KINU_DEPLOY_KILL: killGate,
@@ -286,7 +285,7 @@ exit 87
       ...budget,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       SKIP_E2E: "1",
-    },
+    }),
     stdout: "pipe",
     stderr: "pipe",
   });

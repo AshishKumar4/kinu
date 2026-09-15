@@ -377,7 +377,9 @@ export const LADDER: readonly Gate[] = [
       + "checkout's, so one shared directory serves every worktree while `patches/` is per-commit, "
       + 'and at most one checkout can be truthful at a time. The gate prints its full blind-spot '
       + 'list on the GREEN path, where it is actually needed.',
-    inputs: AMBIENT_BY_NAME,
+    // Reads `package.json` (in the graph), `patches/` (in every closure) and
+    // the installed tree behind the lock; nothing else in the tree.
+    inputs: { ...AMBIENT_BY_NAME, reads: [] },
   },
   {
     run: 'bun run gate:ladder-budget',
@@ -675,7 +677,7 @@ export const LADDER: readonly Gate[] = [
       + 'SHAPE GATE from a coupled test: whether a source-text assertion guards a rule no '
       + 'behavioural test can express is a judgement, so the reach is reported and the ruling '
       + 'left to the reviewer.',
-    inputs: { kind: 'derived' },
+    inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun run gate:complexity',
