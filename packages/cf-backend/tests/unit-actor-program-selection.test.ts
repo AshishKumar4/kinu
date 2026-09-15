@@ -19,7 +19,7 @@
  */
 import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns } from './helpers/actor-harness';
 import { createSandboxedExecutor } from '../../cli-backend/src/executor';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import type { TurnContext } from '@cloudflare/think';
@@ -43,7 +43,7 @@ test('the real Think turn uses preselected versioned source, not the live alias'
   db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected program proof', 'current')")
     .run(rt.actor.actorId);
   rt.identity.scaffold.read = async () => 'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }';
-  const result = await agent.runTurn({ input: 'Run the selected program.' });
+  const result = await thinkTurns(agent).run('Run the selected program.');
   expect(result.status).toBe('completed');
   expect(JSON.stringify(result.message)).toContain('selected-root-v1');
   expect(JSON.stringify(result.message)).not.toContain('wrong-live-alias');
@@ -87,7 +87,7 @@ test('the real cancelAllChats stops new selected-program effects and preserves i
   const effects: string[] = [];
   rt.memory.append = async (_path, content) => { effects.push(content); started.resolve(); await release.promise; };
 
-  const running = agent.runTurn({ input: 'Run until stopped.' });
+  const running = thinkTurns(agent).run('Run until stopped.');
   await started.promise;
   await agent.cancelAllChats();
   release.resolve();
