@@ -21,6 +21,7 @@
  * driver under every suite at once and none of them notices.
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
+import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { ChatResponseResult, TurnConfig } from '@cloudflare/think';
 import type { JsonObject } from '@kinu.run/core';
 
@@ -64,7 +65,26 @@ export interface TurnInput {
   readonly signal?: AbortSignal;
 }
 
+/** How a whole turn ended, as a suite reads it: the loop's verdict and the
+ *  answer row it persisted, in the transcript store's own row shape. */
+export interface RanTurn {
+  readonly status: 'completed' | 'error' | 'aborted' | 'skipped';
+  readonly message: SessionMessage | undefined;
+}
+
 export interface TurnHarness {
+  /** Run one whole turn on the harness's model — admission, every step, the
+   *  settle — and read how it ended. */
+  run(text: string, options?: { readonly signal?: AbortSignal }): Promise<RanTurn>;
+  /** Admit a programmatic turn behind everything queued, under the producer's
+   *  own name for the fact it announces; it runs at the next drain. */
+  enqueue(text: string, options?: { readonly id?: string; readonly idempotencyKey?: string; readonly metadata?: JsonObject }): Promise<void>;
+  /** Run the programmatic turns admitted with `enqueue` that have not run
+   *  yet — the durable queue an alarm drains in production. */
+  drainEnqueued(): Promise<void>;
+  /** Run the newest admitted message as its own turn — what a message that
+   *  arrived while the loop was busy is owed once the loop is free. */
+  runQueuedMessage(): Promise<void>;
   /** Admit a turn and read the request the loop assembled for it. */
   prepare(input: TurnInput): Promise<PreparedRequest>;
   /** The request the loop composes for step `stepNumber` of the prepared

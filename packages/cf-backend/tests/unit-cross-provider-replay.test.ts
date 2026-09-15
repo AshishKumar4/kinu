@@ -19,11 +19,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { AssistantModelMessage, ModelMessage, ToolModelMessage } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { PrepareStepContext } from '@cloudflare/think';
 import { isPortableToolCallId } from '@kinu.run/core';
-import * as v from 'valibot';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** What the SOURCE provider named this call — Anthropic's own grammar, which no
  *  other family mints, so its presence on a request is unambiguous. */
@@ -32,18 +29,6 @@ const SOURCE_ID = 'toolu_01SourceMinted';
 const SOURCE_REASONING = 'I should look this up.';
 
 const SOURCE_REASONING_SIGNATURE = 'anthropic-source-signature';
-
-/** The provider handle a live streamText also passes. `beforeStep` forwards only
- *  `stepNumber` and `messages` to the shared pipeline, so this is supplied as
- *  the model a step carries rather than asserted away. */
-const HARNESS_MODEL = new MockLanguageModelV3();
-
-/** The override half of a `PrepareStepResult`. `v.custom` keeps the element
- *  type without restating the SDK's message union, which is the same treatment
- *  `unit-mid-turn-steer.test.ts` gives the same value. */
-const StepOverrideSchema = v.object({
-  messages: v.array(v.custom<ModelMessage>(() => true)),
-});
 
 /** A completed call and its result, exactly as the previous turn persisted
  *  them: joined by the id the provider that ran them chose. */
@@ -80,15 +65,9 @@ const HISTORY: ModelMessage[] = [
  * Promise for "nothing changed" and pass whatever the input was.
  */
 async function stepMessages(
-  agent: HarnessOrchestratorAgent, messages: ModelMessage[],
+  agent: HarnessOrchestratorAgent, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
-  const context: PrepareStepContext = {
-    stepNumber: 0, messages, steps: [], model: HARNESS_MODEL, experimental_context: undefined,
-  };
-
-  const rewritten = v.safeParse(StepOverrideSchema, await agent.beforeStep(context));
-
-  return rewritten.success ? rewritten.output.messages : messages;
+  return [...await thinkTurns(agent).step(0, messages)];
 }
 
 /** Both halves of every tool call on a request, in wire order. */
@@ -114,10 +93,7 @@ describe('a hosted step whose history came from another provider', () => {
     const { agent } = orchestratorHarness();
     // beforeStep refuses an unprepared turn: open it through beforeTurn, the
     // way production does, so the step reads a real snapshot.
-    await agent.beforeTurn({
-      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
-      continuation: false, body: {},
-    });
+    await thinkTurns(agent).prepare({ messages: [...HISTORY] });
 
     const carried = pairing(await stepMessages(agent, [...HISTORY]));
 
@@ -134,10 +110,7 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('converts source reasoning to portable text and removes its signature', async () => {
     const { agent } = orchestratorHarness();
-    await agent.beforeTurn({
-      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
-      continuation: false, body: {},
-    });
+    await thinkTurns(agent).prepare({ messages: [...HISTORY] });
 
     const messages = await stepMessages(agent, [...HISTORY]);
 
@@ -156,10 +129,7 @@ describe('a hosted step whose history came from another provider', () => {
 
   test('pairs the same way on every step, so a re-issued request is stable', async () => {
     const { agent } = orchestratorHarness();
-    await agent.beforeTurn({
-      system: 'sys', messages: [...HISTORY], tools: {}, model: HARNESS_MODEL,
-      continuation: false, body: {},
-    });
+    await thinkTurns(agent).prepare({ messages: [...HISTORY] });
 
     const first = pairing(await stepMessages(agent, [...HISTORY]));
     const second = pairing(await stepMessages(agent, [...HISTORY]));
