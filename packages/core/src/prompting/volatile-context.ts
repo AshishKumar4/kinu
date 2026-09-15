@@ -374,7 +374,7 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
 /**
  * What the environment declares it can run, as a status suffix.
  *
- * The `run` tool's own description tells the model that "available binaries and
+ * The `shell` tool's own description tells the model that "available binaries and
  * process features are listed in this workspace provider's capabilities"
  * (packages/core/src/execution/inline.ts). Until this rendered, that sentence pointed at a list the
  * model was never given: the field was declared on PromptExecutorInfo,

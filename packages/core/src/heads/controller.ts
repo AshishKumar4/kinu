@@ -444,7 +444,7 @@ export class HeadController {
    * caller has no branch to fail. The MCTS engine drives the same evaluator
    * under its own allSettled and answers a judge failure by reporting the
    * branch failed and scoring it 0; there is no equivalent here — a rejection
-   * propagates out of `run` and takes the whole split with it, so a single 429
+   * propagates out of `shell` and takes the whole split with it, so a single 429
    * discards findings the heads have already produced and paid for, the merge
    * that would have carried them, and the `head_merge` ledger row that is the
    * only durable trace a fork ran at all. The heads' work outlives its judge.

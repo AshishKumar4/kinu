@@ -90,7 +90,7 @@ export function bindProgramCall<Args extends unknown[]>(
 
       if (failure === null) return value;
       const input = v.safeParse(v.object({ action: v.string() }), args[0]);
-      const action = binding.action ?? (binding.tool !== 'run' && input.success ? input.output.action : null);
+      const action = binding.action ?? (binding.tool !== 'shell' && input.success ? input.output.action : null);
       active?.failures.push({ ...failure, tool: binding.tool, action });
 
       return failure;

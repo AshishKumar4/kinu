@@ -215,7 +215,7 @@ entry `chars` show what the page leaves out. The bounds are structural. At most
 `SCAFFOLD_HISTORY_MAX_LIMIT` (100) messages,
 `SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS` (8,000) per message, and
 `SCAFFOLD_HISTORY_MAX_PAGE_CHARS` (40,000) characters per page. Prose returns
-as written. Tool traffic returns named as `[tool-call run {...}]`, not dumped.
+as written. Tool traffic returns named as `[tool-call shell {...}]`, not dumped.
 
 The bridge returns plain data and exposes no writer. Context shrinking still
 goes through the compaction ladder, the sole owner of the model-visible stream.
@@ -265,7 +265,7 @@ Effort, not an output-token cap, is the cheapness lever on most paths.
 
 `TOOL_REACH` (`core/src/tools/registry.ts:80`) is the authoritative map of
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
-line 151 marks 8 native tools: `eval`, `run`, `file`, `agents`,
+line 151 marks 8 native tools: `eval`, `shell`, `file`, `agents`,
 `memory`, `tasks`, `web`, `report`; `actorActiveTools()` narrows them per
 actor. `release` and `agent` are codemode-only. `skills` is neither. A SKILL.md
 is an ordinary `/workspace/skills/` path on the VFS that
@@ -276,7 +276,7 @@ owner-facing `experience` RPC.
 Inside `eval`, the LLM also sees:
 
 - `workspace.*`: VFS, including exact-match `editFile`, shell, memory,
-  `createTool`, `slate`; always available, and where `run` and `file`
+  `createTool`, `slate`; always available, and where `shell` and `file`
   project.
 - `sandbox.*`: Linux container exec and port preview when bound.
 - `agents.*`, `memory.*`, `tasks.*`, `web.*`, `report.*`: codemode projections

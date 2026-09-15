@@ -108,7 +108,7 @@ describe('the reach declaration', () => {
     // declarative must not become a quiet way to grow the standing surface, so
     // the number is asserted, not merely the set.
     expect(BUILTIN_TOOLS.length).toBe(8);
-    expect(BUILTIN_TOOLS).toEqual(['eval', 'run', 'file', 'agents', 'memory', 'tasks', 'web', 'report']);
+    expect(BUILTIN_TOOLS).toEqual(['eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'report']);
   });
 
   test('every declared codemode namespace is produced by a real factory', () => {
@@ -171,7 +171,7 @@ describe('the reach declaration', () => {
     // The reason `codemode` is a namespace string rather than a boolean: these
     // two are reachable in the sandbox through the shared `workspace`
     // primitives they already dispatch into, under a different name.
-    expect(TOOL_REACH.run.codemode).toBe('workspace');
+    expect(TOOL_REACH.shell.codemode).toBe('workspace');
     expect(TOOL_REACH.file.codemode).toBe('workspace');
     expect(TOOL_REACH.slate).toEqual({ native: false, codemode: 'workspace', replay: 'claimed' });
     // eval IS the sandbox, so it owns no namespace inside it.

@@ -3,13 +3,13 @@
  * closes: `run { command: "rm -rf /x" }` gated while the identical command
  * reached through codemode (`nimbus.exec(...)`, `sandbox.exec(...)`,
  * `laptop.exec(...)`) went ungated — which is what a gate living inside the
- * `run` TOOL's own executor buys, instead of one at the boundary every path
+ * `shell` TOOL's own executor buys, instead of one at the boundary every path
  * actually shares.
  *
  * These tests exercise `gateProviderExec` and `DefaultExecutionRouter`
  * directly — the seam itself — independent of any tool/backend wiring, so they
  * fail immediately if `ExecutionRouter.register()` stops gating (the bypass
- * reopens) regardless of how `run`/`eval` are built on top.
+ * reopens) regardless of how `shell`/`eval` are built on top.
  *
  * Revert-proof: dropping the `gateProviderExec` call from `register()` so it is
  * just `this.providers.set(provider.name, provider)` turns every "closes the

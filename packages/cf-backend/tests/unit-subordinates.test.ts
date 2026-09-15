@@ -78,7 +78,7 @@ describe('subordinate wiring', () => {
     expect(actor).not.toContain('workspace_temporary_agents');
 
     // The port is built ONCE PER ACTOR, and that is load-bearing rather than a
-    // caching nicety: `run` parks a waiter on it and the report ingress resolves
+    // caching nicety: `shell` parks a waiter on it and the report ingress resolves
     // that waiter, and those are two different calls on the same isolate. A port
     // rebuilt per call would hand the ingress an empty waiter map and leave
     // every ask hanging on an answer that had already arrived.

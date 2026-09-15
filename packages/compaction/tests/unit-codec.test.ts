@@ -42,10 +42,10 @@ const richHistory: ModelMessage[] = [
   assistant([
     { type: 'reasoning', text: 'thinking about the task' },
     { type: 'text', text: 'I will call two tools.' },
-    toolCall('c1', 'run', { command: 'ls' }),
+    toolCall('c1', 'shell', { command: 'ls' }),
     toolCall('c2', 'web_fetch', { url: 'https://example.com' }),
   ]),
-  toolMessage([toolResult('c1', 'run', 'file-a file-b'), toolResult('c2', 'web_fetch', '<html>page</html>')]),
+  toolMessage([toolResult('c1', 'shell', 'file-a file-b'), toolResult('c2', 'web_fetch', '<html>page</html>')]),
   {
     role: 'assistant',
     content: [{ type: 'text', text: 'cached reply' }],
@@ -82,7 +82,7 @@ describe('round-trip identity', () => {
   });
 
   test('orphaned tool results and unknown roles survive as opaque', () => {
-    const orphan = toolMessage([toolResult('missing', 'run', 'orphan output')]);
+    const orphan = toolMessage([toolResult('missing', 'shell', 'orphan output')]);
     const system: ModelMessage = { role: 'system', content: 'stray system note' };
     expectVerbatim([user('a'), orphan, system, assistant([{ type: 'text', text: 'ok' }]), user('b')]);
   });
@@ -90,9 +90,9 @@ describe('round-trip identity', () => {
   test('multiple tool messages answering one assistant turn fold and re-emit', () => {
     expectVerbatim([
       user('go'),
-      assistant([toolCall('a', 'run', { command: 'x' }), toolCall('b', 'run', { command: 'y' })]),
-      toolMessage([toolResult('a', 'run', 'out-a')]),
-      toolMessage([toolResult('b', 'run', 'out-b')]),
+      assistant([toolCall('a', 'shell', { command: 'x' }), toolCall('b', 'shell', { command: 'y' })]),
+      toolMessage([toolResult('a', 'shell', 'out-a')]),
+      toolMessage([toolResult('b', 'shell', 'out-b')]),
       user('done?'),
     ]);
   });
@@ -107,8 +107,8 @@ describe('encode structure', () => {
   test('tool call + result pair as one item on the assistant turn', () => {
     const turns = kinuCodec.encode([
       user('go'),
-      assistant([{ type: 'text', text: 'running' }, toolCall('c1', 'run', { command: 'ls' })]),
-      toolMessage([toolResult('c1', 'run', 'out')]),
+      assistant([{ type: 'text', text: 'running' }, toolCall('c1', 'shell', { command: 'ls' })]),
+      toolMessage([toolResult('c1', 'shell', 'out')]),
     ]);
 
     expect(turns).toHaveLength(2);
@@ -122,7 +122,7 @@ describe('encode structure', () => {
   });
 
   test('headless tool message forms its own assistant-role turn', () => {
-    const turns = kinuCodec.encode([toolMessage([toolResult('x', 'run', 'out')]), user('hi')]);
+    const turns = kinuCodec.encode([toolMessage([toolResult('x', 'shell', 'out')]), user('hi')]);
     expect(turns).toHaveLength(2);
     expect(turns[0].role).toBe('assistant');
     expect(turns[0].items[0].kind).toBe('opaque');
@@ -146,10 +146,10 @@ describe('decode after pruning', () => {
     assistant([
       { type: 'reasoning', text: 'let me think' },
       { type: 'text', text: 'calling tools' },
-      toolCall('c1', 'run', { command: 'a' }),
-      toolCall('c2', 'run', { command: 'b' }),
+      toolCall('c1', 'shell', { command: 'a' }),
+      toolCall('c2', 'shell', { command: 'b' }),
     ]),
-    toolMessage([toolResult('c1', 'run', 'out-1'), toolResult('c2', 'run', 'out-2')]),
+    toolMessage([toolResult('c1', 'shell', 'out-1'), toolResult('c2', 'shell', 'out-2')]),
     user('next'),
   ];
 
@@ -218,10 +218,10 @@ describe('decode after pruning', () => {
     const ordered: ModelMessage[] = [
       assistant([
         { type: 'text', text: 'before' },
-        toolCall('c1', 'run', { command: 'pwd' }),
+        toolCall('c1', 'shell', { command: 'pwd' }),
         { type: 'text', text: 'after' },
       ]),
-      toolMessage([toolResult('c1', 'run', '/workspace')]),
+      toolMessage([toolResult('c1', 'shell', '/workspace')]),
     ];
 
     const turns = kinuCodec.encode(ordered);
@@ -250,9 +250,9 @@ describe('decode after pruning', () => {
         toolCall('a', 'web_search', { query: 'kinu' }),
         { type: 'text', text: 'between call and provider result' },
         toolResult('a', 'web_search', 'result-a'),
-        toolCall('b', 'run', { command: 'pwd' }),
+        toolCall('b', 'shell', { command: 'pwd' }),
       ]),
-      toolMessage([toolResult('b', 'run', '/workspace')]),
+      toolMessage([toolResult('b', 'shell', '/workspace')]),
     ];
 
     const turns = kinuCodec.encode(ordered);
@@ -361,8 +361,8 @@ describe('estimation and transcripts', () => {
 
   test('a tool pair prices its input and output', () => {
     const turns = kinuCodec.encode([
-      assistant([toolCall('c1', 'run', { command: 'x'.repeat(400) })]),
-      toolMessage([toolResult('c1', 'run', 'y'.repeat(4_000))]),
+      assistant([toolCall('c1', 'shell', { command: 'x'.repeat(400) })]),
+      toolMessage([toolResult('c1', 'shell', 'y'.repeat(4_000))]),
     ]);
 
     const tool = requireToolItem(turns[0].items[0]);
@@ -371,8 +371,8 @@ describe('estimation and transcripts', () => {
 
   test('transcriptLine renders tool input and output', () => {
     const turns = kinuCodec.encode([
-      assistant([toolCall('c1', 'run', { command: 'make test' })]),
-      toolMessage([toolResult('c1', 'run', 'all 42 tests passed')]),
+      assistant([toolCall('c1', 'shell', { command: 'make test' })]),
+      toolMessage([toolResult('c1', 'shell', 'all 42 tests passed')]),
     ]);
 
     const line = kinuCodec.transcriptLine(turns[0].items[0]);
@@ -391,8 +391,8 @@ describe('estimation and transcripts', () => {
           { type: 'image', image: new Uint8Array(5), mediaType: 'image/png' },
         ],
       },
-      assistant([toolCall('c1', 'run', { command: 'ls -la' })]),
-      toolMessage([toolResult('c1', 'run', 'total 12\ndrwxr-xr-x')]),
+      assistant([toolCall('c1', 'shell', { command: 'ls -la' })]),
+      toolMessage([toolResult('c1', 'shell', 'total 12\ndrwxr-xr-x')]),
     ];
 
     const doc = kinuCodec.transcriptDocument?.(kinuCodec.encode(messages)) ?? '';

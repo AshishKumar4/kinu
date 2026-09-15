@@ -73,7 +73,7 @@ describe('openTurnRun / closeTurnRun', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
     acc.context.admit(41_000);
-    acc.context.recordSpill({ producer: 'run', omitted: 160_000, referenced: true });
+    acc.context.recordSpill({ producer: 'shell', omitted: 160_000, referenced: true });
     acc.recordToolCall({
       toolCallId: 'fixture-1',
       toolName: 'eval',
@@ -94,7 +94,7 @@ describe('openTurnRun / closeTurnRun', () => {
     if (row?.type !== 'context_budget') throw new Error('Expected context_budget before turn_end');
     expect(row.admittedChars).toBe(41_000);
     expect(row.omittedChars).toBe(160_000);
-    expect(row.trips).toEqual({ run: 1 });
+    expect(row.trips).toEqual({ shell: 1 });
     expect(row.referenced).toBe(1);
     expect(row.followUps).toBe(1);
   });
@@ -115,12 +115,12 @@ describe('openTurnRun / closeTurnRun', () => {
 
     // Three DIFFERENT failures of one tool — the failure streak, not a repeat.
     for (const boom of ['boom a', 'boom b', 'boom c']) {
-      steering.onToolResult({ toolName: 'run', args: { command: boom }, result: 'Error (exit 2): ' + boom,
+      steering.onToolResult({ toolName: 'shell', args: { command: boom }, result: 'Error (exit 2): ' + boom,
         success: false, reason: 'io', execution: { exitCode: 2 } });
     }
 
     steering.steerFor({ stepNumber: 4, messages: [] });
-    steering.onToolCall({ toolName: 'run', args: { command: 'cat config.log' } });
+    steering.onToolCall({ toolName: 'shell', args: { command: 'cat config.log' } });
 
     closeTurnRun(rec, 'run-n', {
       turnIndex: 0, usage: { input: 1, output: 1 }, reason: 'completed',
@@ -132,7 +132,7 @@ describe('openTurnRun / closeTurnRun', () => {
 
     if (row?.type !== 'turn_steering') throw new Error('Expected turn_steering before turn_end');
     expect(row.trigger).toBe('repeated_failure');
-    expect(row.tool).toBe('run');
+    expect(row.tool).toBe('shell');
     expect(row.step).toBe(4);
     // The conversion numerator: the model tried a different call afterwards.
     expect(row.converted).toBe(true);
@@ -242,7 +242,7 @@ describe('snapshotCompletedTurn', () => {
   test('builds the graded turn from the accumulator; no reported usage means NO usage field', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now() - 1_000);
-    acc.recordToolCall({ toolCallId: 'fixture-2', toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
+    acc.recordToolCall({ toolCallId: 'fixture-2', toolName: 'shell', input: { command: 'ls' }, success: true, output: 'ok' });
     acc.recordStep({});
 
     const turn = snapshotCompletedTurn(acc, {
@@ -260,7 +260,7 @@ describe('snapshotCompletedTurn', () => {
   test('a failed tool call flags the turn, and reported usage rides along', () => {
     const acc = new TurnAccumulator();
     acc.reset(Date.now());
-    acc.recordToolCall({ toolCallId: 'fixture-3', toolName: 'run', success: false, reason: null, error: 'exit 1' });
+    acc.recordToolCall({ toolCallId: 'fixture-3', toolName: 'shell', success: false, reason: null, error: 'exit 1' });
     acc.recordStep({ usage: { input: 7, output: 3 } });
 
     const turn = snapshotCompletedTurn(acc, {
@@ -375,8 +375,8 @@ describe('creditedTurnId', () => {
   test('a failed tool call inside a turn that still answered does not void the credit', () => {
     const acc = new TurnAccumulator();
     acc.reset(0);
-    acc.recordToolCall({ toolCallId: 'fixture-4', toolName: 'run', input: {}, success: false, reason: null, error: 'exit 1' });
-    acc.recordToolCall({ toolCallId: 'fixture-5', toolName: 'run', input: {}, success: true, output: 'ok' });
+    acc.recordToolCall({ toolCallId: 'fixture-4', toolName: 'shell', input: {}, success: false, reason: null, error: 'exit 1' });
+    acc.recordToolCall({ toolCallId: 'fixture-5', toolName: 'shell', input: {}, success: true, output: 'ok' });
     expect(acc.hadError).toBe(true);
     expect(creditedTurnId({ messageId: 'msg-1', completed: true, workMode: 'build' })).toBe('msg-1');
   });

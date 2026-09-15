@@ -38,7 +38,7 @@ export const WEB_MEMBER_EFFECTS = {
 } as const satisfies Readonly<Record<string, SlateMemberEffect>>;
 
 /** The native tools' actions as grant members. A tool that answers one
- *  undifferentiated `call` member — `run`, `eval`, `report`, `agents`
+ *  undifferentiated `call` member — `shell`, `eval`, `report`, `agents`
  *  and any crafted tool — has no read shape, so `call` is mutating. */
 export const TOOL_ACTION_EFFECTS = {
   file: { read: 'read', list: 'read', stat: 'read', search: 'read', write: 'mutate', edit: 'mutate' },

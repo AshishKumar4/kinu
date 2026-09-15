@@ -1200,7 +1200,7 @@ export class KinuPublicSession {
    * The workspace's background jobs, as the Work tab's Supervise pane reads
    *   them — `listBackgroundJobs`, the `@callable` the pane's own rpc is bound
    *   to (pages/SupervisePage.tsx:240). This is how a harness asks what a
-   *   detached tool call became: `run`/`eval` calls that outrun the
+   *   detached tool call became: `shell`/`eval` calls that outrun the
    *   foreground window answer a `{jobId}` handle and settle out of turn, so
    *   their result is reachable only through this row — never in the run
    *   events of the prompt that issued them.

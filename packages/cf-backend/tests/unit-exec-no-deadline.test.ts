@@ -2,7 +2,7 @@
 // replace them.
 //
 // Production evidence (owner screenshot, workspace my-ai-engineer-b3b8b792): a
-// tee'd training script through `run` at `runtime: 'sandbox'` returned
+// tee'd training script through `shell` at `runtime: 'sandbox'` returned
 // `CommandError: … Command timeout after 60000ms`. Core sends no such number,
 // and dropping it is not enough on this SDK, which is what these tests pin:
 //

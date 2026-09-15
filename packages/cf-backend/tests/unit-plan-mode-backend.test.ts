@@ -179,7 +179,7 @@ describe('Plan mode tool lifecycle', () => {
 
     const planTools = rawTools(agent);
     expect(Object.keys(planTools)).toEqual(expect.arrayContaining([
-      'eval', 'run', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
+      'eval', 'shell', 'file', 'agents', 'memory', 'tasks', 'web', 'submit_plan',
     ]));
     expect(planTools.eval?.description).not.toContain('export declare const release:');
 

@@ -1181,7 +1181,7 @@ export class LocalAgentSession implements BackendHost {
    *  one, 'strict' parks gate hits in the durable owner queue.
    *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
    *  `rt.shell` and every `rt.executionRouter` provider consult, so an
-   *  approval answers `run` and every registered codemode executor's `exec()`
+   *  approval answers `shell` and every registered codemode executor's `exec()`
    *  call identically. Returns a disposer so
    *  a surface can detach on disconnect. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {

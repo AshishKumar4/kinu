@@ -85,7 +85,7 @@ const SKILL: ActiveSkill = Object.freeze({
   trust: 'approved',
   name: 'deploy-runbook',
   description: 'How this project deploys.',
-  allowed_tools: ['run', 'workspace.*'],
+  allowed_tools: ['shell', 'workspace.*'],
   keywords: ['deploy', 'rollout'],
   auto_activate: true,
   disable_model_invocation: false,
@@ -109,14 +109,14 @@ const PINNED_SKILL: ActiveSkill = Object.freeze({
 function toolMessage(id: string, text: string): ModelMessage {
   return {
     role: 'tool',
-    content: [{ type: 'tool-result', toolCallId: id, toolName: 'run', output: { type: 'text', value: text } }],
+    content: [{ type: 'tool-result', toolCallId: id, toolName: 'shell', output: { type: 'text', value: text } }],
   };
 }
 
 function assistantToolCall(id: string): ModelMessage {
   return {
     role: 'assistant',
-    content: [{ type: 'tool-call', toolCallId: id, toolName: 'run', input: { command: 'ls' } }],
+    content: [{ type: 'tool-call', toolCallId: id, toolName: 'shell', input: { command: 'ls' } }],
   };
 }
 
@@ -302,7 +302,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-assembly/surface-compilation',
         asserts: 'duplicate tools collapse, executors sort into doctrine order, model profile resolves',
         observe: (s) => s.compilePromptSurface({
-          availableTools: ['run', 'agents', 'run', 'memory'],
+          availableTools: ['shell', 'agents', 'shell', 'memory'],
           externalTools: [{ name: 'jira', source: 'mcp' }, 'linear'],
           executors: EXECUTORS,
           backend: 'cf',
@@ -366,7 +366,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const section = (id: string, provider: string) => {
             const prompt = s.buildSystemPromptSync({
               soulOverride: 'You are Kinu.',
-              availableTools: ['run', 'agents', 'memory'],
+              availableTools: ['shell', 'agents', 'memory'],
               backend: 'cf',
               model: { id, provider },
               currentDate: '2026-01-01',
@@ -762,7 +762,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           for (let i = 0; i < 4; i++) {
             caps.push(budget.capFor(400));
-            sizes.push((await s.clampToolResult('Z'.repeat(5_000), { maxChars: 400, budget, producer: 'run' })).length);
+            sizes.push((await s.clampToolResult('Z'.repeat(5_000), { maxChars: 400, budget, producer: 'shell' })).length);
           }
 
           return { caps, sizes, snapshot: budget.snapshot() };
@@ -1325,14 +1325,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { name: 'agents', args: { action: 'swarm' }, result: null },
             { name: 'agents', args: { action: 'msg' }, result: null },
             { name: 'eval', args: {}, result: null },
-            { name: 'run', args: {}, result: null },
+            { name: 'shell', args: {}, result: null },
           ],
         }),
       },
       {
         id: 'delegation/no-delegation-is-zero-not-absent',
         asserts: 'a fully inline turn reports zeros, so "did not delegate" is measurable',
-        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [{ name: 'run', args: {}, result: null }] }),
+        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [{ name: 'shell', args: {}, result: null }] }),
       },
       {
         id: 'delegation/render-duration-units',
@@ -1537,7 +1537,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           return [
             ['crafted', turn([{ toolName: 'eval', code: 'await tools.sum(1); codemode.fmt(2)' }])],
-            ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'run' }])],
+            ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'shell' }])],
             ['mentioned-only', turn([{ toolName: 'eval', code: '// tools.sum(1)' }])],
             ['across-blocks', turn([
               { toolName: 'eval', code: 'await tools.sum(1)' },
@@ -1698,10 +1698,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the graded CompletedTurn: explicit invocation outcomes, hadError from a failed tool, origin, no fabricated usage, conditional turnId',
         observe: (s) => {
           const clean = new TurnAccumulator();
-          clean.recordToolCall({ toolCallId: 'layer-clean', toolName: 'run', input: { command: 'ls' }, success: true, output: 'ok' });
+          clean.recordToolCall({ toolCallId: 'layer-clean', toolName: 'shell', input: { command: 'ls' }, success: true, output: 'ok' });
           clean.recordStep({ usage: { input: 7, output: 3 } });
           const failed = new TurnAccumulator();
-          failed.recordToolCall({ toolCallId: 'layer-failed', toolName: 'run', success: false, reason: null, error: 'exit 1' });
+          failed.recordToolCall({ toolCallId: 'layer-failed', toolName: 'shell', success: false, reason: null, error: 'exit 1' });
           failed.recordStep({});
 
           return {

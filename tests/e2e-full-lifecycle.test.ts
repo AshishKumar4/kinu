@@ -232,7 +232,7 @@ describe('E2E Full Lifecycle', () => {
 
     for (const name of names) expect(canonical).toContain(name);
 
-    for (const core of ['eval', 'run', 'file', 'memory', 'agents']) {
+    for (const core of ['eval', 'shell', 'file', 'memory', 'agents']) {
       expect(names).toContain(core);
     }
 

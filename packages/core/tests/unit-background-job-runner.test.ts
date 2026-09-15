@@ -170,7 +170,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
     const controller = new AbortController();
     const deps = runner.thresholdDeps({}, 'build', controller);
-    const detaching = deps.onThreshold('run', Promise.resolve('done'));
+    const detaching = deps.onThreshold('shell', Promise.resolve('done'));
     await Promise.resolve();
     expect(transferred).toHaveLength(1);
     expect(stashes).toEqual([]);
@@ -184,8 +184,8 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
   test('rejecting work fails the job + the wake says failed', async () => {
     const { runner, store, enqueued, settled, notified } = setup();
-    const id = runner.create('run', {}, 'build', new AbortController());
-    runner.detach(id, 'run', Promise.reject(new Error('boom')));
+    const id = runner.create('shell', {}, 'build', new AbortController());
+    runner.detach(id, 'shell', Promise.reject(new Error('boom')));
     await settled();
 
     expect(store.get(id)?.status).toBe('failed');
@@ -203,8 +203,8 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const { runner, settled, logs } = setup();
     const ok = runner.create('think', {}, 'build', new AbortController());
     runner.detach(ok, 'think', Promise.resolve('answer'));
-    const bad = runner.create('run', {}, 'build', new AbortController());
-    runner.detach(bad, 'run', Promise.reject(new Error('boom')));
+    const bad = runner.create('shell', {}, 'build', new AbortController());
+    runner.detach(bad, 'shell', Promise.reject(new Error('boom')));
     await settled();
 
     const okLog = logs.find((l) => l.e === 'bg_job_settled' && l.d?.startsWith(ok));
@@ -240,8 +240,8 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('a rejected wake publishes the same durable retry event', async () => {
     const { runner, eventLog, setRejection, settled, drainSchedules } = setup();
     setRejection(new Error('queue unavailable'));
-    const id = runner.create('run', {}, 'build', new AbortController());
-    runner.detach(id, 'run', Promise.resolve('ok'));
+    const id = runner.create('shell', {}, 'build', new AbortController());
+    runner.detach(id, 'shell', Promise.resolve('ok'));
     await settled();
 
     const pending = eventLog.pending();
@@ -254,7 +254,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('a retry-ledger failure surfaces from wake', async () => {
     const { runner, store, eventLog, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
-    const id = runner.create('run', {}, 'build', new AbortController());
+    const id = runner.create('shell', {}, 'build', new AbortController());
     store.settle(id, 0, '"saved"', Date.now());
     eventLog.publish = () => { throw new Error('ledger unavailable'); };
 
@@ -306,7 +306,7 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
 
   test('a run call labels the runtime + command', () => {
     const { runner, store } = setup();
-    const id = runner.create('run', { runtime: 'sandbox', command: 'npm test' }, 'build', new AbortController());
+    const id = runner.create('shell', { runtime: 'sandbox', command: 'npm test' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('sandbox: npm test');
   });
 
@@ -327,9 +327,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test.each([undefined, null])('without an external owner (%p), cancel aborts, marks cancelled, and wakes once', async (external) => {
     const { runner, store, enqueued, settled } = setup({ onDetached: external, onCancelled: external });
     const controller = new AbortController();
-    const id = runner.create('run', {}, 'build', controller);
+    const id = runner.create('shell', {}, 'build', controller);
     const work = Promise.withResolvers<never>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     expect(await runner.cancel(id)).toBe(true);
     expect(store.get(id)?.status).toBe('cancelled');
@@ -351,9 +351,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test('cancelling one detached job cancels only its transferred external work', async () => {
     const cancelled: string[] = [];
     const { runner, settled } = setup({ onCancelled: async (jobId) => { cancelled.push(jobId); } });
-    const id = runner.create('run', {}, 'build', new AbortController());
+    const id = runner.create('shell', {}, 'build', new AbortController());
     const work = Promise.withResolvers<never>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     expect(await runner.cancel(id)).toBe(true);
     expect(cancelled).toEqual([id]);
@@ -374,9 +374,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     });
 
     const controller = new AbortController();
-    const id = runner.create('run', {}, 'build', controller);
+    const id = runner.create('shell', {}, 'build', controller);
     const work = Promise.withResolvers<never>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     expect(await runner.cancel(id)).toBe(false);
     expect(store.get(id)?.status).toBe('running');
@@ -397,9 +397,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test('work that RESOLVES while the external cancel is confirming does not settle over it', async () => {
     const confirm = Promise.withResolvers<void>();
     const { runner, store, settled, enqueued } = setup({ onCancelled: () => confirm.promise });
-    const id = runner.create('run', {}, 'build', new AbortController());
+    const id = runner.create('shell', {}, 'build', new AbortController());
     const work = Promise.withResolvers<string>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     const cancelling = runner.cancel(id);
     work.resolve('the command finished anyway');
@@ -418,9 +418,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test('work that REJECTS in that same window is not recorded failed either', async () => {
     const confirm = Promise.withResolvers<void>();
     const { runner, store, settled, notified } = setup({ onCancelled: () => confirm.promise });
-    const id = runner.create('run', {}, 'build', new AbortController());
+    const id = runner.create('shell', {}, 'build', new AbortController());
     const work = Promise.withResolvers<never>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     const cancelling = runner.cancel(id);
     work.reject(new Error('the device dropped the connection'));
@@ -445,9 +445,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
       },
     });
 
-    const id = runner.create('run', {}, 'build', new AbortController());
+    const id = runner.create('shell', {}, 'build', new AbortController());
     const work = Promise.withResolvers<never>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     const first = runner.cancel(id);
     // The operator clicking Stop twice: the row still says running, so only the
@@ -474,9 +474,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
       onCancelled: async () => { await confirm.promise; throw new Error('device unavailable'); },
     });
 
-    const id = runner.create('run', {}, 'build', new AbortController());
+    const id = runner.create('shell', {}, 'build', new AbortController());
     const work = Promise.withResolvers<string>();
-    runner.detach(id, 'run', work.promise);
+    runner.detach(id, 'shell', work.promise);
 
     const cancelling = runner.cancel(id);
     work.resolve('the build finished');
@@ -493,9 +493,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     const { runner, store } = setup();
     const c1 = new AbortController();
     const c2 = new AbortController();
-    const id1 = runner.create('run', { one: true }, 'build', c1);
+    const id1 = runner.create('shell', { one: true }, 'build', c1);
     const id2 = runner.create('think', { two: true }, 'build', c2);
-    const done = runner.create('run', { done: true }, 'build', new AbortController());
+    const done = runner.create('shell', { done: true }, 'build', new AbortController());
     store.settle(done, 0, '"done"', Date.now());
 
     expect(new Set(runner.cancelRunning())).toEqual(new Set([id1, id2]));
@@ -600,7 +600,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     const resume: JobResumer = async (kind) => { throw new JobNotResumable(kind); };
 
     const { runner, store, enqueued, settled } = setup({ resume });
-    store.create({ id: 'jn', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+    store.create({ id: 'jn', kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recover({ jobId: 'jn', phase: 'running' });
     await settled();
@@ -724,10 +724,10 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forever', () => {
   test('a settlement whose store closed under it strands the row — and the next start settles it', async () => {
     const { runner, store, storeFault, settled, enqueued, db } = setup();
-    const id = runner.create('run', { command: 'sleep 1' }, 'build', new AbortController());
+    const id = runner.create('shell', { command: 'sleep 1' }, 'build', new AbortController());
     let finish: () => void = () => {};
 
-    runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('done'); }));
+    runner.detach(id, 'shell', new Promise<string>((resolve) => { finish = () => resolve('done'); }));
 
     // Teardown: the process gave up on the fiber and closed the database.
     storeFault.closed = true;
@@ -788,8 +788,8 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     const { runner, store, settled } = setup({ resume });
     let finish: () => void = () => {};
 
-    const id = runner.create('run', {}, 'build', new AbortController());
-    runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('real result'); }));
+    const id = runner.create('shell', {}, 'build', new AbortController());
+    runner.detach(id, 'shell', new Promise<string>((resolve) => { finish = () => resolve('real result'); }));
 
     await runner.recoverOrphans();
     expect(store.get(id)?.resumeAttempts).toBe(0);
@@ -971,7 +971,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const { runner, store, logs } = setup();
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+      store.create({ id: `busy-${i}`, kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
     }
 
     const controller = new AbortController();
@@ -980,7 +980,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
       work.reject(new Error('the threshold aborted live work'));
     });
     const deps = runner.thresholdDeps({ command: 'pystan build' }, 'build', controller);
-    const outcome = await deps.onThreshold('run', work.promise);
+    const outcome = await deps.onThreshold('shell', work.promise);
 
     expect(outcome.detached).toBe(false);
 
@@ -1007,7 +1007,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const sibling = new BackgroundJobStore(makeSql(db), actors.sibling('other'));
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      sibling.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+      sibling.create({ id: `busy-${i}`, kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
     }
 
     // The owner sees none of them — its roster and its history are the actor's
@@ -1018,7 +1018,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
-      .onThreshold('run', new Promise(() => { /* still running */ }));
+      .onThreshold('shell', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(false);
 
@@ -1030,11 +1030,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const { runner, store } = setup();
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
-      store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+      store.create({ id: `busy-${i}`, kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
     }
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
-      .onThreshold('run', new Promise(() => { /* still running */ }));
+      .onThreshold('shell', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(true);
   });
@@ -1043,13 +1043,13 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const { runner, store } = setup();
 
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+      store.create({ id: `busy-${i}`, kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
     }
 
     store.settle('busy-0', 0, 'done', Date.now());
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
-      .onThreshold('run', new Promise(() => { /* still running */ }));
+      .onThreshold('shell', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(true);
   });
@@ -1072,7 +1072,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
-      .onThreshold('run', new Promise(() => { /* still running */ }));
+      .onThreshold('shell', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(true);
   });
@@ -1095,7 +1095,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     expect(store.resumeOwedIdsInWorkspace(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
-      .onThreshold('run', new Promise(() => { /* still running */ }));
+      .onThreshold('shell', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(false);
   });
@@ -1123,7 +1123,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     });
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController(), ownership)
-      .onThreshold('run', Promise.resolve('done'));
+      .onThreshold('shell', Promise.resolve('done'));
 
     expect(outcome.detached).toBe(true);
     const jobId = outcome.detached ? outcome.jobId : null;
@@ -1149,7 +1149,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     });
 
     const outcome = await runner.thresholdDeps({}, 'build', controller, ownership)
-      .onThreshold('run', work.promise);
+      .onThreshold('shell', work.promise);
 
     expect(outcome.detached).toBe(true);
 
@@ -1270,7 +1270,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
       harvest: async () => null,
     });
 
-    store.create({ id: 'bgjob-unresumable-empty', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+    store.create({ id: 'bgjob-unresumable-empty', kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recoverOrphans();
     await settled();
@@ -1404,13 +1404,13 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
   const write = toolExecute<JsonValue, JsonValue>(file);
   await write({ action: 'read', path });
   const first = setup();
-  first.store.create({ id: 'plan-write', kind: 'run', workMode: 'plan', input: '{}', now: Date.now() });
+  first.store.create({ id: 'plan-write', kind: 'shell', workMode: 'plan', input: '{}', now: Date.now() });
   const recovered = setup({ db: first.db, resume: async () => write({ action: 'write', path, content: 'changed' }) });
   await recovered.runner.recover({ jobId: 'plan-write', phase: 'running' });
   await recovered.settled();
   expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
   expect(recovered.store.get('plan-write')).toMatchObject({ status: 'failed' });
-  recovered.store.create({ id: 'build-write', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
+  recovered.store.create({ id: 'build-write', kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
   await inWorkMode('plan', async () => {
     await recovered.runner.recover({ jobId: 'build-write', phase: 'running' });
     await recovered.settled();

@@ -1,4 +1,4 @@
-// Cancellation must actually propagate from the `run` tool / executor exec
+// Cancellation must actually propagate from the `shell` tool / executor exec
 // tools. The whole AbortSignal chain is a silent no-op the moment one link
 // drops it: createShell must forward the signal, and every remote executor
 // must read the trailing options.
@@ -76,7 +76,7 @@ describe('run tool — workspace shell abort', () => {
 
     const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({ rt: rtWithShell });
-    const run = toolExecute<{ command: string; runtime?: string }, CommandResult>(tools.run);
+    const run = toolExecute<{ command: string; runtime?: string }, CommandResult>(tools.shell);
 
     controller.abort();
 

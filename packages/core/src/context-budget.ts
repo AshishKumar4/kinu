@@ -50,7 +50,7 @@ const SPILL_DIR_VALUES: readonly string[] = Object.values(SPILL_DIRS);
  *  `web_search`/`web_fetch` tools merged into `web`, so stored rows keep
  *  aggregating with new ones. */
 export type BulkProducer =
-  | 'run'
+  | 'shell'
   | 'file_read'
   | 'web_fetch'
   | 'eval'

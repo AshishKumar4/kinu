@@ -141,7 +141,7 @@ test('the graph renders every binding with members, effects and risk text', () =
   expect(graph.bindings[7]).toEqual({
     slate: 'issues', name: 'BRAIN', kind: 'ai', capability: { kind: 'model', tier: 'fast' },
     members: [{
-      member: 'run', effect: 'mutate',
+      member: 'shell', effect: 'mutate',
       risk: {
         public: 'Runs a model call on your fast tier. Every call spends your inference. Anyone who opens this share can trigger it.',
         users: 'Runs a model call on your fast tier. Every call spends your inference. Anyone you named on this share can trigger it.',
@@ -206,7 +206,7 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
       bindings: {
         FILES: { kind: 'namespace', namespace: 'nonexistent' },
         GH: { kind: 'mcp', server: 'gitlab' },
-        TOOL: { kind: 'tool', name: 'run' },
+        TOOL: { kind: 'tool', name: 'shell' },
         MISSING_TOOL: { kind: 'tool', name: 'not_a_tool' },
         DELEGATE: { kind: 'tool', name: 'agents' },
         EXEC: { kind: 'tool', name: 'eval' },
@@ -236,7 +236,7 @@ test('bindings the workspace cannot honour carry their problem on the row', () =
     catalog: { ...catalog, slates: { broken }, tools: ['crafted_one'] },
   }).bindings.find((binding) => binding.name === 'TOOL');
 
-  expect(tool).toMatchObject({ capability: { kind: 'tool', name: 'run' }, members: [{ member: 'call', effect: 'mutate' }] });
+  expect(tool).toMatchObject({ capability: { kind: 'tool', name: 'shell' }, members: [{ member: 'call', effect: 'mutate' }] });
 
   expect(() => slateCapabilityGraph({ slate: 'gone', workspace: 'ws', catalog }))
     .toThrow('No slate named gone');

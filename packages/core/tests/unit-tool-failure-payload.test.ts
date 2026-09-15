@@ -8,7 +8,7 @@
  * is over — the model has no way to know what broke, so it guesses, retries the
  * same command, or declares success.
  *
- * The defect these lock: `run` reported ONLY stderr on a nonzero exit and threw
+ * The defect these lock: `shell` reported ONLY stderr on a nonzero exit and threw
  * stdout away. Every test runner on earth prints its failures to stdout and
  * exits nonzero — `pytest`, `bun test`, `cargo test`, `make`. So the model ran
  * the suite, got back `Error (exit 1): ` with nothing after the colon, and had
@@ -16,7 +16,7 @@
  * every existing test asserted only the `Error (exit N)` prefix.
  *
  * Three implementations of one contract, so all three are pinned here:
- *   - the `run` builtin over the workspace shell (core/tools/builtins.ts)
+ *   - the `shell` builtin over the workspace shell (core/tools/builtins.ts)
  *   - the inline executor's `exec` (core/execution/inline.ts)
  *   - the local `laptop` executor's `exec` (cli-backend, covered in its own suite)
  */
@@ -30,7 +30,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type {  } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
 /** A shell whose command failed the way a test runner fails: the diagnosis on
  *  stdout, a bare summary line (or nothing at all) on stderr, nonzero exit. */
@@ -51,18 +51,18 @@ function failingSuiteShell(stderr = ''): Shell {
   };
 }
 
-function runToolOver(shell: Shell): RunTool {
+function shellToolOver(shell: Shell): ShellTool {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime });
 
-  return { execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run) };
+  return { execute: toolExecute<{ command: string; runtime?: string }, string>(tools.shell) };
 }
 
-describe('a failed `run` tells the model what actually happened', () => {
+describe('a failed `shell` tells the model what actually happened', () => {
   test('a nonzero exit keeps stdout — the failing suite is legible, not swallowed', async () => {
-    const run = runToolOver(failingSuiteShell());
-    const pending = run.execute({ command: 'bun test' });
+    const tool = shellToolOver(failingSuiteShell());
+    const pending = tool.execute({ command: 'bun test' });
 
     // The diagnosis, not just the verdict. Without these the model is told only
     // that something exited 1, which is the same information as no message.
@@ -72,30 +72,30 @@ describe('a failed `run` tells the model what actually happened', () => {
   });
 
   test('the exit code still rides along, so failure stays unambiguous', async () => {
-    const run = runToolOver(failingSuiteShell());
-    await expect(run.execute({ command: 'bun test' })).rejects.toMatchObject({ code: 'io', execution: { exitCode: 1 } });
+    const tool = shellToolOver(failingSuiteShell());
+    await expect(tool.execute({ command: 'bun test' })).rejects.toMatchObject({ code: 'io', execution: { exitCode: 1 } });
   });
 
   test('stderr is not dropped either when the command wrote to both', async () => {
-    const run = runToolOver(failingSuiteShell('error: script "test" exited with code 1'));
-    const pending = run.execute({ command: 'bun test' });
+    const tool = shellToolOver(failingSuiteShell('error: script "test" exited with code 1'));
+    const pending = tool.execute({ command: 'bun test' });
     await expect(pending).rejects.toThrow('applies the discount before tax');
     await expect(pending).rejects.toThrow('script "test" exited with code 1');
   });
 
   test('a failure with no output at all says so, rather than trailing into nothing', async () => {
-    const run = runToolOver({ exec: async () => ({ stdout: '', stderr: '', exitCode: 127 }) });
-    const pending = run.execute({ command: 'nosuchbinary' });
+    const tool = shellToolOver({ exec: async () => ({ stdout: '', stderr: '', exitCode: 127 }) });
+    const pending = tool.execute({ command: 'nosuchbinary' });
     await expect(pending).rejects.toMatchObject({ execution: { exitCode: 127 } });
     await expect(pending).rejects.toThrow('(no output)');
   });
 
   test('a successful command is unchanged — stdout only, no error framing', async () => {
-    const run = runToolOver({
+    const tool = shellToolOver({
       exec: async () => ({ stdout: 'all good', stderr: 'a deprecation warning', exitCode: 0 }),
     });
 
-    const out = await run.execute({ command: 'bun test' });
+    const out = await tool.execute({ command: 'bun test' });
 
     expect(out).toContain('all good');
     expect(out).not.toContain('Error (exit');

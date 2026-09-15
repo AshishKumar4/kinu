@@ -324,7 +324,7 @@ export class TurnSteering {
    *   • `repeats.size` — distinct (tool, arguments) calls issued. The repeat
    *     detector's own keyset, read for what it is rather than for what
    *     repeats in it: every entry is a call this turn had not made before. It
-   *     is also, for `run`, exactly "distinct commands run".
+   *     is also, for `shell`, exactly "distinct commands run".
    *   • `filesTouched` — paths read or written for the first time, off the
    *     turn's file ledger.
    *   • `editsApplied` — edits that actually changed a file. `sed -i` exits 0

@@ -14,7 +14,7 @@
 // instead of an unclaimed loop over private bytes nobody else could read.
 //
 // The tool surface is the SAME backend-agnostic buildHeadToolSet the cf Facet
-// uses: `run` + `eval` + `web` (the parent's vocabulary, so a fork's
+// uses: `shell` + `eval` + `web` (the parent's vocabulary, so a fork's
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 

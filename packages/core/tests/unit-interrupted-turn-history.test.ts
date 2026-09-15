@@ -39,13 +39,13 @@ function sse(events: string[]): string {
   return events.map((e) => `data: ${e}\n\n`).join('');
 }
 
-/** Text + one `run` call, finishing on tool_calls — the shape a turn is in when
+/** Text + one `shell` call, finishing on tool_calls — the shape a turn is in when
  *  the owner presses stop. */
 function toolStep(id: string): Response {
   return new Response(sse([
     JSON.stringify({ choices: [{ delta: { content: 'checking the tree' } }] }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
-      { index: 0, id, type: 'function', function: { name: 'run', arguments: '{"command":"git status"}' } },
+      { index: 0, id, type: 'function', function: { name: 'shell', arguments: '{"command":"git status"}' } },
     ] } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }),
     '[DONE]',
@@ -61,7 +61,7 @@ function textStep(text: string): Response {
 }
 
 const tools: ToolSet = {
-  run: tool({
+  shell: tool({
     description: 'shell',
     inputSchema: z.object({ command: z.string() }),
     execute: async ({ command }: { command: string }) => `ran: ${command}`,
@@ -232,7 +232,7 @@ describe('a history that already holds an orphaned call', () => {
     { role: 'user', content: 'check the repo' },
     { role: 'assistant', content: [
       { type: 'text', text: 'checking the tree' },
-      { type: 'tool-call', toolCallId: ORPHAN_ID, toolName: 'run', input: { command: 'git status' } },
+      { type: 'tool-call', toolCallId: ORPHAN_ID, toolName: 'shell', input: { command: 'git status' } },
     ] },
     { role: 'user', content: 'hello?' },
   ];

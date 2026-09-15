@@ -79,7 +79,7 @@ describe('ChatApp consent ownership', () => {
     const pending = {
       consentId: 'consent-1',
       deviceLabel: 'Workstation',
-      method: 'run',
+      method: 'shell',
       command: 'bun test',
     };
 
@@ -124,7 +124,7 @@ describe('ChatApp consent ownership', () => {
         listPending: async () => [{
           consentId: 'consent-enter',
           deviceLabel: 'Workstation',
-          method: 'run',
+          method: 'shell',
           command: 'bun test',
         }],
         resolve: async (_id, decision) => {
@@ -156,7 +156,7 @@ describe('ChatApp consent ownership', () => {
         listPending: async () => [{
           consentId: 'long-consent',
           deviceLabel: 'Workstation',
-          method: 'run',
+          method: 'shell',
           command: `bun run ${'private-argument '.repeat(200)}`,
         }],
         resolve: async (_id, decision) => {

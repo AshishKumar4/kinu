@@ -106,14 +106,14 @@ function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
     turn: {
       userMessage: 'run the migration',
       assistantResponse: 'ran it',
-      toolCalls: [{ name: 'run', args: { command: 'migrate' } }],
+      toolCalls: [{ name: 'shell', args: { command: 'migrate' } }],
       steps: 2,
       durationMs: 1_200,
       feedback: null,
       hadError: false,
       turnId,
     },
-    reachable: ['run', 'read'],
+    reachable: ['shell', 'read'],
     minSeverity: 'nit',
     recent: [],
   };
@@ -639,7 +639,7 @@ describe('whether the container may be disturbed', () => {
   test('a running detached job counts, because it may hold the container', async () => {
     const { agent } = orchestratorHarness();
     agent.harnessJobs().create({
-      id: 'bgjob-live', kind: 'run', workMode: 'build',
+      id: 'bgjob-live', kind: 'shell', workMode: 'build',
       input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
     });
     expect(await agent.hasSandboxBackgroundWork()).toBe(true);
@@ -649,7 +649,7 @@ describe('whether the container may be disturbed', () => {
     const { agent } = orchestratorHarness();
     const jobs = agent.harnessJobs();
     jobs.create({
-      id: 'bgjob-done', kind: 'run', workMode: 'build',
+      id: 'bgjob-done', kind: 'shell', workMode: 'build',
       input: JSON.stringify({ command: 'npm test' }), now: Date.now(), label: 'npm test',
     });
     jobs.settle('bgjob-done', jobs.epochOf('bgjob-done') ?? 0, '"ok"', Date.now());

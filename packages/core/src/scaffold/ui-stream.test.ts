@@ -72,7 +72,7 @@ describe('scaffoldEventsToUIStream', () => {
   test('tool_call + tool_result → tool-input-available + tool-output-available, closing open text', async () => {
     const chunks = await collect(scaffoldEventsToUIStream(scriptedRunner([
       { type: 'text_delta', text: 'thinking' },
-      { type: 'tool_call', name: 'run', args: { command: 'ls' }, toolCallId: 'tc1' },
+      { type: 'tool_call', name: 'shell', args: { command: 'ls' }, toolCallId: 'tc1' },
       { type: 'tool_result', toolCallId: 'tc1', result: { stdout: 'a\nb' }, outcome: { success: true } },
       { type: 'done' },
     ])));
@@ -83,7 +83,7 @@ describe('scaffoldEventsToUIStream', () => {
       'tool-input-available', 'tool-output-available', 'finish',
     ]);
     expect(chunks.find(c => c.type === 'tool-input-available')).toMatchObject({
-      toolCallId: 'tc1', toolName: 'run', input: { command: 'ls' },
+      toolCallId: 'tc1', toolName: 'shell', input: { command: 'ls' },
     });
     expect(chunks.find(c => c.type === 'tool-output-available')).toMatchObject({
       toolCallId: 'tc1', output: { stdout: 'a\nb' },

@@ -3,7 +3,7 @@
 // The regression these tests pin: a non-zero exit that returns stderr alone
 // sends a failing `pytest`/`make` — which writes its diagnostics to stdout —
 // to the model as an exit code and nothing else. Asserted through the
-// PUBLIC surfaces the model actually reads (the `run` tool, codemode
+// PUBLIC surfaces the model actually reads (the `shell` tool, codemode
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -18,7 +18,7 @@ import { createTestRuntime } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<CommandResult> };
+type ShellTool = { execute: (args: { command: string; runtime?: string }) => Promise<CommandResult> };
 
 /** A pytest-shaped failure: everything diagnostic on stdout, nothing on stderr. */
 const PYTEST = {
@@ -27,13 +27,13 @@ const PYTEST = {
   exitCode: 1,
 };
 
-const runToolOver = (shell: Shell): RunTool => {
+const shellToolOver = (shell: Shell): ShellTool => {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
 
   return {
     execute: toolExecute<{ command: string; runtime?: string }, CommandResult>(
-      buildBuiltinTools({ rt: runtime }).run,
+      buildBuiltinTools({ rt: runtime }).shell,
     ),
   };
 };
@@ -90,9 +90,9 @@ describe('formatExecResult', () => {
 
 
 describe('the surfaces the model reads', () => {
-  test('the `run` tool surfaces a failing test suite\'s stdout', async () => {
-    const run = runToolOver({ exec: async () => PYTEST });
-    await expect(run.execute({ command: 'pytest' })).rejects.toMatchObject({
+  test('the `shell` tool surfaces a failing test suite\'s stdout', async () => {
+    const tool = shellToolOver({ exec: async () => PYTEST });
+    await expect(tool.execute({ command: 'pytest' })).rejects.toMatchObject({
       code: 'io', execution: { exitCode: 1 }, message: expect.stringContaining('test_add - assert 3 == 4'),
     });
   });
@@ -100,7 +100,7 @@ describe('the surfaces the model reads', () => {
   test('successful refusal-shaped stdout stays data in native run and codemode', async () => {
     const stdout = JSON.stringify({ reason: 'denied', error: 'historical incident' });
     const shell: Shell = { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) };
-    expect(await runToolOver(shell).execute({ command: 'cat incident.json' })).toBe(stdout);
+    expect(await shellToolOver(shell).execute({ command: 'cat incident.json' })).toBe(stdout);
     const { rt } = createTestRuntime();
 
     const provider = createInlineExecutor({
@@ -110,12 +110,12 @@ describe('the surfaces the model reads', () => {
     expect(await provider.tools.exec?.execute('cat incident.json')).toBe(stdout);
   });
 
-  test('`run` on a successful command with warnings keeps the warnings', async () => {
-    const run = runToolOver({ exec: async () => ({ stdout: 'ok', stderr: 'npm WARN deprecated', exitCode: 0 }) });
-    expect(await run.execute({ command: 'npm install' })).toContain('npm WARN deprecated');
+  test('`shell` on a successful command with warnings keeps the warnings', async () => {
+    const tool = shellToolOver({ exec: async () => ({ stdout: 'ok', stderr: 'npm WARN deprecated', exitCode: 0 }) });
+    expect(await tool.execute({ command: 'npm install' })).toContain('npm WARN deprecated');
   });
 
-  test('codemode `workspace.exec` surfaces the same failure detail as `run`', async () => {
+  test('codemode `workspace.exec` surfaces the same failure detail as `shell`', async () => {
     const { rt } = createTestRuntime();
 
     const provider = createInlineExecutor({

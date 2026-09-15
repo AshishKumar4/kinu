@@ -845,7 +845,7 @@ export function findEntrypoints(
         }
       }
 
-      // `tools.run = tool({…})` and `{ run: tool({…}) }` — a handler bound under
+      // `tools.shell = tool({…})` and `{ run: tool({…}) }` — a handler bound under
       // a name the model sends. The VALUE has to be a built tool: `run` and
       // `file` are ordinary property names, and keying on the name alone found
       // 164 entrypoints where 8 tools exist, rooting files at random.

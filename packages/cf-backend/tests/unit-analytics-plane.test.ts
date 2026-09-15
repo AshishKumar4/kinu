@@ -900,11 +900,11 @@ describe('the record adapters write the rows their boundaries promise', () => {
   test('a tool row carries a verdict and a duration and nothing the tool touched', () => {
     const plane = fakeEnv();
     recordToolRow(plane.env, {
-      workspace: 'ws', agentKind: 'orchestrator', tool: 'run', failed: true, durationMs: 91,
+      workspace: 'ws', agentKind: 'orchestrator', tool: 'shell', failed: true, durationMs: 91,
     });
     const point = onlyPoint(plane.agent);
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'kind')).toBe('tool');
-    expect(blobAt(point, AGENT_METRICS_SCHEMA, 'tool')).toBe('run');
+    expect(blobAt(point, AGENT_METRICS_SCHEMA, 'tool')).toBe('shell');
     expect(blobAt(point, AGENT_METRICS_SCHEMA, 'outcome')).toBe('failed');
     expect(point.doubles?.[1]).toBe(91);
     expect(point.doubles?.[4]).toBe(1);

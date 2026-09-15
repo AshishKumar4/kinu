@@ -374,7 +374,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
 describe('steeringConversion — every mechanical trigger', () => {
   test('a repeat-breaker steer that converted is counted', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'run', converted: true });
+    emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'repeated_call', step: 3, tool: 'shell', converted: true });
     emit(store.sql, store.actor, 'run-a', 'turn_steering', { trigger: 'no_progress', step: 9, converted: true });
 
     expect(steeringConversion.score(store.sql, store.actor).rate).toBe(1);
@@ -386,11 +386,11 @@ describe('steeringConversion — every mechanical trigger', () => {
 
     for (let i = 0; i < 3; i++) {
       emit(store.sql, store.actor, `run-${String(i)}`, 'turn_steering', {
-        trigger: 'repeated_failure', step: 5, tool: 'run', converted: false,
+        trigger: 'repeated_failure', step: 5, tool: 'shell', converted: false,
       });
     }
 
-    emit(store.sql, store.actor, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'run', converted: true });
+    emit(store.sql, store.actor, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'shell', converted: true });
 
     const score = steeringConversion.score(store.sql, store.actor);
     expect(score.eligible).toBe(4);
@@ -506,7 +506,7 @@ describe('recoveryDurability — the recovery that TOOK', () => {
   test('a finding whose signature never recurs holds', () => {
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
-      recoveries: [{ tool: 'run', failures: 3, failedSignature: 'run:bun test x' }],
+      recoveries: [{ tool: 'shell', failures: 3, failedSignature: 'run:bun test x' }],
     });
     const score = recoveryDurability.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
@@ -521,10 +521,10 @@ describe('recoveryDurability — the recovery that TOOK', () => {
     // recoveries-over-recoveries is 1.00 on every run forever.
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
-      recoveries: [{ tool: 'run', failures: 2, failedSignature: 'run:pytest -q' }],
+      recoveries: [{ tool: 'shell', failures: 2, failedSignature: 'run:pytest -q' }],
     });
     emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
-      recoveries: [{ tool: 'run', failures: 4, failedSignature: 'run:pytest -q' }],
+      recoveries: [{ tool: 'shell', failures: 4, failedSignature: 'run:pytest -q' }],
     });
     const score = recoveryDurability.score(store.sql, store.actor);
     expect(score.eligible).toBe(1);
@@ -538,7 +538,7 @@ describe('recoveryDurability — the recovery that TOOK', () => {
     const store = eventStore();
     emit(store.sql, store.actor, 'run-a', 'execution_recovery', {
       recoveries: [
-        { tool: 'run', failures: 1, failedSignature: 'same' },
+        { tool: 'shell', failures: 1, failedSignature: 'same' },
         { tool: 'file', failures: 1, failedSignature: 'same' },
       ],
     });
@@ -625,10 +625,10 @@ describe('toolOutcomes — structural attribution with an observed denominator',
       name: 'file', toolCallId: 't1', outcome: { success: true }, result: { error: 'ordinary document data' },
     });
     emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
-      name: 'run', toolCallId: 't2', outcome: { success: true }, result: 'Error (exit 3)',
+      name: 'shell', toolCallId: 't2', outcome: { success: true }, result: 'Error (exit 3)',
     });
     emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
-      name: 'run', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 3 } }, result: 'ok',
+      name: 'shell', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 3 } }, result: 'ok',
     });
     const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
@@ -640,8 +640,8 @@ describe('toolOutcomes — structural attribution with an observed denominator',
 
   test('rows with no producer outcome remain observed but cannot supply a success rate', () => {
     const store = eventStore();
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't1', result: 'Error (exit 3)' });
-    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'run', toolCallId: 't2', error: 'a bare error string, no outcome' });
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't1', result: 'Error (exit 3)' });
+    emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'shell', toolCallId: 't2', error: 'a bare error string, no outcome' });
     emit(store.sql, store.actor, 'run-a', 'tool_call_end', { name: 'file', toolCallId: 't3', error: '', result: 'ok' });
     const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
@@ -658,13 +658,13 @@ describe('toolOutcomes — structural attribution with an observed denominator',
       name: 'file', toolCallId: id, args: { action: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
     });
     emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
-      name: 'run', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 1 } }, result: 'no details',
+      name: 'shell', toolCallId: 't3', outcome: { success: false, reason: null, execution: { exitCode: 1 } }, result: 'no details',
     });
     const result = toolOutcomes.score(store.sql, store.actor);
     expect(result.eligible).toBe(3);
     expect(result.passed).toBe(0);
     expect(result.rate).toBe(0);
-    expect(parseFailureMix(result.detail)).toEqual([['file·edit·not_found', 2], ['run·exit_1', 1]]);
+    expect(parseFailureMix(result.detail)).toEqual([['file·edit·not_found', 2], ['shell·exit_1', 1]]);
     store.close();
   });
 });

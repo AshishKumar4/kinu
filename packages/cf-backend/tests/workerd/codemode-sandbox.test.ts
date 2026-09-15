@@ -291,7 +291,7 @@ describe('the eval sandbox under workerd', () => {
 
   test('a bare native tool name is corrected toward tools.<name>', async () => {
     const result = await executor.execute("// misuse\nreturn await run({ command: 'ls' })", [toolsProvider([]), stateProvider, workspace]);
-    expect(result.error).toContain('"run" is a native Kinu tool');
-    expect(result.error).toContain('`tools.run(input)`');
+    expect(result.error).toContain('"shell" is a native Kinu tool');
+    expect(result.error).toContain('`tools.shell(input)`');
   });
 });

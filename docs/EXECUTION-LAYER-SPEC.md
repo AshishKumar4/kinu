@@ -7,7 +7,7 @@
 
 ## One workspace, optional environments
 
-Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `run`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
+Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare, and over the local workspace on the CLI. The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
@@ -67,7 +67,7 @@ must be cheap. Neither provisions anything.
 `ExecutionRouter` (`core/src/execution/router.ts`) registers providers, reports
 status, and gives codemode only available providers. Explicit `runtime` plus
 namespace is the routing decision. `register()` applies `gateProviderExec`
-(`core/src/execution/approval.ts`), so `run` and `<name>.exec()` share approval.
+(`core/src/execution/approval.ts`), so `shell` and `<name>.exec()` share approval.
 `workspace.exec` is exempt. `withApprovalGatedShell` already gates it;
 `startProcess` is gated here.
 
@@ -81,7 +81,7 @@ A gate denial preserves `denied`; a queued request preserves `unavailable`,
 and neither dispatches a command. Only producer-classified no-execution
 outcomes qualify for a grant refund.
 
-Native invocations use the SDK error channel. For example, native `run`
+Native invocations use the SDK error channel. For example, native `shell`
 returns successful text but raises a classified `KinuError` for an operation
 failure, retaining observed exit metadata. The explicit namespace adapters
 return typed operation refusals as values so authored code can branch on them.
@@ -127,7 +127,7 @@ backend label.
 ## Workspace, container, laptop, parent
 
 `createNimbusWorkspaceExecutor()` gives Cloudflare one Nimbus session for
-files, POSIX shell, code/runtime execution, processes, and ports. `run`,
+files, POSIX shell, code/runtime execution, processes, and ports. `shell`,
 `file`, and codemode share a read-before-write ledger and approval policy.
 Actors share files and processes but retain a `shellId` across reconstruction:
 `agent:<name>` for the main actor (`cf-backend/src/actor-agent.ts:700`) and

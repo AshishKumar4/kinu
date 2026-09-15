@@ -94,7 +94,7 @@ const TOOL_SCHEMAS = [
   {
     type: "function" as const,
     function: {
-      name: "run",
+      name: "shell",
       description: "Run a shell command. Supports: cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq. Pipes and redirects work.",
       parameters: { type: "object", properties: { command: { type: "string" }, executor: { type: "string" } }, required: ["command"] },
     },

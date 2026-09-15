@@ -605,7 +605,7 @@ export interface ShellApprovalPolicy {
 /** The conservative default every gated boundary falls back to when no
  *  policy is supplied: 'strict', with nobody to ask — 'gate' decisions are
  *  refused with the explanatory message, never silently allowed. Matches
- *  what `run` always defaulted to before this policy existed. */
+ *  what `shell` always defaulted to before this policy existed. */
 export const STRICT_NO_CHANNEL_POLICY: ShellApprovalPolicy = { mode: () => 'strict' };
 
 /**
@@ -687,7 +687,7 @@ function afterGrants(review: ApprovalResult, policy: ShellApprovalPolicy, execut
  * Wrap ANY exec-shaped function — a `Shell.exec`, an `ExecutorProvider`
  * tool's `execute` — with the FULL mode-aware approval gate. This is the one
  * implementation of "should this command run" used at every boundary a
- * command actually reaches a shell: `run`'s workspace/router dispatch and
+ * command actually reaches a shell: `shell`'s workspace/router dispatch and
  * every ExecutorProvider's `exec`/`startProcess` (see execution/approval.ts),
  * so `run { command }` and the same command reached through codemode
  * (`workspace.exec` and every registered executor's `exec`) answer to

@@ -99,7 +99,7 @@ export function clearBackgroundJobs(jobs: BackgroundJobStore) {
  * holds on the resume path and not on this one would be worse than none, because
  * the two paths differ only in who pressed the button.
  *
- * A kind the narrowing declines (`run`, `eval`, a converse `agents` action)
+ * A kind the narrowing declines (`shell`, `eval`, a converse `agents` action)
  * is replayed exactly as stored.
  */
 export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string): RetryOutcome {

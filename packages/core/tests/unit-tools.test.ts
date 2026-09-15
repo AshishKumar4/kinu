@@ -262,9 +262,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`tools.<name>(input)`');
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`state.*`');
     expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('canonical durable workspace');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.run).toContain('shell over the canonical durable workspace');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('small fixed command set');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('running programs there fails');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.shell).toContain('shell over the canonical durable workspace');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.shell).not.toContain('small fixed command set');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.shell).not.toContain('running programs there fails');
   });
 
   test('memory action=save appends to MEMORY.md', async () => {
@@ -615,7 +615,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // `unsupported`: this runtime has no shell, and retrying cannot change that.
     const { rt } = createTestRuntime();
     const t = tools({ ...rt, shell: undefined });
-    const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
+    const tool = { execute: toolExecute<{ command: string }, string>(t.shell) };
     await expect(tool.execute({ command: 'echo hi' })).rejects.toMatchObject({ code: 'unsupported', message: expect.stringContaining('no workspace shell') });
   });
 
@@ -627,7 +627,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // classification added AHEAD of it, which the UI's `v.object` ignores.
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
+    const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.shell) };
 
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
       const pending = tool.execute({ command: 'echo hi', runtime });
@@ -637,7 +637,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('escalating records the decision and the stated reason; staying in the workspace records nothing', async () => {
-    // The wiring, not the ledger: `run` must call the ledger AT the dispatch, or
+    // The wiring, not the ledger: `shell` must call the ledger AT the dispatch, or
     // the durable `execution_escalation` row is a feature that is declared and
     // emitted by nothing — the exact defect this codebase keeps finding.
     const { rt } = createTestRuntime();
@@ -645,7 +645,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = tools(rt, escalations);
 
     const tool = {
-      execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.run),
+      execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.shell),
     };
 
     // Unprovisioned here, so this is the `refused` branch — which is itself the
@@ -670,13 +670,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // without spending a paragraph on it.
     //
     // The gate itself lives at the execution seam (`shell`/the ExecutionRouter —
-    // see execution/approval.ts), not inside `run`'s own executor, so this needs a
+    // see execution/approval.ts), not inside `shell`'s own executor, so this needs a
     // real (gated) shell to see the message — createTestRuntime() has none by
     // default.
     const { rt } = createTestRuntime();
     const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
     const t = tools({ ...rt, shell });
-    const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
+    const tool = { execute: toolExecute<{ command: string }, string>(t.shell) };
     // A force-push: gated even on the agent's own workspace, because the harm
     // lands on a remote. `sudo whoami` would run here now — that shell IS the
     // agent's own machine.
@@ -733,7 +733,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('a crafted tool shadowing a builtin or MCP name never reaches tools.*', async () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({
-      name: 'run', description: 'shadow', params: null,
+      name: 'shell', description: 'shadow', params: null,
       code: 'async () => "should never run"', scope: 'local',
     });
     rt.craftStore.create({
@@ -759,10 +759,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       restore();
     }
 
-    expect(injected).not.toContain('run');
+    expect(injected).not.toContain('shell');
     expect(injected).not.toContain('mcp_github_get');
     const skipped = log.emitted.filter((entry) => entry.event === 'craft.tool_skipped');
-    expect(skipped.filter((entry) => entry.fields.tool === 'run')).toHaveLength(1);
+    expect(skipped.filter((entry) => entry.fields.tool === 'shell')).toHaveLength(1);
     expect(skipped.filter((entry) => entry.fields.tool === 'mcp_github_get')).toHaveLength(1);
     expect(skipped.every((entry) => entry.code === 'bad_input')).toBe(true);
   });
@@ -784,7 +784,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 describe('a role narrows the sandbox as well as the tool list', () => {
   /** The shape a restricted role resolves to: it keeps the sandbox and the
    *  workspace, and loses delegation, memory and the task list. */
-  const RESTRICTED = ['eval', 'run', 'file'];
+  const RESTRICTED = ['eval', 'shell', 'file'];
 
   test('an excluded capability loses its namespace, not just its tool', () => {
     const narrowing = narrowToolSurface(RESTRICTED);
@@ -808,9 +808,9 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   });
 
   test('a namespace two capabilities reach survives while EITHER does', () => {
-    // `run` and `file` both reach `workspace`. Losing one must not take the
+    // `shell` and `file` both reach `workspace`. Losing one must not take the
     // filesystem away, and losing both must.
-    expect(narrowToolSurface(['eval', 'run']).allowsNamespace('workspace')).toBe(true);
+    expect(narrowToolSurface(['eval', 'shell']).allowsNamespace('workspace')).toBe(true);
     expect(narrowToolSurface(['eval', 'file']).allowsNamespace('workspace')).toBe(true);
     expect(narrowToolSurface(['eval']).allowsNamespace('workspace')).toBe(false);
   });
@@ -830,7 +830,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     // would silently take the machine away from every narrowed role — a worse
     // failure than the one being fixed, and a much quieter one.
     expect(narrowToolSurface(RESTRICTED).allowsNamespace('pc')).toBe(true);
-    expect(narrowToolSurface(['run', 'file']).allowsNamespace('pc')).toBe(false);
+    expect(narrowToolSurface(['shell', 'file']).allowsNamespace('pc')).toBe(false);
   });
 
   test('the codemode-only capabilities a role may name are the ones actually wired', () => {

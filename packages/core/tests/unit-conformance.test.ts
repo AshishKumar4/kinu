@@ -26,12 +26,12 @@ function observing(planes: ObservedSurface['planes']): ObservedSurface {
 
 describe('compareSurface can fail (canaries)', () => {
   test('declared wired but not observed → missing', () => {
-    const report = compareSurface(observing({ tool: new Set(['run']) }));
+    const report = compareSurface(observing({ tool: new Set(['shell']) }));
     const missing = report.findings.filter((f) => f.kind === 'missing').map((f) => f.name);
-    // Every tool the manifest wires on cli except `run` must be reported.
+    // Every tool the manifest wires on cli except `shell` must be reported.
     expect(missing).toContain('eval');
     expect(missing).toContain('memory');
-    expect(missing).not.toContain('run');
+    expect(missing).not.toContain('shell');
   });
 
   test('observed but not declared → undeclared', () => {

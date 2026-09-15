@@ -279,7 +279,7 @@ describe('tool effect claims', () => {
     // An MCP server's tool, or any adapter added later: nothing has established
     // its replay safety, so it goes through the claim.
     expect(replayPolicyFor('mcp__stripe__create_charge')).toBe('claimed');
-    expect(replayPolicyFor('run')).toBe('claimed');
+    expect(replayPolicyFor('shell')).toBe('claimed');
   });
 
   describe('buildMcpToolSet — an admitted remote surface is claimed before it merges', () => {

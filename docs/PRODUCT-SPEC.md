@@ -358,7 +358,7 @@ The backend wrapper may differ where the hosting API differs. Hosted Think, loca
 
 ### 9.1 Current native and code surfaces
 
-The builtin registry defines `eval`, `run`, `file`, `agents`, `memory`, `tasks`, `web` and `report`. Availability is intersected with the actor's role and wired dependencies. MCP and crafted tools are additional admitted tools; eight builtin names do not mean every actor has exactly eight total tools.
+The builtin registry defines `eval`, `shell`, `file`, `agents`, `memory`, `tasks`, `web` and `report`. Availability is intersected with the actor's role and wired dependencies. MCP and crafted tools are additional admitted tools; eight builtin names do not mean every actor has exactly eight total tools.
 
 The current hosted code program receives capability namespaces, not the trusted Worker's raw environment:
 

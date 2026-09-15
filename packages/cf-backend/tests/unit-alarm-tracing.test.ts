@@ -315,7 +315,7 @@ describe('a span marks a failure and changes nothing about it', () => {
 
     try {
       await tracer.span(
-        'run',
+        'shell',
         { isolateGen: 1, selfPath: 'A:a' },
         async () => { await Promise.resolve(); throw thrown; },
       );

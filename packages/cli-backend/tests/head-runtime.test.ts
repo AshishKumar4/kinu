@@ -163,7 +163,7 @@ function capturingHeadModel(
       promptSink?.(JSON.stringify(opts.prompt));
 
       if (runSchemaSink) {
-        runSchemaSink(JSON.stringify((opts.tools ?? []).find((candidate) => candidate.name === 'run')));
+        runSchemaSink(JSON.stringify((opts.tools ?? []).find((candidate) => candidate.name === 'shell')));
       }
 
       return {
@@ -380,7 +380,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     await (await runtime.spawnHead(aHeadInput())).run();
     expect(new Set(captured)).toEqual(new Set([
       'record_evidence', 'record_decision',
-      'eval', 'run', 'file', 'web',
+      'eval', 'shell', 'file', 'web',
       'split_subheads',
     ]));
   });
@@ -430,13 +430,13 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   });
 
   test('allowedTools maps the PARENT vocabulary onto real tools (never empties)', async () => {
-    // The old bug: a fork with allowedTools:["run"] was filtered against a
+    // The old bug: a fork with allowedTools:["shell"] was filtered against a
     // disjoint sandbox_* head surface and silently ran with ZERO tools. Now the
-    // head's vocabulary IS the parent's, so ["run"] resolves to exactly run.
+    // head's vocabulary IS the parent's, so ["shell"] resolves to exactly run.
     let captured: string[] = [];
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
-    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['run'] }))).run();
-    expect(captured).toEqual(['run']);
+    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['shell'] }))).run();
+    expect(captured).toEqual(['shell']);
   });
 
   test('phase events fire on split and merge', async () => {
@@ -589,7 +589,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     });
 
-    const run = toolExecute<{ command: string; runtime: string }, string>(tools.run);
+    const run = toolExecute<{ command: string; runtime: string }, string>(tools.shell);
     const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' });
     expect(String(out)).toContain('real file content');
   });

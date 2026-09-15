@@ -303,7 +303,7 @@ export class TerminalTransitions {
     try {
       run = await this.ledger.drive(this.sequenceId(transition));
     } catch (err) {
-      // RELEASED, then RE-ARMED. `run` can reject while arming the first wake:
+      // RELEASED, then RE-ARMED. `shell` can reject while arming the first wake:
       // a live process holding the sequence is one every later sweep skips, and
       // rows owed with no wake behind them are rows nothing comes back for.
       this.leave(transition);

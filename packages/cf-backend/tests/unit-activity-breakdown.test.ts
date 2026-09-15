@@ -28,10 +28,10 @@ describe("breakdownView", () => {
     const view = breakdownView(compose([
       seg("tools", "web", 400),
       seg("tools", "file", 1600),
-      seg("tools", "run", 800),
+      seg("tools", "shell", 800),
     ]));
 
-    expect(view.planes[0]?.rows.map((r) => r.label)).toEqual(["file", "run", "web"]);
+    expect(view.planes[0]?.rows.map((r) => r.label)).toEqual(["file", "shell", "web"]);
     expect(view.planes[0]?.chars).toBe(2800);
   });
 

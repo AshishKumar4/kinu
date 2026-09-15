@@ -24,7 +24,7 @@ describe('clamped run output on the local backend', () => {
   test('the marker remedy round-trips: workspace.readFile restores what the host shell cannot see', async () => {
     const rt = localRuntime();
     const tools = buildBuiltinTools({ rt });
-    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.run);
+    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
 
     // A real HOST command whose output blows the clamp budget. `laptop` is
     // where the machine is now — the default `workspace` runtime is the

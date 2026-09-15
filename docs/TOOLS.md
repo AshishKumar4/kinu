@@ -3,7 +3,7 @@
 `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` defines eight native
 tools. Each is a standing choice, so a longer list reduces selection accuracy.
 `buildBuiltinTools` builds one set for both backends. Only `eval`,
-`run`, `file`, `memory`, and `tasks` are unconditional. The rest need wired
+`shell`, `file`, `memory`, and `tasks` are unconditional. The rest need wired
 deps. Subordinates get `report` and no `peers`, so answering an inbound agent
 message event — `msg` with `event_id` — is off their surface. Files use `file`
 or `workspace.*`. Crafted tools use `tools.<name>(args)`.
@@ -13,7 +13,7 @@ or `workspace.*`. Crafted tools use `tools.<name>(args)`.
 | Tool | Purpose |
 |------|---------|
 | `eval` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, `web.*`, `agent.*`, `llm.*`, and `tools.<name>` for crafted tools |
-| `run` | One shell command in one explicitly selected runtime |
+| `shell` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane, over the same workspace filesystem every other surface addresses. `read` a file, `edit` exact text inside it, `write` it whole |
 | `agents` | The whole delegation surface: `swarm \| hire \| msg \| list \| dismiss` |
 | `memory` | The one durable-state tool: `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `conversations` to search or browse this agent's own past conversation |
@@ -32,7 +32,7 @@ release:{ native: false, codemode: 'release' }   // codemode only
 eval: { native: true, codemode: null }  // native only; it IS the sandbox
 ```
 
-`codemode` is a namespace name, not a boolean. `run` and `file` use shared
+`codemode` is a namespace name, not a boolean. `shell` and `file` use shared
 `workspace` primitives, so they own no namespace. A capability owns one when
 `codemode` equals its key. Four readers keep this declaration authoritative:
 
@@ -96,14 +96,14 @@ Plan adds no second approval queue and no new persisted format.
 ## file: the file plane
 
 `FILE_TOOL_ACTIONS` names `read`, `write`, `edit`, `list`, `stat`, and `search`. `file`, workspace
-`run`, and `workspace.*` address `rt.storage.vfs`: on hosted, the actor DO own
+`shell`, and `workspace.*` address `rt.storage.vfs`: on hosted, the actor DO own
 Nimbus workspace; on CLI, the working directory when set, otherwise its in-SQLite tree. Containers
 and devices keep separate files under `sandbox.*` and `laptop.*`.
 
 ### Why it exists
 
-Before `file`, all file changes used `run`. One local Terminal-Bench run found
-789 `run` calls and 6 `eval` calls. Of 374 `run` commands in the 2.1
+Before `file`, all file changes used `shell`. One local Terminal-Bench run found
+789 `shell` calls and 6 `eval` calls. Of 374 `shell` commands in the 2.1
 set, 65 were inline `python3 -c`, 55 heredocs, 23 shell redirects, and 14
 `sed -i`. Roughly two in five hand-rolled a mutation. None can report an absent
 target, and `sed -i` exits 0 either way.
@@ -410,7 +410,7 @@ reads.
 
 ## run: shell command
 
-`run` is the Nimbus POSIX shell over the `file` and `workspace.*` plane. It has
+`shell` is the Nimbus POSIX shell over the `file` and `workspace.*` plane. It has
 pipelines, redirects, variables, loops, and the executor advertised "~95
 coreutils" (`packages/core/src/execution/inline.ts`), not a document count.
 Live executor status defines hosted capability. Local execution uses the
@@ -421,7 +421,7 @@ workspace process.
 `runtime_not_provisioned`. Relative paths use `WORKSPACE_ROOT`, `/home/user`.
 Containers receive `/workspace`.
 
-`run` and `eval` are backgroundable. `detachAfterMs` is 30,000
+`shell` and `eval` are backgroundable. `detachAfterMs` is 30,000
 interactive or 300,000 one-shot. Detached work has no deadline. Teardown waits
 `settleGraceMs`, 300,000 interactive or 120,000 one-shot. Approval pre-flights
 every runtime: `deny` refuses; `gate` requires `allow_all`.

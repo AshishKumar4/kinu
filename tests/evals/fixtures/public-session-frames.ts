@@ -100,7 +100,7 @@ export const RECOVERY_TURN_CHUNKS: readonly UIMessageChunk[] = [
   {
     type: 'tool-input-available',
     toolCallId: 'call-1',
-    toolName: 'run',
+    toolName: 'shell',
     input: { command: 'bun test broken.test.ts' },
   },
   { type: 'tool-output-error', toolCallId: 'call-1', errorText: 'Error (exit 1)\n1 fail' },
@@ -109,7 +109,7 @@ export const RECOVERY_TURN_CHUNKS: readonly UIMessageChunk[] = [
   {
     type: 'tool-input-available',
     toolCallId: 'call-2',
-    toolName: 'run',
+    toolName: 'shell',
     input: { command: 'bun test broken.test.ts' },
   },
   { type: 'tool-output-available', toolCallId: 'call-2', output: { ok: true, passed: 1 } },
@@ -233,7 +233,7 @@ export const LEDGER_EVENTS: readonly RunEvent[] = [
   },
   {
     type: 'tool_call_end', runId: 'run-1', eventIndex: 3, timestamp: TIMESTAMP,
-    name: 'run', toolCallId: 'call-2',
+    name: 'shell', toolCallId: 'call-2',
     args: { command: 'bun test broken.test.ts' },
     result: 'Error (exit 1)\n--- stderr ---\n1 fail', durationMs: 900,
     outcome: { success: false, reason: null, execution: { exitCode: 1 } },
@@ -256,7 +256,7 @@ export const LEDGER_EVENTS: readonly RunEvent[] = [
   },
   {
     type: 'tool_call_end', runId: 'run-1', eventIndex: 9, timestamp: TIMESTAMP,
-    name: 'run', toolCallId: 'call-4',
+    name: 'shell', toolCallId: 'call-4',
     args: { command: 'bun test broken.test.ts' }, result: '1 pass, 0 fail', durationMs: 850,
     outcome: { success: true },
   },

@@ -7,7 +7,7 @@ What the model can call, by what name, from where. Decided 2026-09-15 with the o
 | Today | After | Why |
 |---|---|---|
 | `eval` | `eval` | The name every coding agent the models learned from uses for this tool. Identifiers follow as `codemode` (`executeCodemodeCalls` becomes `executeCodemodeCalls`); `eval` itself is reserved as a binding name in strict mode. |
-| `run` | `shell` | One shell command in one runtime. `bash` was considered: the sandbox and a device run `bash -c`, the hosted workspace runs Nimbus's own shell, so `shell` is the name that is true on all three. |
+| `shell` | `shell` | One shell command in one runtime. `bash` was considered: the sandbox and a device run `bash -c`, the hosted workspace runs Nimbus's own shell, so `shell` is the name that is true on all three. |
 | `run.runtime` + `run.device` | `shell.runtime` | One field. Its values are the names the live prompt lists: `workspace`, `sandbox`, and each device by its nickname. The `device` field goes. |
 | executor kind `laptop` | `device` | Four names for one thing today (`laptop`, `device`, "Your PC", `/pc`). The registry and the consent tables already say device. |
 | mount `/pc` (one device) or `/pc/<name>` | `/pc/<name>` always | A path stays valid when a second machine joins, so a saved tool or a slate that names it never breaks. `mounts.ts` and `volatile-context.ts` are the two sites. |

@@ -146,7 +146,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'family-kimi',
     opts: {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
       currentDate: '2026-01-01',
@@ -155,7 +155,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'family-gpt',
     opts: {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'gpt-5-codex', provider: 'openai' },
       currentDate: '2026-01-01',
@@ -164,7 +164,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'family-gemini',
     opts: {
-      availableTools: ['run', 'memory'],
+      availableTools: ['shell', 'memory'],
       backend: 'cf',
       model: { id: 'gemini-3-pro', provider: 'google' },
       currentDate: '2026-01-01',
@@ -196,30 +196,30 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
   {
     name: 'external-tools',
     opts: {
-      availableTools: ['run'],
+      availableTools: ['shell'],
       externalTools: [{ name: 'jira', source: 'mcp', description: 'Issue tracker.' }, 'linear'],
       backend: 'cf',
     },
   },
   {
     name: 'executors-workspace-only',
-    opts: { availableTools: ['run'], executors: [WORKSPACE], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE], backend: 'cf' },
   },
   {
     name: 'executors-offline-laptop',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, LAPTOP_OFFLINE], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, LAPTOP_OFFLINE], backend: 'cf' },
   },
   {
     name: 'executors-preview-capable',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, SANDBOX], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, SANDBOX], backend: 'cf' },
   },
   {
     name: 'executors-unnamed-namespace',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, CUSTOM], backend: 'cf' },
   },
   {
     name: 'executors-cli-local-laptop',
-    opts: { availableTools: ['run'], executors: [WORKSPACE, LAPTOP], backend: 'cli-local' },
+    opts: { availableTools: ['shell'], executors: [WORKSPACE, LAPTOP], backend: 'cli-local' },
   },
   {
     name: 'delegation-swarm-only',

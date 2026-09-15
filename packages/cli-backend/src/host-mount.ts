@@ -103,7 +103,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
  * The physical working directory as the workspace file plane.
  *
  * A local agent's canonical files ARE the directory it was started in: every
- * peer agent bound to that directory reads the same bytes, and a `run` command
+ * peer agent bound to that directory reads the same bytes, and a `shell` command
  * and a `file` read address one tree instead of two. What the agent knows
  * about ITSELF — SOUL.md, its scaffold, its memory, its transcripts — stays in
  * the SQLite-backed plane behind `agentStateVfs`, so none of it is ever

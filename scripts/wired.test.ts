@@ -66,7 +66,7 @@ import { usedThroughBarrel, runIt, type RunDeps } from '../index';
 export function buildTools(): Record<string, unknown> {
   const tools: Record<string, unknown> = {};
   for (const name of BUILTIN_TOOLS) void TOOL_REACH[name as keyof typeof TOOL_REACH];
-  tools.run = tool({ execute: async () => usedThroughBarrel() });
+  tools.shell = tool({ execute: async () => usedThroughBarrel() });
 ${body}
   return tools;
 }

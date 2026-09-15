@@ -81,7 +81,7 @@ function riskOf(capability: SlateCapability, member: string, effect: 'read' | 'm
     case 'tool':
       if (capability.name === 'file' && (member === 'write' || member === 'edit')) {
         body = `Writes, edits or deletes files in workspace ${workspace} as you.`;
-      } else if (capability.name === 'run') {
+      } else if (capability.name === 'shell') {
         body = `Runs shell commands in workspace ${workspace} as you. A command can change or delete anything there.`;
       } else if (capability.name === 'eval') {
         body = `Runs a program with your whole tool surface in workspace ${workspace}.`;
@@ -195,7 +195,7 @@ function graphBinding(
 
     return row(
       capability,
-      [graphMember(capability, 'run', 'mutate', workspace)],
+      [graphMember(capability, 'shell', 'mutate', workspace)],
       declared.tier !== undefined && !catalog.tiers.includes(declared.tier)
         ? `you have no ${declared.tier} tier`
         : undefined,

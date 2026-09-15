@@ -219,7 +219,7 @@ describe('collectDynamicContext', () => {
     // mid-turn has to be visible on the very next one.
     const o = setup();
     expect(collect(o).jobs).toEqual({ items: [], total: 0 });
-    o.stores.jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: 1 });
+    o.stores.jobs.create({ id: 'j1', kind: 'shell', workMode: 'build', now: 1 });
     expect(collect(o).jobs!.items).toHaveLength(1);
   });
 });

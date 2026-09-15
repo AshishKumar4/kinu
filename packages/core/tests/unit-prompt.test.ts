@@ -1,4 +1,4 @@
-// Behavior tests for buildSystemPromptSync — the canonical system prompt.
+// Behavior tests for buildSystemPromptSync — the canonical system prompt.
 // Catches drift: stale tool references, missing capability sections, execution
 // guidance, and that registered-executors render correctly.
 import { describe, test, expect } from 'bun:test';
@@ -42,7 +42,7 @@ import { makeSqlExec } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
 /**
- * The ONE declaration of the `agent.*` contract — the codemode type block that
+ * The ONE declaration of the `agent.*` contract — the codemode type block that
  * reaches the model inside the eval description.
  *
  * The prompt's Code-execution section points at this namespace instead of
@@ -67,10 +67,10 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/self-evolving/i);          // general-purpose, not code-centric
   });
 
-  test('renders a neutral delegation index — one tool, no advice on when to delegate', () => {
+  test('renders a neutral delegation index — one tool, no advice on when to delegate', () => {
     // The index names the actions and their one-line shape; which rung a task
     // wants is selection doctrine and lives in the `agents` tool description.
-    // No sentence here tells the model WHEN to delegate — pressure in an index
+    // No sentence here tells the model WHEN to delegate — pressure in an index
     // is doctrine in a second place, and one of the two will drift.
     const { rt } = createTestRuntime();
 
@@ -106,7 +106,7 @@ describe('buildSystemPromptSync', () => {
 
   test('tree search is action=swarm, and it is a rung rather than a settlement', () => {
     // Preservation contract: the tree search is its own ACTION, not a settle
-    // policy. What must not exist is a second spelling — so the docstring names
+    // policy. What must not exist is a second spelling — so the docstring names
     // no settle at all, and the prompt's index names the action without
     // restating the rung.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
@@ -174,7 +174,7 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the agents schema description leads with the one-sentence lifetime frame', () => {
-    // Two rungs — an ephemeral search, and one hire whose `lifetime` says
+    // Two rungs — an ephemeral search, and one hire whose `lifetime` says
     // whether the agent answers once or stays. The frame names both in one
     // sentence; the rungs that follow carry the mechanism.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(
@@ -189,11 +189,11 @@ describe('buildSystemPromptSync', () => {
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));
   });
 
-  test('the rungs are specified once, in the schema — the prompt only indexes them', () => {
+  test('the rungs are specified once, in the schema — the prompt only indexes them', () => {
     // The schema is the ONE place the rung triggers are stated; the prompt
     // names the rungs and nothing more. Rendering them verbatim in both
-    // surfaces buys no family anything — schema descriptions are
-    // family-neutral, so every family already receives them — and costs 418
+    // surfaces buys no family anything — schema descriptions are
+    // family-neutral, so every family already receives them — and costs 418
     // tokens of byte-identical text in every request.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -205,7 +205,7 @@ describe('buildSystemPromptSync', () => {
 
   test('the two delegation bodies share no sentence, so neither can drift into the other', () => {
     // The spec is the SINGLE SOURCE of delegation doctrine and the prompt's
-    // Delegation section does not render it verbatim — the test above pins that
+    // Delegation section does not render it verbatim — the test above pins that
     // direction. This pins the other one: two bodies about one subject, one of
     // them a GEPA target, converging sentence by sentence until a reader has to
     // diff them to find which is in force.
@@ -218,7 +218,7 @@ describe('buildSystemPromptSync', () => {
     // the place a copy actually lands: a `{{#if}}` sits between the section's
     // lines, it ends in `}}` rather than a full stop, so the sentence after it
     // was glued to the sentence before and matched nothing. Proven by pasting
-    // one of the spec's own sentences into the section — invisible before the
+    // one of the spec's own sentences into the section — invisible before the
     // strip, caught after it.
     const sentences = (text: string): string[] =>
       text.replace(/\{\{[^}]*\}\}/g, ' ')
@@ -228,7 +228,7 @@ describe('buildSystemPromptSync', () => {
     const shared = sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).filter((s) => section.has(s));
     expect(shared).toEqual([]);
     expect(sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).length).toBeGreaterThan(10);
-    // 2026-09-03: five — the neutral index is one clause per action plus the
+    // 2026-09-03: five — the neutral index is one clause per action plus the
     // frame and the namespace line, which is still real prose on both sides
     // rather than two empty lists agreeing.
     expect(section.size).toBeGreaterThan(4);
@@ -237,7 +237,7 @@ describe('buildSystemPromptSync', () => {
   test('completion never evicts: the hire rung teaches that finished subordinates STAY', () => {
     // The eviction bug this stands against: doctrine that says "retire it when
     // done" has the orchestrator dismiss subordinates the moment they report
-    // completed — wiping their context. Persistence is the doctrine in both
+    // completed — wiping their context. Persistence is the doctrine in both
     // surfaces.
     expect(DELEGATION_RUNGS.hire).toMatch(/reports and STAYS/);
     expect(DELEGATION_RUNGS.hire).toMatch(/dismiss only one whose role is permanently over/);
@@ -256,7 +256,7 @@ describe('buildSystemPromptSync', () => {
     // rather than a preference: the caller's own verifier with an `objective`,
     // a judged sweep without one.
     //
-    // 2026-09-03: the WHICH-SCORER-WHEN clause lives on the search rung alone —
+    // 2026-09-03: the WHICH-SCORER-WHEN clause lives on the search rung alone —
     // the one-sentence lifetime frame carries no scorer. The assertion is still
     // ONCE on the whole rendered description: it proves the clause reaches the
     // model AND that exactly one source states it.
@@ -267,7 +267,7 @@ describe('buildSystemPromptSync', () => {
     expect(agents).toMatch(/and ranked by a judge ensemble when you do not/);
     expect(agents.match(/and ranked by a judge ensemble when you do not/g)).toHaveLength(1);
     // The rung still says who NAMES the shape, and that scoring is a mechanism
-    // rather than an opinion — the half the frame does not carry.
+    // rather than an opinion — the half the frame does not carry.
     expect(agents).toMatch(/You name the shape with `preset`, and a verifier is CODE that runs here rather than a model's opinion of the answer/);
     expect(agents).toMatch(/a metric nothing can execute is not an objective/);
     // Mechanism before limitation, the ordering this test was written for: what
@@ -278,7 +278,7 @@ describe('buildSystemPromptSync', () => {
     expect(agents).not.toMatch(/genuinely unclear/);
   });
 
-  test('the search rung carries no triggers — no breadth, doubt or payoff framing', () => {
+  test('the search rung carries no triggers — no breadth, doubt or payoff framing', () => {
     // 2026-09-03: the rung states what a search is, what it costs and what it
     // refuses. Triggers (Breadth: work splits; Doubt: first attempt failed,
     // unsure is itself a reason) read as a sales line and tell the model WHEN
@@ -300,9 +300,9 @@ describe('buildSystemPromptSync', () => {
     // The measured half, from Anthropic's multi-agent research write-up: on
     // their BrowseComp eval token usage BY ITSELF explains 80% of the
     // performance variance, and a multi-agent run costs about 15x a chat turn.
-    // What they shipped against it was EXPLICIT NUMBERS in the lead's prompt —
+    // What they shipped against it was EXPLICIT NUMBERS in the lead's prompt —
     // "1 agent with 3-10 tool calls" for fact-finding up to "more than 10
-    // subagents with clearly divided responsibilities" — because agents
+    // subagents with clearly divided responsibilities" — because agents
     // misjudge effort in BOTH directions, the named failure being "spawning 50
     // subagents for simple queries". So each rung states a count AND what the
     // count spends; an instruction to widen with no price attached is the
@@ -311,7 +311,7 @@ describe('buildSystemPromptSync', () => {
     // The numbers are OURS. They are DERIVED here rather than trusted, because
     // registry.ts is import-free by design and strategy/swarm.ts states the
     // hazard in as many words: prose "an import-free module away from the rows
-    // it describes — in tools/registry.ts, say — drifts from them". The model
+    // it describes — in tools/registry.ts, say — drifts from them". The model
     // reads the band; only this assertion reads the table.
     const widths = NAMED_SWARM_PRESETS.map((preset) => SWARM_PRESET_POINTS[preset].branches);
     const band = `from ${String(Math.min(...widths))} to ${String(Math.max(...widths))} per level`;
@@ -349,8 +349,8 @@ describe('buildSystemPromptSync', () => {
 
   test('every surface that enumerates presets names all six, and every one of them resolves', () => {
     // A model can select any preset from the advertised enum, so every name the
-    // doctrine lists MUST resolve. Doctrine that instead DECLARES a gap — an
-    // `UNCONSTRUCTIBLE` sentence about a preset the table does construct — is
+    // doctrine lists MUST resolve. Doctrine that instead DECLARES a gap — an
+    // `UNCONSTRUCTIBLE` sentence about a preset the table does construct — is
     // exactly the drift one shared constant prevents.
     const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
 
@@ -380,8 +380,8 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('the preset list is rendered where `preset` is filled, and not a second time in the rung', () => {
-    // Which presets exist is FIELD doctrine — read at the moment the field is
-    // typed — so it rides the `preset` property and the missing-`preset` refusal.
+    // Which presets exist is FIELD doctrine — read at the moment the field is
+    // typed — so it rides the `preset` property and the missing-`preset` refusal.
     // The rung carried its own copy, which is what drifted; it now carries only
     // what decides whether to search at all, and the prompt's Delegation index
     // never enumerated presets in the first place.
@@ -390,7 +390,7 @@ describe('buildSystemPromptSync', () => {
     expect(DELEGATION_RUNGS.swarm).not.toContain('research/audit/redteam');
     expect(DELEGATION_RUNGS.swarm).not.toContain(doctrine);
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('research/audit/redteam');
-    // Still says who names the shape — the pointer stays, only the list moved.
+    // Still says who names the shape — the pointer stays, only the list moved.
     expect(DELEGATION_RUNGS.swarm).toContain('You name the shape with `preset`');
     expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain(doctrine);
   });
@@ -398,7 +398,7 @@ describe('buildSystemPromptSync', () => {
   test('no built-in skill body calls an action or a field the tool surface does not have', () => {
     // A skill body is prompt text verbatim on the turn it activates. This one
     // still told the model to call `agents({action:"fork", forks:[...], budget})`
-    // — one dead action and two dead fields — which is the failure mode a naming
+    // — one dead action and two dead fields — which is the failure mode a naming
     // drift produces silently, because nothing typechecks a template string.
     const liveActions: readonly string[] = AGENTS_TOOL_ACTIONS;
     const swarmFields: readonly string[] = AGENTS_ACTION_FIELDS.swarm;
@@ -421,7 +421,7 @@ describe('buildSystemPromptSync', () => {
     // Nodes run concurrently with no channel between them, so a task where one
     // node consumes another's finding silently gets nothing. `whenNotToUse`
     // already forbids nodes that RACE on a mutable resource; this is the other
-    // half — what a node arrives holding, which is the `context` axis and not
+    // half — what a node arrives holding, which is the `context` axis and not
     // something the task text may assume.
     //
     // It rides `task` itself, as half of DELEGATION_INHERITANCE.swarm.brief:
@@ -432,7 +432,7 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).not.toContain(DELEGATION_INHERITANCE.swarm.brief);
-    // What the prompt keeps is the one-line shape of each action — never the
+    // What the prompt keeps is the one-line shape of each action — never the
     // field-level context fact, and no artifact trail.
     expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
     expect(prompt).not.toContain('shared/findings');
@@ -476,7 +476,7 @@ describe('buildSystemPromptSync', () => {
   test('the agents example is the cheapest COMPLETE call', () => {
     // An example earns its tokens by being copyable. `preset` + `task` is the
     // whole minimum, and `ideate` is the one preset that legally takes no
-    // `objective` — so the example is a call that would run, not a fragment.
+    // `objective` — so the example is a call that would run, not a fragment.
     // The shape a model gets wrong here is the objective's nesting, and that
     // rides `objective`'s own property description instead.
     const { rt } = createTestRuntime();
@@ -499,7 +499,7 @@ describe('buildSystemPromptSync', () => {
       expect(description).toContain(`Use when: ${spec.whenToUse}`);
       expect(description).toContain(`Avoid when: ${spec.whenNotToUse}`);
       expect(description).toContain(`Returns: ${spec.result}`);
-      // Prompt prose carries ONLY the summary — no duplicated doctrine, for
+      // Prompt prose carries ONLY the summary — no duplicated doctrine, for
       // any tool. `agents` is not exempt: its rungs reach the model through the
       // schema every family reads, never through a second rendering in prose.
       expect(prompt).not.toContain(spec.whenToUse);
@@ -517,7 +517,7 @@ describe('buildSystemPromptSync', () => {
     // Stripping the index to bare names for one family rests on a Moonshot
     // claim ("prompt prose about tool usage interferes with autonomous
     // selection") that is retired, K2.5-scoped, and unverifiable at any live
-    // source — and it cannot work anyway, since tool schemas are family-neutral
+    // source — and it cannot work anyway, since tool schemas are family-neutral
     // and kimi receives every byte of the doctrine such a strip would be
     // protecting it from. Live K3 guidance argues against DUPLICATION, for
     // everyone, which is what the schema-only doctrine rule already does.
@@ -525,7 +525,7 @@ describe('buildSystemPromptSync', () => {
     const registeredExecutors: string[] = [];
 
     const opts = {
-      availableTools: ['run', 'memory'] as const,
+      availableTools: ['shell', 'memory'] as const,
       externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
       registeredExecutors,
     };
@@ -541,12 +541,12 @@ describe('buildSystemPromptSync', () => {
     expect(kimi).toEqual(section('anthropic/claude-sonnet-4.5'));
     expect(kimi).toEqual(section('codex/gpt-5.5'));
 
-    // The index carries the EXAMPLE, which nothing else carries — not the
+    // The index carries the EXAMPLE, which nothing else carries — not the
     // summary, which is line 1 of the same tool's schema description in the same
-    // request. A summary here is the duplicate — 942 chars of it across the
+    // request. A summary here is the duplicate — 942 chars of it across the
     // eight builtins (measured 2026-08-25). Both directions are asserted, so
     // neither the example going missing nor a summary appearing is silent.
-    expect(kimi).toContain(`- **run**: \`${BUILTIN_TOOL_SPECS.run.example}\``);
+    expect(kimi).toContain(`- **shell**: \`${BUILTIN_TOOL_SPECS.shell.example}\``);
     expect(kimi).toContain(`- **memory**: \`${BUILTIN_TOOL_SPECS.memory.example}\``);
 
     for (const name of BUILTIN_TOOLS) {
@@ -575,7 +575,7 @@ describe('buildSystemPromptSync', () => {
     // not restated here. Until 2026-08-25 this asserted `agent.proposeCurriculum`
     // in the prompt, which pinned a hand-written copy of a declaration that
     // ships in the same request (tools/agent-self.ts TYPES, carried into the
-    // eval description by renderCodemodeDescription) — and the copy
+    // eval description by renderCodemodeDescription) — and the copy
     // was the weaker of the two. The pin now proves the same capability is
     // discoverable AND that its contract has exactly one home.
     expect(prompt).toContain('`agent.*` namespace inside eval');
@@ -583,7 +583,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('agent.proposeCurriculum(');
     expect(agentSelfTypes()).toContain('proposeCurriculum');
     // The lesson loop is a standing fact about what is IN the memory store,
-    // not a usage rule, so it rides the memory spec's doctrine field — the one
+    // not a usage rule, so it rides the memory spec's doctrine field — the one
     // line of `## Memory and facts` the memory schema did not already carry.
     expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toMatch(/failures are recorded as lessons/i);
   });
@@ -605,8 +605,8 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('advertises the temporary-agent channel only where the port is wired, on any backend', () => {
-    // 2026-09-03: the channel lives in the Delegation index and nowhere else —
-    // Code execution names no `agents` call at all — and the index names the
+    // 2026-09-03: the channel lives in the Delegation index and nowhere else —
+    // Code execution names no `agents` call at all — and the index names the
     // one-question clause only where the temporary port is wired.
     const { rt } = createTestRuntime();
     const withTemporary = buildSystemPromptSync(rt, { backend: 'cf', temporaryAsk: true });
@@ -623,7 +623,7 @@ describe('buildSystemPromptSync', () => {
     const withoutTemporary = buildSystemPromptSync(rt, { backend: 'cli-local' });
     expect(withoutTemporary).toMatch(/Code execution and learned capabilities/);
     expect(withoutTemporary).not.toContain('`hire` with `lifetime:"task"` runs one agent for one question');
-    // The scaffold lane is still advertised where the temporary clause is not —
+    // The scaffold lane is still advertised where the temporary clause is not —
     // that is what this half of the test is for. It is advertised as the
     // NAMESPACE now rather than as a copied signature (see the note in the craft
     // test above); the signature itself is asserted against its one declaration.
@@ -647,7 +647,7 @@ describe('buildSystemPromptSync', () => {
   });
 
   test('durable-state doctrine is schema-only: no `## Memory and facts` section', () => {
-    // The section restated the memory schema's own whenToUse in five bullets —
+    // The section restated the memory schema's own whenToUse in five bullets —
     // keyed facts for precise lookup, save/search for prose, conversations
     // before re-deriving, and stale-key replacement. Two phrasings of one rule
     // cost adherence twice and invite reconciliation.
@@ -677,7 +677,7 @@ describe('buildSystemPromptSync', () => {
 
   test('the ambient skills index renders name + description for every available skill, active or not', () => {
     // The discovery gap this closes: without this, a skill that never
-    // auto-activates is invisible to the model — nothing in the prompt names
+    // auto-activates is invisible to the model — nothing in the prompt names
     // it, and there is no tool call left that lists it either.
     const { rt } = createTestRuntime();
 
@@ -694,7 +694,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).toContain('## Skills');
-    // A workspace file says so in the index — provenance, not a verdict on it.
+    // A workspace file says so in the index — provenance, not a verdict on it.
     expect(prompt).toContain('**dormant-skill** (workspace file) — Not active this turn');
     // Progressive disclosure: index carries the description, never the body.
     expect(prompt).not.toContain('DORMANT-BODY-MUST-NOT-APPEAR');
@@ -720,7 +720,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/Showing a running app/);
     expect(prompt).toMatch(/exposePort/);
     // With ≥2 executors, state the mount doctrine: separate machines, whose
-    // live files also appear in the agent's own plane at /pc and /sandbox —
+    // live files also appear in the agent's own plane at /pc and /sandbox —
     // and the shell limit that keeps commands routed by namespace.
     expect(prompt).toMatch(/separate machines/i);
     expect(prompt).toContain('/pc');
@@ -776,7 +776,7 @@ describe('buildSystemPromptSync', () => {
 
   test('every runtime is its own machine, on every backend, with mounts named', () => {
     // The workspace is its own durable filesystem on BOTH backends, so this is
-    // unconditional — no per-backend exception for a cli-local host shell
+    // unconditional — no per-backend exception for a cli-local host shell
     // shared with the laptop executor, which is the one shape that would make
     // "separate filesystems" false.
     // The mount doctrine rides beside it: a live machine's files also appear
@@ -817,7 +817,7 @@ describe('buildSystemPromptSync', () => {
   });
 
 
-  test('the isolate ceiling is claimed only where it holds — never on cli-local', () => {
+  test('the isolate ceiling is claimed only where it holds — never on cli-local', () => {
     // cli-local's workspace is the inline executor on the user's own machine
     // (cli-backend/runtime.ts registers createInlineExecutor), which carries no
     // isolate limit and reports a measured cgroup instead when it has one.
@@ -851,8 +851,8 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('currently offline');
     // The row names the machine its owner named. "laptop" is the namespace.
     expect(prompt).toContain('ashish@studio');
-    // Calling an offline device is how the owner gets ASKED for it — the hub
-    // raises a connect request on that call — so the row names the way back
+    // Calling an offline device is how the owner gets ASKED for it — the hub
+    // raises a connect request on that call — so the row names the way back
     // rather than forbidding the call.
     expect(prompt).toContain('asks the user to bring it back');
     expect(prompt).toContain('kinu connect');
@@ -912,7 +912,7 @@ describe('buildSystemPromptSync', () => {
     expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
   });
 
-  test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
+  test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
     const { rt } = createTestRuntime();
 
     const prompt = buildSystemPromptSync(rt, {
@@ -948,7 +948,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     // The workspace filesystem is named by where it actually is, and the shell
-    // is said to run over exactly those bytes — a mount alias like `/local`
+    // is said to run over exactly those bytes — a mount alias like `/local`
     // names a path those bytes do not live at.
     expect(prompt).toContain('/home/user');
     expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
@@ -959,8 +959,8 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('Nimbus for quick cloud execution');
     expect(prompt).toMatch(/paths native to each machine/);
     // The mount doctrine is part of the naming: a live machine's files sit
-    // in the agent's own plane at /pc or /sandbox, and the shell's limit — it
-    // cannot see mount points — is stated beside them.
+    // in the agent's own plane at /pc or /sandbox, and the shell's limit — it
+    // cannot see mount points — is stated beside them.
     expect(prompt).toContain('/pc');
     expect(prompt).toContain('/sandbox');
     expect(prompt).toMatch(/cannot see mount points/);
@@ -1000,7 +1000,7 @@ describe('buildSystemPromptSync', () => {
     // problem and then fumbled the deliverable. One reasoned the causal
     // structure out exactly right and wrote every row of the CSV transposed.
     // One built an API to its own convenient signature and reported "all 14
-    // tests pass" — against its own tests. So verification is a SECTION, not one
+    // tests pass" — against its own tests. So verification is a SECTION, not one
     // hedged line ("verify meaningful changes with the narrowest reliable
     // checks") buried in operating guidance, and not both.
     const { rt } = createTestRuntime();
@@ -1010,17 +1010,17 @@ describe('buildSystemPromptSync', () => {
     // CompletionGate is that instruction as a mechanism, and an unconditional
     // re-verification pass is the family Anthropic's Opus 5 guidance says to
     // delete (a third off cost per ticket, no accuracy change).
-    expect(prompt).not.toMatch(/The artifact is the evidence — read it/);
+    expect(prompt).not.toMatch(/The artifact is the evidence — read it/);
     expect(prompt).not.toMatch(/Before you call work done/);
     expect(prompt).not.toMatch(/Re-read/);
     // The transposition test: check the artifact's literal shape, not the
-    // plan — a specific thing to look at rather than a second pass.
+    // plan — a specific thing to look at rather than a second pass.
     expect(prompt).toMatch(/Check every deliverable the request names/);
     expect(prompt).toMatch(/column order, direction, units, filenames/);
     // The self-graded-signature test.
     expect(prompt).toMatch(/Build to the interface the task states/);
     expect(prompt).toMatch(/A result is something you executed/);
-    // And no buried line — one home for the doctrine, not two.
+    // And no buried line — one home for the doctrine, not two.
     expect(prompt).not.toContain('narrowest reliable checks');
     // It lands last, right before the answer it governs.
     expect(prompt.indexOf('## Verification')).toBeGreaterThan(prompt.indexOf('## Delegation'));
@@ -1030,7 +1030,7 @@ describe('buildSystemPromptSync', () => {
   test('the run-the-real-check line is gated on actually having an executor', () => {
     // Gate to reality: an agent with no way to execute anything cannot run the
     // task's own checks, so it is not told to. The two artifact-shape lines are
-    // ungated — they apply to any answer.
+    // ungated — they apply to any answer.
     const { rt } = createTestRuntime();
 
     const noExec = buildSystemPromptSync(rt, {
@@ -1043,7 +1043,7 @@ describe('buildSystemPromptSync', () => {
     expect(noExec).not.toContain('Run the real check');
 
     const withRun = buildSystemPromptSync(rt, {
-      availableTools: ['memory', 'run'],
+      availableTools: ['memory', 'shell'],
       registeredExecutors: [],
     });
 
@@ -1118,7 +1118,7 @@ describe('buildSystemPromptSync', () => {
     expect(modelSupportsTools({ id: 'o4-mini' })).toBe(false);
     expect(modelSupportsTools({ id: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b' })).toBe(false);
     expect(modelSupportsTools({ id: '@cf/moonshotai/kimi-k2.6' })).toBe(true);
-    expect(() => assertToolsSupportedByModel({ id: 'o4-mini' }, ['run']))
+    expect(() => assertToolsSupportedByModel({ id: 'o4-mini' }, ['shell']))
       .toThrow(/does not support tool calling/);
   });
 
@@ -1148,12 +1148,12 @@ describe('buildSystemPromptSync', () => {
   test('a background-job wake reaches the resume guidance even though it also carries a work mode', () => {
     // The regression this pins. jobs/runner.ts stamps BOTH
     // `kinuEvent: 'background_job'` and `kinuMode: job.workMode` on the
-    // wake, and `background_jobs.work_mode` is NOT NULL — so under the old
+    // wake, and `background_jobs.work_mode` is NOT NULL — so under the old
     // single-`mode` precedence the work mode always won and this guidance,
     // written to stop the agent re-doing or polling settled work, never
     // reached a model on the real wake path. The two axes are read from
     // different keys now, so the wake carries the overlay AND its permission
-    // — through distinct planes: static policy in the system, current mode in
+    // — through distinct planes: static policy in the system, current mode in
     // the ledger, and provenance in the turn-local tail. A wake does not
     // rewrite the policy prefix.
     const wake = { kinuEvent: 'background_job', kinuMode: 'build' };
@@ -1190,7 +1190,7 @@ describe('buildSystemPromptSync', () => {
 
     expect(workModeForTurnMetadata({ kinuMode: 'plan' })).toBe('plan');
     expect(workModeForTurnMetadata({ kinuMode: 'build' })).toBe('build');
-    // Only the exact 'plan' string raises the bar — an old or foreign client
+    // Only the exact 'plan' string raises the bar — an old or foreign client
     // cannot invent a mode, and cannot lower one either.
     expect(workModeForTurnMetadata({ kinuMode: 'invalid' })).toBe('build');
     expect(workModeForTurnMetadata(null)).toBe('build');
@@ -1357,7 +1357,7 @@ describe('buildSystemPromptSync', () => {
   test('persistence is stated plainly and teaches compaction awareness', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    // Gating is structural — no hedging about backend support.
+    // Gating is structural — no hedging about backend support.
     expect(prompt).not.toContain('when the backend supports them');
     // The model must not wrap up early because of token-budget fears.
     expect(prompt).toContain('The runtime automatically compacts your context window as it approaches its limit');
@@ -1368,12 +1368,12 @@ describe('buildSystemPromptSync', () => {
     // Budget regression gate: each builder-owned section of the representative
     // CF surface stays within its pinned ceiling, so prompt growth is a
     // reviewed decision, not drift. Ceilings are ~10% over 2026-06 measured
-    // sizes — raise one ONLY alongside an intentional content change.
+    // sizes — raise one ONLY alongside an intentional content change.
     const BUDGETS = {
       'Runtime context': 160,
       // 2026-08: the ladder pointer is gone. It restated the Delegation
       // section's own opening forty lines above it, and both of its triggers
-      // are mechanised — turn-steering states them at the step where the
+      // are mechanised — turn-steering states them at the step where the
       // decision is still open, which is the version that measurably converts.
       // 2026-09-13: current mode stays dynamic; reviewed conditional Plan
       // policy is restored here. Exact measured 878, with no local headroom.
@@ -1385,11 +1385,11 @@ describe('buildSystemPromptSync', () => {
       // 2026-08: think/team summaries now name the lifetime rung they are.
       // 2026-08: +1 concrete example call per tool, and the index lost the
       // `experience` line. The prompt teaches tool use by showing a real
-      // argument shape rather than by describing one — deliberate, and the
+      // argument shape rather than by describing one — deliberate, and the
       // only place the specs' `example` field is rendered.
       // 2026-08-11: the `agents` example became the fork call (+92 chars, the
       // nested forks array is longer than hire's flat role/mission). It sits
-      // close to this ceiling on purpose — the next example that grows should
+      // close to this ceiling on purpose — the next example that grows should
       // be a reviewed decision, which is what this gate is for.
       // 2026-08-12: RAISED 2100 → 2350 for the `tasks` line. The index costs
       // one summary + one example per tool (237 chars here, measured 2081 →
@@ -1398,7 +1398,7 @@ describe('buildSystemPromptSync', () => {
       // 2026-08-25: LOWERED 2350 → 1020, measured 990 (−1328 from the 2318 this
       //   ceiling was set against). The index stopped rendering each tool's
       //   `summary`, which is line 1 of that tool's own schema description in
-      //   the SAME request — 942 chars of pure duplication across the eight
+      //   the SAME request — 942 chars of pure duplication across the eight
       //   builtins. What remains is the name and the one real call, which is the
       //   only place BUILTIN_TOOL_SPECS.example reaches a model, and which is
       //   the split OpenAI's GPT-4.1 guide prescribes: examples in the prompt,
@@ -1409,19 +1409,19 @@ describe('buildSystemPromptSync', () => {
       'Tools available this turn': 1100,
       // +2 lines of file doctrine: the workspace filesystem is named by where
       // it is, and every other environment is a separate machine whose commands
-      // stay behind its own namespace — stated once here for all of them.
+      // stay behind its own namespace — stated once here for all of them.
       // 2026-08-16: RE-PINNED 2450 → 2700 for TWO additions, measured 2657
       // (+374 the Worker isolate ceiling and sandbox work doctrine; +472 the
       // Approvals block replacing a per-call paragraph).
       // 2026-08-21: RAISED 2700 → 3100 for the mount doctrine, measured 3051.
-      //   +351 — the separate-machines paragraph now states the mount table
+      //   +351 — the separate-machines paragraph now states the mount table
       //     (/pc, /sandbox) with the shell limit that keeps commands routed by
       //     namespace, and the hasDevices block maps a mounted native path.
       //     The owner's ruling made the mounts product surface (#36/#142/#143).
       // 2026-08-25: LOWERED 3100 → 3050, measured 3001. Two changes landed on
       //   this section in the same pass, and the number is the sum of both:
-      //     −123 (slimming) the mount doctrine was stated TWICE — one paragraph
-      //       gated on `manyRuntimes`, one on `hasDevices` — restating
+      //     −123 (slimming) the mount doctrine was stated TWICE — one paragraph
+      //       gated on `manyRuntimes`, one on `hasDevices` — restating
       //       separate-machines, commands-through-their-own-namespace and
       //       mounts-show-native-paths in different words. One paragraph now
       //       carries every fact both did. `hasDevices` is the weaker gate and
@@ -1434,7 +1434,7 @@ describe('buildSystemPromptSync', () => {
       // 2026-09-03: RAISED 3050 → 3200 for the fleet, measured 3159.
       //   +158 NET. The laptop line stopped naming ONE machine and one grant
       //     (−73: both left for the dynamic-context roster, where every machine
-      //     renders by name each step — with two connected, the prefix's one
+      //     renders by name each step — with two connected, the prefix's one
       //     name was whichever the hub happened to pick) and now states the
       //     fleet rule instead (+197): a call names its machine with
       //     `device: "<name>"` when more than one is connected, a call that
@@ -1444,33 +1444,37 @@ describe('buildSystemPromptSync', () => {
       // 2026-09-03, same day, second raise → 3260. The hosted workspace line
       //   now states the isolate as shared memory with a narrow remit (editing,
       //   small scripts, local git history) and routes clones, fetches,
-      //   installs and builds to `sandbox.*` — the escalation that did not
+      //   installs and builds to `sandbox.*` — the escalation that did not
       //   happen, when `git clone` died against the memory wall and the agent
       //   retried in place instead of moving to the container. Measured +56
       //   on its own base; the two raises land on one prefix here, so the
       //   base; the two raises land on one prefix here, so the ceiling is
       //   their sum over the original 3050 with the same headroom.
       // 2026-09-15: +152, exact measured 3412. One sentence under `hasSandbox`
-      //   stating the container's mount equivalence — the container's whole
+      //   stating the container's mount equivalence — the container's whole
       //   filesystem sits at `/sandbox` while its commands run in `/workspace`
-      //   — so `/sandbox/workspace/x` is the file a `run` on `sandbox` calls
+      //   — so `/sandbox/workspace/x` is the file a `shell` on `sandbox` calls
       //   `x`. The mount paragraph it lives beside is `hasDevices`-gated, and
       //   a device-less workspace (every eval workspace) never saw it: the
       //   public-failure-recovery model wrote to `/sandbox/` (container `/`)
       //   and its `cd /` test run backgrounded on the 30s window.
-      'Execution environments': 3412,
+      // 2026-09-15, same day, rename raise → 3414, exact measured. The
+      //   `run`→`shell` rename made this section two chars longer in
+      //   aggregate; no text changed but the name, so the ceiling tracks
+      //   the rename, not a new sentence.
+      'Execution environments': 3414,
       'Persistence': 700,
       // 2026-08: −1 line. `eval runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
       // 2026-08-12: +4 chars. Defect-B fix: the agent.jobResult bullet used to
       // read as a generic "read status and results" call; it now says a
       // settled job is what it reads, and that the wake already named the id
-      // — the same "you don't need to check, you'll be told" doctrine as the
+      // — the same "you don't need to check, you'll be told" doctrine as the
       // Background work section, stated where this tool is introduced.
       // 2026-08-25: LOWERED 1610 → 830, measured 801 (−425 on this surface,
       //   −777 with rlm.query present). The six `agent.*` API bullets were a
       //   hand-maintained second copy of the `agent.*` codemode type block,
-      //   which ships to the model inside the eval description — and
+      //   which ships to the model inside the eval description — and
       //   the weaker copy: the proposeScaffold bullet omitted the required
       //   `async function* run(rt, task)` export, the host-bridge restriction
       //   and the rationale floor that the declaration states. One pointer at
@@ -1479,16 +1483,16 @@ describe('buildSystemPromptSync', () => {
       'Code execution and learned capabilities': 830,
       // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
       // ONE lifetime-keyed ladder.
-      // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
+      // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
       // clamp tightens mechanically, and a model told WHY reaches for a rung
       // instead of re-running the command (core/src/context-budget.ts).
-      // 2026-08: +1 line for `agents.*` in codemode — the rung ladder is also
+      // 2026-08: +1 line for `agents.*` in codemode — the rung ladder is also
       // a sandbox namespace, which is what makes a crafted tool a workflow,
       // and it carries the in-sandbox fork's non-resumable cost.
       // 2026-08: the rungs became a two-line INDEX. Their triggers were
       // byte-identical to the `agents` schema whenToUse (418 tok per request)
       // and were kept here only so a bare tool-name index (kimi) would still
-      // get the decision — a rationale that never held, since schemas are
+      // get the decision — a rationale that never held, since schemas are
       // family-neutral. The index is gone and so is the duplication.
       // 2026-08-11: LOWERED 2250 → 1870. The section now teaches three things
       // it did not (the shape that calls for a fork, which settle each shape
@@ -1499,7 +1503,7 @@ describe('buildSystemPromptSync', () => {
       // dismiss tail was DELEGATION_RUNGS.hire paraphrased; the report line
       // was the `report` schema's whenToUse/whenNotToUse paraphrased.
       // 2026-08-11: RAISED 1870 → 2250 (back to its pre-2026-08-11 ceiling).
-      // A trigger alone did not move settle=mcts — 1 use in 89 trials — so the
+      // A trigger alone did not move settle=mcts — 1 use in 89 trials — so the
       // section now states the MECHANISM: that mcts writes its own rival
       // approaches from the task (the call shape differs from merge), that it
       // varies their angles, that it runs rounds, and that execution fixes the
@@ -1511,7 +1515,7 @@ describe('buildSystemPromptSync', () => {
       // 2026-08-17: RAISED 2250 → 2450 (+251 chars measured, ~58 o200k tokens).
       // The polarity flip: the first bullet was "- Do it yourself" (49 chars),
       // which put rung 0 first and made the section a classification the model
-      // passes by doing nothing — doctrine converted 0% of eligible turns, a
+      // passes by doing nothing — doctrine converted 0% of eligible turns, a
       // mechanical splice 24%. It is replaced by a default sentence (300 chars)
       // that states delegation as the default and the three exemptions last, as
       // things to DO. This is the only increase in the section and it buys the
@@ -1524,12 +1528,12 @@ describe('buildSystemPromptSync', () => {
       // runs and is required there, and mcts takes none.
       // 2026-08-17: RAISED 2530 → 2597 (+67 chars NET measured, ~16 o200k
       // tokens). The ladder was keyed on lifetime alone, and the axis that
-      // actually decides which rung a task wants — what context the helper
-      // starts from — was in neither index bullet. Both now carry it: a fork
+      // actually decides which rung a task wants — what context the helper
+      // starts from — was in neither index bullet. Both now carry it: a fork
       // runs on the caller's context (so its brief is one line), a hire starts
       // blank (so its mission is the whole brief). Gross +174, of which 107 was
       // paid back by deleting "Forks cannot see each other's work and meet only
-      // at the merge, so each fork's task has to stand on its own" — that fact
+      // at the merge, so each fork's task has to stand on its own" — that fact
       // now rides `forks[].task` itself (DELEGATION_INHERITANCE.fork.brief),
       // where it is read as the brief is being written rather than thousands of
       // tokens earlier.
@@ -1539,7 +1543,7 @@ describe('buildSystemPromptSync', () => {
       //   coordination loop and no artifact trail.
       'Delegation': 580,
       // 2026-08-12: RAISED 260 → 680. Defect-B fix (background polling): the
-      // section used to say only "stop the turn; the backend will wake you" —
+      // section used to say only "stop the turn; the backend will wake you" —
       // one clause the owner's bench evidence shows the model reads as
       // optional and routes around (agent.jobResult polled in a loop despite
       // that exact promise already being there). It now says the work KEEPS
@@ -1572,7 +1576,7 @@ describe('buildSystemPromptSync', () => {
 
         if (size === undefined) return [`section "${title}" missing from the prompt`];
 
-        return size > budget ? [`section "${title}" is ${size} chars — over its ${budget}-char budget`] : [];
+        return size > budget ? [`section "${title}" is ${size} chars — over its ${budget}-char budget`] : [];
       });
     };
 
@@ -1582,13 +1586,13 @@ describe('buildSystemPromptSync', () => {
       sectionOverrides: { 'guidance/operating': OPERATING_GUIDANCE.source + '\nX' },
     });
 
-    expect(problems(grown)).toEqual(['section "Operating guidance" is 880 chars — over its 878-char budget']);
+    expect(problems(grown)).toEqual(['section "Operating guidance" is 880 chars — over its 878-char budget']);
   });
 
   test('does NOT promise unimplemented or redundant strategies', () => {
     // Regression: a tool description that claims support for strategies which do
-    // not exist. There is no strategy id for a caller to type at all — a search
-    // measures and nothing else spawns — so naming one is exactly that defect.
+    // not exist. There is no strategy id for a caller to type at all — a search
+    // measures and nothing else spawns — so naming one is exactly that defect.
     // single-shot stays registered for eval harnesses but is pure overhead for a
     // chat model, so it is never advertised, and `mcts` is registered for the
     // durable search store and reaches neither surface.

@@ -116,7 +116,7 @@ const CHECKOUT_CHANGELOG = {
 
 const CHECKOUT_JOBS: BackgroundJob[] = [
   { id: 'bgjob-7c1e4a92', kind: 'eval', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, settledAt: null },
-  { id: 'bgjob-9d3c6e11', kind: 'run', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
+  { id: 'bgjob-9d3c6e11', kind: 'shell', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
 ];
 
 // The queue holds what only the owner can decide: the mission said "deploy
@@ -165,7 +165,7 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
       jobs = method === 'retryBackgroundJob'
         ? [
           ...jobs.map((job) => (job.id === id ? { ...job, retriedBy: retryId } : job)),
-          { id: retryId, kind: 'run', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null, createdAt: Date.now(), settledAt: null },
+          { id: retryId, kind: 'shell', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'running', result: null, error: null, createdAt: Date.now(), settledAt: null },
         ]
         : jobs.filter((job) => job.id !== id);
       pending = pending.filter((action) => action.id !== id);

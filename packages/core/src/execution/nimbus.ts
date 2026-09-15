@@ -234,7 +234,7 @@ const NOT_CONFIGURED =
 /**
  * `unavailable`, for the reason spelled out in `sandbox.ts`: the binding is
  * absent, so this deployment has no session at all, and it is the same fact the
- * `run` tool already spells `unavailable` for an unregistered runtime. One fact,
+ * `shell` tool already spells `unavailable` for an unregistered runtime. One fact,
  * one code, one part of the census.
  *
  * Its own bucket matters more here than anywhere else: Nimbus IS the workspace
@@ -250,7 +250,7 @@ const NOT_CONFIGURED_REFUSAL = refusalText(new KinuError('unavailable', NOT_CONF
  *
  * `unsupported`, never `unavailable`: retrying cannot grow a method onto a handle,
  * which is the exact line the two codes divide (obs/error.ts), and it is the same
- * call the `run` tool makes for `runtime_does_not_support_exec`.
+ * call the `shell` tool makes for `runtime_does_not_support_exec`.
  */
 function handleLacks(surface: string): string {
   return refusalText(new KinuError('unsupported', `Nimbus SDK handle does not expose ${surface}`));

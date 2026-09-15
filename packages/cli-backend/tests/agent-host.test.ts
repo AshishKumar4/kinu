@@ -937,7 +937,7 @@ describe('LocalAgentHost', () => {
    * NO HANG, EXACTLY ONE RESULT — for every way a temporary child's turn can end.
    *
    * There is no deadline anywhere in this rung by ruling, so the ONLY thing that
-   * makes `run` return is the child reporting. These drive the two endings the
+   * makes `shell` return is the child reporting. These drive the two endings the
    * durable relay policy withholds — a finished turn with nothing to say, and a
    * turn that failed — on the real local substrate, and assert the call returns
    * with exactly one report and no duplicate.

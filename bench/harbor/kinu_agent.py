@@ -196,7 +196,7 @@ class KinuAgent(BaseInstalledAgent):
         a tar stream and lands at mode 0600.
 
         Done here rather than in ``install`` because Harbor scopes the task's
-        agent user around ``run`` alone — during setup ``exec_as_agent`` is still
+        agent user around ``shell`` alone — during setup ``exec_as_agent`` is still
         the container's default user, so a uid read there could own the file to
         somebody the turn does not run as.
         """

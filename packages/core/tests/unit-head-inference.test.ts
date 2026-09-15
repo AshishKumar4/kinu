@@ -384,11 +384,11 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
     // same toolCallId; a SerializedMessage has no id to match, so emitting one
     // would make every head request malformed at the provider.
     const msgs = buildHeadMessages(headInput({
-      inheritedContext: [{ id: 't1', role: 'tool', content: 'exit status 0', createdAt: 1, toolName: 'run' }],
+      inheritedContext: [{ id: 't1', role: 'tool', content: 'exit status 0', createdAt: 1, toolName: 'shell' }],
     }));
 
     expect(msgs.map((m) => m.role)).toEqual(['user', 'user']);
-    expect(msgs[0]!.content).toBe('[inherited tool result from run]\nexit status 0');
+    expect(msgs[0]!.content).toBe('[inherited tool result from shell]\nexit status 0');
   });
 
   test("an inherited 'system' entry does not become a second system prompt", () => {

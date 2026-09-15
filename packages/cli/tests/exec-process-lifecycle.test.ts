@@ -17,7 +17,7 @@
  *
  * Both are invisible to a return value and obvious to a stopwatch on a real
  * process. So this spawns the actual CLI binary against a mock model that
- * drives the actual `run` tool at a real host shell, and asserts on the exit.
+ * drives the actual `shell` tool at a real host shell, and asserts on the exit.
  *
  * The paired assertion matters as much: the backgrounded process must SURVIVE.
  * Exiting promptly by killing the user's server would pass a naive timing test
@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 /**
- * An OpenAI-compatible endpoint that calls `run` once with `command`, then
+ * An OpenAI-compatible endpoint that calls `shell` once with `command`, then
  * answers with text. Non-streaming and streaming both, because the CLI picks.
  */
 function modelThatRuns(command: string) {
@@ -79,7 +79,7 @@ function modelThatRuns(command: string) {
   const toolCall = {
     id: "call_1",
     type: "function",
-    function: { name: "run", arguments: JSON.stringify({ command, runtime: "laptop" }) },
+    function: { name: "shell", arguments: JSON.stringify({ command, runtime: "laptop" }) },
   };
 
   const server = Bun.serve({
@@ -225,7 +225,7 @@ describe("kinu exec — a one-shot run terminates", () => {
 
   test("the tool result reaches the model instead of waiting on the server", async () => {
     // The same defect seen from the model's side: if the call only returns when
-    // the server dies, the turn cannot continue, so `run`'s output never enters
+    // the server dies, the turn cannot continue, so `shell`'s output never enters
     // the transcript. Asserting on the exit alone would not catch a variant
     // that exits promptly having dropped the result.
     const home = newHome();

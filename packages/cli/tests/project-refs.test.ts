@@ -130,7 +130,7 @@ function createdDbPath(created: CreatedCliAgent): string {
   return created.dbPath;
 }
 
-/** The refusal `run` produces. A call that does not refuse is the failure. */
+/** The refusal `shell` produces. A call that does not refuse is the failure. */
 function messageOf(run: () => void): string {
   try {
     run();

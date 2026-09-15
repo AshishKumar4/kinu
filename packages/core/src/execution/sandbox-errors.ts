@@ -6,7 +6,7 @@
  * namespaces the actor registers. Kinu's OWN top-level tool NAMES are not bare
  * identifiers in that scope: a native tool is `tools.<name>(input)` there. A
  * model reaching for a bare `run(...)` from inside a program is an easy,
- * recurring mistake — `run` in particular reads as a plausible global because
+ * recurring mistake — `shell` in particular reads as a plausible global because
  * it IS a tool the model can see in its own list.
  *
  * When that happens the sandbox throws a bare V8 ReferenceError
