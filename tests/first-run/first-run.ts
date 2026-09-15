@@ -88,6 +88,7 @@ export const FIRST_RUN_CASES = [
   'every-tool',
   'sandbox-mount-write',
   'public-share',
+  'device-link',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -260,6 +261,23 @@ export const FIRST_RUN_DEFECTS = {
       + 'the namespace write succeeding where the mount write failed and listFiles(\'\') refusing '
       + 'on ValidationFailedError.',
   },
+  'device-link': {
+    id: 'device-link',
+    found: 'A linked machine\'s socket dropped about forty seconds after connect, every time: '
+      + 'the daemon\'s keepalive pings and the deployed hub never answers, so the daemon closes '
+      + 'the live socket and redials — and a command that lands in the gap is answered with a '
+      + '"needs a computer of yours" card no reconnect retires.',
+    missedBecause: 'every device test asserts the link at the moment it forms — connectDevice '
+      + 'waits for the first connected and stops — so a hub that cannot answer `ping` drops the '
+      + 'socket at +40 s in a window nothing ever measured.',
+    provedRedAt: 'c9a43fdb8',
+    redDirection: 'RED against the deployed c9a43fdb8 on 2026-09-15: a real daemon under this '
+      + 'repo\'s bun, a real `POST /api/cli/devices` registration, and the devices route\'s own '
+      + 'stamps — `lastSeenAt` moves when the second accept lands and `connected` flickers '
+      + 'through the redial gap. Green requires the link to hold the whole 50 s window, a '
+      + 'command to reach the machine through a `once` consent answer, and revoke to end the '
+      + 'socket and the credential.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -362,6 +380,7 @@ const SHORT_SUBJECT = {
   'every-tool': 'tools',
   'sandbox-mount-write': 'mount',
   'public-share': 'public',
+  'device-link': 'link',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
@@ -395,6 +414,13 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
   run(input: FirstRunRun<Session, Plan>): Promise<readonly EvalSubgoal[]>;
   /** Calls outside the workspace ledger, added to its observed tool-call count. */
   calls?(): number;
+  /** The retained episode's own name, when one row runs more than once under
+   *  one defect id. Each case keeps its events, history, and subgoals under
+   *  `TRANSCRIPTS/<episode>/`, and two runs sharing `id` would otherwise
+   *  overwrite each other's evidence — the device-link row's three cases are
+   *  exactly that shape. Omit it for a row's single case; the task id remains
+   *  the record's join either way. */
+  readonly episode?: string;
 }
 
 /**
@@ -428,19 +454,21 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
   const startedAt = Date.now();
   let opened: Session | undefined;
 
+  const episode = spec.episode ?? spec.id;
+
   try {
     await withEpisodeEvidence(async () => {
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
-    }, { transcripts: TRANSCRIPTS, taskId: spec.id, modelCalls: spec.modelCalls }, async (session, collect) => {
+    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls }, async (session, collect) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
     const subgoals = await spec.run({ session, plan });
 
     const { events, history } = await collect();
     observedModels.note(events);
     const totals = ledgerTotalsFromEvents(events);
-    const retained = retainEpisodeTranscript(TRANSCRIPTS, spec.id, { events, history, subgoals });
+    const retained = retainEpisodeTranscript(TRANSCRIPTS, episode, { events, history, subgoals });
 
     const outcome = subgoalsOutcome(subgoals, { turns: totals.turns, toolCalls: totals.toolCalls });
     const scores: EvalScoreRow[] = [outcomeRow(outcome)];
