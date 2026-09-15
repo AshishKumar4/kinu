@@ -94,10 +94,7 @@ describe('connectMcpServers', () => {
     } finally {
       await conn.close();
     }
-  // Measured 2.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test('a tool call without a configured timeout completes after six seconds', async () => {
     // The fixture completes a 6,000 ms call without a server timeout; this
@@ -113,7 +110,7 @@ describe('connectMcpServers', () => {
     } finally {
       await conn.close();
     }
-  }, 20_000);
+  });
 
   test('the caller cancels a running tool call; nothing else ends it early', async () => {
     const conn = await connectMcpServers({
@@ -131,7 +128,7 @@ describe('connectMcpServers', () => {
     } finally {
       await conn.close();
     }
-  }, 20_000);
+  });
 
   test('connects to a stdio MCP server, lists tools, and proxies a call', async () => {
     const logs: string[] = [];
@@ -232,7 +229,7 @@ describe('LocalAgentSession MCP admission', () => {
     } finally {
       await session.end();
     }
-  }, 30_000);
+  });
 
   test('tools admit in (server, tool) order regardless of config map order', async () => {
     // The admitted set must be the same on two sessions that configure the
@@ -255,5 +252,5 @@ describe('LocalAgentSession MCP admission', () => {
     } finally {
       await session.end();
     }
-  }, 30_000);
+  });
 });

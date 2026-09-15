@@ -999,7 +999,7 @@ describe('control commands route model/effort by session state', () => {
     expect(tier.reasoningEffort).toBe('high');
     // The signed-out slot owns what the commands wrote — nothing else does.
     expect(expectOk(steps.localSlot)).toEqual({ model: 'openai/gpt-4o-mini', reasoningEffort: 'high' });
-  }, 20_000);
+  });
 
   test('signed in, kinu model goes to the account store, never into config.json; the next turn revalidates it', async () => {
     const steps = runScenario(`
@@ -1082,6 +1082,6 @@ describe('control commands route model/effort by session state', () => {
     expect(expectOk(steps.localSlot)).toBeNull();
     // And the cache a next offline read would fall back to carries it too.
     expect(expectOk(steps.cacheSlot)).toMatchObject({ model: 'account-gateway/custom-model' });
-  }, 20_000);
+  });
 });
 

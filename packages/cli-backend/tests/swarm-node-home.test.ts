@@ -241,7 +241,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))
       .toEqual(Array.from({ length: IDEATE_BRANCHES }, () => 'private-home'));
-  }, 120_000);
+  });
 
   test('the homes are real directories in the ORIGIN\u2019s own filesystem', async () => {
     const rt = cliRuntime('swarm-node-home-inodes');
@@ -277,7 +277,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     for (const uid of uids) expect(uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
     // One uid each: two nodes sharing a uid is two nodes sharing a home.
     expect(uids.size).toBe(IDEATE_BRANCHES);
-  }, 120_000);
+  });
 
   test('the same call with no home host reports the shared plane instead', async () => {
     // The denominator for the arms above. Without this, `private-home` could be
@@ -289,7 +289,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     expect(settled.map((node) => node.isolation))
       .toEqual(Array.from({ length: IDEATE_BRANCHES }, () => 'shared-origin-plane'));
-  }, 120_000);
+  });
 });
 
 describe('a node seat shares the origin plane on its own head row', () => {

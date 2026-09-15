@@ -51,7 +51,7 @@ describe('createHostShell', () => {
     // Generous by three orders of magnitude against the correct behaviour
     // (~50ms) and still an order of magnitude under the broken one.
     expect(elapsed).toBeLessThan(3_000);
-  }, 30_000);
+  });
 
   test('a backgrounded child does not keep the host process alive', async () => {
     // The other half of the same contract, and the half only a real process can
@@ -73,7 +73,7 @@ describe('createHostShell', () => {
     expect(await new Response(proc.stderr).text()).toBe('');
     expect(exitCode).toBe(0);
     expect(elapsed).toBeLessThan(10_000);
-  }, 40_000);
+  });
 
   test('output written before the command exits is not truncated by the early return', async () => {
     // The failure mode this must not introduce: returning on `exit` instead
@@ -86,7 +86,7 @@ describe('createHostShell', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trimEnd().split('\n')).toHaveLength(20_000);
     expect(result.stdout).toContain('\n20000');
-  }, 30_000);
+  });
 
   test('a failing command still reports its exit code and both streams', async () => {
     const shell = createHostShell(process.cwd());
