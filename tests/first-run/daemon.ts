@@ -61,6 +61,10 @@ export interface AttachedMachine {
   /** This machine's own home. Its config, pidfile, agent roots and exec log all
    *  live under here, so two machines share nothing. */
   readonly home: string;
+  /** The daemon process's own exit status, resolving when it ends — the
+   *  machine's own answer to whether its link is still being dialled, which a
+   *  revoked credential ends with the rejected exit. */
+  readonly exited: Promise<number>;
   /** Every command this machine's `hostname` answered, oldest first. Written by
    *  the machine itself, so an empty list is that machine standing idle rather
    *  than a routing assumption. */
@@ -170,6 +174,7 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
     deviceId: registration.deviceId,
     name,
     home,
+    exited: daemon.exited,
     execLog: () => readExecLog(execLogPath),
     stop: () => { stopDaemon(daemon); },
   };
@@ -276,7 +281,7 @@ function stopDaemon(daemon: Subprocess): void {
  *  CLI's identical helper tails the same log `installDaemonFiles` runs it into;
  *  bounded, because a daemon that logged a megabyte before failing is not more
  *  informative than its last lines. */
-function readDaemonLogTail(path: string): string {
+export function readDaemonLogTail(path: string): string {
   try {
     const text = readFileSync(path, 'utf8');
 
