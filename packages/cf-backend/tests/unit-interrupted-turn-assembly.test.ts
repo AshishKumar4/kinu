@@ -12,9 +12,9 @@
 // through the actor harness with a history that already holds an orphaned call —
 // the shape a bricked workspace is in right now — and asserts what comes out.
 import { describe, expect, test } from 'bun:test';
-import type { ModelMessage, ToolSet } from 'ai';
+import type { ModelMessage } from 'ai';
 import { INTERRUPTED_TOOL_RESULT } from '@kinu.run/core';
-import { orchestratorHarness } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns } from './helpers/actor-harness';
 
 const ORPHAN_ID = 'call_ed15d29f352a4735e6b01b5';
 
@@ -32,16 +32,9 @@ describe('cf beforeTurn assembly over an interrupted history', () => {
   test('hands the model a terminal result for the orphaned call', async () => {
     const { agent } = orchestratorHarness();
 
-    const config = await agent.beforeTurn({
-      system: 'sys',
-      messages: interruptedHistory,
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    const config = await thinkTurns(agent).prepare({ messages: interruptedHistory });
 
-    const assembled = config?.messages ?? [];
+    const assembled = config.messages;
     expect(assembled.length).toBeGreaterThan(0);
 
     // Every non-provider-executed tool call in the assembled request has a
