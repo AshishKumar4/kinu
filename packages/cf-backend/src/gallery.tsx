@@ -349,7 +349,10 @@ function pluginsFixture(path: string): Response | null {
   return null;
 }
 
-async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
+/** The account slice: onboarding completion, account deletion, and the
+ *  profile GET/PATCH the settings account section and the wizard's name step
+ *  read. */
+function accountProfileFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/onboarding/complete" && method === "POST") {
     return fixtureJson({ onboardedAt: NOW });
   }
@@ -386,6 +389,13 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     });
   }
 
+  return null;
+}
+
+/** The reads behind the settings sections: credentials, the Codex and
+ *  gateway status rigs, the model list, the provider catalog, the Cloudflare
+ *  account and the CLI install panel. */
+async function settingsSectionsFixture(path: string): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([{ key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW }]);
   }
@@ -438,42 +448,53 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     });
   }
 
-  // The setupmodal frame mounts the real HomePage chrome behind the modal, so
-  // the roster and the panel's server list both answer here — a 404 would put
-  // a failure in the sidebar and the Recent section that a real page has
-  // never shown.
-  if (path === "/api/user/workspaces") {
-    if (EXTRA_WORKSPACE) {
-      const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
+  return null;
+}
 
-      return fixtureJson({
-        entries: [...roster.entries, {
-          name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5,
-          lastVisited: NOW - 36e5, archivedAt: null,
-        }],
-        total: roster.entries.length + 1,
-      });
-    }
+/* The setupmodal frame mounts the real HomePage chrome behind the modal, so
+   the roster and the panel's server list both answer here — a 404 would put
+   a failure in the sidebar and the Recent section that a real page has
+   never shown. */
+function workspaceRosterFixture(path: string): Response | null {
+  if (path !== "/api/user/workspaces") return null;
 
-    return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+  if (EXTRA_WORKSPACE) {
+    const roster = v.parse(v.object({ entries: v.array(JsonValueSchema), total: v.number() }), STUB_DATA["/api/user/workspaces"]);
+
+    return fixtureJson({
+      entries: [...roster.entries, {
+        name: "audit-sweep", displayName: "Audit sweep", createdAt: NOW - 14 * 864e5,
+        lastVisited: NOW - 36e5, archivedAt: null,
+      }],
+      total: roster.entries.length + 1,
+    });
   }
 
-  if (path === "/api/user/mcp/servers") {
-    return fixtureJson([
-      {
-        id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
-        transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-        authUrl: null, error: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
-      },
-      {
-        id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
-        transport: "sse", status: "authenticating", toolsCount: 0,
-        allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
-        error: null, createdAt: NOW - 864e5, updatedAt: NOW,
-      },
-    ]);
-  }
+  return fixtureJson(STUB_DATA["/api/user/workspaces"]);
+}
 
+/** The MCP server rows: one ready, one mid-OAuth with a tool allowlist. */
+function mcpServersFixture(path: string): Response | null {
+  if (path !== "/api/user/mcp/servers") return null;
+
+  return fixtureJson([
+    {
+      id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
+      transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
+      authUrl: null, error: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+    },
+    {
+      id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+      transport: "sse", status: "authenticating", toolsCount: 0,
+      allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+      error: null, createdAt: NOW - 864e5, updatedAt: NOW,
+    },
+  ]);
+}
+
+/** The device rows: the incident pair (revoke, then acknowledge the unstopped
+ *  commands), the Sandbox switch, the connect POST and the roster GET. */
+function deviceRowsFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/devices/dev-1" && method === "DELETE") {
     localStorage.setItem("gallery-device-incident", "revoked");
 
@@ -517,24 +538,52 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     }]);
   }
 
-  const plugins = pluginsFixture(path);
+  return null;
+}
 
-  if (plugins !== null) return plugins;
+/** The profile-catalog read: the real digest over the real canonical bytes,
+ *  hashed here with WebCrypto because the gallery has no `node:crypto`. */
+async function profileCatalogFixture(path: string): Promise<Response | null> {
+  if (path !== "/api/user/profile-catalog") return null;
 
-  if (path === "/api/user/profile-catalog") {
-    // The real digest over the real canonical bytes, hashed here with
-    // WebCrypto because the gallery has no `node:crypto`.
-    const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
+  const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
 
-    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
-      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
-    return fixtureJson({
-      authority: { kind: "account", accountId: "gallery" },
-      version: 0,
-      digest,
-      catalog: BUILTIN_PROFILE_CATALOG,
-    });
+  return fixtureJson({
+    authority: { kind: "account", accountId: "gallery" },
+    version: 0,
+    digest,
+    catalog: BUILTIN_PROFILE_CATALOG,
+  });
+}
+
+/** One family of the account fixture: answers the paths it owns, `null` for
+ *  every other. Sync or async — the composer awaits either. */
+type SettingsSlice =
+  (path: string, method: string, body: BodyInit | null | undefined)
+    => Response | null | Promise<Response | null>;
+
+/* The families in composition order. Their path sets are disjoint, so the
+   order is a reading order, not routing. */
+const SETTINGS_SLICES: readonly SettingsSlice[] = [
+  accountProfileFixture,
+  settingsSectionsFixture,
+  workspaceRosterFixture,
+  mcpServersFixture,
+  deviceRowsFixture,
+  pluginsFixture,
+  profileCatalogFixture,
+];
+
+/** The account fixture, composed: the first slice that owns the path answers
+ *  it, and a path no family claims is the 404 the stub has always served. */
+async function userSettingsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> {
+  for (const slice of SETTINGS_SLICES) {
+    const response = await slice(path, method, body);
+
+    if (response !== null) return response;
   }
 
   return fixtureJson({ error: `gallery has no settings fixture for ${path}` }, 404);
