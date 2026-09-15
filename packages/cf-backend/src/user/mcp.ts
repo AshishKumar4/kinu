@@ -14,7 +14,9 @@ import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
   admitMcpDescriptors, McpToolSurfaceSchema,
-  type JsonObject, type SerializableToolDescriptor, type McpSurfaceBudget,
+  mcpPresetById,
+  type JsonObject, type McpPreset, type McpPresetId,
+  type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -92,6 +94,11 @@ export interface McpServerInput {
   transport?: McpTransport;
   headers?: Record<string, string>;
   allowedTools?: string[];
+  /** The `MCP_PRESETS` entry this add came from; absent on a custom server.
+   *  When present the catalog is the authority: `name`, `serverUrl` and
+   *  `transport` in the returned config are the preset's, whatever the caller
+   *  sent. */
+  presetId?: McpPresetId;
 }
 
 /** Connection status as the SDK surfaces it. We re-derive at read time from
@@ -116,6 +123,7 @@ export interface McpServerSummary {
   toolsCount: number;
   authUrl: string | null;
   allowedTools: string[] | null;
+  presetId: McpPresetId | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -129,6 +137,7 @@ export interface McpServerConfig {
   transport: McpTransport;
   headers: Record<string, string> | null;
   allowedTools: string[] | null;
+  presetId: McpPresetId | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -177,6 +186,11 @@ function canonicalMcpUrl(serverUrl: string): string {
  * OMITTED: `headers: {}` is not a credential and must not make a row look like
  * it holds one. `allowedTools: []` is left alone — an empty allowlist means
  * "expose nothing", which is not the same statement as omitting it.
+ *
+ * A preset add resolves to the CATALOG entry: name, endpoint and transport
+ * are the preset's own, so a caller that tags `presetId` cannot smuggle a
+ * different endpoint in under a preset's name. `serverUrl` is optional on
+ * that path — the preset supplies it.
  */
 export function validateMcpServerInput<Input>(input: Input): McpServerInput {
   const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
@@ -187,15 +201,27 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
 
   const obj = parsedInput.output;
 
-  const name = validateMcpServerName(obj.name);
+  let preset: McpPreset | undefined;
+
+  if (obj.presetId !== undefined && obj.presetId !== null) {
+    const parsedPresetId = v.safeParse(v.string(), obj.presetId);
+
+    if (!parsedPresetId.success) throw new Error('`presetId` must be a string.');
+
+    preset = mcpPresetById(parsedPresetId.output);
+
+    if (!preset) throw new Error(`Unknown MCP preset '${parsedPresetId.output}'.`);
+  }
+
+  const name = preset ? preset.title : validateMcpServerName(obj.name);
 
   const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
 
-  if (!parsedServerUrl.success || !parsedServerUrl.output.trim()) {
+  if (!preset && (!parsedServerUrl.success || !parsedServerUrl.output.trim())) {
     throw new Error('`serverUrl` is required.');
   }
 
-  const serverUrl = parsedServerUrl.output;
+  const serverUrl = preset ? preset.serverUrl : v.parse(v.string(), obj.serverUrl);
 
   if (!URL.canParse(serverUrl)) throw new Error('`serverUrl` is not a valid URL.');
   const parsed = new URL(serverUrl);
@@ -226,7 +252,7 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
     throw new Error("`transport` must be one of 'auto', 'sse', 'streamable-http'.");
   }
 
-  const transport = parsedTransport.output ?? 'auto';
+  const transport = preset ? preset.transport : (parsedTransport.output ?? 'auto');
 
   let headers: Record<string, string> | undefined;
 
@@ -272,7 +298,10 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
     }
   }
 
-  return { name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools };
+  return {
+    name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
+    presetId: preset?.id,
+  };
 }
 
 /**

@@ -766,8 +766,18 @@ export function mockAgentsSdk(): void {
   // `user_mcp_servers`, and the reconciliation and credential-seam contracts are
   // statements about it (see `recordedMcpServers`).
   registerSynchronousMock('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
+  // The provider the add flow builds: what `connectToServer` returns while a
+  // server needs sign-in is READ OFF this object, so the stub carries the two
+  // fields the real flow sets — `authUrl` (queued per add by
+  // `queueMcpAuthUrl`, consumed by the next constructed provider) and
+  // `clientId`.
   registerSynchronousMock('agents/mcp/do-oauth-client-provider', () => ({
-    DurableObjectOAuthClientProvider: class { serverId = ''; },
+    DurableObjectOAuthClientProvider: class {
+      serverId = '';
+      clientId: string | null = null;
+      authUrl: string | null = pendingMcpAuthUrl;
+      constructor() { pendingMcpAuthUrl = null; }
+    },
   }));
   // The DO layer reaches the runtime + codemode module graph (a head builds a
   // CF runtime and an execute_tools tool), both of which import this
@@ -1042,6 +1052,16 @@ let mcpDiscoveryFailure: Error | null = null;
  * teardown boundary rather than letting a test model it as a successful remove. */
 let mcpRemoveFailure: Error | null = null;
 
+/** The authorize URL the next add's OAuth provider lands on — what the real
+ *  flow writes on the provider while a server asks for sign-in. `userMcp_add`
+ *  constructs the provider itself, so the test queues the URL here and the
+ *  provider stub picks it up at construction. */
+let pendingMcpAuthUrl: string | null = null;
+
+export function queueMcpAuthUrl(authUrl: string): void {
+  pendingMcpAuthUrl = authUrl;
+}
+
 let liveMcpManager: { mcpConnections: Record<string, RecordedMcpConnection> } | null = null;
 
 let mcpRestored = 0;
@@ -1228,6 +1248,7 @@ export function resetRecordedMcp(): void {
   mcpDiscoveryFailure = null;
 
   mcpRemoveFailure = null;
+  pendingMcpAuthUrl = null;
   liveMcpManager = null;
   mcpRestored = 0;
   mcpWaited = 0;
@@ -1382,6 +1403,37 @@ class FakeMCPClientManager {
 
   async waitForConnections(): Promise<void> {
     mcpWaited += 1;
+  }
+
+  /** The real `connectToServer` (`client-zqKcsyFa.js`): a registered server
+   *  connects, and a connection that needs authorization answers
+   *  AUTHENTICATING with the URL the provider's redirect flow produced. The
+   *  fake's provider carries that URL because the test queued it — a provider
+   *  with no `authUrl` models a server that needed no sign-in and connects. */
+  async connectToServer(id: string): Promise<
+    | { state: 'failed'; error: string }
+    | { state: 'authenticating'; authUrl: string; clientId?: string }
+    | { state: 'connected' }
+  > {
+    const connection = this.mcpConnections[id];
+
+    if (!connection) return { state: 'failed', error: `no registered server ${id}` };
+
+    const provider = connection.options.transport.authProvider;
+
+    if (provider?.authUrl) {
+      connection.connectionState = 'authenticating';
+
+      return {
+        state: 'authenticating',
+        authUrl: provider.authUrl,
+        clientId: provider.clientId ?? undefined,
+      };
+    }
+
+    connection.connectionState = 'connected';
+
+    return { state: 'connected' };
   }
 
   /** Re-probe the live connection, the way the SDK's own reauthorization path

@@ -2693,3 +2693,5 @@ export {
 export {
   readAllOutcome,
 } from './utils/spawned-output';
+
+export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';

@@ -142,6 +142,7 @@ import {
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type McpPresetId,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
@@ -5242,9 +5243,10 @@ export class UserDO extends Agent<Env> {
 
     const rows = this.sqlx<{
       id: string; name: string; server_url: string; transport: McpTransport;
-      allowed_tools: string | null; created_at: number; updated_at: number;
+      allowed_tools: string | null; preset_id: McpPresetId | null;
+      created_at: number; updated_at: number;
     }>(
-      `SELECT id, name, server_url, transport, allowed_tools, created_at, updated_at
+      `SELECT id, name, server_url, transport, allowed_tools, preset_id, created_at, updated_at
        FROM user_mcp_servers ORDER BY name`,
     );
 
@@ -5282,6 +5284,7 @@ export class UserDO extends Agent<Env> {
         status,
         error: conn?.connectionError ?? null,
         toolsCount,
+        presetId: r.preset_id,
         authUrl,
         allowedTools: allowed,
         createdAt: r.created_at,
@@ -5318,10 +5321,10 @@ export class UserDO extends Agent<Env> {
     this.claimMcpServerName(cfg.name, id, () => {
       this.ctx.storage.sql.exec(
         `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, server_url, transport, headers, allowed_tools, preset_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson, now, now,
+        sealedHeaders, allowedJson, cfg.presetId ?? null, now, now,
       );
     });
 
