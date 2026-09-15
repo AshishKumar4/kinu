@@ -1,15 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { scratchDir } from '@kinu.run/test-utils';
-import * as v from 'valibot';
 
 import { findDuplicateGroups } from './ast-duplication';
 import { findMovable, withoutComments } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
 import { auditInterception, declaredSandboxClasses, WranglerContainers, wranglerContainerClasses } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
+import { parseJsonc } from './jsonc';
 import { configuredScanner, judgeAdvisories } from './dependency-advisory-gate';
 import {
   advisoriesFor, queryAdvisories, type Exposure, type ReviewedPackage,
@@ -706,7 +706,7 @@ describe('egress interception denominator', () => {
       ],
       "env": { "staging": { "containers": [ { "class_name": "C" } ] } }
     }`);
-    expect(wranglerContainerClasses(v.parse(WranglerContainers, require(config)))).toEqual(['A', 'B', 'C']);
+    expect(wranglerContainerClasses(parseJsonc(readFileSync(config, 'utf8'), WranglerContainers, 'wrangler.jsonc'))).toEqual(['A', 'B', 'C']);
   });
 
   test('a generic container class is in the denominator', () => {

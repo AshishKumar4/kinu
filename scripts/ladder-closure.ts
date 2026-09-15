@@ -65,6 +65,12 @@ export type Inputs =
     /** Environment names whose values change the verdict, beyond the literal
      *  `process.env.NAME` reads the graph carries. */
     readonly env?: readonly string[];
+    /** Tracked paths a computed `import()` or `require()` in the graph can
+     *  load. A graph with such a site and no declaration is never cached; a
+     *  declaration on a graph with no such site is stale and refused. The
+     *  walker cannot follow the string, so `--audit-closure` is what checks
+     *  the declaration against the file the process really loaded. */
+    readonly imports?: readonly string[];
   }
   | {
     /** Never cached: the gate touches a network, a deployed build, a live
@@ -285,6 +291,8 @@ interface Walk {
   readonly files: Set<string>;
   readonly env: Set<string>;
   readonly readsByPath: string[];
+  /** `file:line` of every computed `import()`/`require()`. */
+  readonly computedImports: string[];
   readonly envEnumerated: string[];
   readonly envComputed: string[];
   readonly corpus: boolean;
@@ -300,6 +308,7 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
   const files = new Set<string>();
   const env = new Set<string>();
   const readsByPath: string[] = [];
+  const computedImports: string[] = [];
   const envEnumerated: string[] = [];
   const envComputed: string[] = [];
   let corpus = false;
@@ -322,13 +331,8 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
     if (!isParseable(file)) return paths;
     const parsed = parse(file, repo.read(file));
     const { edges, computed, resolvedByPath } = moduleEdges(parsed);
-    const [computedLine] = computed;
 
-    if (computedLine !== undefined) {
-      failure = `${file}:${String(computedLine)} imports by a computed specifier the walker cannot follow`;
-
-      return paths;
-    }
+    for (const line of computed) computedImports.push(`${file}:${String(line)}`);
 
     const scan = scanMarkers(parsed.root, edges.map((edge) => edge.specifier));
 
@@ -362,7 +366,7 @@ function walkGraph(entries: readonly string[], repo: Repo): Walk {
     return paths;
   });
 
-  return { files, env, readsByPath, envEnumerated, envComputed, corpus, failure };
+  return { files, env, readsByPath, computedImports, envEnumerated, envComputed, corpus, failure };
 }
 
 interface Form {
@@ -476,6 +480,16 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
   const walked = walkGraph(form.entries, repo);
 
   if (walked.failure !== undefined) return { kind: 'uncomputable', why: `${run}: ${walked.failure}` };
+  const [computedImport] = walked.computedImports;
+
+  if (computedImport !== undefined && inputs.imports === undefined) {
+    return { kind: 'uncomputable', why: `${run}: ${computedImport} imports by a computed specifier the walker cannot follow` };
+  }
+
+  if (computedImport === undefined && inputs.imports !== undefined) {
+    return { kind: 'uncomputable', why: `${run}: the row declares \`imports\` and the graph has no computed import — a stale declaration` };
+  }
+
   const notes: string[] = [];
   const universe = new Set(repo.files);
   const files = new Set<string>(walked.files);
@@ -529,12 +543,17 @@ export function deriveClosure(run: string, inputs: Inputs, repo: Repo): Closure 
     };
   }
 
-  for (const prefix of [...form.reads, ...(inputs.reads ?? [])]) {
+  for (const prefix of [...form.reads, ...(inputs.reads ?? []), ...(inputs.imports ?? [])]) {
     const matched = repo.files.filter((file) => file === prefix || (prefix.endsWith('/') && file.startsWith(prefix)));
 
     if (matched.length === 0) return { kind: 'uncomputable', why: `${run}: declared read ${prefix} matches no tracked file` };
 
     for (const file of matched) files.add(file);
+  }
+
+  if (computedImport !== undefined) {
+    notes.push(`${String(walked.computedImports.length)} computed import(s) at ${walked.computedImports.join(', ')}; the row `
+      + `declares imports [${(inputs.imports ?? []).join(', ')}] — checked by --audit-closure, not by the walker`);
   }
 
   // An untracked file in the closure is bytes the tree cannot name: a built
