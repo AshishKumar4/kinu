@@ -24,7 +24,7 @@ import { git } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   BUDGET_TOLERANCE, CI_EXEMPT, EVAL_TIER_SCRIPT, HOOKS_DIR, LADDER, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  declaredTierCost, deployGates, evalTierArms, gatesFor, judgeBudgets, packageScripts, readBudget,
+  DEPLOY_PHASES, declaredTierCost, deployPlan, evalTierArms, gatesFor, judgeBudgets, packageScripts, printPlan, readBudget,
   runnableArgv, trackedTestFiles, type LadderBudget,
 } from './ladder';
 import {
@@ -36,8 +36,6 @@ import { SKIP_RATCHET_VITEST_TARGETS } from './skip-ratchet';
 const root = resolve(import.meta.dir, '..');
 
 const tracked = trackedTestFiles();
-
-const deploy = deployGates();
 
 /**
  * Suites that deliberately run under no `bun test` tier, and the runner that
@@ -118,11 +116,21 @@ const omittedGate = (directory: string): string | undefined =>
   Object.entries(ROOT_TEST_OMISSIONS).find(([name]) => name === directory)?.[1];
 
 describe('the ladder measures something', () => {
-  test('deploy.sh parses to a non-empty gate list', () => {
-    // A parser that silently matches no `run_required_gate` lines would make
-    // every parity assertion below vacuously true. That is the exact shape of
-    // unit-layergate.test.ts:70's import walk, and of assertEventSequence.
-    expect(deploy.length).toBeGreaterThan(10);
+  test('the deploy plan holds every non-evals gate, in phase order, and nothing else', () => {
+    // The plan is what `bash scripts/deploy.sh` schedules from — the one copy
+    // of what blocks a publish. Until 2026-09-15 this parsed deploy.sh's own
+    // `run_required_gate` lines and held them equal to the ladder; the parser
+    // and the second list are gone, and the property is that the plan is the
+    // ladder: every gate but the evals tier, each once, phases in order.
+    const plan = deployPlan();
+    expect(plan.length).toBeGreaterThan(10);
+    expect(plan.map((row) => row.run).sort()).toEqual(LADDER.filter((gate) => gate.tier !== 'evals').map((gate) => gate.run).sort());
+    const phaseIndex = plan.map((row) => DEPLOY_PHASES.indexOf(row.phase));
+    expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
+    // The printed form round-trips: what the runner reads is what was planned.
+    const printed = printPlan(plan).split('\n').map((line) => line.split('\t'));
+    expect(printed.map((fields) => fields[4])).toEqual(plan.map((row) => row.run));
+    expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
   });
 
   test('git reports a non-empty set of test files', () => {
@@ -133,7 +141,7 @@ describe('the ladder measures something', () => {
     const scripts = new Set(Object.keys(packageScripts()));
     const unrunnable: string[] = [];
 
-    for (const gate of gatesFor('deploy', deploy)) {
+    for (const gate of gatesFor('deploy')) {
       const words = gate.run.split(/\s+/);
 
       if (words[0] === 'bun' && words[1] === 'run' && !scripts.has(words[2] ?? '')) {
@@ -143,7 +151,7 @@ describe('the ladder measures something', () => {
 
     expect(unrunnable).toEqual([]);
 
-    for (const tier of TIERS) expect(gatesFor(tier, deploy).length).toBeGreaterThan(0);
+    for (const tier of TIERS) expect(gatesFor(tier).length).toBeGreaterThan(0);
   });
 
   test('claims() resolves the invocation forms this repo uses', () => {
@@ -198,41 +206,19 @@ describe('the ladder measures something', () => {
     // the four files above had to be credited somewhere they could not run.
     expect(claims('bun run test:eval', tracked).sort())
       .toEqual([...bunSuitesUnderTests, ...vitestUnderTests].sort());
-    // Enumerated, not counted: a bare length drifted from 3 to 4 the moment
-    // `bench-inference-proxy.test.ts` landed, and a count cannot say WHICH file
-    // the glob gained or lost. Naming the set makes a new bench suite a
-    // deliberate edit here rather than a silently absorbed number.
-    expect(claims('bun test scripts/bench*.test.ts', tracked).sort()).toEqual([
-      'scripts/bench-c3-overwrite-cell.test.ts',
-      'scripts/bench-corpus-gate.test.ts',
-      'scripts/bench-devbox-ask-again.test.ts',
-      'scripts/bench-devbox-block-attach.test.ts',
-      'scripts/bench-devbox-decision.test.ts',
-      'scripts/bench-devbox-workerd.test.ts',
-      'scripts/bench-external.test.ts',
-      'scripts/bench-fuse-probe.test.ts',
-      'scripts/bench-inference-proxy.test.ts',
-      'scripts/bench-pi-worker.test.ts',
-      'scripts/bench-r2-workspace.test.ts',
-      'scripts/bench-restore-probe.test.ts',
-      'scripts/bench.test.ts',
-    ]);
+    // The glob and named-file forms are proved over a FIXTURE tree below
+    // (`claims() resolves a glob against whatever tree it is given`), never by
+    // naming the live repo's files: this held a thirteen-entry list of bench
+    // suites that a new suite had to be added to by hand (f6d08d72d), which is
+    // the defect the family rule exists to remove. The live tree's one property
+    // worth asserting is that the glob resolves to SOMETHING, so an empty
+    // expansion cannot read as a gate that ran nothing.
+    expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBeGreaterThan(0);
 
     const durabilityProbeGate = LADDER.find(gate =>
       gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
 
     expect(durabilityProbeGate?.tier).toBe('ci');
-    // Spelled out, like the glob above and for the same reason: the seven rig
-    // suites after the probe are named files, so an eighth is a deliberate edit
-    // here rather than a suite that silently joined a measured row.
-    expect(durabilityProbeGate?.run).toBe(
-      'bun test scripts/bench*.test.ts'
-      + ' scripts/sandbox-durability-probe.test.ts'
-      + ' scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts'
-      + ' scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts'
-      + ' scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts'
-      + ' scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
-    );
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
     // The workerd layer resolves from its own command text, so it is
@@ -248,6 +234,46 @@ describe('the ladder measures something', () => {
   });
 });
 
+describe('claims() resolves a glob against whatever tree it is given', () => {
+  // The MECHANISM, over a tree this test owns. A live-tree assertion that
+  // names files is a list somebody maintains; this proves the resolver's
+  // three forms — glob, directory, named file — on known inputs, and that a
+  // file added to the tree is claimed with no edit anywhere.
+  const tree = [
+    'scripts/bench-a.test.ts', 'scripts/bench-b.test.ts', 'scripts/bench.test.ts',
+    'scripts/benchmark-notes.md', 'scripts/other.test.ts', 'scripts/deep/bench-c.test.ts',
+    'scripts/x-ux.test.ts', 'scripts/y-ux.test.ts', 'scripts/ux.test.ts', 'scripts/z-ux.helper.ts',
+    'packages/p/tests/one.test.ts', 'packages/p/tests/two.spec.ts', 'packages/p/src/lib.ts',
+  ];
+
+  test('a glob claims exactly the discoverable suites it matches, one path segment deep', () => {
+    expect(claims('bun test scripts/bench*.test.ts', tree)).toEqual([
+      'scripts/bench-a.test.ts', 'scripts/bench-b.test.ts', 'scripts/bench.test.ts',
+    ]);
+    expect(claims('bun test scripts/*-ux.test.ts', tree)).toEqual(['scripts/x-ux.test.ts', 'scripts/y-ux.test.ts']);
+  });
+
+  test('a file added to the tree joins its family with no edit', () => {
+    const grown = [...tree, 'scripts/bench-new.test.ts', 'scripts/w-ux.test.ts'];
+    expect(claims('bun test scripts/bench*.test.ts', grown)).toContain('scripts/bench-new.test.ts');
+    expect(claims('bun test scripts/*-ux.test.ts', grown)).toContain('scripts/w-ux.test.ts');
+  });
+
+  test('a glob beside named files claims the union once, in resolution order', () => {
+    expect(claims('bun test scripts/bench*.test.ts scripts/other.test.ts scripts/bench.test.ts', tree)).toEqual([
+      'scripts/bench-a.test.ts', 'scripts/bench-b.test.ts', 'scripts/bench.test.ts', 'scripts/other.test.ts',
+    ]);
+  });
+
+  test('a directory claims every discoverable suite beneath it and nothing else', () => {
+    expect(claims('bun test packages/p/', tree)).toEqual(['packages/p/tests/one.test.ts', 'packages/p/tests/two.spec.ts']);
+  });
+
+  test('a named file not in the tree claims nothing rather than itself', () => {
+    expect(claims('bun test scripts/absent.test.ts', tree)).toEqual([]);
+  });
+});
+
 describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
   test('no tier claims a test file that a later tier does not', () => {
     // A gate at an early tier and not a later one means the later tier is the
@@ -256,7 +282,7 @@ describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
     // that gains an argument does not read as a hole.
     const claimedAt = TIERS.map((tier) => ({
       tier,
-      files: new Set(gatesFor(tier, deploy).flatMap((gate) => claims(gate.run, tracked))),
+      files: new Set(gatesFor(tier).flatMap((gate) => claims(gate.run, tracked))),
     }));
 
     const regressions: string[] = [];
@@ -274,40 +300,6 @@ describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
     expect(regressions).toEqual([]);
   });
 
-  test('every gate declared here is covered at deploy', () => {
-    // A gate that runs at commit and not at deploy would make the deploy path
-    // the weaker one. Test gates are compared by the files they claim, so
-    // `bun test scripts/bench*.test.ts` at CI is satisfied by deploy.sh's wider
-    // `scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts` line;
-    // non-test gates have no files to compare and must match by command.
-    const atDeploy = new Set(deploy);
-    const filesAtDeploy = new Set(deploy.flatMap((run) => claims(run, tracked)));
-    const orphans: string[] = [];
-
-    for (const gate of LADDER) {
-      // The `evals` tier is deliberately NOT a deploy gate: live-model
-      // behavioural evidence a deploy must not wait on or pay for. Its
-      // deliberate runner is `bun run evals:full`, and TIERS' own doc carries
-      // the reason. Every other tier must still be covered at deploy.
-      if (gate.tier === 'evals') continue;
-
-      if (atDeploy.has(gate.run)) continue;
-      const files = claims(gate.run, tracked);
-
-      if (files.length === 0) {
-        orphans.push(`${gate.run} (tier ${gate.tier}) runs no test file and is in no deploy.sh gate line`);
-        continue;
-      }
-
-      const missing = files.filter((file) => !filesAtDeploy.has(file));
-
-      if (missing.length > 0) {
-        orphans.push(`${gate.run} (tier ${gate.tier}) claims ${String(missing.length)} file(s) no deploy gate runs, e.g. ${missing[0] ?? ''}`);
-      }
-    }
-
-    expect(orphans).toEqual([]);
-  });
 });
 
 describe('CI is not a silent subset of deploy', () => {
@@ -317,12 +309,12 @@ describe('CI is not a silent subset of deploy', () => {
     // badge was meaningfully weaker than a green local run and the delta was
     // invisible. After this assertion the delta can only ever be a decision
     // someone wrote down.
-    const ci = gatesFor('ci', deploy);
+    const ci = gatesFor('ci');
     const atCi = new Set(ci.map((gate) => gate.run));
     const filesAtCi = new Set(ci.flatMap((gate) => claims(gate.run, tracked)));
     const undeclared: string[] = [];
 
-    for (const run of deploy) {
+    for (const { run } of deployPlan()) {
       if (atCi.has(run) || Object.hasOwn(CI_EXEMPT, run)) continue;
       const files = claims(run, tracked);
       const missing = files.filter((file) => !filesAtCi.has(file));
@@ -338,11 +330,11 @@ describe('CI is not a silent subset of deploy', () => {
     expect(undeclared).toEqual([]);
   });
 
-  test('every exemption names a gate deploy.sh actually runs', () => {
+  test('every exemption names a gate the deploy plan runs', () => {
     // A stale exemption is worse than a missing one: it reads as a considered
     // decision about a gate that no longer exists, and it silently excuses the
     // next gate that happens to be spelled the same way.
-    const runs = new Set(deploy);
+    const runs = new Set(deployPlan().map((row) => row.run));
     const stale = Object.keys(CI_EXEMPT).filter((run) => !runs.has(run));
     expect(stale).toEqual([]);
   });
@@ -375,7 +367,7 @@ describe('every test file is claimed by some runner', () => {
     // assertion could not express "the eval tier owns these four files", so the
     // four were credited to a bun gate that cannot select them. The ci delta is
     // the next test's subject, declared file by file.
-    const covered = new Set(gatesFor('evals', deploy).flatMap((gate) => claims(gate.run, tracked)));
+    const covered = new Set(gatesFor('evals').flatMap((gate) => claims(gate.run, tracked)));
 
     const unclaimed = tracked
       .filter((path) => !covered.has(path)
@@ -389,7 +381,7 @@ describe('every test file is claimed by some runner', () => {
     // What a green CI badge does NOT mean, as a list rather than as a hope. Both
     // directions: a file outside `AFTER_CI_SUITES` that no ci gate claims is a
     // hole, and a file inside it that a ci gate DOES claim is a stale excuse.
-    const atCi = new Set(gatesFor('ci', deploy).flatMap((gate) => claims(gate.run, tracked)));
+    const atCi = new Set(gatesFor('ci').flatMap((gate) => claims(gate.run, tracked)));
     const declared = Object.keys(AFTER_CI_SUITES).sort();
 
     const missing = tracked
@@ -458,7 +450,7 @@ describe('every test file is claimed by some runner', () => {
 
     // No bun gate may claim one: `bun test` cannot run Python, and a `.py` under
     // a directory target would be a claim over a file the runner skips.
-    const elsewhere = gatesFor('evals', deploy)
+    const elsewhere = gatesFor('evals')
       .filter((gate) => gate.run !== 'bun run gate:python-suites')
       .flatMap((gate) => claims(gate.run, tracked));
 
@@ -540,7 +532,7 @@ describe('every test file is claimed by some runner', () => {
     const cliFiles = claims(cliGate, tracked);
     expect(cliFiles.length).toBeGreaterThan(0);
 
-    const elsewhere = new Set(gatesFor('ci', deploy)
+    const elsewhere = new Set(gatesFor('ci')
       .filter((gate) => gate.run !== cliGate)
       .flatMap((gate) => claims(gate.run, tracked)));
 
@@ -573,7 +565,7 @@ describe('every test file is claimed by some runner', () => {
     expect(workerd.length).toBeGreaterThan(0);
     expect(workerd.every((path) => bunWouldSkip(path))).toBe(true);
 
-    const bunClaimed = gatesFor('ci', deploy)
+    const bunClaimed = gatesFor('ci')
       .filter((gate) => gate.run !== 'bun run test:workerd')
       .flatMap((gate) => claims(gate.run, tracked));
 
@@ -604,7 +596,7 @@ describe('every test file is claimed by some runner', () => {
     expect(packages.size).toBe(10);
 
     const byRootScript = new Set(claims('bun run test', tracked));
-    const atCi = gatesFor('ci', deploy);
+    const atCi = gatesFor('ci');
     const wrong: string[] = [];
 
     for (const directory of packages) {
@@ -658,8 +650,8 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     expect(budget.reason.length).toBeGreaterThan(40);
 
     const declared = {
-      commit: declaredTierCost('commit', deploy),
-      push: declaredTierCost('push', deploy),
+      commit: declaredTierCost('commit'),
+      push: declaredTierCost('push'),
     };
 
     for (const tier of ['commit', 'push'] as const) {
@@ -772,7 +764,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
   // Synthesis stays: an undeclared deploy gate must still RUN. This is what makes
   // it also fail, by name, until somebody measures it.
   test('every gate the deploy tier runs carries a measured cost and a named blind spot', () => {
-    const vague = gatesFor('deploy', deploy)
+    const vague = gatesFor('deploy')
       .filter((gate) => gate.seconds <= 0 || gate.blind.length < 20 || gate.catches.length < 20)
       .map((gate) => gate.run);
 
@@ -780,7 +772,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
   });
 
   test('heavy package gates use four isolated Bun workers', () => {
-    const atCi = gatesFor('ci', deploy);
+    const atCi = gatesFor('ci');
 
     for (const run of [
       'bun test --parallel=4 packages/cf-backend/',
@@ -909,7 +901,7 @@ describe('a gate the runner cannot spawn is a gate that does not exist', () => {
     const globbed = LADDER.filter((gate) => gate.run.includes('*'));
     expect(globbed.length).toBeGreaterThan(0);
 
-    const unspawnable = gatesFor('deploy', deploy)
+    const unspawnable = gatesFor('deploy')
       .filter((gate) => runnableArgv(gate.run, tracked).some((word) => word.includes('*')))
       .map((gate) => gate.run);
 
@@ -937,7 +929,7 @@ describe('a gate the runner cannot spawn is a gate that does not exist', () => {
     // same defect: `bun test --grep 'foo bar'` splits into a silently wrong
     // argv, runs, and reports green over the wrong set. `*` is the one
     // metacharacter the runner resolves, from claims().
-    const shellSyntax = gatesFor('deploy', deploy)
+    const shellSyntax = gatesFor('deploy')
       .filter((gate) => /['"?$&|<>~`(){}[\]]/.test(gate.run))
       .map((gate) => gate.run);
 

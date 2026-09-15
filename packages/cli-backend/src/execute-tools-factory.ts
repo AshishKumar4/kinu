@@ -32,11 +32,11 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
   decodeJsonValue, explainNativeToolReferenceError, nativeToolFunctions,
-  renderExecuteToolsDescription, renderToolsDeclaration,
+  renderExecuteToolsDescription, renderToolsDeclaration, executeToolsInputSchema,
   withCraftedToolDeclarations,
   codemodeFunction, withCodemodeProgram,
 } from '@kinu.run/core';
-import { tool, jsonSchema } from 'ai';
+import { tool } from 'ai';
 import { createRequire } from 'node:module';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import * as v from 'valibot';
@@ -102,11 +102,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         ].join('\n\n'),
         'local',
       ),
-      inputSchema: jsonSchema<{ code: string }>({
-        type: 'object',
-        properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
-        required: ['code'],
-      }),
+      inputSchema: executeToolsInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
         // `console` is shadowed by a capturing stand-in: this builder runs the

@@ -117,6 +117,29 @@ const FIBRE_ALPHA = 0.095;
 
 const SIGNAL_ALPHA = 0.42;
 
+/** The pointer's reach over the tissue, in view width units: inside it the
+ *  mat answers. Apart from the hero tree's own reach on purpose: the tree
+ *  bends tips under a cursor, the tissue holds whole strokes. */
+const TISSUE_REACH = 0.12;
+
+/** How far a tissue stroke bends toward the pointer at most, in view widths. */
+const TISSUE_BEND = 0.015;
+
+/** How fast the pointer's hold eases in and out, per second. */
+const POINTER_RATE = 7;
+
+/** A pointer burst faster than this (view widths per second) fires a signal. */
+const BURST_SPEED = 0.4;
+
+/** At most one pointer-fired signal per root in this window, in seconds. */
+const BURST_WINDOW = 0.25;
+
+/** A fired signal's brightness and width scale within this seeded range. */
+const AMPLITUDE_LOW = 0.45;
+
+/** The top of the seeded amplitude range. */
+const AMPLITUDE_HIGH = 1;
+
 /** How fast the look follows the activity: a change reads as a fade of
  *  about a second, never a cut. Slower than the hero's branch fade —
  *  activity is a mood, not an event. */
@@ -186,6 +209,8 @@ interface Node {
   y: number;
   /** How far under the copy this node sits: 0 clear, 1 hidden. */
   cover: number;
+  /** The pointer's hold on this node: 0 away, 1 under it. Eases both ways. */
+  hold: number;
 }
 
 interface Edge {
@@ -289,9 +314,25 @@ export class Connectome {
 
   private focusUntil = 0;
 
-  private signalAt = 0;
-
   private flash: Flash | null = null;
+
+  /** The pointer in view units, or null when absent, hoverless or reduced-motion. */
+  private pointerX: number | null = null;
+
+  private pointerY: number | null = null;
+
+  /** Where the pointer was on the last burst check, and when, in tissue time. */
+  private burstX = 0;
+
+  private burstY = 0;
+
+  private burstAt = 0;
+
+  /** The last tissue time a pointer burst fired from each root. */
+  private readonly burstFired: number[] = [];
+
+  /** The tissue time each root may next send a grain, seeded exponentially. */
+  private nextFire: number[] = [];
 
   private keepOut: readonly KeepOut[] = [];
 
@@ -310,7 +351,10 @@ export class Connectome {
     this.pulseData = new Float32Array(new ArrayBuffer(4 * PULSE_STRIDE * this.signalCap));
     this.grow();
     this.fuse();
-    this.signalAt = 0.2 + this.random() * 0.4;
+
+    for (const id of this.roots) {
+      this.nextFire[id] = this.waitFor(IDLE.cadence * this.roots.length);
+    }
 
     if (options.activity !== undefined) {
       this.activity = options.activity;
@@ -355,13 +399,44 @@ export class Connectome {
     return this.activity.working ? 'working' : 'idle';
   }
 
+  /** The strongest pointer hold across the mat, 0 with no pointer: what a
+   *  gate waits on to know the cursor reached the simulation. */
+  pointerHold(): number {
+    let hold = 0;
+
+    for (const node of this.nodes) hold = Math.max(hold, node.hold);
+
+    return hold;
+  }
+
   step(dt: number): void {
     this.elapsed += dt;
     this.settleLook(dt);
+    this.settlePointer(dt);
     this.place();
     this.stepFlash(dt);
     this.emit();
     this.stepSignals(dt);
+  }
+
+  /** The pointer in view units: an input to the simulation, never to the
+   *  random stream, so a scripted path replays the same frames. The mount
+   *  calls this only where hover exists and motion is wanted. */
+  setPointer(x: number, y: number): void {
+    if (this.pointerX === null) {
+      this.burstX = x;
+      this.burstY = y;
+      this.burstAt = this.elapsed;
+    }
+
+    this.pointerX = x;
+    this.pointerY = y;
+  }
+
+  /** The pointer left: the hold eases back over about half a second. */
+  clearPointer(): void {
+    this.pointerX = null;
+    this.pointerY = null;
   }
 
   frame(): ArtFrame {
@@ -383,12 +458,13 @@ export class Connectome {
       const cornerness = a.corner === flashCorner ? a.cornerness : b.corner === flashCorner ? b.cornerness : 0;
       const flashed = lift * cornerness;
       const focused = a.corner === focusCorner ? focus * a.cornerness * 0.3 : 0;
+      const held = Math.max(a.hold, b.hold);
       const breath = 0.5 + 0.5 * sine(wave - edge.phase);
-      const glow = clamp(this.look.glowBase + this.look.glowAmp * breath + focused + 0.5 * flashed, 0, 0.5 + 0.5 * flashed);
+      const glow = clamp(this.look.glowBase + this.look.glowAmp * breath + focused + 0.5 * flashed + 0.35 * held, 0, 0.5 + 0.5 * flashed + 0.35 * held);
       const alpha = FIBRE_ALPHA * (0.35 + 0.65 * edge.rim) * (0.8 + 0.2 * breath) * (1 + 0.25 * focused / 0.3) * (1 + 1.2 * flashed) * (1 - edge.cover);
 
       if (alpha <= 0.003) continue;
-      count = this.pushStroke(count, edge, glow, alpha);
+      count = this.pushStroke(count, edge, glow, held > 0.02 ? TONE_BRIGHT : TONE_ACCENT, alpha);
     }
 
     return {
@@ -550,6 +626,7 @@ export class Connectome {
       x: hx,
       y: hy,
       cover: 0,
+      hold: 0,
     });
 
     return id;
@@ -724,17 +801,30 @@ export class Connectome {
 
   /** The mat sways as one cloth: every node moves with a smooth field of
    *  its home, so neighbours move together; every edge follows its ends;
-   *  every tip breathes out and back. */
+   *  every tip breathes out and back. The pointer's hold bends strokes
+   *  toward it, at most TISSUE_BEND where the hold is whole. */
   private place(): void {
     const t = this.elapsed;
     const slow = t * 0.31;
     const slower = t * 0.23;
 
     const swayY = SWAY / this.aspect;
+    const pointerX = this.pointerX;
+    const pointerY = this.pointerY;
 
     for (const node of this.nodes) {
       node.x = node.hx + SWAY * sine(slow + node.hx * 9 + node.hy * 5);
       node.y = node.hy + swayY * sine(slower + node.hx * 4 + node.hy * 11 + 1.5708);
+
+      if (pointerX !== null && pointerY !== null && node.hold > 0.001) {
+        const gap = this.distance(node.x, node.y, pointerX, pointerY);
+
+        if (gap > 1e-6) {
+          const pull = Math.min(TISSUE_BEND, gap) * node.hold;
+          node.x += (pointerX - node.x) / gap * pull;
+          node.y += (pointerY - node.y) / gap * pull / this.aspect;
+        }
+      }
     }
 
     for (const edge of this.edges) {
@@ -752,6 +842,70 @@ export class Connectome {
       edge.cy = (a.y + b.y) / 2 + dx * edge.bow / this.aspect;
 
       if (edge.tip) edge.drawn = 0.55 + 0.45 * (0.5 + 0.5 * sine(edge.tipRate * t + edge.tipPhase));
+    }
+  }
+
+  /** The pointer's hold eases toward its target every step: whole under the
+   *  pointer, nothing past TISSUE_REACH, in and out at POINTER_RATE, so a
+   *  leave decays back over about half a second. A burst — fast motion —
+   *  fires one signal from the nearest root in reach, rate-limited. */
+  private settlePointer(dt: number): void {
+    const ease = 1 - Math.exp(-dt * POINTER_RATE);
+    const pointerX = this.pointerX;
+    const pointerY = this.pointerY;
+
+    if (pointerX === null || pointerY === null) {
+      for (const node of this.nodes) node.hold *= 1 - ease;
+
+      return;
+    }
+
+    for (const node of this.nodes) {
+      const gap = this.distance(node.hx, node.hy, pointerX, pointerY);
+      const target = gap >= TISSUE_REACH ? 0 : 1 - gap / TISSUE_REACH;
+      node.hold += (target - node.hold) * ease;
+    }
+
+    const moved = this.distance(this.burstX, this.burstY, pointerX, pointerY);
+    const window = this.elapsed - this.burstAt;
+
+    if (window >= 0.1) {
+      if (window > 0 && moved / window > BURST_SPEED) this.fireBurst(pointerX, pointerY);
+      this.burstX = pointerX;
+      this.burstY = pointerY;
+      this.burstAt = this.elapsed;
+    }
+  }
+
+  /** One signal from the nearest root in the pointer's reach, unless that
+   *  root fired within BURST_WINDOW. The amplitude is seeded. */
+  private fireBurst(x: number, y: number): void {
+    let nearest = -1;
+    let nearestGap = TISSUE_REACH;
+
+    for (const id of this.roots) {
+      const node = this.nodes[id];
+
+      if (node === undefined) continue;
+      const gap = this.distance(node.hx, node.hy, x, y);
+
+      if (gap < nearestGap) {
+        nearestGap = gap;
+        nearest = id;
+      }
+    }
+
+    if (nearest < 0) return;
+
+    while (this.burstFired.length <= nearest) this.burstFired.push(-BURST_WINDOW * 2);
+
+    if (this.elapsed - (this.burstFired[nearest] ?? -BURST_WINDOW * 2) < BURST_WINDOW) return;
+    this.burstFired[nearest] = this.elapsed;
+    const node = this.nodes[nearest];
+    const edge = node?.edges[0];
+
+    if (node !== undefined && edge !== undefined) {
+      this.launch(nearest, edge, -1, 10, AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW));
     }
   }
 
@@ -815,18 +969,34 @@ export class Connectome {
     if (this.flash.age > FLASH_ATTACK + FLASH_DECAY) this.flash = null;
   }
 
-  /** Grains leave at the mode's cadence: from a root inward or a tip back
-   *  when idle, wandering; from anywhere toward the focus corner while working. */
+  /** A seeded exponential wait of the given mean, capped at eight means so
+   *  one draw never idles the tissue past its mood. */
+  private waitFor(mean: number): number {
+    return Math.min(8 * mean, -Math.log(1 - this.random()) * mean);
+  }
+
+  /** Grains leave per root on a seeded exponential wait whose mean is the
+   *  mode's cadence times the root count, so the whole tissue still fires
+   *  at today's rate while each root clusters and rests. Each grain's
+   *  amplitude is seeded in [AMPLITUDE_LOW, AMPLITUDE_HIGH] and scales its
+   *  brightness and width. */
   private emit(): void {
-    while (this.elapsed >= this.signalAt) {
-      this.signalAt += this.look.cadence * (0.6 + 0.8 * this.random());
-      const working = this.activity.working && this.focusCorner >= 0;
+    const working = this.activity.working && this.focusCorner >= 0;
+    const mean = this.look.cadence * this.roots.length;
+
+    for (const id of this.roots) {
+      if (this.elapsed < (this.nextFire[id] ?? Number.POSITIVE_INFINITY)) continue;
+      this.nextFire[id] = this.elapsed + this.waitFor(mean);
+
+      // From the root itself most of the time; sometimes the grain leaves a
+      // tip and walks back toward it, or — while working — starts anywhere
+      // and converges on the corner that wants the answer.
       let from: number;
 
       if (working) {
         from = Math.floor(this.random() * this.nodes.length);
       } else if (this.random() < 0.6) {
-        from = this.roots[Math.floor(this.random() * this.roots.length)] ?? 0;
+        from = id;
       } else {
         from = this.tipList[Math.floor(this.random() * this.tipList.length)] ?? 0;
       }
@@ -835,8 +1005,9 @@ export class Connectome {
 
       if (origin === undefined || (working && origin.corner === this.focusCorner && origin.cornerness > 0.5)) continue;
       const edge = this.chooseEdge(from, -1, working ? this.focusCorner : -1);
+      const amplitude = AMPLITUDE_LOW + this.random() * (AMPLITUDE_HIGH - AMPLITUDE_LOW);
 
-      if (edge !== null) this.launch(from, edge, working ? this.focusCorner : -1, working ? 24 : 8 + Math.floor(this.random() * 8), 1);
+      if (edge !== null) this.launch(from, edge, working ? this.focusCorner : -1, working ? 24 : 8 + Math.floor(this.random() * 8), amplitude);
     }
   }
 
@@ -933,7 +1104,7 @@ export class Connectome {
     return true;
   }
 
-  private pushStroke(count: number, edge: Edge, glow: number, alpha: number): number {
+  private pushStroke(count: number, edge: Edge, glow: number, tone: number, alpha: number): number {
     this.strokes = grown(this.strokes, (count + 1) * STROKE_STRIDE);
     const at = count * STROKE_STRIDE;
     const strokes = this.strokes;
@@ -946,7 +1117,7 @@ export class Connectome {
     strokes[at + 6] = edge.drawn;
     strokes[at + 7] = edge.width;
     strokes[at + 8] = glow;
-    strokes[at + 9] = TONE_ACCENT;
+    strokes[at + 9] = tone;
     strokes[at + 10] = alpha;
     strokes[at + 11] = edge.generation;
 
@@ -975,7 +1146,7 @@ export class Connectome {
         y1: edge.y1,
         tail,
         head,
-        width: edge.width * 0.8 + 0.5,
+        width: (edge.width * 0.8 + 0.5) * (0.6 + 0.4 * Math.min(1, signal.strength)),
         glow: 0.9,
         tone: TONE_BRIGHT,
         alpha,

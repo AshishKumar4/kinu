@@ -56,13 +56,14 @@ const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
 };
 
 /** What a gate can read off the live background: which renderer took the
- *  canvas, the last frames' cost, the picture's clock, and what the tissue
- *  is doing. */
+ *  canvas, the last frames' cost, the picture's clock, what the tissue is
+ *  doing, and how strongly the pointer holds it. */
 export interface AppBackgroundHandle {
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
   time(): number;
   mode(): ConnectomeMode;
+  pointer(): number;
 }
 
 declare global {
@@ -77,6 +78,10 @@ declare global {
 function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
   const wide = useMediaQuery(RAIL_QUERY);
+  // The pointer answers only where a cursor can hover and motion is wanted:
+  // touch screens and reduced-motion visitors keep the undisturbed picture.
+  const hoverable = useMediaQuery('(hover: hover)');
+  const calm = useMediaQuery('(prefers-reduced-motion: reduce)');
   const { working, decisions } = useRosterActivity();
   const living = useRef<LivingCanvas<ArtFrame, Connectome> | null>(null);
 
@@ -161,11 +166,38 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
     changes.observe(shell, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
     shell.addEventListener('scroll', onScroll, { capture: true, passive: true });
 
+    // The pointer feeds the simulation, never the renderer: viewport units,
+    // null when it leaves. The host itself is pointer-transparent, so the
+    // window hears what the picture cannot. Stills never listen.
+    const toView = (clientX: number, clientY: number): readonly [number, number] => {
+      const box = host.getBoundingClientRect();
+
+      return [(clientX - box.left) / box.width, (clientY - box.top) / box.height];
+    };
+
+    const onMove = (event: PointerEvent): void => {
+      if (event.pointerType === 'touch') return;
+      const [x, y] = toView(event.clientX, event.clientY);
+      mounted.art().setPointer(x, y);
+    };
+
+    const onLeave = (): void => {
+      mounted.art().clearPointer();
+    };
+
+    if (hoverable && !calm) {
+      window.addEventListener('pointermove', onMove, { passive: true });
+      window.addEventListener('pointerleave', onLeave);
+      window.addEventListener('blur', onLeave);
+      document.documentElement.addEventListener('pointerleave', onLeave);
+    }
+
     const handle: AppBackgroundHandle = {
       renderer: () => mounted.renderer(),
       frameTimes: () => mounted.frameTimes(),
       time: () => mounted.time(),
       mode: () => mounted.art().mode(),
+      pointer: () => mounted.art().pointerHold(),
     };
 
     living.current = mounted;
@@ -174,6 +206,10 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
     return () => {
       changes.disconnect();
       shell.removeEventListener('scroll', onScroll, { capture: true });
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerleave', onLeave);
+      window.removeEventListener('blur', onLeave);
+      document.documentElement.removeEventListener('pointerleave', onLeave);
 
       if (scheduled !== 0) cancelAnimationFrame(scheduled);
       mounted.dispose();
@@ -181,7 +217,7 @@ function Tissue({ known }: { readonly known: { current: ConnectomeActivity } }):
 
       if (window.__kinuAppBackground === handle) delete window.__kinuAppBackground;
     };
-  }, [known, wide]);
+  }, [known, wide, hoverable, calm]);
 
   return (
     <div

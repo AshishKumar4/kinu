@@ -48,6 +48,7 @@
  */
 
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { textSink } from '@nimbus-sh/core/_shared/bytes.js';
 import type { FacetHost } from '@nimbus-sh/core/runtime/facet-host.js';
 import type { RunnerFactory } from '@nimbus-sh/core/runtime/installed-runtimes.js';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
@@ -281,11 +282,13 @@ export async function provisionWorkspaceRuntimes(deps: {
   const installed = kit.rehydrateInstalledRuntimesView(kernelFs, registry, home, runnerFor);
   const alreadyRegistered = new Set(installed.bins);
 
+  // Process output crosses the runtime as bytes; each stream gets its own
+  // streaming decoder so a multibyte character split across chunks lands whole.
   const shellExecute: ShellExecuteFn = async (command, ctx) => (await workspace.shell.execute(command, {
     cwd: ctx.cwd,
     env: ctx.env,
-    onStdout: (data) => ctx.stdout.write(data),
-    onStderr: (data) => ctx.stderr.write(data),
+    onStdout: textSink((text) => ctx.stdout.write(text)),
+    onStderr: textSink((text) => ctx.stderr.write(text)),
   })).exitCode;
 
   // Nimbus's own npm: it resolves against registry.npmjs.org, extracts tarballs

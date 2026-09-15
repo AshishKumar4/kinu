@@ -14,7 +14,9 @@ import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
   admitMcpDescriptors, McpToolSurfaceSchema,
-  type JsonObject, type SerializableToolDescriptor, type McpSurfaceBudget,
+  mcpPresetById, MCP_PRESETS,
+  type JsonObject, type JsonValue, type McpPreset, type McpPresetId,
+  type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
@@ -24,6 +26,7 @@ import * as v from 'valibot';
 
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
+
 
 /**
  * The orchestrator's per-activation MCP tool cache, keyed by the HASH OF THE
@@ -92,6 +95,11 @@ export interface McpServerInput {
   transport?: McpTransport;
   headers?: Record<string, string>;
   allowedTools?: string[];
+  /** The `MCP_PRESETS` entry this add came from; absent on a custom server.
+   *  When present the catalog is the authority: `name`, `serverUrl` and
+   *  `transport` in the returned config are the preset's, whatever the caller
+   *  sent. */
+  presetId?: McpPresetId;
 }
 
 /** Connection status as the SDK surfaces it. We re-derive at read time from
@@ -116,6 +124,7 @@ export interface McpServerSummary {
   toolsCount: number;
   authUrl: string | null;
   allowedTools: string[] | null;
+  presetId: McpPresetId | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -129,6 +138,7 @@ export interface McpServerConfig {
   transport: McpTransport;
   headers: Record<string, string> | null;
   allowedTools: string[] | null;
+  presetId: McpPresetId | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -177,6 +187,11 @@ function canonicalMcpUrl(serverUrl: string): string {
  * OMITTED: `headers: {}` is not a credential and must not make a row look like
  * it holds one. `allowedTools: []` is left alone — an empty allowlist means
  * "expose nothing", which is not the same statement as omitting it.
+ *
+ * A preset add resolves to the CATALOG entry: name, endpoint and transport
+ * are the preset's own, so a caller that tags `presetId` cannot smuggle a
+ * different endpoint in under a preset's name. `serverUrl` is optional on
+ * that path — the preset supplies it.
  */
 export function validateMcpServerInput<Input>(input: Input): McpServerInput {
   const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
@@ -187,15 +202,17 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
 
   const obj = parsedInput.output;
 
-  const name = validateMcpServerName(obj.name);
+  const preset = validateMcpPresetId(obj.presetId);
+
+  const name = preset ? preset.title : validateMcpServerName(obj.name);
 
   const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
 
-  if (!parsedServerUrl.success || !parsedServerUrl.output.trim()) {
+  if (!preset && (!parsedServerUrl.success || !parsedServerUrl.output.trim())) {
     throw new Error('`serverUrl` is required.');
   }
 
-  const serverUrl = parsedServerUrl.output;
+  const serverUrl = preset ? preset.serverUrl : v.parse(v.string(), obj.serverUrl);
 
   if (!URL.canParse(serverUrl)) throw new Error('`serverUrl` is not a valid URL.');
   const parsed = new URL(serverUrl);
@@ -226,7 +243,7 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
     throw new Error("`transport` must be one of 'auto', 'sse', 'streamable-http'.");
   }
 
-  const transport = parsedTransport.output ?? 'auto';
+  const transport = preset ? preset.transport : (parsedTransport.output ?? 'auto');
 
   let headers: Record<string, string> | undefined;
 
@@ -272,7 +289,28 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
     }
   }
 
-  return { name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools };
+  return {
+    name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
+    presetId: preset?.id,
+  };
+}
+
+/** The `presetId` leg of an add: absent → a custom server; present but not a
+ *  catalog id → an error, because a preset the catalog cannot name has no
+ *  endpoint to connect. The preset it returns supplies name, URL, transport —
+ *  the body may not override them. */
+function validateMcpPresetId(presetId: JsonValue | undefined): McpPreset | undefined {
+  if (presetId === undefined || presetId === null) return undefined;
+
+  const parsedPresetId = v.safeParse(v.string(), presetId);
+
+  if (!parsedPresetId.success) throw new Error('`presetId` must be a string.');
+
+  const preset = mcpPresetById(parsedPresetId.output);
+
+  if (!preset) throw new Error(`Unknown MCP preset '${parsedPresetId.output}'.`);
+
+  return preset;
 }
 
 /**
@@ -481,4 +519,78 @@ export function mapConnectionStatus(state: string | undefined): McpConnectionSta
     case 'failed':         return 'failed';
     default:               return 'unknown';
   }
+}
+
+/** One preset's deploy-time availability, as the cards need it. `appConfigured`
+ *  is only meaningful for `oauth-app` presets: it reports whether the env
+ *  carries the registered client's credentials (BOTH names), which is what
+ *  decides between a sign-in button and the preset's token fallback. The id
+ *  alone tells a token-or-DCR preset apart. */
+export interface McpPresetAvailability {
+  readonly id: McpPresetId;
+  readonly appConfigured: boolean;
+}
+
+/** The `Env` keys that carry each `oauth-app` preset's registered client —
+ *  the ONLY place those names exist. Core's catalog cannot name them (it does
+ *  not know `Env`); the credential read, the refusal that names the missing
+ *  secrets, and the deploy doc all take their wording from this map. */
+const MCP_APP_ENV = {
+  github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
+  google: { id: 'MCP_GOOGLE_CLIENT_ID', secret: 'MCP_GOOGLE_CLIENT_SECRET' },
+} as const satisfies Partial<Record<McpPresetId, {
+  readonly id: keyof Env;
+  readonly secret: keyof Env;
+}>>;
+
+/** The four literal names above, as keys — `env[k]` then resolves `string |
+ *  undefined` from the optional Env fields rather than the index signature. */
+type McpAppEnvKey =
+  (typeof MCP_APP_ENV)[keyof typeof MCP_APP_ENV][keyof (typeof MCP_APP_ENV)['github']];
+
+/** The env names an `oauth-app` preset's app lives under, for messages that
+ *  have to say them. `undefined` for any other kind. */
+export function mcpAppEnvNames(
+  preset: McpPreset,
+): { readonly clientIdEnv: McpAppEnvKey; readonly clientSecretEnv: McpAppEnvKey } | undefined {
+  if (preset.auth !== 'oauth-app') return undefined;
+
+  if (preset.id === 'github' || preset.id === 'google') {
+    const names = MCP_APP_ENV[preset.id];
+
+    return { clientIdEnv: names.id, clientSecretEnv: names.secret };
+  }
+
+  return undefined;
+}
+
+/** The registered client's credentials for an `oauth-app` preset, or null
+ *  when the env does not carry them. */
+export function mcpAppCredentials(
+  env: Env,
+  preset: McpPreset,
+): { clientId: string; clientSecret: string } | null {
+  const names = mcpAppEnvNames(preset);
+
+  if (!names) return null;
+
+  const clientId = env[names.clientIdEnv];
+  const clientSecret = env[names.clientSecretEnv];
+
+  // Both are `string | undefined` on Env; an empty string fails the same
+  // check a missing binding does.
+  if (!clientId || !clientSecret) return null;
+
+  return { clientId, clientSecret };
+}
+
+/** The catalog read for the cards: every preset and whether its registered
+ *  app is configured. `oauth-app` presets answer `appConfigured` off the env;
+ *  every other kind is answerable from the catalog alone, so it reports `true`
+ *  — there is nothing to configure. */
+export function listMcpPresetAvailability(env: Env): McpPresetAvailability[] {
+  return MCP_PRESETS.map((preset) => ({
+    id: preset.id,
+    appConfigured: preset.auth !== 'oauth-app' || mcpAppCredentials(env, preset) !== null,
+  }));
 }

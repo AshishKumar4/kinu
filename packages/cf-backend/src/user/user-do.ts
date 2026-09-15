@@ -40,6 +40,12 @@ import {
   DurableObjectOAuthClientProvider,
   type AgentMcpOAuthProvider,
 } from "agents/mcp/do-oauth-client-provider";
+
+// Re-exported for tests: the provider subclass binds `agents/mcp/*` at load,
+// so a test that statically imported mcp.ts itself would arrive before the
+// stub lands and hold the real base class. user-do is only imported after it.
+export { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
+
 import {
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
@@ -133,7 +139,7 @@ import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { recordReleaseTransition } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import {
-  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED, DEVICE_PROVISION_METHOD,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
@@ -142,14 +148,16 @@ import {
   summarizeDeviceAction,
   type DeviceConsentDecision, type DeviceStatus,
   type DeviceFleetEntry, type DeviceSandboxStatus, type DeviceTier,
+  type McpPresetId, mcpPresetById,
   describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor,
 } from '@kinu.run/core';
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized,
-  storedMcpOptionsCarryCredential,
-  type McpServerSummary, type McpTransport,
+  storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability,
+  type McpPresetAvailability, type McpServerSummary, type McpTransport,
 } from './mcp';
+import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -273,6 +281,7 @@ interface McpHydrationRow extends SqlRow {
   server_url: string;
   transport: McpTransport;
   headers: string | null;
+  preset_id: string | null;
 }
 
 interface SqlRow extends Record<string, SqlStorageValue> {}
@@ -2231,25 +2240,24 @@ export class UserDO extends Agent<Env> {
     this._devices.accept(verified.deviceId, server);
     const now = Date.now();
 
-    // A connecting machine IS the answer to every open provisioning card:
-    // the condition those cards asked for now holds, so they settle as
-    // `connected` and the calls parked on them re-ask liveness below. A card
-    // whose workspace cannot be reached keeps its row — the NEXT accept
-    // retries it — because tearing it down here would strand the caller on a
-    // card nobody settled.
-    for (const pending of this.sqlx<{ agent_name: string; consent_id: string }>(
-      `SELECT agent_name, consent_id FROM device_provision_pending`,
+    // A machine landing clears the offline notice on exactly the workspaces a
+    // refused call already named it to — tracked rows, never a roster scan.
+    // An unreachable workspace keeps its row for the next accept.
+    const label = this.deviceLabel(verified.deviceId);
+
+    for (const { agent_name } of this.sqlx<{ agent_name: string }>(
+      `SELECT agent_name FROM device_notice_pending`,
     )) {
       try {
         const workspace = this.env.OrchestratorAgent.get(
-          this.env.OrchestratorAgent.idFromName(pending.agent_name),
+          this.env.OrchestratorAgent.idFromName(agent_name),
         );
 
-        await workspace.settleDeviceConsent(pending.consent_id, 'connected');
-        this.sqlx(`DELETE FROM device_provision_pending WHERE agent_name = ?`, pending.agent_name);
+        await workspace.announceDeviceAvailable({ id: verified.deviceId, label });
+        this.sqlx(`DELETE FROM device_notice_pending WHERE agent_name = ?`, agent_name);
       } catch (cause) {
-        diagnostics.event('device.provision_settle_unreachable', {
-          workspace: pending.agent_name, error: renderThrownChain({ cause }),
+        diagnostics.event('device.available_announce_unreachable', {
+          workspace: agent_name, error: renderThrownChain({ cause }),
         });
       }
     }
@@ -2762,9 +2770,9 @@ export class UserDO extends Agent<Env> {
    * resolves to the ONLY live machine; with several live it is a question for
    * the caller, not a coin for the hub — nothing crosses to any machine, and
    * the answer names the ones that could have been meant. With none live, a
-   * workspace operation raises one provisioning request when `consentAgent`
-   * names the workspace; owner-facing reads and terminal opens pass
-   * `undefined` and simply report that no machine is connected.
+   * workspace operation names the registered machines on the workspace's own
+   * rail; owner-facing reads and terminal opens pass `undefined` and simply
+   * report that no machine is connected.
    */
   private async resolveDeviceForCall(
     requested: string | undefined,
@@ -2774,26 +2782,46 @@ export class UserDO extends Agent<Env> {
 
     if (deviceId) return deviceId;
 
-    if (consentAgent !== undefined) {
-      // The card parks this call until the owner answers, the ask lapses, or
-      // a daemon's accept settles it — the case the wait exists for. Whatever
-      // the card's answer was, the question it asked is about THIS instant,
-      // so liveness is re-read rather than its word taken: a machine that
-      // connected while the card was up is the device the call wanted.
-      await this.raiseProvisioningRequest(consentAgent);
-
-      const arrived = this.liveDeviceForCall(requested);
-
-      if (arrived) return arrived;
-    }
+    if (consentAgent !== undefined) await this.announceDevicesUnavailable(consentAgent);
 
     throw new Error(NO_DEVICE_CONNECTED);
   }
 
+  /** The owner's registered machines that are not connected, for the notice a
+   *  refused call sends the workspace. Revoked rows are gone, not offline. */
+  private registeredOfflineDevices(): Array<{ id: string; label: string; lastSeenAt: number | null }> {
+    const live = new Set(this._devices.connectedDeviceIds());
+
+    return this.sqlx<{ id: string; label: string; last_seen_at: number | null }>(
+      `SELECT id, label, last_seen_at FROM user_devices WHERE revoked_at IS NULL ORDER BY created_at ASC`,
+    ).filter((row) => !live.has(row.id)).map((row) => ({
+      id: row.id, label: row.label, lastSeenAt: row.last_seen_at,
+    }));
+  }
+
+  /** A refused call names the registered machines on the workspace's own rail.
+   *  The call still fails: nothing executes until a daemon is linked. The
+   *  workspace is recorded, so the next connect clears exactly this notice. */
+  private async announceDevicesUnavailable(workspaceOrAgent: string): Promise<void> {
+    try {
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
+
+      await stub.announceDeviceUnavailable(this.registeredOfflineDevices());
+      this.sqlx(
+        `INSERT INTO device_notice_pending (agent_name, announced_at) VALUES (?, ?)
+         ON CONFLICT (agent_name) DO UPDATE SET announced_at = excluded.announced_at`,
+        workspaceOrAgent, Date.now(),
+      );
+    } catch (error) {
+      diagnostics.event('device.unavailable_announce_unreachable', {
+        workspace: workspaceOrAgent, error: renderThrownChain({ cause: error }),
+      });
+    }
+  }
+
   /** The device the call would reach right now, or null when none qualifies.
    *  An unnamed call with several live is ambiguous rather than absent, and
-   *  says so — both reads of liveness ask through here, before the card and
-   *  after it settles. */
+   *  says so. */
   private liveDeviceForCall(requested: string | undefined): string | null {
     const deviceId = this._devices.connectedDeviceId(requested);
 
@@ -3327,54 +3355,6 @@ export class UserDO extends Agent<Env> {
     return { allowed: true };
   }
 
-  /**
-   * The agent reached for its owner's computer and none was connected. Raise
-   * ONE provisioning card on the same rail per-action consent rides and park
-   * this call on it — but park on the card's END, not on a decision: the
-   * provisioning ask carries none. A daemon's accept is what settles it (the
-   * connect it asked for), an owner's answer or the ask's lapse ends it the
-   * same way, and in every case the caller re-reads liveness rather than
-   * taking the card's word — so `waitSettled` answers only "the card is
-   * down", and this method returns nothing.
-   *
-   * Raise and wait are TWO calls because the row below must name the card it
-   *  tracks: the accept path settles by `consent_id`, which only exists once
-   *  the registry answers the raise. A settle landing between them is safe —
-   *  `waitSettled` on a card already gone resolves at once. A retry loop
-   *  cannot stack cards: the registry joins an identical prompt already
-   *  waiting instead of minting a second id (DeviceConsentRegistry.raise).
-   */
-  private async raiseProvisioningRequest(workspaceOrAgent: string): Promise<void> {
-    try {
-      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceOrAgent));
-
-      const consentId = await stub.raiseDeviceConsent({
-        deviceId: '',
-        deviceLabel: 'this computer',
-        method: DEVICE_PROVISION_METHOD,
-        command: `Connect this computer so "${workspaceOrAgent}" can run commands on it — you will be walked through \`kinu connect\`.`,
-        workspaceName: workspaceOrAgent,
-      });
-
-      // The connect path settles by this row: one per workspace, rewritten
-      // when the ask re-raises — the joined card's own id is what the accept
-      // hands back.
-      this.sqlx(
-        `INSERT OR REPLACE INTO device_provision_pending (agent_name, consent_id, raised_at) VALUES (?, ?, ?)`,
-        workspaceOrAgent, consentId, Date.now(),
-      );
-
-      await stub.waitDeviceConsentSettled(consentId);
-    } catch (error) {
-      // No one to show the card to is the unanswered case, never a refusal.
-      diagnostics.event('device.provision_request_unreachable', { error: renderThrownChain({ cause: error }) });
-    } finally {
-      // The card is gone — answered, lapsed, connected, or never raised at
-      // all (the workspace was unreachable). Its wait is over either way, so
-      // the row goes.
-      this.sqlx(`DELETE FROM device_provision_pending WHERE agent_name = ?`, workspaceOrAgent);
-    }
-  }
 
   /** The remembered bindings (Account settings → Devices — see and revoke which
    *  workspaces may use a device). */
@@ -5109,7 +5089,7 @@ export class UserDO extends Agent<Env> {
     const mgr = this.userMcp();
 
     const rows = this.sqlx<McpHydrationRow>(
-      `SELECT id, name, server_url, transport, headers FROM user_mcp_servers`,
+      `SELECT id, name, server_url, transport, headers, preset_id FROM user_mcp_servers`,
     );
 
     const configured = new Set(rows.map((row) => row.id));
@@ -5202,14 +5182,28 @@ export class UserDO extends Agent<Env> {
             type: row.transport,
           };
 
+    // An `oauth-app` row restores with the registered-app provider, so sign-in
+    // and token refresh keep answering the env's client registration instead of
+    // falling back to a dynamic registration the vendor cannot accept.
+    const preset = row.preset_id === null ? undefined : mcpPresetById(row.preset_id);
+
+    const appCredentials = preset?.auth === 'oauth-app'
+      ? mcpAppCredentials(this.env, preset)
+      : null;
+
     if (callbackUrl) {
-      const authProvider = new DurableObjectOAuthClientProvider(
-        this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-      );
+      const authProvider = appCredentials
+        ? new RegisteredAppOAuthClientProvider(
+            this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+            appCredentials.clientId, appCredentials.clientSecret, preset?.scope,
+          )
+        : new DurableObjectOAuthClientProvider(
+            this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+          );
 
       authProvider.serverId = row.id;
 
-      if (stored?.client_id) authProvider.clientId = stored.client_id;
+      if (!appCredentials && stored?.client_id) authProvider.clientId = stored.client_id;
       transport.authProvider = authProvider;
     }
 
@@ -5217,12 +5211,14 @@ export class UserDO extends Agent<Env> {
       url: row.server_url, name: row.name, callbackUrl, transport,
     };
 
-    if (stored?.client_id) options.clientId = stored.client_id;
+    // For an oauth-app row the env's client id is the authority even when the
+    // stored id predates an app rotation — a stale stored id on the provider
+    // would key its token rows under a client nothing else uses.
+    options.clientId = appCredentials?.clientId ?? stored?.client_id ?? undefined;
 
     if (stored?.auth_url) options.authUrl = stored.auth_url;
     await mgr.registerServer(row.id, options);
   }
-
   /** This server's current custom headers, opened for ONE request.
    *
    *  Read from SQL on every call rather than captured: a rotated header is then
@@ -5271,9 +5267,10 @@ export class UserDO extends Agent<Env> {
 
     const rows = this.sqlx<{
       id: string; name: string; server_url: string; transport: McpTransport;
-      allowed_tools: string | null; created_at: number; updated_at: number;
+      allowed_tools: string | null; preset_id: McpPresetId | null;
+      created_at: number; updated_at: number;
     }>(
-      `SELECT id, name, server_url, transport, allowed_tools, created_at, updated_at
+      `SELECT id, name, server_url, transport, allowed_tools, preset_id, created_at, updated_at
        FROM user_mcp_servers ORDER BY name`,
     );
 
@@ -5311,6 +5308,7 @@ export class UserDO extends Agent<Env> {
         status,
         error: conn?.connectionError ?? null,
         toolsCount,
+        presetId: r.preset_id,
         authUrl,
         allowedTools: allowed,
         createdAt: r.created_at,
@@ -5318,9 +5316,18 @@ export class UserDO extends Agent<Env> {
       };
     });
   }
+  /** The preset catalog's deploy-time availability: which presets can offer a
+   *  sign-in button (their OAuth app is configured) versus their token
+   *  fallback or nothing at all. Read beside `userMcp_list` — this is the
+   *  answer the cards need before the user has added anything. */
+  async userMcp_presets(caller: UserCaller): Promise<McpPresetAvailability[]> {
+    await this.requireTier(caller, 'mcp.manage');
+
+    return listMcpPresetAvailability(this.env);
+  }
 
   /** Add a new MCP server. `publicOrigin` is the user-facing origin the
-   *  Worker should redirect OAuth callbacks to (e.g. `https://kinu.example`).
+   *  server calls back to during OAuth — it determines the callback URL.
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
   async userMcp_add<McpInput>(
@@ -5335,6 +5342,27 @@ export class UserDO extends Agent<Env> {
       throw new Error('publicOrigin must be a full https?:// origin.');
     }
 
+    const preset = cfg.presetId === undefined ? undefined : mcpPresetById(cfg.presetId);
+
+    // A preset whose OAuth app is not configured has no sign-in to start;
+    // without a token it could only dead-end in the SDK's registration step,
+    // so the add is refused before the name claim — the claim is the row's
+    // identity, and a refused add must leave no row behind. The names come
+    // from the map rather than the catalog so the message can never quote a
+    // secret name the reader cannot satisfy.
+    if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
+      const names = mcpAppEnvNames(preset);
+
+      throw new Error(
+        `'${preset.title}' needs either the deployment's ${names?.clientIdEnv ?? 'app'}/`
+        + `${names?.clientSecretEnv ?? 'secret'} OAuth app or a token in \`headers\`.`,
+      );
+    }
+
+    const appCredentials = preset?.auth === 'oauth-app'
+      ? mcpAppCredentials(this.env, preset)
+      : null;
+
     const id = nanoid(8);
     const now = Date.now();
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
@@ -5347,18 +5375,23 @@ export class UserDO extends Agent<Env> {
     this.claimMcpServerName(cfg.name, id, () => {
       this.ctx.storage.sql.exec(
         `INSERT INTO user_mcp_servers
-           (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, server_url, transport, headers, allowed_tools, preset_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-        sealedHeaders, allowedJson, now, now,
+        sealedHeaders, allowedJson, cfg.presetId ?? null, now, now,
       );
     });
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
 
-    const authProvider = new DurableObjectOAuthClientProvider(
-      this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
-    );
+    const authProvider = appCredentials
+      ? new RegisteredAppOAuthClientProvider(
+          this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+          appCredentials.clientId, appCredentials.clientSecret, preset?.scope,
+        )
+      : new DurableObjectOAuthClientProvider(
+          this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
+        );
 
     authProvider.serverId = id;
 
@@ -5376,6 +5409,9 @@ export class UserDO extends Agent<Env> {
         url: cfg.serverUrl,
         name: cfg.name,
         callbackUrl,
+        // The registered app's id lands on the SDK row so a restore after
+        // eviction keeps keying its token storage under the same client.
+        clientId: appCredentials?.clientId,
         transport: {
           ...credential,
           authProvider,

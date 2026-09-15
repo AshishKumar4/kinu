@@ -113,8 +113,8 @@ export interface VfsListedEntry {
  *
  * `readRange` is a PREFIX read: the plane hands back the first `length` bytes
  * from `offset` without materializing the file. Only planes whose transport has
- * an offset/length read declare it — the credentialed session protocol does
- * (execution/nimbus-agent-files.ts) — and the viewer's bounded preview is the
+ * an offset/length read declare it — the session's file plane does
+ * (execution/nimbus.ts) — and the viewer's bounded preview is the
  * caller that needs it, because reading a gigabyte to show half a megabyte is
  * the cost, not the clipping.
  *
@@ -131,7 +131,7 @@ export interface VfsNativeReads {
 
 /** The routed tree's native operations, where it declares them. A widening
  *  assignment, not a cast: the extras are optional, and vfs/nimbus-workspace.ts
- *  and execution/{nimbus,sandbox,nimbus-agent-files}.ts are the producers whose
+ *  and execution/{nimbus,sandbox}.ts are the producers whose
  *  members carry exactly these signatures. */
 function nativeOps(files: VFS): Partial<VfsNativeMutations & VfsNativeReads> {
 	const probed: VFS & Partial<VfsNativeMutations & VfsNativeReads> = files;

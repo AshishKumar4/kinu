@@ -109,6 +109,34 @@ export function workspaceOverviewStatus(overview: WorkspaceOverview): WorkspaceO
   return { kind: 'idle' };
 }
 
+/** What the one chip on a workspace's card says: the label, and the tone the
+ *  surface resolves to a token — `accent` needs the owner, `live` is moving,
+ *  `danger` is a sealed failure, `muted` is everything quiet. */
+export interface WorkspaceHeadline {
+  readonly label: string;
+  readonly tone: 'accent' | 'live' | 'danger' | 'muted';
+}
+
+/** The single state a workspace's card states, first match wins. Where
+ *  {@link workspaceOverviewStatus} names a SLOT the surface fills with its own
+ *  words, the headline is the shared one-rule answer: text and tone together,
+ *  so no surface orders them differently. A run only reads as failed when it
+ *  can speak at all — working and durable leftovers outrank its end, because
+ *  a stale verdict beside live work would say two things at once. */
+export function overviewHeadline(o: WorkspaceOverview): WorkspaceHeadline {
+  if (o.decisionsWaiting > 0) return { label: `Needs you · ${o.decisionsWaiting}`, tone: 'accent' };
+
+  if (o.activity === 'working') return { label: 'Working', tone: 'live' };
+
+  if (o.latestRun?.status === 'error') return { label: 'Last run failed', tone: 'danger' };
+
+  if (o.activity === 'unfinished') return { label: 'Unfinished', tone: 'muted' };
+
+  if (o.hasUpdates) return { label: 'Updated', tone: 'muted' };
+
+  return { label: 'Idle', tone: 'muted' };
+}
+
 /** One fact a card can show beneath its lead line. `tone` is a surface-
  *  neutral word — `warning`, `accent`, `muted`, `quiet`, `success` — and the
  *  caller owns the class it maps to, same split as the status slot: core

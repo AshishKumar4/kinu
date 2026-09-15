@@ -35,7 +35,7 @@ import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { EmptyState, Section } from "./shared";
+import { Section } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import { isClosedTree, isSettled, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
@@ -154,16 +154,19 @@ export function WorkTab({
   const elsewhere = pendingActions.filter(
     (a): a is DecidedElsewhere => a.kind !== "deferred_action");
 
+  // Empty sections render nothing: the tab opens with one pending action and
+  // no in-flight work as "Needs you" alone, with no Now section beneath it.
   const nothingAtAll = pendingActions.length === 0 && openTasks.length === 0
     && runningJobs.length === 0 && journal.length === 0
     && tasks !== null && changelog !== null;
 
   if (nothingAtAll && !hasPlans && !plan) {
     return (
-      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} arrival={workspacePlanArrival} activeActors={activePlanActors} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} /><EmptyState title="Nothing has happened yet"
-        hint="This tab collects plans, background jobs, agent changes, and anything waiting on you." /></div>
+      <div className="space-y-6"><WorkPlans active={plan} rpc={planRpc} rootRpc={rpc} owner={planOwner} arrival={workspacePlanArrival} activeActors={activePlanActors} onPresence={setHasPlans} onNewPlan={onNewPlan} onReviewActor={onReviewActor} /><p className="p-row-text p-text-3">Nothing yet</p></div>
     );
   }
+
+  const nowEmpty = tasks !== null && openTasks.length === 0 && runningJobs.length === 0;
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -185,6 +188,7 @@ export function WorkTab({
         </div>
       )}
 
+      {!nowEmpty && (
       <Section id="work-now" title="Now" icon={<PulseIcon size={14} className="p-text-2" />}>
         {taskResource.status === "error" && tasks === null ? (
           <LoadFailure what="the plan" message={taskResource.message} onRetry={reloadTasks} />
@@ -205,18 +209,15 @@ export function WorkTab({
                 ))}
               </div>
             )}
-            {openTasks.length === 0 && runningJobs.length === 0 && (
-              <p className="p-row-text p-text-3">
-                Nothing in flight. A multi-step plan or a tool call over 30 seconds lands here.
-              </p>
-            )}
           </div>
         )}
       </Section>
+      )}
 
+      {journal.length > 0 && (
       <Section id="work-journal" title="Journal"
         icon={<ClockIcon size={14} className="p-text-2" />}
-        badge={journal.length > 0 ? <Badge variant="secondary">{journal.length}</Badge> : undefined}>
+        badge={<Badge variant="secondary">{journal.length}</Badge>}>
         <div className="space-y-3">
           <div className="flex items-center gap-1 flex-wrap">
             {FILTERS.map((chip) => (
@@ -240,16 +241,7 @@ export function WorkTab({
             </div>
           )}
 
-          {visible.length === 0 ? (
-            // Never claimed while a third of this feed is still unread.
-            changelog !== null && (
-              <p className="text-xs p-text-3">
-                {journal.length === 0
-                  ? "Nothing has settled yet. Finished jobs and closed plan items collect here."
-                  : "Nothing under this filter."}
-              </p>
-            )
-          ) : (
+          {visible.length > 0 && (
             <div className="p-group">
               {visible.map((row) => (
                 <div key={row.key}>
@@ -265,6 +257,7 @@ export function WorkTab({
           )}
         </div>
       </Section>
+      )}
     </div>
   );
 }

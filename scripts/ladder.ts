@@ -79,16 +79,48 @@ export const HOOKS_DIR = '.githooks';
  */
 export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
+/**
+ * The deploy's phases, in the order the runner walks them, with a barrier
+ * after each. `source` is the one concurrent wave; every other phase holds
+ * the gates that run alone, and `post-publish` runs after the upload and the
+ * smoke test against the build that just shipped. The runner reads this
+ * order out of `--plan`, so the order lives here and nowhere else.
+ */
+export const DEPLOY_PHASES = ['preflight', 'source', 'hammer', 'infra', 'post-publish'] as const;
+
+export type DeployPhase = (typeof DEPLOY_PHASES)[number];
+
+/** The shared process-tree deadline for a gate that declares none, seconds.
+ *  Calibrated against the slowest source gate; a live probe that needs more
+ *  declares its own on its row with the reason. */
+export const GATE_DEADLINE_SECONDS = 480;
+
 export type Tier = (typeof TIERS)[number];
 
 export interface Gate {
-  /** The exact command as invoked. Where deploy.sh runs the same gate, spelled
-   *  identically to its `run_required_gate` line. */
+  /** The exact command as invoked. */
   readonly run: string;
+  /** The short human name the deploy runner prints beside its verdict. */
+  readonly label: string;
+  /** Where in the deploy the gate runs. Every phase but `source` runs its
+   *  gates ALONE, one wave each, in {@link DEPLOY_PHASES} order; a row that
+   *  declares none runs in the concurrent source wave. A row declaring a
+   *  phase other than `source` carries `alone`: why nothing may run beside it. */
+  readonly phase?: Exclude<DeployPhase, 'source'>;
+  /** Why the gate runs alone. Required with `phase`. */
+  readonly alone?: string;
+  /** Seconds before the deploy runner kills the gate's process tree, where
+   *  the shared `GATE_DEADLINE_SECONDS` does not fit; with the reason. */
+  readonly deadline?: { readonly seconds: number; readonly why: string };
   /** The cheapest tier that runs it. Every later tier runs it too. */
   readonly tier: Tier;
   /** Measured wall clock in seconds. Every entry carries its own date and box beside it; re-validated 2026-09-05 on the 24-thread workstation. */
   readonly seconds: number;
+  /** Hardware threads the gate occupies at peak, for the deploy wave's thread
+   *  budget. Absent means one. Declared only where measured above one: a
+   *  browser suite's Chrome, a `--parallel=4` row's four workers. See
+   *  {@link gateWeight} for the measurement behind the figures. */
+  readonly weight?: number;
   /** The defect class this makes impossible. Not what it "checks". */
   readonly catches: string;
   /** What it does NOT catch. A gate whose blind spot nobody wrote down gets
@@ -123,6 +155,13 @@ const AMBIENT_BY_NAME: Inputs = {
 export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/preflight.ts',
+    label: 'Environment preflight',
+    phase: 'preflight',
+    alone: 'runs alone and FIRST. Its subject is the environment every other gate reports through: '
+      + 'an exhausted $TMPDIR inode table surfaces later as a 5-second timeout inside an '
+      + 'unrelated filesystem test, which reads as a code regression and is not one. A gate '
+      + 'running beside it could report that regression before the preflight had said the '
+      + 'machine was unfit to be reported on.',
     tier: 'commit',
     seconds: 0.12,
     catches: 'a gate reporting on an environment nobody looked at: exhausted temp '
@@ -134,6 +173,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts',
+    label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
     catches: 'a pattern census that mistakes strings for regexes or a JSONC parser that changes data',
@@ -142,6 +182,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun scripts/pattern-inventory.ts',
+    label: 'Pattern inventory',
     tier: 'push',
     seconds: 2.5, // Measured 2026-09-06 on the 24-thread workstation.
     catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
@@ -150,6 +191,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run lint',
+    label: 'Anti-slop lint',
     tier: 'commit',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 21.4 s solo
     // (test:anti-slop under node, then oxlint). Split out of `bun run check`
@@ -165,6 +207,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test packages/agent-core/drift.test.ts',
+    label: 'Vendored runtime drift',
     tier: 'commit',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 0.1 s solo.
     seconds: 0.1,
@@ -175,6 +218,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run typecheck',
+    label: 'TypeScript projects',
     tier: 'commit',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
     // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
@@ -189,6 +233,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:do-init',
+    label: 'Durable Object cold start',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.71 s. Replaces 0.1 s.
     seconds: 0.71,
@@ -200,6 +245,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:duplication',
+    label: 'Duplicate implementations',
     tier: 'commit',
     // Re-measured 2026-09-05 on the 24-thread box: 1.6/1.6/1.7/1.7s. Replaces 1.1s.
     seconds: 1.7,
@@ -211,6 +257,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:reachability',
+    label: 'Unreachable RPC surface',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 2.27 s. Replaces 1 s.
     seconds: 2.27,
@@ -221,6 +268,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:platform',
+    label: 'Platform fact catalog',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.22 s. Replaces 0.07 s.
     seconds: 0.22,
@@ -231,6 +279,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:egress-interception',
+    label: 'Egress interception totality',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.73 s. Replaces 0.1 s.
     seconds: 0.73,
@@ -246,6 +295,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:typecheck-coverage',
+    label: 'Typecheck coverage',
     tier: 'commit',
     seconds: 0.1,
     catches: 'a directory of tests that no tsconfig `bun run check` runs ever compiles. '
@@ -264,6 +314,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:set-equality',
+    label: 'Measured set equals governed set',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.63 s. Replaces 0.2 s.
     seconds: 0.63,
@@ -286,6 +337,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:literature-citations',
+    label: 'External citation register',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 5.86 s. Replaces 1 s.
     seconds: 5.86,
@@ -325,6 +377,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:commit-message',
+    label: 'Commit message hygiene',
     tier: 'commit',
     seconds: 0.1,
     catches: 'a commit message that credits an orchestration subagent as if it were a human '
@@ -365,6 +418,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:install-scripts',
+    label: 'Dependency install-script policy',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.05 s. Replaces 0.2 s.
     seconds: 0.05,
@@ -386,6 +440,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:patch-parity',
+    label: 'Committed patches reproduce node_modules',
     tier: 'commit',
     seconds: 0.16,
     catches: 'a committed patch that does not reproduce the `node_modules` the suites ran '
@@ -408,6 +463,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:ladder-budget',
+    label: 'Tier-budget ratchet',
     // PUSH, beside `bun test scripts/ladder.test.ts` and for its reason: the ratchet
     // judges the declarations of BOTH cheap tiers, and every push runs every commit
     // gate — so one static check at push governs both hooks, while a commit-tier row
@@ -429,6 +485,7 @@ export const LADDER: readonly Gate[] = [
 
   {
     run: 'bun run gate:bench-corpus',
+    label: 'Seeded bench defects still apply',
     // PUSH, not commit, and the reason is cost placement rather than the gate: the
     // commit tier is the pre-commit hook and declares 53.24s, so a whole-corpus
     // check belongs at push — still the author's machine, before the code leaves
@@ -456,6 +513,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:skip-ratchet',
+    label: 'Declared skip ratchet',
     // MOVED commit -> push when its measured cost went 0.3s -> 2.9s. The 0.3s was
     // never right — `bun test ./tests/` alone is 1.2s — and covering the vitest arm
     // added a vite transform on top, so the commit tier's declared 15s budget was
@@ -486,6 +544,7 @@ export const LADDER: readonly Gate[] = [
 
   {
     run: 'bun run gate:dead-code',
+    label: 'Dead code',
     // COMMIT, moved from push 2026-09-10. The old reason was that nothing can
     // become dead between a commit and the push that follows it. That premise
     // holds for one developer who commits then pushes, and it is FALSE for a
@@ -518,6 +577,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:undeclared-imports',
+    label: 'Undeclared imports',
     // COMMIT, beside `gate:dead-code`, which holds the same boundary from the
     // other side. The push premise does not apply and the commit one does: an
     // undeclared import cannot appear BETWEEN a commit and the push that
@@ -561,6 +621,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:wired',
+    label: 'Built but unwired',
     // COMMIT, moved from push 2026-09-10 beside `gate:dead-code` and for the
     // same falsified premise: "nothing can become unwired between a commit and
     // the push that follows it" assumes the author pushes. A lane commits in a
@@ -606,6 +667,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:client-graph',
+    label: 'Client graph',
     // COMMIT. The 2026-09-06 barrel regression shipped because no commit-tier
     // gate reads the client module GRAPH: the root barrel gained SQLite-backed
     // slate stores importing the vendored agent-core runtime, dev died before
@@ -628,6 +690,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:core-layering',
+    label: 'Core layering',
     // COMMIT. 40 of core's 42 directories are one import cycle, so no package
     // split can start; this declares the three layers and locks today's 177
     // upward edges shrink-only. 0.43s measured, 1s declared.
@@ -643,6 +706,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:vendor-schema',
+    label: 'Vendor schema',
     // COMMIT, beside schema-drift, for its reason: every statement that names a
     // vendor-owned table is PREPARED against the vendor's own DDL, and a column
     // that does not exist refuses at prepare — the `actor_id` read against the
@@ -662,6 +726,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun scripts/test-census.ts --ratchet',
+    label: 'Test census ratchet',
     // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
     // WHOLE-TREE census — 835 test files parsed, plus every product module a
     // test imports — and a test cannot become coupled to an implementation
@@ -706,6 +771,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:complexity',
+    label: 'Complexity budget',
     // PUSH, beside the other whole-tree censuses: 1.8s measured 2026-09-01 on
     // the 24-thread box for 1,906 files and 48,048 functions, and a function
     // cannot become complex between a commit and the push that follows it.
@@ -743,6 +809,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:silent-drop',
+    label: 'Silently dropped failures',
     tier: 'push',
     seconds: 1.4,
     catches: 'a failure destroyed in one of the six ways the four no-swallow lint rules are '
@@ -759,6 +826,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun scripts/secret-scan.ts',
+    label: 'Secret scan',
     tier: 'push',
     // Measured 2026-08-30: the persistent cat-file reader made the history
     // phase 16.3 s; live/index adds under 1 s on the local-ref corpus then present.
@@ -775,6 +843,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun scripts/schema-drift.ts',
+    label: 'Schema drift',
     tier: 'commit',
     // Measured 2026-09-01, three runs: 0.47/0.52/0.44s over 863 enumerated
     // product files, 71 parsed, 118 tables. It was a PUSH gate at 2s while it
@@ -799,6 +868,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
+    label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and
@@ -868,6 +938,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
+    label: 'Skip ratchet and typecheck coverage self-tests',
     tier: 'push',
     seconds: 0.1,
     catches: 'the two new gates\' own decision boundaries — including the one that '
@@ -883,6 +954,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
+    label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
     // for the three files together. Replaces 1 s for the single file.
@@ -901,6 +973,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/deploy.test.ts',
+    label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
     // predates the archive unpack-and-install tests; the suite really installs.
@@ -912,13 +985,15 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts',
+    run: 'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
+    label: 'Gate self-tests: secrets, corpus, preflight',
     tier: 'push',
     // 1.0 s declared 2026-08-24; the gallery-harness case adds 0.13 s, measured 2026-09-05.
     // Re-measured 2026-09-05 on the 24-thread box: 19.3/18.1s (42 tests). The slow file
     // is secret-scan.test.ts at 16.0s — the history walk grows with the object store —
     // plus workspace-name-ux at 1.9s. Replaces 1.2s.
     seconds: 19,
+    weight: 5,
     catches: 'a secret scanner that stopped matching, an exact historical adjudication that '
       + 'widened into a path or test exemption, or an enumeration that stopped treating '
       + 'tracked-ness as authoritative. The red fixture puts a credential only on a non-current '
@@ -937,6 +1012,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/gate-set-equality.test.ts',
+    label: 'Set-equality gate self-tests',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 1.2/1.0s. Replaces 0.4s.
     seconds: 1.1,
@@ -954,6 +1030,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/wired.test.ts',
+    label: 'Wired gate self-tests',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 5.1/4.5s (31 tests). Replaces 3.8s.
     seconds: 5,
@@ -980,11 +1057,13 @@ export const LADDER: readonly Gate[] = [
     // Measured 2026-08-22 on the 24-thread workstation: 33.15s with four
     // isolated Bun workers, versus 78.16s in one shared process.
     run: 'bun run test:core',
+    label: 'Core suite',
     tier: 'push',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: 43.1 s solo,
     // 5,645 tests. Split out of `bun run test` (44 s) so a change under
     // `packages/core` re-runs this and a change elsewhere does not.
     seconds: 43,
+    weight: 11,
     catches: 'behavioural regressions in core — the whole shared spine both backends run on. '
       + 'No test COUNT is quoted as a contract: the old row carried 3,105 against a measured '
       + '3,917. Spelled ROOT-RELATIVE (`bun test packages/x/`) rather than `--cwd packages/x`: '
@@ -999,6 +1078,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run test:spine',
+    label: 'Agent-utils, agent-core and compaction suites',
     tier: 'push',
     // Measured 2026-09-15 on the 24-thread workstation, quiet: agent-core 0.1 s,
     // agent-utils 0.3 s, compaction 1.1 s solo. One row: three suites under
@@ -1011,6 +1091,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:python-suites',
+    label: 'Bench Python suites',
     tier: 'push',
     // 0.23s: 77 tests over three `unittest discover` processes, measured
     // 2026-08-30. Cheap because the suites need no dependency and no harness
@@ -1036,6 +1117,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test packages/devbox/',
+    label: 'Devbox durability decisions',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 75.2/73.2s (961 tests). The 0.3s
     // predates the durability suite; the pins retry against unreachable hosts with
@@ -1055,6 +1137,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test packages/test-utils/',
+    label: 'Test-utils suite',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 6.9/6.8s (229 tests, mostly the
     // eval-compare hard-task compute). The 0.2s named only the slicing helpers.
@@ -1070,8 +1153,10 @@ export const LADDER: readonly Gate[] = [
     // 24-thread box: 12.8/13.1s (3,031 tests across 220 files) — the suite doubled.
     // Replaces 7s.
     run: 'bun test --parallel=4 packages/cf-backend/',
+    label: 'Cloudflare backend and conformance suite',
     tier: 'push',
     seconds: 13,
+    weight: 11,
     catches: 'the Cloudflare composition root observed against the capability manifest '
       + '— the conformance gate.',
     blind: 'anything needing a Workers runtime rather than a composition root — every '
@@ -1084,6 +1169,7 @@ export const LADDER: readonly Gate[] = [
 
   {
     run: 'bun run gate:scanner-bundle',
+    label: 'Install scanner bundle',
     tier: 'push',
     seconds: 0.3,
     catches: 'the install scanner Bun loads drifting from its source. Bun loads the scanner '
@@ -1103,6 +1189,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:dependency-advisories',
+    label: 'Dependency advisory policy',
     tier: 'ci',
     seconds: 0.3,
     catches: 'a dependency arriving with a known vulnerability nobody reviewed. `bun pm scan` '
@@ -1126,8 +1213,10 @@ export const LADDER: readonly Gate[] = [
   {
     // Measured 2026-08-22: 18.42s, four isolated workers.
     run: 'bun test --parallel=4 packages/cli-backend/',
+    label: 'CLI backend and conformance suite',
     tier: 'ci',
     seconds: 19,
+    weight: 11,
     catches: 'the local composition root and its conformance gate, plus the real host '
       + 'filesystem and checkpoint paths.',
     blind: 'the CLI surface above it.',
@@ -1138,8 +1227,10 @@ export const LADDER: readonly Gate[] = [
     // the other 43 files took 16.64s at parallel=4. Putting the slow file in
     // that wave exceeded 180s through contention.
     run: 'bun run test:cli',
+    label: 'Full production CLI suite',
     tier: 'ci',
     seconds: 41,
+    weight: 11,
     catches: 'the production CLI end to end, including the PTY and subprocess paths. Every '
       + 'file it claims runs in no other tier. The runner derives all files in the directory, '
       + 'isolates the measured contention-sensitive file, then runs the remainder at parallel=4. '
@@ -1152,6 +1243,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test packages/pc-agent/',
+    label: 'Local-device daemon suite',
     tier: 'ci',
     seconds: 0.3,
     catches: 'the local-device daemon. No count quoted, for the reason `bun run test` '
@@ -1163,6 +1255,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun scripts/tracing-gate.ts',
+    label: 'Tracing wired end to end',
     tier: 'ci',
     seconds: 0.3,
     catches: 'traces declared in code but switched off in a deployable environment. '
@@ -1179,6 +1272,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test ./tests/',
+    label: 'Root end-to-end lifecycle suites',
     tier: 'ci',
     seconds: 1.3,
     catches: 'the root end-to-end and eval suites parsing, constructing their workspaces '
@@ -1200,6 +1294,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run test:eval',
+    label: 'Eval tier',
     tier: 'evals',
     // The CREDENTIALED cost, because that is the cost this gate actually incurs
     // where it runs. `scripts/eval-tier.sh` authenticates as `eval-service`
@@ -1252,6 +1347,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
+    label: 'Evaluation gate logic',
     tier: 'ci',
     seconds: 1,
     catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '
@@ -1284,6 +1380,7 @@ export const LADDER: readonly Gate[] = [
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
     run: 'bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts',
+    label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 5.42s: 420 tests over 21 files, median of 5.53 / 5.42 / 4.89 on the
     // 24-thread box, measured 2026-08-27 when the eight rig suites joined — 89 of
@@ -1313,13 +1410,20 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts',
+    run: 'bun test scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    label: 'UI gate self-tests',
     tier: 'ci',
     // Measured 2026-09-14 with both the app-background and the account-ux
     // self-tests in this row: 347.00s over one run on the 24-thread
     // workstation (293.62s with app-background alone, declared 315; 324.74s
     // with account-ux alone, declared 350; 265.76s before either joined).
-    seconds: 375,
+    // The row is the `*-ux` FAMILY since 2026-09-15 rather than a list: a
+    // fifteenth suite joined on 2026-09-14 by a hand edit in three files, and
+    // a suite outside every family is what the orphan test below catches. The
+    // client-failure trio (45 s, measured 13.84 s on 2026-09-06) and
+    // `workspace-name-ux` fold in; their declared seconds are added here.
+    seconds: 420,
+    weight: 5,
     catches: 'the six UI gates\' own decision logic, including the one that would have '
       + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
       + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
@@ -1383,14 +1487,23 @@ export const LADDER: readonly Gate[] = [
       + 'a deployed OAuth flow. Browser capture fidelity outside those fixed frames remains '
       + 'unmeasured rather than green. For the plan document: one gallery plan and '
       + 'three variants of it, so the annotation ENGINE — selection, offsets, save, '
-      + 'export — is exercised only as far as one stored anchor painting.',
+      + 'export — is exercised only as far as one stored anchor painting.'
+      + ' Folded in from the former client-failure row: what the browser does when a '
+      + 'client-side failure has nowhere to go — the error boundary reports to the server, a '
+      + 'stalled report never leaves the page waiting, retry and navigation stay reachable, a '
+      + 'rejected lazy chunk offers the one-shot reload, and a reconnect refreshes Files and '
+      + 'memory after read faults. Those run over a local browser and a locally built bundle: '
+      + 'a stale edge asset, a real network stall and whether a report reaches a deployed '
+      + 'sink are outside it, and nothing compares pixels.',
     inputs: AMBIENT_BY_NAME,
   },
   {
     run: 'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
+    label: 'Public pages render',
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
     seconds: 55,
+    weight: 5,
     catches: 'the signed-out pages as a browser renders them: the hero tree grows and '
       + 'settles on the landing page, the sign-in and install pages carry the shell, '
       + 'and the landing landmarks and deploy link name the product Kinu. '
@@ -1411,30 +1524,13 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts',
-    tier: 'ci',
-    // Measured 2026-09-06, these 48 browser tests pass in 13.84 seconds.
-    // The snapshot suite exercises Files and memory recovery after read faults.
-    seconds: 45,
-    catches: 'what the browser does when a client-side failure has nowhere to go. The '
-      + 'error boundary reports to the server rather than only to a console nobody '
-      + 'reads, a stalled report never leaves the page waiting, retry and navigation '
-      + 'both stay reachable, and a rejected lazy chunk offers the one-shot reload '
-      + 'that recovers a stale build. Both classes shipped green under every '
-      + 'source-reading gate in this repository, because the defect is a state the '
-      + 'user is left in rather than a call that is absent. A workspace reconnect '
-      + 'must refresh the mounted Files pane and current memory after read failures.',
-    blind: 'a local browser over a locally built bundle. A stale asset served from the '
-      + 'edge, a real network stall that never delivers headers, and whether the '
-      + 'report reaches a deployed sink are all outside it. Nothing compares pixels.',
-    inputs: AMBIENT_BY_NAME,
-  },
-  {
     run: 'bun test scripts/react-runtime-identity.test.ts',
+    label: 'React runtime identity',
     tier: 'ci',
     // Runs the real client build twice, then drives three routes in Chromium.
     // Measured 2026-08-27: 8.92s.
     seconds: 20,
+    weight: 5,
     catches: 'which React the shipped bundle contains and which dispatcher the page '
       + 'runs on. It builds with the production Vite config the deploy uses, then '
       + 'asserts one React runtime module in one chunk, zero development-only text '
@@ -1448,6 +1544,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/nested-container-resolution.test.ts',
+    label: 'Nested container resolution',
     tier: 'ci',
     // Walks the deployed module graph with the bundler as a pure resolver.
     // Measured 2026-08-27: 8.80s.
@@ -1465,8 +1562,10 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/swarm-tree-geometry.test.ts',
+    label: 'Swarm-tree geometry',
     tier: 'ci',
     seconds: 29,
+    weight: 5,
     catches: 'where the swarm trees LAND, at 640px and 1280px in both palettes — the '
       + 'class of defect no source-reading instrument in this repository can see. Six '
       + 'wires, each proven red by reverting it: a node label clipped at a flat 20 '
@@ -1491,8 +1590,10 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/chat-scroll.test.ts',
+    label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
+    weight: 5,
     catches: 'whether older history arriving above the viewport moves the message the '
       + 'reader is looking at — measured, in a real cascade, at 0px over four prepends '
       + 'of 1190px each. `gallery.tsx`\'s `chathistory` frame was built expressly to be '
@@ -1516,6 +1617,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run layergate',
+    label: 'Layergate conformance',
     tier: 'ci',
     seconds: 25,
     catches: 'per-layer behavioural drift against a locked baseline, 18 measured layers.',
@@ -1525,6 +1627,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run layergate --matrix',
+    label: 'Layergate fault-localization matrix',
     tier: 'ci',
     seconds: 30,
     catches: 'a layer whose probes cannot localise a fault to it — cross-talk. Without '
@@ -1534,6 +1637,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:capability-parity',
+    label: 'Cross-backend capability parity',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box: 1.5/1.6/1.6/1.7/1.8s. Replaces 1.2s.
     seconds: 1.7,
@@ -1553,8 +1657,18 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run test:workerd',
+    label: 'Durable Object semantics under workerd',
     tier: 'ci',
-    seconds: 12.7,
+    // Measured 2026-09-15 on the 24-thread workstation: 439 s (load 1.8) and
+    // 399 s (load 9.6) solo, 36 files serial by design (`fileParallelism:
+    // false`, wall-time gates), 139 to 159 s of it module import. Replaces
+    // 12.7 s, which named five surfaces and 18 tests; the tier has 144. The
+    // same day the probe's outbound started answering `models.dev/api.json`
+    // from a fixture: refused, it surfaced as HTTP 500 and every provider fell
+    // back on each listing sweep — 51 fallbacks per run — and the gate ran 160
+    // to 398 s with them and 399 to 439 s without, so the fallbacks were a
+    // network dependency, not the wall. The wall is the serial import cost.
+    seconds: 420,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
       + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
@@ -1593,6 +1707,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:policy-drift',
+    label: 'Duplicated policy constants',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box: 0.8/0.8/0.8/0.9/0.9s. Replaces 0.6s.
     seconds: 0.9,
@@ -1610,6 +1725,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:scratch-ownership',
+    label: 'Test scratch ownership',
     tier: 'commit',
     // Measured 2026-09-05 on the 24-thread box (load 2.3): 0.42 s. Replaces 1.3 s.
     seconds: 0.42,
@@ -1630,6 +1746,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:agents-fields',
+    label: 'Agents action/field relation',
     tier: 'commit',
     seconds: 0.34,
     catches: 'a field of the `agents` tool that the handler reads and nothing declares, or '
@@ -1655,6 +1772,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts',
+    label: 'Hammer and fence gate self-tests',
     tier: 'push',
     seconds: 0.4,
     catches: 'the two adversarial gates\' own decision boundaries — the half that decides '
@@ -1674,6 +1792,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:mutation-fences',
+    label: 'Concurrency fences stay load-bearing',
     tier: 'deploy',
     // Four fences, each proved twice (pristine green, mutant red) inside one
     // sparse `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the
@@ -1697,9 +1816,17 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:hammer',
+    label: 'Contended reruns of the Cloudflare suite',
+    phase: 'hammer',
+    alone: 'runs alone, and its SUBJECT is why. It saturates nproc/2 threads with CPU burners on '
+      + 'purpose, so every gate beside it would be measured on a machine this one is '
+      + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
+      + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
+      + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
+      + 'wave so a cheap source failure still fails first, and before the account gate.',
     tier: 'deploy',
     // 6 runs x ~11s contended = 65.8s measured 2026-08-31 (24 threads, 12
-    // burners). SERIAL by construction — see SERIAL_GATES.
+    // burners). Alone by construction — see its `phase` and `alone` below.
     seconds: 66,
     catches: 'a test that passes once on an idle box and fails when the machine is busy or '
       + 'when the suite runs again. Every other tier runs each suite ONCE and reads the exit '
@@ -1725,6 +1852,7 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run verify:lean',
+    label: 'Lean proofs, consistency, and traceability',
     tier: 'deploy',
     // 2.2s WARM, median of 2.19 / 2.20 on the 24-thread box, 2026-08-21: `lake
     // build` is a no-op once the Lean build cache holds the build, so this figure sits on
@@ -1753,6 +1881,12 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:infra',
+    label: 'Declared infrastructure exists and is bound',
+    phase: 'infra',
+    alone: 'runs alone, after every source gate. It is the cheapest gate that talks to Cloudflare, '
+      + '`npx wrangler whoami` is its precondition, and its place in the order carries meaning: '
+      + 'everything before it proves the SOURCE is deployable and it proves the ACCOUNT is. '
+      + 'Running it early would spend account calls on a tree that has not been shown to compile.',
     tier: 'deploy',
     seconds: 43,
     catches: 'a resource the binding manifest declares and the account does not hold, and a '
@@ -1796,6 +1930,21 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:first-run',
+    label: 'First-run tier',
+    phase: 'post-publish',
+    deadline: {
+      seconds: 1_800,
+      why: 'covers six deployed episodes. Three use a real model over a socket. '
+        + 'Two attach real daemons; one drives Chrome against the deployed app. '
+        + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
+        + 'until a deployed run measures it and the cost in LADDER.',
+    },
+    alone: 'runs alone, and AFTER the deploy — the only gate here whose subject is the DEPLOYED '
+      + 'build rather than this tree. It attaches real machines to the account, opens a real '
+      + 'browser session and creates workspaces as the same identity `gate:infra` '
+      + 'authenticates with, so anything beside it would be inside the fleet one of its cases '
+      + 'is measuring: the two-machines case asserts that exactly two machines are live and a '
+      + "sibling's daemon would make that three.",
     tier: 'deploy',
     // On 2026-09-05, credential-free collection skipped six files and six tests.
     // `bun --bun vitest run --config vitest.first-run.config.ts` reported
@@ -1835,6 +1984,21 @@ export const LADDER: readonly Gate[] = [
   },
   {
     run: 'bun run gate:trajectory',
+    label: 'Trajectory tier',
+    phase: 'post-publish',
+    deadline: {
+      seconds: 3_600,
+      why: 'covers five two-turn episodes on the product model over the public API, each '
+        + 'run to completion. Measured 1661s on 2026-09-12 with every case red; the bound is '
+        + 'roughly twice that so a slow model answers rather than being killed as a hang.',
+    },
+    alone: 'runs alone, LAST before the build. Its subject is the DEPLOYED product on its default '
+      + 'model, so it spends minutes of live turns on the shared account as the identity '
+      + '`gate:infra` authenticates with; a gate beside it would be inside the workspaces it '
+      + 'creates and tears down, and its wall time — the one figure `LADDER` declares for it — '
+      + 'would be measured under someone else\'s load. After `gate:infra` because that is the '
+      + 'cheapest proof the account answers at all, and a tree that has not been shown to '
+      + 'compile should not spend model calls.',
     tier: 'deploy',
     // Measured 2026-09-12 on the deployed 4f4c0af36: one credentialed run of
     // the five cases on the product model, 541s wall as the script prints it,
@@ -1866,59 +2030,60 @@ export const LADDER: readonly Gate[] = [
   },
 ];
 
-/**
- * The deploy gates that MUST NOT run beside another gate, each with the reason.
- *
- * Everything not named here or in {@link EXCLUSION_GROUPS} is independent, and
- * `scripts/deploy.sh` runs it concurrently. That claim is checkable rather than
- * hopeful: no gate writes into the working tree (`gate:bench-corpus` uses
- * `git apply --check`, `gate:patch-parity` copies into a throwaway tree, every
- * `tsc` is `--noEmit`), and every test process gets its own `mkdtemp` KINU_HOME
- * from scripts/test-scratch-home.ts.
- *
- * `deploy.test.ts` asserts deploy.sh puts a barrier around exactly these, so the
- * policy and the pipeline cannot drift apart.
- */
-export const SERIAL_GATES = {
-  'bun scripts/preflight.ts':
-    'runs alone and FIRST. Its subject is the environment every other gate reports through: '
-    + 'an exhausted $TMPDIR inode table surfaces later as a 5-second timeout inside an '
-    + 'unrelated filesystem test, which reads as a code regression and is not one. A gate '
-    + 'running beside it could report that regression before the preflight had said the '
-    + 'machine was unfit to be reported on.',
-  'bun run gate:hammer':
-    'runs alone, and its SUBJECT is why. It saturates nproc/2 threads with CPU burners on '
-    + 'purpose, so every gate beside it would be measured on a machine this one is '
-    + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
-    + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
-    + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
-    + 'wave so a cheap source failure still fails first, and before the account gate.',
-  'bun run gate:infra':
-    'runs alone, after every source gate. It is the cheapest gate that talks to Cloudflare, '
-    + '`npx wrangler whoami` is its precondition, and its place in the order carries meaning: '
-    + 'everything before it proves the SOURCE is deployable and it proves the ACCOUNT is. '
-    + 'Running it early would spend account calls on a tree that has not been shown to compile.',
-  'bun run gate:first-run':
-    'runs alone, and AFTER the deploy — the only gate here whose subject is the DEPLOYED '
-    + 'build rather than this tree. It attaches real machines to the account, opens a real '
-    + 'browser session and creates workspaces as the same identity `gate:infra` '
-    + 'authenticates with, so anything beside it would be inside the fleet one of its cases '
-    + 'is measuring: the two-machines case asserts that exactly two machines are live and a '
-    + "sibling's daemon would make that three.",
-  'bun run gate:trajectory':
-    'runs alone, LAST before the build. Its subject is the DEPLOYED product on its default '
-    + 'model, so it spends minutes of live turns on the shared account as the identity '
-    + '`gate:infra` authenticates with; a gate beside it would be inside the workspaces it '
-    + 'creates and tears down, and its wall time — the one figure `LADDER` declares for it — '
-    + 'would be measured under someone else\'s load. After `gate:infra` because that is the '
-    + 'cheapest proof the account answers at all, and a tree that has not been shown to '
-    + 'compile should not spend model calls.',
-} satisfies Record<string, string>;
 
 /**
- * How many hardware threads a gate occupies while it runs, for every gate
- * that occupies more than one. The pre-publish wave is scheduled by this
- * budget against the machine's thread count, not by a count of gates.
+ * The deploy tier's commands, in the order the runner walks them. Until
+ * 2026-09-15 this PARSED deploy.sh's `run_required_gate` lines, and deploy.sh
+ * carried a second copy of every row's weight, deadline and phase in bash
+ * tables `deploy.test.ts` held equal to this file. Now deploy.sh consumes
+ * `--plan` and there is one copy: this one.
+ */
+export function deployGates(): string[] {
+  return deployPlan().map((row) => row.run);
+}
+
+/** One row of the deploy plan, as the runner reads it. */
+export interface PlanRow {
+  readonly phase: DeployPhase;
+  readonly label: string;
+  readonly weight: number;
+  readonly deadline: number;
+  readonly run: string;
+}
+
+/**
+ * The deploy plan: every deploy-tier gate with its phase, label, weight and
+ * deadline, in phase order and, within a phase, in ladder order. This is
+ * what `bash scripts/deploy.sh` schedules from — the single source of what
+ * blocks a publish.
+ */
+export function deployPlan(): PlanRow[] {
+  const gates = gatesFor('deploy').filter((gate) => gate.tier !== 'evals');
+  const rows: PlanRow[] = [];
+
+  for (const phase of DEPLOY_PHASES) {
+    for (const gate of gates) {
+      if ((gate.phase ?? 'source') !== phase) continue;
+      rows.push({
+        phase, label: gate.label, weight: gateWeight(gate), deadline: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, run: gate.run,
+      });
+    }
+  }
+
+  return rows;
+}
+
+/** The plan as the runner reads it: one tab-separated line per row —
+ *  phase, label, weight, deadline, command. Tabs, because a command holds
+ *  spaces and a label holds punctuation, and neither holds a tab. */
+export function printPlan(rows: readonly PlanRow[]): string {
+  return rows.map((row) => [row.phase, row.label, String(row.weight), String(row.deadline), row.run].join('\t')).join('\n');
+}
+
+/**
+ * A gate's weight: the hardware threads it occupies at peak, one unless the
+ * row declares more. The deploy wave is scheduled by this budget against the
+ * machine's thread count, not by a count of gates.
  *
  * Why. Measured 2026-09-16 on the 24-thread workstation: the eleven-suite UI
  * row passes alone in 361 s and failed every deploy attempt at width 6 AND at
@@ -1932,194 +2097,14 @@ export const SERIAL_GATES = {
  * `gate:dead-code` at 1.7 (37 samples, mean 0.9). Six of the first beside two
  * of the second is forty threads on a box with twenty-four.
  *
- * The figures below are the measured PEAKS, rounded up, because a wall clock
- * inside a gate is hit by the peak and not by the mean. A browser row weighs
- * its one Chrome instance's peak; every `--parallel=4` row weighs the peak of
- * four workers each running its own thread pool; `bun run test:cli` runs the
- * same four workers through `scripts/test-cli.ts`. Everything not named here
- * weighs one. `deploy.test.ts` holds deploy.sh's table equal to this one.
+ * The declared figures are the measured PEAKS, rounded up, because a wall
+ * clock inside a gate is hit by the peak and not by the mean: a browser row
+ * weighs its one Chrome instance's peak (5); every `--parallel=4` row weighs
+ * the peak of four workers each running its own thread pool (11), and
+ * `bun run test:cli` runs the same four workers through `scripts/test-cli.ts`.
  */
-export const GATE_WEIGHTS = {
-  'bun test --parallel=4 packages/cf-backend/': 11,
-  'bun test --parallel=4 packages/cli-backend/': 11,
-  'bun run test:core': 11,
-  'bun run test:cli': 11,
-  'bun test scripts/app-background-ux.test.ts scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts scripts/control-plane-ux.test.ts scripts/feedback-ux.test.ts scripts/home-overview-ux.test.ts scripts/models-section-ux.test.ts scripts/plan-review-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts scripts/account-ux.test.ts scripts/provider-wait-ux.test.ts': 5,
-  'bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts': 5,
-  'bun test scripts/client-error-ux.test.ts scripts/lazy-route-ux.test.ts scripts/workspace-snapshot-ux.test.ts': 5,
-  'bun test scripts/react-runtime-identity.test.ts': 5,
-  'bun test scripts/swarm-tree-geometry.test.ts': 5,
-  'bun test scripts/chat-scroll.test.ts': 5,
-  'bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts': 5,
-} satisfies Readonly<Record<string, number>>;
-
-/** A gate's weight: its declared figure, or one. */
-export function gateWeight(run: string): number {
-  return Object.entries(GATE_WEIGHTS).find(([declared]) => declared === run)?.[1] ?? 1;
-}
-
-/** deploy.sh's weight table, parsed. The runner is bash and cannot import
- *  {@link GATE_WEIGHTS}, so the two are written twice and asserted once. */
-export function deployWeights(
-  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
-): Record<string, number> {
-  return Object.fromEntries(
-    bashTable(source, 'GATE_WEIGHT').map(([run, weight]) => [run, Number.parseInt(weight, 10)]),
-  );
-}
-
-/**
- * Same-wave exclusions. Empty after the gallery harness moved to a
- * kernel-assigned port and per-process Vite cache, fixtures gained semantic
- * identities, and the chat anchor stopped re-pinning on page-settle commits.
- * `deploy.test.ts` holds this equal to deploy.sh's table.
- */
-export interface ExclusionGroup {
-  readonly why: string;
-  readonly gates: readonly string[];
-}
-
-export const EXCLUSION_GROUPS: Readonly<Record<string, ExclusionGroup>> = {};
-
-/**
- * The deploy tier, read out of deploy.sh. A parse of the authoritative list,
- * never a copy: a gate added there appears here on the next run, and
- * `ladder.test.ts` fails if this parse ever returns nothing — a parser that
- * silently matches no lines would make every parity assertion vacuous, which is
- * the exact failure this ladder exists to stop.
- */
-export function deployGates(
-  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
-): string[] {
-  const gates: string[] = [];
-
-  for (const line of source.split('\n')) {
-    const match = /^run_required_gate\s+"[^"]*"\s+(.+?)\s*$/.exec(line);
-
-    if (match?.[1] !== undefined) gates.push(match[1]);
-  }
-
-  return gates;
-}
-
-/**
- * The deploy gates GROUPED BY THE WAVE THEY RUN IN, read out of the same file.
- *
- * deploy.sh enqueues gates and runs each queue at a `flush_gates` line, so a wave
- * is the run of gates between two flushes and every gate in one wave runs beside
- * the others. That makes "runs alone" a property of this grouping rather than of
- * a log, which matters: an assertion that reads the ORDER off a stub log stays
- * green when a barrier is deleted, because the scheduler happens to launch index
- * 0 first. A test that cannot fail is not a gate.
- *
- * A trailing enqueue with no flush after it is a gate nobody runs, so it comes
- * back as its own final wave and `deploy.test.ts` refuses it.
- */
-export function deployWaves(
-  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
-): string[][] {
-  const waves: string[][] = [];
-  let wave: string[] = [];
-
-  for (const line of source.split('\n')) {
-    if (/^flush_gates\s*$/.test(line)) {
-      if (wave.length > 0) waves.push(wave);
-      wave = [];
-      continue;
-    }
-
-    const match = /^run_required_gate\s+"[^"]*"\s+(.+?)\s*$/.exec(line);
-
-    if (match?.[1] !== undefined) wave.push(match[1]);
-  }
-
-  if (wave.length > 0) waves.push(wave);
-
-  return waves;
-}
-
-/**
- * Gates that may not be bounded by the shared source-gate deadline, each with
- * the reason and the seconds it gets instead.
- *
- * `GATE_DEADLINE_SECONDS` in deploy.sh bounds a test process on the deploy
- * box, and 480s is calibrated against the slowest source gate. A live
- * container lifecycle would need its own declaration because raising the
- * shared figure would take the wall off every source gate at once. None is
- * wired until its acceptance run is green.
- */
-export const GATE_DEADLINES = {
-  'bun run gate:first-run': {
-    seconds: 1_800,
-    why: 'covers six deployed episodes. Three use a real model over a socket. '
-      + 'Two attach real daemons; one drives Chrome against the deployed app. '
-      + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
-      + 'until a deployed run measures it and the cost in LADDER.',
-  },
-  'bun run gate:trajectory': {
-    seconds: 3_600,
-    why: 'covers five two-turn episodes on the product model over the public API, each '
-      + 'run to completion. Measured 1661s on 2026-09-12 with every case red; the bound is '
-      + 'roughly twice that so a slow model answers rather than being killed as a hang.',
-  },
-} satisfies Readonly<Record<string, { readonly seconds: number; readonly why: string }>>;
-
-/**
- * The `['key']=value` rows of ONE named bash associative array.
- *
- * Scoped to its own `declare -A NAME=( … )` block rather than matched over the
- * whole file, because deploy.sh now declares two such tables and a file-wide
- * match read the deadline table's rows as exclusion groups — an exclusion
- * group named `3600`, holding a gate that excludes nothing.
- */
-function bashTable(source: string, name: string): [string, string][] {
-  const lines = source.split('\n');
-  const opened = lines.findIndex((line) => line.includes(`declare -A ${name}=(`));
-
-  if (opened === -1) return [];
-  const rows: [string, string][] = [];
-
-  for (let index = opened; index < lines.length; index += 1) {
-    const line = lines[index] ?? '';
-    const match = /^\s*\['([^']+)'\]=(\S+)\s*$/.exec(line);
-    const key = match?.[1];
-    const value = match?.[2];
-
-    if (key !== undefined && value !== undefined) rows.push([key, value]);
-
-    // The array closes on the first line ending in `)`, which is also the
-    // OPENING line for an empty table written `declare -A NAME=()`. Reading
-    // past it is what let one table's rows be attributed to another's.
-    if (line.trimEnd().endsWith(')')) break;
-  }
-
-  return rows;
-}
-
-/** deploy.sh's per-gate deadline table, parsed. The runner is bash and cannot
- *  import {@link GATE_DEADLINES}, so the two are written twice and asserted
- *  once — the same shape as the exclusion table below. */
-export function deployDeadlines(
-  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
-): Record<string, number> {
-  return Object.fromEntries(
-    bashTable(source, 'GATE_DEADLINES').map(([run, seconds]) => [run, Number.parseInt(seconds, 10)]),
-  );
-}
-
-/**
- * deploy.sh's own exclusion table, parsed. Held equal to {@link EXCLUSION_GROUPS}
- * by `deploy.test.ts`: the runner is bash and cannot import the declaration, so
- * the two are written twice and asserted once.
- */
-export function deployExclusions(
-  source = readFileSync(resolve(root, 'scripts/deploy.sh'), 'utf8'),
-) {
-  const groups: Record<string, string[]> = {};
-
-  for (const [run, group] of bashTable(source, 'GATE_GROUP')) (groups[group] ??= []).push(run);
-
-  return groups;
+export function gateWeight(gate: Pick<Gate, 'weight'>): number {
+  return gate.weight ?? 1;
 }
 
 /** The path of the Python suites' runner, as its gate spells it. */
@@ -2252,25 +2237,11 @@ export const CI_EXEMPT = {
     + 'before the build.',
 } satisfies Record<string, string>;
 
-/** Every gate at or below `tier`. At `deploy`, anything deploy.sh runs that no
- *  earlier tier declares is appended verbatim, so the tier is exactly what the
- *  deploy path runs even while a new gate is still undescribed here. */
-export function gatesFor(tier: Tier, deploy: readonly string[]): Gate[] {
+/** Every gate at or below `tier`. */
+export function gatesFor(tier: Tier): Gate[] {
   const upto = TIERS.indexOf(tier);
-  const gates = LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
 
-  if (tier !== 'deploy') return gates;
-  const declared = new Set(gates.map((gate) => gate.run));
-
-  return [
-    ...gates,
-    ...deploy.filter((run) => !declared.has(run)).map((run): Gate => ({
-      run, tier: 'deploy', seconds: 0,
-      catches: 'declared by scripts/deploy.sh and not yet described in LADDER',
-      blind: 'unknown — see scripts/deploy.sh',
-      inputs: { kind: 'live', why: 'undescribed in LADDER, so nothing declares what it reads; never cached until it is' },
-    })),
-  ];
+  return LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
 }
 
 /**
@@ -2540,10 +2511,10 @@ export interface TierCost {
   readonly steps: Record<string, number>;
 }
 
-export function declaredTierCost(tier: BudgetTier, deploy: readonly string[]): TierCost {
+export function declaredTierCost(tier: BudgetTier): TierCost {
   const steps: Record<string, number> = {};
 
-  for (const gate of gatesFor(tier, deploy)) steps[gate.run] = gate.seconds;
+  for (const gate of gatesFor(tier)) steps[gate.run] = gate.seconds;
 
   return {
     total: Object.values(steps).reduce((sum, seconds) => sum + seconds, 0),
@@ -2624,8 +2595,8 @@ export const BUDGET_BLIND_SPOTS: readonly string[] = [
   + '20% tolerance is what covers that instead of a second set of figures.',
 ];
 
-function printMatrix(deploy: readonly string[]): void {
-  const all = gatesFor('deploy', deploy);
+function printMatrix(): void {
+  const all = gatesFor('deploy');
   const tracked = trackedTestFiles();
   const width = Math.max(...all.map((gate) => gate.run.length));
   console.log(`${'gate'.padEnd(width)}  ${TIERS.map((tier) => tier.padEnd(7)).join('')}cost    files`);
@@ -2644,7 +2615,7 @@ function printMatrix(deploy: readonly string[]): void {
   console.log('');
 
   for (const tier of TIERS) {
-    const gates = gatesFor(tier, deploy).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+    const gates = gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
     const cost = gates.reduce((sum, gate) => sum + gate.seconds, 0);
     const files = new Set(gates.flatMap((gate) => claims(gate.run, tracked)));
     console.log(
@@ -2673,10 +2644,13 @@ if (import.meta.main) {
     if (cause.code !== 'EPIPE') throw cause;
   });
 
-  const deploy = deployGates();
+  if (process.argv.includes('--plan')) {
+    console.log(printPlan(deployPlan()));
+    process.exit(0);
+  }
 
   if (process.argv.includes('--matrix')) {
-    printMatrix(deploy);
+    printMatrix();
     process.exit(0);
   }
 
@@ -2717,7 +2691,7 @@ if (import.meta.main) {
     const tier = TIERS.find((candidate) => candidate === flag?.slice('--tier='.length)) ?? 'push';
     const repo = repoAt(root, (run, files) => claims(run, files));
     const tracked = trackedTestFiles();
-    const gates = gatesFor(tier, deploy).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+    const gates = gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
     let holes = 0;
     let audited = 0;
 
@@ -2751,8 +2725,8 @@ if (import.meta.main) {
     const budget = readBudget();
 
     const declared = {
-      commit: declaredTierCost('commit', deploy),
-      push: declaredTierCost('push', deploy),
+      commit: declaredTierCost('commit'),
+      push: declaredTierCost('push'),
     };
 
     const breaches = judgeBudgets(declared, budget);
@@ -2816,8 +2790,8 @@ if (import.meta.main) {
       + `(${String(cpus().length)} threads)`;
 
     const today = new Date().toISOString().slice(0, 10);
-    const commit = declaredTierCost('commit', deploy);
-    const push = declaredTierCost('push', deploy);
+    const commit = declaredTierCost('commit');
+    const push = declaredTierCost('push');
 
     const count = writeBudget({
       reason,
@@ -2847,17 +2821,17 @@ if (import.meta.main) {
 
   if (tier === undefined) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --audit-closure [--tier=<tier>] | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --plan | --audit-closure [--tier=<tier>] | --matrix | --install-hooks | --check-budget | --lock --reason="<what grew and why>"`,
     );
     process.exit(2);
   }
 
-  const gates = gatesFor(tier, deploy)
+  const gates = gatesFor(tier)
     .filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
 
   const measured = assertMeasured(`ladder --tier=${tier}`, [
     ['gates in this tier', gates.length],
-    ['gates declared by deploy.sh', deploy.length],
+    ['gates in the deploy plan', deployPlan().length],
   ]);
 
   // A ladder is a description; something has to make it true. This repo has

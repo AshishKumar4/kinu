@@ -733,6 +733,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
           }),
         factsCompressed: recording.emitted
           .filter((e) => e.event === 'memory.facts_compressed').length,
+        catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
+        catalogHits: (await this.probeLog()).catalogHits,
       });
     } finally {
       restore();
@@ -744,12 +746,17 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
    *  routes there, so this fetch is the established "pull the pool's log over
    *  the existing RPC" pattern — no new Worker, no cross-worker binding. */
   async httpCalls(): Promise<HttpCall[]> {
+    return (await this.probeLog()).calls;
+  }
+
+  /** The probe's outbound log: every model call, and how many times the
+   *  worker fetched the provider catalog. */
+  async probeLog(): Promise<{ calls: HttpCall[]; catalogHits: number }> {
     const response = await fetch('http://probe-control.invalid/log');
 
-    // SAFETY: the `/log` branch constructs its answer as `{ calls: [...log] }`,
-    // so this object shape is owner-guaranteed by the handler in this tree;
-    // v.parse against the shared array schema names any drift.
-    return v.parse(v.array(HttpCallSchema), (await response.json() as { calls: unknown }).calls);
+    // Parsed at the boundary: the `/log` branch constructs its answer as
+    // `{ calls, catalogHits }`, and the schema names any drift.
+    return v.parse(v.object({ calls: v.array(HttpCallSchema), catalogHits: v.number() }), await response.json());
   }
 
   /** Clear the HTTP log before a drive, so each test's wire proof is its own. */
@@ -1696,6 +1703,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
           }),
         factsCompressed: recording.emitted
           .filter((e) => e.event === 'memory.facts_compressed').length,
+        catalogFallbacks: recording.emitted.filter((e) => e.event === 'models_dev.catalog_fallback').length,
+        catalogHits: (await this.probeLog()).catalogHits,
       });
     } finally {
       restore();

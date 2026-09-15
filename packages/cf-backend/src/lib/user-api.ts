@@ -474,27 +474,41 @@ export interface McpServerSummary {
   toolsCount: number;
   authUrl: string | null;
   allowedTools: string[] | null;
+  presetId: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
 export interface McpServerInput {
-  name: string;
-  serverUrl: string;
+  name?: string;
+  serverUrl?: string;
   transport?: McpTransport;
   headers?: Record<string, string>;
   allowedTools?: string[];
+  /** A `MCP_PRESETS` id: the catalog supplies name, endpoint and transport. */
+  presetId?: string;
 }
 
-const McpServerSummarySchema = v.object({
+export const McpServerSummarySchema = v.object({
   id: v.string(), name: v.string(), serverUrl: v.string(),
   transport: v.picklist(['auto', 'sse', 'streamable-http']),
   status: v.picklist(['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown']),
   error: v.nullable(v.string()), toolsCount: v.number(), authUrl: v.nullable(v.string()),
-  allowedTools: v.nullable(v.array(v.string())), createdAt: v.number(), updatedAt: v.number(),
+  allowedTools: v.nullable(v.array(v.string())), presetId: v.nullable(v.string()),
+  createdAt: v.number(), updatedAt: v.number(),
 });
 
 export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
+
+/** One preset's deploy-time availability, as UserDO reports it — whether its
+ *  registered OAuth app is configured, which decides sign-in vs fallback. */
+export interface McpPresetAvailability {
+  id: string;
+  appConfigured: boolean;
+}
+
+export const listMcpPresets = () =>
+  api(v.array(v.object({ id: v.string(), appConfigured: v.boolean() })), 'GET', '/mcp/presets');
 
 export const addMcpServer   = (input: McpServerInput) =>
   api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input);

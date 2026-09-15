@@ -1370,15 +1370,15 @@ body > .annotation-toolbar {
 /* ── Workbench scale — the earlier, denser measure the owner reads the
    workspace at ────────────────────────────────────────────────────────────
    The d04 scale unified the workbench on the marketing-read sizes; the owner
-   kept that scale everywhere EXCEPT the workspace. Every selector below is
-   the pre-d04 size for the SAME role — the role names stay, only the rungs
-   the workbench sits on change. The scope is `html[data-workbench]` (set by
-   WorkspacePage while it is mounted, so rail, drawer and portaled chrome
-   follow the page) or `.p-workbench` (the landing frames, whose mock must
-   photograph the workspace at this scale). Unlayered, so they outrank the
-   layered role declarations above. Sizes are rem at a 16px root; comments
-   carry the pixels a default root renders. */
-:is(html[data-workbench], .p-workbench) {
+   kept that scale everywhere EXCEPT the workspace's own content. Every
+   selector below is the pre-d04 size for the SAME role — the role names stay,
+   only the rungs the workbench sits on change. The scope is `[data-workbench]`
+   (set by WorkspacePage's content root while it is mounted, so the rail, the
+   drawer and portaled chrome keep the default scale) or `.p-workbench` (the
+   landing frames, whose mock must photograph the workspace at this scale).
+   Unlayered, so they outrank the layered role declarations above. Sizes are
+   rem at a 16px root; comments carry the pixels a default root renders. */
+:is([data-workbench], .p-workbench) {
   .prose-chat {
     /* 14.496px on 1.7 — the scale the owner approved for assistant prose. */
     font-size: 0.906rem;
@@ -1407,4 +1407,21 @@ body > .annotation-toolbar {
   .plan-review-document [data-block-id] :not(pre) > code { font-size: 0.9em; }
   .plan-review-document pre[data-block-id] { font-size: 0.8125rem; line-height: 1.65; } /* 13px */
   .plan-review-document pre[data-block-id]::before { font-size: 0.6875rem; } /* 11px */
+}
+
+/* ── Pages redesign ──────────────────────────────────────────────────
+   The Shared page's card hover: the accent hairline at forty percent and a
+   one-pixel lift, fast. Its own layer block so it sits under utilities like
+   the grammar above and overrides `.p-card`'s transition list by order. */
+@layer components {
+.p-card-lift {
+  transition: border-color 120ms ease-out, transform 120ms ease-out;
+}
+.p-card-lift:hover {
+  border-color: color-mix(in srgb, var(--c-accent) 40%, transparent);
+  transform: translateY(-1px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .p-card-lift:hover { transform: none; }
+}
 }

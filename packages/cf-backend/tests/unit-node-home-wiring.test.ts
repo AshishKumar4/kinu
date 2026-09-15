@@ -24,8 +24,6 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
   facetHomeProvisioner, headAgentName,
   AGENT_HOME_MODE,
@@ -37,13 +35,18 @@ import {
   type NodeWorkspaceProvisioner,
 } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
-import { AGENT_FS_CHUNK_BYTES, nimbusSessionFiles } from '@kinu.run/core';
-import { createWorkspace } from '@kinu.run/core/workspace';
+import { nimbusSessionFiles } from '@kinu.run/core';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
   ensureProgrammaticReady,
+  rpcDeleteFile,
   rpcExec,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import {
+  _rpcExists, _rpcFsReadRange, _rpcMkdir, _rpcReadFile, _rpcReadFileBytes, _rpcReaddir, _rpcRename, _rpcStat, _rpcWriteFile,
+} from '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js';
+import { programmaticHostOver } from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 const databases: Database[] = [];
@@ -109,55 +112,7 @@ async function openFixture(): Promise<Fixture> {
     generation: 1,
   });
 
-  const durable = new Map<string, unknown>();
-
-  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
-    const entries = new Map<string, unknown>();
-
-    for (const [key, value] of durable) {
-      if (key.startsWith(options.prefix)) entries.set(key, value);
-    }
-
-    // SAFETY: the storage list contract types each row by the caller's T,
-    // which the untyped stand-in rows cannot name; `never` keeps the Map
-    // assignable to every T.
-    return entries as Map<string, never>;
-  };
-
-  const host: ProgrammaticHost = {
-    _w1SessionDestroyed: false,
-    env: {},
-    ctx: {
-      storage: {
-        get: async (key) => durable.get(key),
-        put: async (key, value) => { durable.set(key, value); },
-        delete: async (key) => { durable.delete(key); },
-        deleteAll: async () => { durable.clear(); },
-        deleteAlarm: async () => undefined,
-        list: listDurable,
-        transaction: async (body) => body({
-          get: async (key) => durable.get(key),
-          put: async (key, value) => { durable.set(key, value); },
-          delete: async (key) => { durable.delete(key); },
-          list: listDurable,
-        }),
-      },
-    },
-    shell: workspace.shell,
-    shellProcessPid: null,
-    sqliteFs: workspace.vfs,
-    processes: new SessionProcessSupervisor(),
-    portRegistry: new PortRegistry(),
-    facetManager: null,
-    viteDevServer: null,
-    cirrusReal: null,
-    _cpRegistry: workspace.registry,
-    _viteShimPid: null,
-    _viteShimPort: null,
-    ensureSqliteFs: () => undefined,
-    ensureFacetManager: () => undefined,
-    initSession: async () => { throw new Error('workspace is already composed'); },
-  };
+  const host = programmaticHostOver(workspace).host;
 
   await ensureProgrammaticReady(host);
   const wiring = { root: workspace.vfs.as(ROOT), confiner: workspace.vfs, sql };
@@ -522,9 +477,34 @@ describe('hosted node execution', () => {
   });
 });
 
-/** The session as this repo reaches it: `exec` with a credential is the ONE
- *  surface that carries one, so the credentialed file plane is built on it. */
-function sessionBox(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHandle {
+/**
+ * The session as this repo reaches it. `exec` carries the credential on every
+ * command; the file plane is the session's own pid-less file RPCs bound to
+ * the same credential — what the SDK's `files.as(cred)` calls — so a node's
+ * file tools and its commands are one identity over one tree.
+ */
+function sessionBox(f: Fixture, cred: VfsCred): NimbusSandboxHandle {
+  const refuse = async (): Promise<never> => { throw new Error('a credentialed plane must not fall back to the session user'); };
+
+  const { host } = f;
+  // The file RPCs dispatch through the workspace's one supervisor op, the
+  // same method a hosted workspace mounts for its facets.
+  const rpc = { ...host, supervisorOp: (envelope: Parameters<NimbusWorkspace['supervisorOp']>[0]) => f.workspace.supervisorOp(envelope) };
+
+  const filesAs = (agent: VfsCred): NimbusSandboxHandle['files'] => ({
+    as: filesAs,
+    read: (path) => _rpcReadFile(rpc, path, undefined, agent),
+    readBytes: (path) => _rpcReadFileBytes(rpc, path, undefined, agent),
+    readRange: (path, offset, length) => _rpcFsReadRange(rpc, path, offset, length, undefined, agent),
+    write: async (path, content) => { await _rpcWriteFile(rpc, path, content, undefined, agent); },
+    list: (path) => _rpcReaddir(rpc, path ?? '/', undefined, agent),
+    stat: async (path) => v.parse(v.nullable(FileStatSchema), await _rpcStat(rpc, path, undefined, agent)),
+    rename: (from, to) => _rpcRename(rpc, from, to, undefined, agent),
+    exists: (path) => _rpcExists(rpc, path, undefined, agent),
+    mkdir: (path) => _rpcMkdir(rpc, path, undefined, agent),
+    delete: (path, options) => rpcDeleteFile(rpc, path, options, agent),
+  });
+
   return {
     ready: async () => undefined,
     exec: async (rawCommand, options) => {
@@ -544,138 +524,14 @@ function sessionBox(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHandle 
         stderr: result.stderr,
       };
     },
-    files: {
-      read: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      write: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      list: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      exists: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-      delete: async () => { throw new Error('a credentialed plane must not fall back to the session user'); },
-    },
+    files: { as: filesAs, read: refuse, write: refuse, list: refuse, exists: refuse, delete: refuse },
   };
 }
 
-/**
- * The runner's request, as this test reads it back off the wire.
- *
- * PARSED, never cast: this test's whole claim is that the plane put the path and
- * the payload in the environment as JSON, and a cast would assert that claim
- * against itself. The environment is parsed too, so a call that carried no
- * request fails here instead of reading as `{}`.
- */
-const RequestEnvSchema = v.object({ KINU_AGENT_FS_REQUEST: v.string() });
-
-const RequestSchema = v.object({
-  op: v.string(),
-  path: v.optional(v.string()),
-  temp: v.optional(v.string()),
-  b64: v.optional(v.string()),
-  from: v.optional(v.string()),
-  to: v.optional(v.string()),
-  off: v.optional(v.number()),
-  len: v.optional(v.number()),
-  recursive: v.optional(v.boolean()),
-});
-
-type AgentFsRequest = v.InferOutput<typeof RequestSchema>;
-
-function requestOf(call: RootExecCall | undefined): AgentFsRequest {
-  const carried = v.parse(RequestEnvSchema, call?.options.env);
-
-  return v.parse(RequestSchema, JSON.parse(carried.KINU_AGENT_FS_REQUEST));
-}
-
-/** A box answering the runner protocol from a script, so a mid-stream failure
- *  is a decision this test makes rather than one it waits for. */
-function scriptedBox(
-  nimbus: RootExecNimbus,
-  answer: (op: string, index: number) => string,
-): NimbusSandboxHandle {
-  let index = 0;
-
-  return {
-    ...nimbusBox(nimbus),
-    exec: async (rawCommand, options) => {
-      const call: RootExecCall = { command: rawCommand, options: options ?? {} };
-      nimbus.calls.push(call);
-      const stdout = answer(requestOf(call).op, index);
-      index += 1;
-
-      return { command: rawCommand, success: true, exitCode: 0, stdout, stderr: '' };
-    },
-  };
-}
+/** What the session's `stat` answers, as the handle's stat reads it. */
+const FileStatSchema = v.object({ type: v.string(), size: v.number(), mtime: v.number() });
 
 describe('the hosted file plane acts as the node, or the home is unwritable', () => {
-  test('the request is JSON in the environment; no path and no payload is shell text', async () => {
-    const nimbus = new RootExecNimbus();
-
-    const files = nimbusSessionFiles(
-      scriptedBox(nimbus, () => JSON.stringify({ ok: true })), HOSTED_NODE.cred,
-    );
-
-    // A name and a payload holding everything a shell would act on.
-    await files.writeFile("/home/node-node-A/we\nird 'q'-name", new Uint8Array([0, 0xff, 0x27, 0x60, 0x24]));
-
-    const staged = nimbus.calls[0];
-    expect(staged?.options.cred).toBe(HOSTED_NODE.cred);
-    // ONE fixed program, and the only interpolated text in it.
-    expect(staged?.command.startsWith('node -e ')).toBe(true);
-    expect(staged?.command).not.toContain('node-node-A');
-    expect(staged?.command).not.toContain('AP8nYCQ');
-    expect(requestOf(staged)).toMatchObject({ op: 'stage', b64: 'AP8nYCQ=' });
-    // Staged beside the target, then renamed onto it.
-    const temp = String(requestOf(staged).temp);
-    expect(temp.startsWith("/home/node-node-A/we\nird 'q'-name.kinu-")).toBe(true);
-    expect(requestOf(nimbus.calls[1])).toEqual({
-      op: 'commit', temp, path: "/home/node-node-A/we\nird 'q'-name",
-    });
-    expect(nimbus.calls).toHaveLength(2);
-  });
-  test('a refusal carries the substrate’s own errno, and absent is not refused', async () => {
-    const nimbus = new RootExecNimbus();
-
-    const refusing = (code: string) => nimbusSessionFiles(
-      scriptedBox(nimbus, (op) => JSON.stringify(
-        op === 'discard'
-          ? { ok: true }
-          : { ok: false, code, message: `${code}: home/node-node-B` },
-      )),
-      HOSTED_NODE.cred,
-    );
-
-    await expect(refusing('EACCES').writeFile('/home/node-node-B/leak', 'x'))
-      .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    await expect(refusing('ENOTDIR').readdir('/home/node-node-B/file/inner'))
-      .rejects.toThrow(expect.objectContaining({ code: 'ENOTDIR' }));
-    // `stat` answers `null` for ENOENT ONLY. A refusal must not read as an
-    // empty directory, and `exists` must not answer `false` to a boundary.
-    expect(await refusing('ENOENT').stat('/home/node-node-A/absent')).toBeNull();
-    expect(await refusing('ENOENT').exists('/home/node-node-A/absent')).toBe(false);
-    await expect(refusing('EACCES').stat('/home/node-node-B/private'))
-      .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    await expect(refusing('EACCES').exists('/home/node-node-B/private'))
-      .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-  });
-
-  test('a write that fails mid-stream discards its temp and never touches the target', async () => {
-    const nimbus = new RootExecNimbus();
-
-    const files = nimbusSessionFiles(
-      scriptedBox(nimbus, (op) => JSON.stringify(
-        op === 'commit' ? { ok: false, code: 'EACCES', message: 'EACCES: home/node-node-A/target' } : { ok: true },
-      )),
-      HOSTED_NODE.cred,
-    );
-
-    await expect(files.writeFile('/home/node-node-A/target', 'new bytes'))
-      .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-
-    const ops = nimbus.calls.map((call) => requestOf(call).op);
-    expect(ops).toEqual(['stage', 'commit', 'discard']);
-    // The temp it removes is the temp it staged — never the target.
-    expect(requestOf(nimbus.calls[2]).temp).toBe(requestOf(nimbus.calls[0]).temp);
-  });
-
   test('an uncredentialed plane keeps the SDK surface — the ORIGIN is not routed through a runner', async () => {
     const nimbus = new RootExecNimbus();
     const box = nimbusBox(nimbus);
@@ -692,8 +548,8 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
     const b = credOf(await f.provision(node('bK2')));
-    const asA = nimbusSessionFiles(sessionBox(f.host, a), a);
-    const asB = nimbusSessionFiles(sessionBox(f.host, b), b);
+    const asA = nimbusSessionFiles(sessionBox(f, a), a);
+    const asB = nimbusSessionFiles(sessionBox(f, b), b);
 
     const bytes = new Uint8Array([0, 1, 2, 0xff, 0xfe, 0x80, 0x0a, 0x27, 0x5c]);
     await asA.writeFile('/home/head-aX9/candidate.bin', bytes);
@@ -742,7 +598,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
   test('against the real substrate: hostile names list, read, rename and delete exactly', async () => {
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
-    const asA = nimbusSessionFiles(sessionBox(f.host, a), a);
+    const asA = nimbusSessionFiles(sessionBox(f, a), a);
     // Every name `ls` cannot express unambiguously.
     const names = ["we\nird 'q'-name", '--dash-leading', 'two  spaces\ttab', 'back\\slash$dollar'];
 
@@ -764,57 +620,34 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     expect(await asA.exists('/home/head-aX9/nest')).toBe(false);
   });
 
-  test('against the real substrate: a file larger than one payload, and what it costs', async () => {
+  test('against the real substrate: a large file lands byte-exact through the bound plane', async () => {
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
-    const nimbus = new RootExecNimbus();
-    const counted = sessionBox(f.host, a);
-
-    const box: NimbusSandboxHandle = {
-      ...counted,
-      exec: async (rawCommand, options) => {
-        nimbus.calls.push({ command: rawCommand, options: options ?? {} });
-
-        return await counted.exec(rawCommand, options);
-      },
-    };
-
-    const asA = nimbusSessionFiles(box, a);
-    // Straddling the chunk boundary, with a non-repeating tail so a lost or
-    // reordered chunk cannot pass.
-    const big = new Uint8Array(AGENT_FS_CHUNK_BYTES + 4096);
+    const asA = nimbusSessionFiles(sessionBox(f, a), a);
+    // A non-repeating pattern well past any single chunk, so a lost or
+    // reordered piece cannot pass.
+    const big = new Uint8Array(2 * 1024 * 1024 + 4096);
 
     for (let at = 0; at < big.length; at += 1) big[at] = (at * 31 + (at >> 8)) & 0xff;
 
     await asA.writeFile('/home/head-aX9/big.bin', big);
-    const writeCalls = nimbus.calls.length;
-    nimbus.calls.length = 0;
     const read = await asA.readFile('/home/head-aX9/big.bin');
-    const readCalls = nimbus.calls.length;
     // Parsed rather than tested at runtime: a byte read that came back decoded
     // would be a different contract, and this states which one is under test.
     const bytes = v.parse(v.instance(Uint8Array), read);
 
     expect(bytes).toEqual(big);
     expect((await asA.stat('/home/head-aX9/big.bin'))?.size).toBe(big.byteLength);
-    // MEASURED COST, and the reason the chunk is a wire bound and not a file
-    // limit: two chunks plus one commit to write; two chunks plus the
-    // zero-length read that proves EOF to read.
-    expect(writeCalls).toBe(3);
-    expect(readCalls).toBe(3);
-    // The base64 boundary itself: the last chunk is short and its own encode
-    // must not pad into the middle of the stream.
-    expect(bytes.subarray(AGENT_FS_CHUNK_BYTES - 3, AGENT_FS_CHUNK_BYTES + 3))
-      .toEqual(big.subarray(AGENT_FS_CHUNK_BYTES - 3, AGENT_FS_CHUNK_BYTES + 3));
+    expect(await asA.readRange('/home/head-aX9/big.bin', big.length - 8, 8)).toEqual(big.subarray(big.length - 8));
   });
 
-  test('against the real substrate: a failed commit leaves the old target byte-exact and no temp', async () => {
+  test('against the real substrate: a write onto a directory is refused and touches nothing', async () => {
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
-    const asA = nimbusSessionFiles(sessionBox(f.host, a), a);
+    const asA = nimbusSessionFiles(sessionBox(f, a), a);
     await asA.writeFile('/home/head-aX9/keeper', 'the old bytes\n');
-    // A directory the rename cannot land on: the stage succeeds, the commit
-    // fails, and the target must survive untouched.
+    // A directory a file write cannot land on: the refusal is the plane's own
+    // and the neighbouring files survive untouched.
     await asA.mkdir('/home/head-aX9/occupied', { recursive: true });
     await asA.writeFile('/home/head-aX9/occupied/child', 'child');
 
@@ -822,8 +655,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
     expect(await asA.readFile('/home/head-aX9/keeper', { encoding: 'utf8' })).toBe('the old bytes\n');
     expect(await asA.readFile('/home/head-aX9/occupied/child', { encoding: 'utf8' })).toBe('child');
-    // And no staging file left behind for a later reader to trip over.
-    expect((await asA.readdir('/home/head-aX9')).filter((name) => name.includes('.kinu-'))).toEqual([]);
+    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['keeper', 'occupied']);
   });
 });
 
@@ -834,7 +666,9 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     databases.push(database);
     const sql = hostedSql(database);
     const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
-    const first = createWorkspace({ sql, transactions, generation: 1 });
+    // One counter row, adopted and bumped by each open: the second workspace
+    // is the next generation of the same database, as a reset is.
+    const first = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
     const identity = await provision(headAgentName(node('reset').nodeId));
 
@@ -844,7 +678,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     expect(await child.shell.exec('echo node > /tmp/note')).toMatchObject({ exitCode: 0 });
     expect((await first.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe('/home/user /tmp/main');
     // A reset discards the instance and keeps its database.
-    const second = createWorkspace({ sql, transactions, generation: 2 });
+    const second = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const restored = await second.asAgent(identity);
     expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
     expect((await restored.shell.exec('cat /tmp/note')).stdout).toBe('node\n');
@@ -861,7 +695,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const workspace = createWorkspace({
       sql,
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
-      generation: 1,
+      generation: workspaceGenerationStorage(sql),
     });
 
     const provision = facetHomeProvisioner(

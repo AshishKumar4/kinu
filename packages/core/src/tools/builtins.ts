@@ -75,6 +75,7 @@ import {
 import type { ProfileCatalogEnvelope } from '../types/profile';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
+import { executeToolsInputSchema } from './sandbox-contract';
 import { dispatchReport, reportHandoffProperties, type ReportToolInput } from '../delegation/report-tool';
 import {
   SUBORDINATE_REPORT_STATUSES,
@@ -423,11 +424,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     description:
       BUILTIN_TOOL_DESCRIPTIONS.execute_tools +
       ' (NOT CONFIGURED — no execute_tools builder on this runtime)',
-    inputSchema: jsonSchema<{ code: string }>({
-      type: 'object',
-      properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
-      required: ['code'],
-    }),
+    inputSchema: executeToolsInputSchema(),
     execute: async (): Promise<JsonValue> => {
       throw new KinuError('unsupported', 'execute_tools is not configured on this runtime. The backend must supply '
         + 'deps.preBuiltExecuteTool to buildBuiltinTools or deps.executeTools to '

@@ -57,21 +57,52 @@ describe('slate sharing surfaces', () => {
 
           try {
             const text = await shared.evaluate(() => document.body.innerText);
-            expect(text).toContain('My shared');
-            expect(text).toContain('Shared with me');
-            expect(text).toContain('Public');
-            expect(text).toContain('From people I know');
-            expect(text).toContain('from sam@example.com');
-            expect(text).toContain('from lee@example.com');
-            // A blueprint row forks; a live row opens. Four blueprints, four live rows.
-            expect(await shared.$$eval('button', (buttons) => buttons.filter((button) => button.textContent?.includes('Fork into a workspace')).length)).toBe(4);
-            expect(await shared.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(4);
+
+            // The five segments, each carrying its list's count — All is the
+            // kind:id-deduped union, so the doubled live row counts once.
+            const tabs = await shared.$$eval('[aria-label="Shared lists"] [role="tab"]', (els) =>
+              els.map((el) => ({ label: el.childNodes[0]?.textContent?.trim() ?? '', count: el.querySelector('span')?.textContent ?? '' })));
+
+            expect(tabs).toEqual([
+              { label: 'All', count: '7' }, { label: 'Mine', count: '3' }, { label: 'With me', count: '2' },
+              { label: 'Public', count: '2' }, { label: 'People I know', count: '1' },
+            ]);
+            expect(text).toContain('sam@example.com');
+            expect(text).toContain('lee@example.com');
+            // A blueprint row forks; a live row opens. Four blueprints, three live rows in the union.
+            expect(await shared.$$eval('[data-share-grid] button', (buttons) => buttons.filter((button) => button.textContent?.trim() === 'Fork').length)).toBe(4);
+            expect(await shared.$$eval('[data-open-live]', (buttons) => buttons.length)).toBe(3);
             expect(text).toContain('live · public');
             expect(text).toContain('live · people');
+            // Three columns at the spec's 1440, one on the phone.
+            await shared.setViewport({ width: viewport === 'desktop' ? 1440 : 390, height: viewport === 'desktop' ? 900 : 844 });
+            const columns = await shared.$eval('[data-share-grid]', (grid) => getComputedStyle(grid).gridTemplateColumns.split(' ').length);
+            expect(columns).toBe(viewport === 'desktop' ? 3 : 1);
             shots.push(await shoot(shared, `shared-${viewport}-${theme}`));
             shots.push(await shoot(shared, `shared-four-lists-${viewport}-${theme}`, LIVE_SHOTS));
+            // The segments switch what the grid holds, and search narrows it —
+            // a searched-out segment says "Nothing matches", not its own line.
+            await shared.click('[data-segment="received"]');
+            await shared.waitForFunction(
+              () => document.querySelectorAll('[data-share-grid] > li').length === 2, { timeout: 10_000 },
+            );
+            await shared.type('[aria-label="Search shared"]', 'lighthouse');
+            await shared.waitForFunction(
+              () => document.body.innerText.includes('Nothing matches'),
+              { timeout: 10_000 },
+            );
+            await shared.$eval('[aria-label="Search shared"]', (input) => {
+              // React owns the value: only the native setter plus an input
+              // event moves its tracker.
+              Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(input, '');
+              input.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+            await shared.click('[data-segment="all"]');
+            await shared.waitForFunction(
+              () => document.querySelectorAll('[data-share-grid] > li').length === 7, { timeout: 10_000 },
+            );
             await shared.evaluate(() => {
-              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Fork into a workspace'));
+              const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Fork');
 
               if (button === undefined) throw new Error('no fork button');
               button.click();

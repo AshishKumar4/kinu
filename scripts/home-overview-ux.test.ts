@@ -160,7 +160,7 @@ describe('the home workspace cards', () => {
         // pointer while its summary arrived.
         expect(list.map((card) => card.title)).toEqual([
           'Checkout coupon bug', 'Perf audit — landing', 'Email triage automation',
-          'Design system v2', 'handwrought-walnut-4166c321',
+          'Design system v2', 'Untitled workspace',
         ]);
 
         const coupon = cardNamed(list, 'Checkout coupon bug');
@@ -183,7 +183,7 @@ describe('the home workspace cards', () => {
         expect(cardNamed(list, 'Design system v2').status).toContain('Work remains');
         expect(fact(cardNamed(list, 'Design system v2'), 'unfinished').text).toBe('Unfinished work');
 
-        const quiet = cardNamed(list, 'handwrought-walnut-4166c321');
+        const quiet = cardNamed(list, 'Untitled workspace');
         expect(quiet.status).toContain('No active work');
         expect(quiet.evidence.map((item) => item.text)).toEqual(['No runs yet']);
         expect(quiet.status).not.toContain('completed');

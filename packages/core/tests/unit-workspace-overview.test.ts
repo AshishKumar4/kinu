@@ -13,7 +13,7 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
-  buildWorkspaceOverview, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema,
+  buildWorkspaceOverview, overviewHeadline, workspaceOverviewEvidence, workspaceOverviewStatus, WorkspaceOverviewSchema,
   type WorkspaceOverviewInputs,
 } from '../src/read-models/workspace-overview';
 import type { PendingAction } from '../src/read-models/pending-actions';
@@ -111,6 +111,39 @@ describe('workspaceOverviewStatus', () => {
     expect(workspaceOverviewStatus(buildWorkspaceOverview({ ...EMPTY, unfinished: true }))).toEqual({ kind: 'unfinished' });
 
     expect(workspaceOverviewStatus(buildWorkspaceOverview(EMPTY))).toEqual({ kind: 'idle' });
+  });
+});
+
+describe('overviewHeadline', () => {
+  test('a waiting decision outranks live work, and its count rides the label', () => {
+    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, working: true, pendingActions: [action('release_approval')] })))
+      .toEqual({ label: 'Needs you · 1', tone: 'accent' });
+  });
+
+  test('live work outranks a failed run', () => {
+    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, working: true, latestRun: { status: 'error', task: null } })))
+      .toEqual({ label: 'Working', tone: 'live' });
+  });
+
+  test('a sealed error outranks durable leftovers', () => {
+    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, latestRun: { status: 'error', task: null } })))
+      .toEqual({ label: 'Last run failed', tone: 'danger' });
+  });
+
+  test('durable leftovers outrank unread updates', () => {
+    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, unfinished: true, pendingActions: [action('unseen_changes')] })))
+      .toEqual({ label: 'Unfinished', tone: 'muted' });
+  });
+
+  test('unread updates outrank a plain idle line', () => {
+    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, pendingActions: [action('unseen_changes')] })))
+      .toEqual({ label: 'Updated', tone: 'muted' });
+  });
+
+  test('nothing to say is "Idle", never a run word', () => {
+    expect(overviewHeadline(buildWorkspaceOverview(EMPTY))).toEqual({ label: 'Idle', tone: 'muted' });
+    expect(overviewHeadline(buildWorkspaceOverview({ ...EMPTY, latestRun: { status: 'completed', task: null } })))
+      .toEqual({ label: 'Idle', tone: 'muted' });
   });
 });
 

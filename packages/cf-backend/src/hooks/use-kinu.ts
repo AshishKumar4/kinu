@@ -320,6 +320,11 @@ const SocketMessageSchema = v.variant("type", [
     workspaceName: v.optional(v.nullable(v.string())),
   }),
   v.object({ type: v.literal("device_consent_resolved"), consentId: v.string() }),
+  v.object({
+    type: v.literal("device_unavailable"),
+    devices: v.array(v.object({ id: v.string(), label: v.string(), lastSeenAt: v.nullable(v.number()) })),
+  }),
+  v.object({ type: v.literal("device_available"), deviceId: v.string(), label: v.string() }),
   // The turn is waiting on the provider — a 429/529's declared sleep, a
   // backoff, or a sibling's cooldown — NOT thinking in silence. `waitMs` is
   // what the transport is about to sleep; `attempt` is which refusal it was
@@ -686,6 +691,9 @@ export async function refreshLiveResource<Value>(
   }
 }
 
+/** A registered machine that was not connected when a device call was refused. */
+export interface UnavailableDevice { id: string; label: string; lastSeenAt: number | null }
+
 export type ConsentDecision = "once" | "always" | "deny";
 
 export function resolvePendingConsent(
@@ -916,6 +924,9 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
+  /** A refused device call named the registered machines that are not
+   *  connected, or null when no notice is up. A connect clears it. */
+  const [unavailableDevices, setUnavailableDevices] = useState<UnavailableDevice[] | null>(null);
   // Everything asynchronous waiting on the owner — pending release approvals,
   // a scaffold version under trial, failed jobs, unseen self-changes,
   // curriculum proposals. ONE read behind both the Work tab's queue and the one
@@ -1518,6 +1529,10 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "device_consent_resolved") {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
           setConsentResolutionError(msg.consentId, null);
+        } else if (msg.type === "device_unavailable") {
+          setUnavailableDevices(msg.devices);
+        } else if (msg.type === "device_available") {
+          setUnavailableDevices(null);
         } else if (msg.type === "work_cancelled") {
           // Every head stopped mid-step. Whatever they had written is either
           // journalled or gone, and neither case is still being written.
@@ -2305,6 +2320,8 @@ export function useKinu(target?: string | KinuActorAddress) {
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,
+    /** Machines a refused device call named, until a connect clears the notice. */
+    unavailableDevices,
     /** Whether unseen self-changes remain — the sidebar roster's dot. Work
      *  marks them seen server-side, then calls the clear. */
     changelogUnseen,

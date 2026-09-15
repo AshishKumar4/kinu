@@ -10,7 +10,7 @@ import {
   ClockCounterClockwiseIcon, UserPlusIcon,
 } from "@phosphor-icons/react";
 import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, DEVICE_PROVISION_METHOD,
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   isPlaceholderMission, summarizeRestorePlan,
 } from "@kinu.run/core";
 import type {
@@ -30,7 +30,7 @@ import { ConnectedModelPicker } from "@/components/ModelPicker";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
+import { DeviceOfflineRow, MessageView, ProgrammaticTurnCard, SteerBubble } from "@/components/MessageView";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId } from "@kinu.run/core";
@@ -40,10 +40,10 @@ import { SLATE_PREFIX } from "@/components/surfaces/presence";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
-import { SubordinateTabs, agentTitle, workspaceTitle } from "@/components/SubordinateTabs";
+import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@kinu.run/core";
+import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type Rpc, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
 // The model picker reads /api/user/models (which unions the connected
@@ -133,52 +133,17 @@ export function ConversationSkeleton() {
 }
 
 /**
- * Device card. Two shapes, one rail:
- *   - a device is connected and this workspace has no binding on it yet, so
- *     the agent's action is waiting on the owner. One question: use this
- *     machine for this workspace? "Use <device>" IS the binding, per
- *     workspace, revocable under Account settings → Devices. The card names
- *     no tier, because a binding has none: what a command may reach is the
- *     machine's own Sandbox setting, set on the device row.
- *   - no device is connected at all (`DEVICE_PROVISION_METHOD`), so the agent
- *     is asking for one to exist. Approving cannot bind anything by itself —
- *     it points the owner at the connect flow, which states its own terms.
+ * Device card. A device is connected and this workspace has no binding on it
+ * yet, so the agent's action is waiting on the owner. One question: use this
+ * machine for this workspace? "Use <device>" IS the binding, per
+ * workspace, revocable under Account settings → Devices. The card names
+ * no tier, because a binding has none: what a command may reach is the
+ * machine's own Sandbox setting, set on the device row.
  */
 export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
-  if (consent.method === DEVICE_PROVISION_METHOD) {
-    const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
-
-    return (
-      <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
-        <div className="flex items-start gap-2">
-          <DesktopTowerIcon size={16} className="p-warning shrink-0 mt-0.5" weight="fill" />
-          <div className="min-w-0 flex-1">
-            <div className="text-xs p-text">
-              {asking} needs a computer of yours and none is connected.
-            </div>
-            <div className="mt-1 p-row-text p-text-2">{consent.command}</div>
-            <Link to="/user/settings#devices"
-              className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md p-accent-bg p-accent p-t-control hover:opacity-90">
-              Connect a device
-            </Link>
-            <div className="mt-1 p-meta p-text-3">
-              You will review the access before anything runs.
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 mt-2.5 justify-end">
-          <button onClick={() => onResolve(consent.consentId, "deny")}
-            className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>
-          <button onClick={() => onResolve(consent.consentId, "once")}
-            className="px-2.5 py-1 p-t-control rounded-md p-card p-card-hover p-text-2">Dismiss</button>
-        </div>
-      </div>
-    );
-  }
-
   const forWhom = consent.workspaceName ? `“${consent.workspaceName}”` : "this workspace";
 
   return (
@@ -684,14 +649,8 @@ export default function WorkspacePage() {
   }, [createAndOpenAgent]);
 
   /* The workbench reads at the compact scale index.css gates on
-     `html[data-workbench]`: the rail and drawer live outside this route's
-     subtree, so the flag sits on the root. A layout effect sets it before the
-     first paint, so the page never flashes at the default scale. */
-  useLayoutEffect(() => {
-    document.documentElement.dataset.workbench = "";
-
-    return () => { delete document.documentElement.dataset.workbench; };
-  }, []);
+     `[data-workbench]`: the flag sits on this route's content root (line 1157),
+     so the rail, the drawer, and portaled chrome keep the default scale. */
 
   // The picker awaits its own write. `setModel` records the failure on
   // `state.error` and rolls the picker back to the stored spec before it
@@ -739,22 +698,21 @@ export default function WorkspacePage() {
     return () => media.removeEventListener("change", sync);
   }, []);
 
+  // The collapsed-by-default inspector opens itself once the workspace holds
+  // something it exists to show: a decision or consent waiting on the owner,
+  // a slate or preview, a pinned port, an active plan. Produced outputs
+  // alone do not open it: every command run would otherwise open the pane
+  // on a fresh workspace.
   const inspector = useInspectorLayout({
     desktopPanels,
-    mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
-    // The open/closed choice is this workspace's: opening the inspector in one
-    // workspace never opens it in the next.
     workspace: agentId,
-    // The collapsed-by-default inspector opens itself once the workspace holds
-    // something it exists to show: a decision or consent waiting on the owner,
-    // a slate or preview, a produced output, an active plan.
+    mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
     worthShowing: [
       state.pendingActions.length > 0,
       state.pendingConsents.length > 0,
       state.slates.length > 0,
       state.previewFocus !== null,
       state.pinnedPorts.length > 0,
-      state.executorOutputs.size > 0,
       Boolean(state.activePlan),
     ].some(Boolean),
   });
@@ -1150,12 +1108,13 @@ export default function WorkspacePage() {
   // NOT `|| agentId`. `agentId` is the slug in the address bar, and falling
   // back to it is what titled a new workspace `handwrought-walnut-4166c321`.
   // The URL still carries the id for anyone who needs one.
-  const shownTitle = workspaceTitle(as?.displayName || rosterTitle);
+  const storedTitle = as?.displayName || rosterTitle;
+  const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
 
 
   return (
     <SlateInlineContext.Provider value={slateInline}>
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-workbench>
       {/* Non-destructive disconnect banner. The chat panel below stays
           mounted so the in-flight assistant turn is preserved through
           partysocket auto-reconnect. (STABILITY-AUDIT §A1.) */}
@@ -1189,6 +1148,7 @@ export default function WorkspacePage() {
           mission-control) ⇄ SUPERVISE (the agent over time). */}
       <WorkspaceBar
         title={shownTitle}
+        editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}
@@ -1338,6 +1298,7 @@ export default function WorkspacePage() {
               {state.subordinateEvents.map((event) => (
                 <SubordinateEventCard key={event.id} event={event} workspace={agentId} />
               ))}
+              <DeviceOfflineRow devices={state.unavailableDevices} />
               {state.chatError && (
                 <ChatErrorCard
                   message={state.chatError.body}
