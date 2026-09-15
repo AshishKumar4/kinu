@@ -1,13 +1,12 @@
-diff --git a/packages/core/src/scaffold/ui-stream.ts b/packages/core/src/scaffold/ui-stream.ts
-index a0f4f44ad..a6563bc86 100644
---- a/packages/core/src/scaffold/ui-stream.ts
-+++ b/packages/core/src/scaffold/ui-stream.ts
-@@ -186,7 +186,7 @@ export async function* scaffoldEventsToUIStream(
-     }
-   }
+diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
+index f182e225c..0a6b4c5af 100644
+--- a/packages/core/src/scaffold/executor.ts
++++ b/packages/core/src/scaffold/executor.ts
+@@ -542,7 +542,6 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
  
--  if (!result.ok && result.error) yield { type: 'error', errorText: result.error };
-+  if (result.ok && result.error) yield { type: 'error', errorText: result.error };
-   yield* closePart();
-   yield { type: 'finish' };
- }
+   if (result.error) {
+     const msg = result.error;
+-    await emit({ type: 'error', message: msg });
+ 
+     return {
+       ok: false,
