@@ -896,6 +896,17 @@ function MODEL_STUBS(): ModelMenuEntry[] {
 
 const realFetch = window.fetch.bind(window);
 
+// `?frame=workspacepage&anon=1` answers the profile read with null — the
+// schema's nullable arm — so the inspector's account key stays absent and
+// every persist path is a no-op, the state a signed-out session stands in.
+// It lands as stub DATA rather than another branch in galleryFetch: the
+// fetch dispatch is at its complexity budget and the row is read like any
+// other fixture answer.
+const ANONYMOUS_WORKSPACE = frame === 'workspacepage'
+  && new URLSearchParams(location.search).get('anon') === '1';
+
+if (ANONYMOUS_WORKSPACE) STUB.set('/api/user/profile', null);
+
 const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
   const parsedInput = v.safeParse(v.string(), input);
   const parsedUrl = v.safeParse(v.instance(URL), input);

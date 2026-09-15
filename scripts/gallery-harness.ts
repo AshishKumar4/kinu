@@ -219,11 +219,12 @@ function builtAssetContentType(file: string): string {
 }
 
 /** Run `body` against a live gallery, then tear the server and browser down
- *  in one finally. The HTTP server binds port 0 — the kernel selects and
- *  binds in one syscall, so another gate cannot claim the port between a
- *  probe and a later listen — and serves only the finished build output:
- *  every response is a file that existed before the browser launched. */
-export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Promise<T> {
+ *  entirely. Every route answers one immutable, pre-rendered build of
+ *  `gallery-dist` — a frozen artifact, never the dev server — so a page's
+ *  every response is a file that existed before the browser launched.
+ *  `browserArgs` appends launch flags for the one test that needs a
+ *  capability the default lane disables (e.g. WebGPU). */
+export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, browserArgs: string[] = []): Promise<T> {
   const dist = await builtGalleryDist();
 
   const http = createHttpServer((request, response) => {
@@ -282,6 +283,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Pr
         '--no-sandbox',
         '--disable-dev-shm-usage',
         '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+        ...browserArgs,
       ],
     };
 
