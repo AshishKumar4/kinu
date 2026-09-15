@@ -21,9 +21,10 @@ export struct View {
   time: f32,
 }
 
-// Tones: 0 an ordinary attempt, cooler the weaker it scores; 1 the kept
-// path, the theme's gold on the dark ground and its deepened text-grade gold
-// on paper; 2 ash; 3 an ember.
+// Tones: 0 an ordinary attempt, cooler the weaker it scores (on paper the
+// mix runs toward the text-grade gold so the mesh reads against the light
+// ground); 1 the kept path, the theme's gold on the dark ground and its
+// deepened text-grade gold on paper; 2 ash; 3 an ember.
 export fn tone_color(palette: Palette, tone: f32, glow: f32) -> vec3f {
   if (tone > 2.5) {
     return mix(palette.accent.rgb, palette.ash.rgb, 0.35);
@@ -35,6 +36,10 @@ export fn tone_color(palette: Palette, tone: f32, glow: f32) -> vec3f {
 
   if (tone > 0.5) {
     return mix(palette.accent.rgb, palette.bright.rgb, palette.mode);
+  }
+
+  if (palette.mode > 0.5) {
+    return mix(palette.ash.rgb, palette.bright.rgb, 0.35 + 0.65 * glow);
   }
 
   return mix(palette.ash.rgb, palette.accent.rgb, 0.35 + 0.65 * glow);

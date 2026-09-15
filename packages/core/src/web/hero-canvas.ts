@@ -34,6 +34,11 @@ export interface StrokeSurface {
   createLinearGradient(x0: number, y0: number, x1: number, y1: number): CanvasGradient;
 }
 
+/** How much more presence the mesh carries on paper: the light-mode lift,
+ *  measured 2026-09-16 against the rebased rim-band target (2.0-2.5x the
+ *  light baseline). Strokes and pulses share it; dark is untouched. */
+const LIGHT_LIFT = 2.4;
+
 function mix(from: Rgb, to: Rgb, amount: number): Rgb {
   return [
     from[0] + (to[0] - from[0]) * amount,
@@ -43,8 +48,10 @@ function mix(from: Rgb, to: Rgb, amount: number): Rgb {
 }
 
 /** The same tone rule the WGSL palette module applies: an ordinary attempt
- *  is cooler the weaker it scores, the kept path is the gold (deepened to
- *  the text-grade gold on paper), ash is ash, an ember is a cooling gold. */
+ *  is cooler the weaker it scores (on paper the mix runs toward the
+ *  text-grade gold, so the mesh reads against the light ground), the kept
+ *  path is the gold (deepened to the text-grade gold on paper), ash is
+ *  ash, an ember is a cooling gold. */
 function toneColor(palette: ArtPalette, tone: number, glow: number): Rgb {
   if (tone === TONE_BRIGHT) return palette.mode === 'light' ? palette.bright : palette.accent;
 
@@ -53,6 +60,8 @@ function toneColor(palette: ArtPalette, tone: number, glow: number): Rgb {
   if (tone === TONE_EMBER) return mix(palette.accent, palette.ash, 0.35);
 
   // Tone 0, an ordinary attempt.
+  if (palette.mode === 'light') return mix(palette.ash, palette.bright, 0.35 + 0.65 * glow);
+
   return mix(palette.ash, palette.accent, 0.35 + 0.65 * glow);
 }
 
@@ -140,7 +149,9 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
         const at = index * STROKE_STRIDE;
         const glow = strokes[at + 8] ?? 0;
         const tone = strokes[at + 9] ?? 0;
-        const alpha = strokes[at + 10] ?? 0;
+        // On paper the mesh carries extra presence: a light-only lift that
+        // leaves the dark picture exactly where it was.
+        const alpha = (strokes[at + 10] ?? 0) * (palette.mode === 'light' ? LIGHT_LIFT : 1);
         const lineWidth = strokes[at + 7] ?? 1;
 
         if (alpha <= 0.004) continue;
@@ -164,7 +175,8 @@ export function createCanvasRenderer(context: StrokeSurface, initialPalette: Art
         const lineWidth = pulses[at + 8] ?? 1;
         const glow = pulses[at + 9] ?? 0;
         const tone = pulses[at + 10] ?? 0;
-        const alpha = pulses[at + 11] ?? 0;
+        // Pulses share the paper lift, so the whole mesh steps up as one.
+        const alpha = (pulses[at + 11] ?? 0) * (palette.mode === 'light' ? LIGHT_LIFT : 1);
 
         if (alpha <= 0.004 || (pulses[at + 6] ?? 0) === (pulses[at + 7] ?? 0)) continue;
         const color = recede(palette, mix(toneColor(palette, tone, glow), palette.bright, glow * 0.6));
