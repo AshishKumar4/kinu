@@ -262,7 +262,12 @@ function renderExecutorSection(surface: PromptSurface, render: RenderSection): s
   if (executors.length === 0 && !deviceOffline) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
-  const devices = executors.filter((exec) => exec.name !== 'workspace');
+
+  // cliLocal has no device runtime: the machine IS the workspace, so the
+  // device executor never reaches this section there — no row, no namespace,
+  // no separate-machines paragraph. (Sandbox, if registered, still renders.)
+  const devices = executors.filter((exec) => exec.name !== 'workspace')
+    .filter((exec) => surface.backend !== 'cli-local' || exec.name !== 'device');
 
   const lines = [
     ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)).filter((line) => line !== ''),

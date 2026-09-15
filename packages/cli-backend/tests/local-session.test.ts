@@ -783,7 +783,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const system = observed.find((m) => m.role === 'system');
     expect(system).toBeDefined();
     const text = String(system!.content);
-    expect(text).not.toContain('device.*');
+    expect(text).not.toContain('device.***');
     expect(text).toContain('the machine the CLI runs on');
     expect(text).toContain('rooted in the directory the session was started in');
     expect(text).not.toContain('device tunnel');

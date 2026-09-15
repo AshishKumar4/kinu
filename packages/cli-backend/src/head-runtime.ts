@@ -239,6 +239,8 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       input,
       capture,
       rt,
+      // cliLocal has no device runtime: the machine is the workspace.
+      cliLocal: true,
       codemodeTool,
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),
