@@ -1,15 +1,24 @@
 // `bun test`'s entry, named by `bunfig.toml`'s `preload`.
 //
-// Three lines on purpose: the throwaway KINU_HOME, the release and the
+// Short on purpose: the throwaway KINU_HOME, the release and the
 // SIGKILL backstop all live in `./test-scratch-home.ts`, which vitest's entry
 // imports too. All this file contributes is the `afterAll` that belongs to THIS
 // runner — `bun:test`'s, which throws if called under any other.
-import { afterAll } from 'bun:test';
+import { afterAll, setDefaultTimeout } from 'bun:test';
 
 import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
 
 afterAll(release);
+
+// No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
+// 2026-09-15 it read red on a test that passes alone, under the deploy wave's
+// load. A test ends on its condition or on the process's own end; a hang is
+// killed by the deploy ladder at the gate's deadline, which names the gate.
+// `0` disables the default (measured on bun 1.4.0: a 5.6 s test passes under
+// this preload and fails without it). `gate:test-clocks` pins this line and
+// refuses per-test durations in the corpus.
+setDefaultTimeout(0);
 
 // The two `cloudflare:` builtins the Agents SDK's ROOT module imports
 // (`EmailMessage` from cloudflare:email, `RpcTarget`/`exports` from

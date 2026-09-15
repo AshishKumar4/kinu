@@ -79,7 +79,7 @@ export default defineConfig({
     // `incomplete` by the behaviour runner instead of being turned into a
     // pass/fail verdict here.
     testTimeout: 0,
-    hookTimeout: 300_000,
+    hookTimeout: 0,
     // Each file drives real model calls against one account. Running them
     // concurrently buys little and makes rate-limit failures look like
     // behavioural findings — that reasoning is about FILES racing each other,
