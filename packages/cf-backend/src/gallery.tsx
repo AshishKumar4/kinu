@@ -1333,6 +1333,22 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
   listSlates: () => ({ slates: [], problems: [] }),
   getActivePlanReview: () => galleryAgentPlan,
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
+  // `?consent=provision` hangs the workspace frame's provisioning card: the
+  // agent asked for a machine and none is connected. The wording mirrors
+  // UserDO.raiseProvisioningRequest, whose string is what the card renders.
+  listPendingConsents: () => (
+    new URLSearchParams(location.search).get("consent") === "provision"
+      ? [{
+        consentId: "cons-gallery-1",
+        deviceId: "",
+        deviceLabel: "this computer",
+        method: "connect",
+        command: "Connect this computer so \"checkout-fixes\" can run commands on it — you will be walked through `kinu connect`.",
+        workspaceName: "checkout-fixes",
+        createdAt: NOW,
+      }]
+      : []
+  ),
 }));
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {

@@ -521,7 +521,7 @@ function SubordinateChatColumn({
       </div>
 
       <ErrorBoundary label="Agent chat">
-        <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto">
+        <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
           {/* Above the oldest message, exactly as the workspace column has it:
               a walk in progress, a failed page with its retry, or the store's
               own statement that this is the beginning. Suppressed only when
@@ -1273,7 +1273,7 @@ export default function WorkspacePage() {
             <ErrorBoundary label="Chat">
             {/* One centred 780px reading measure. Every entry stays within it,
                 so prose remains readable while tables and activity rows gain space. */}
-            <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-7 space-y-5 lg:px-8 [&>*]:max-w-[780px] [&>*]:mx-auto">
+            <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-7 space-y-5">
               <ConversationStartBoundary
                 hasEntries={thread.entries.length > 0}
                 streaming={state.isStreaming}
@@ -1342,7 +1342,7 @@ export default function WorkspacePage() {
 
             {/* Device-consent cards — an agent wants to use a connected device */}
             {state.pendingConsents.length > 0 && (
-              <div className="px-5 lg:px-7 space-y-2 pb-1">
+              <div className="p-thread-column space-y-2 pb-1">
                 {state.pendingConsents.map((c) => (
                   <DeviceConsentCard key={c.consentId} consent={c} onResolve={state.resolveConsent} />
                 ))}

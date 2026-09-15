@@ -76,6 +76,7 @@ export {
 
 export {
   DeviceSocketHub, deviceIdFromSocket,
+  DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
 } from './device-hub';
 

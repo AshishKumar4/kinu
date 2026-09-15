@@ -30,6 +30,17 @@ import * as v from 'valibot';
  *  hub, which reads the same sockets. */
 export const WS_OPEN = 1;
 
+/** The daemon's keepalive, verbatim. It pings with a bare text frame 30s after
+ *  open and closes the socket when no `pong` text frame returns within 10s —
+ *  so an unanswered one means every device link drops once a minute. These
+ *  are the wire's own words: the daemon (packages/pc-agent) keeps its own
+ *  literals because it is shipped source. NOT a hibernation auto-response —
+ *  `setWebSocketAutoResponse` answers EVERY socket this object holds, and a
+ *  pasted "ping" on a terminal pane is keystrokes for a shell, not a probe. */
+export const DEVICE_KEEPALIVE_PING = 'ping';
+
+export const DEVICE_KEEPALIVE_PONG = 'pong';
+
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
 /**
