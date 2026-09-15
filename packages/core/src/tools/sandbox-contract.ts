@@ -26,13 +26,14 @@
  */
 
 import * as v from 'valibot';
-import type { ToolSet } from 'ai';
+import type { Schema, ToolSet } from 'ai';
+import { jsonSchema } from 'ai';
 import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
-import { TOOL_REACH, type ToolSurfaceNarrowing } from './registry';
+import { TOOL_REACH, EXECUTE_TOOLS_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
 import { KinuError } from '../obs';
 import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
@@ -132,6 +133,19 @@ export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefi
   const parsed = v.safeParse(NativeToolSchemaCarrier, tool.inputSchema);
 
   return parsed.success ? parsed.output.jsonSchema : undefined;
+}
+
+/** The `execute_tools` input schema, shared by both backends so the tool's one
+ *  `code` field is described one way — by EXECUTE_TOOLS_CODE_DESCRIPTION in
+ *  registry.ts, NOT by codemode's own "async arrow function" label. CF wraps
+ *  `createCodeTool` and reassigns this schema over the built tool's own; the
+ *  CLI builds the `tool()` with it directly. */
+export function executeToolsInputSchema(): Schema<{ code: string }> {
+  return jsonSchema<{ code: string }>({
+    type: 'object',
+    properties: { code: { type: 'string', description: EXECUTE_TOOLS_CODE_DESCRIPTION } },
+    required: ['code'],
+  });
 }
 
 export interface CraftedDeclaration {

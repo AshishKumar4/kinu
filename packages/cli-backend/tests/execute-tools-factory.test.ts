@@ -6,7 +6,9 @@
 // The transform reads JavaScript structure, including multiline expressions.
 import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
+import * as v from 'valibot';
 import type { CodemodeProvider, CraftedToolSet, JsonValue } from '@kinu.run/core';
+import { EXECUTE_TOOLS_CODE_DESCRIPTION } from '@kinu.run/core';
 import { scratchDir, toolExecute, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory';
 import { inWorkMode, successfulToolOutcome, renderDynamicContextBlock, runChat, DynamicContextLedger, craftedToolDeclarations } from '@kinu.run/core';
@@ -27,6 +29,22 @@ function makeTool(): ExecuteTool {
 
   return toolExecute(factory({ native: {}, craftedTools: () => ({}), providers: [] }));
 }
+
+describe('createNodeExecuteToolFactory — the code field the model reads', () => {
+  test('the input schema describes a script body, not an arrow function', () => {
+    const built = createNodeExecuteToolFactory()({ native: {}, craftedTools: () => ({}), providers: [] });
+
+    const schema = v.parse(v.object({
+      jsonSchema: v.object({
+        properties: v.object({ code: v.object({ description: v.string() }) }),
+        required: v.array(v.string()),
+      }),
+    }), built.inputSchema).jsonSchema;
+
+    expect(schema.properties.code.description).toBe(EXECUTE_TOOLS_CODE_DESCRIPTION);
+    expect(schema.required).toEqual(['code']);
+  });
+});
 
 describe('createNodeExecuteToolFactory — console capture + implicit return', () => {
   test('saving a crafted tool preserves the native description and makes the next call usable', async () => {
