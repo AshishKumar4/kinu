@@ -523,28 +523,57 @@ export interface McpPresetAvailability {
   readonly appConfigured: boolean;
 }
 
+/** The `Env` keys that carry each `oauth-app` preset's registered client —
+ *  the ONLY place those names exist. Core's catalog cannot name them (it does
+ *  not know `Env`); the credential read, the refusal that names the missing
+ *  secrets, and the deploy doc all take their wording from this map. */
+const MCP_APP_ENV = {
+  github: { id: 'MCP_GITHUB_CLIENT_ID', secret: 'MCP_GITHUB_CLIENT_SECRET' },
+  google: { id: 'MCP_GOOGLE_CLIENT_ID', secret: 'MCP_GOOGLE_CLIENT_SECRET' },
+} as const satisfies Partial<Record<McpPresetId, {
+  readonly id: keyof Env;
+  readonly secret: keyof Env;
+}>>;
+
+/** The four literal names above, as keys — `env[k]` then resolves `string |
+ *  undefined` from the optional Env fields rather than the index signature. */
+type McpAppEnvKey =
+  (typeof MCP_APP_ENV)[keyof typeof MCP_APP_ENV][keyof (typeof MCP_APP_ENV)['github']];
+
+/** The env names an `oauth-app` preset's app lives under, for messages that
+ *  have to say them. `undefined` for any other kind. */
+export function mcpAppEnvNames(
+  preset: McpPreset,
+): { readonly clientIdEnv: McpAppEnvKey; readonly clientSecretEnv: McpAppEnvKey } | undefined {
+  if (preset.auth !== 'oauth-app') return undefined;
+
+  if (preset.id === 'github' || preset.id === 'google') {
+    const names = MCP_APP_ENV[preset.id];
+
+    return { clientIdEnv: names.id, clientSecretEnv: names.secret };
+  }
+
+  return undefined;
+}
+
 /** The registered client's credentials for an `oauth-app` preset, or null
- *  when the env does not carry them. The lookup is keyed on the preset's ID
- *  rather than the catalog's `clientIdEnv`/`clientSecretEnv` strings: `Env`
- *  is a typed interface, not a dictionary, so a name read through it keeps
- *  the columns typed and a miss stays a miss. */
+ *  when the env does not carry them. */
 export function mcpAppCredentials(
   env: Env,
   preset: McpPreset,
 ): { clientId: string; clientSecret: string } | null {
-  if (preset.auth !== 'oauth-app') return null;
+  const names = mcpAppEnvNames(preset);
 
-  const pair =
-    preset.id === 'github' ? { id: env.MCP_GITHUB_CLIENT_ID, secret: env.MCP_GITHUB_CLIENT_SECRET }
-      : preset.id === 'google' ? { id: env.MCP_GOOGLE_CLIENT_ID, secret: env.MCP_GOOGLE_CLIENT_SECRET }
-        : undefined;
+  if (!names) return null;
 
-  // An oauth-app preset the lookup cannot name — i.e. the catalog and this
-  // read fell out of step — is reported as unconfigured rather than signing
-  // in under nothing.
-  if (!pair?.id || !pair.secret) return null;
+  const clientId = env[names.clientIdEnv];
+  const clientSecret = env[names.clientSecretEnv];
 
-  return { clientId: pair.id, clientSecret: pair.secret };
+  // Both are `string | undefined` on Env; an empty string fails the same
+  // check a missing binding does.
+  if (!clientId || !clientSecret) return null;
+
+  return { clientId, clientSecret };
 }
 
 /** The catalog read for the cards: every preset and whether its registered

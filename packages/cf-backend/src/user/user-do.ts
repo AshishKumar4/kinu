@@ -154,7 +154,7 @@ import {
 import {
   validateMcpServerInput, validateMcpServerName, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, mcpCredentialTransport, isMcpTransportUnauthorized,
-  storedMcpOptionsCarryCredential, mcpAppCredentials, listMcpPresetAvailability,
+  storedMcpOptionsCarryCredential, mcpAppCredentials, mcpAppEnvNames, listMcpPresetAvailability,
   type McpPresetAvailability, type McpServerSummary, type McpTransport,
 } from './mcp';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
@@ -5347,13 +5347,15 @@ export class UserDO extends Agent<Env> {
     // A preset whose OAuth app is not configured has no sign-in to start;
     // without a token it could only dead-end in the SDK's registration step,
     // so the add is refused before the name claim — the claim is the row's
-    // identity, and a refused add must leave no row behind. (Both env names
-    // are set on every oauth-app preset, so `?? ''` only guards a malformed
-    // catalog.)
+    // identity, and a refused add must leave no row behind. The names come
+    // from the map rather than the catalog so the message can never quote a
+    // secret name the reader cannot satisfy.
     if (preset?.auth === 'oauth-app' && !mcpAppCredentials(this.env, preset) && !cfg.headers) {
+      const names = mcpAppEnvNames(preset);
+
       throw new Error(
-        `'${preset.title}' needs either the deployment's ${preset.clientIdEnv ?? ''}/`
-        + `${preset.clientSecretEnv ?? ''} OAuth app or a token in \`headers\`.`,
+        `'${preset.title}' needs either the deployment's ${names?.clientIdEnv ?? 'app'}/`
+        + `${names?.clientSecretEnv ?? 'secret'} OAuth app or a token in \`headers\`.`,
       );
     }
 
