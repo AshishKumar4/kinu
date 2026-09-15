@@ -5,7 +5,6 @@ import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase, SqlRow, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
   ensureProgrammaticReady,
   rpcExec,
@@ -16,6 +15,8 @@ import {
   type ProgrammaticExecOptions,
   type ProgrammaticHost,
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
+import type { SessionPortHost } from '@nimbus-sh/worker/port-capability';
+import { programmaticHostOver, type DurableState } from './helpers/programmatic-host';
 
 const databases: Database[] = [];
 
@@ -63,64 +64,10 @@ function openWorkspaceDatabase(): WorkspaceDatabase {
   };
 }
 
-type DurableShellState = Map<string, unknown>;
+type DurableShellState = DurableState;
 
 function workerHost(workspace: NimbusWorkspace, durableState: DurableShellState): ProgrammaticHost {
-  const listDurable = async <T,>(options: { prefix: string }): Promise<Map<string, T>> => {
-    const entries = new Map<string, unknown>();
-
-    for (const [key, value] of durableState) {
-      if (key.startsWith(options.prefix)) entries.set(key, value);
-    }
-
-    // SAFETY: the storage list contract types each row by the caller's T,
-    // which the untyped stand-in rows cannot name; `never` keeps the Map
-    // assignable to every T.
-    return entries as Map<string, never>;
-  };
-
-  return {
-    _w1SessionDestroyed: false,
-    env: {},
-    ctx: {
-      storage: {
-        get: async (key) => durableState.get(key),
-        put: async (key, value) => { durableState.set(key, value); },
-        delete: async (key) => { durableState.delete(key); },
-        deleteAll: async () => { durableState.clear(); },
-        deleteAlarm: async () => undefined,
-        list: listDurable,
-        transaction: async (body) => body({
-          get: async (key) => durableState.get(key),
-          put: async (key, value) => { durableState.set(key, value); },
-          delete: async (key) => { durableState.delete(key); },
-          list: listDurable,
-        }),
-      },
-    },
-    shell: workspace.shell,
-    shellProcessPid: null,
-    sqliteFs: workspace.vfs,
-    processes: new SessionProcessSupervisor(),
-    portRegistry: new PortRegistry(),
-    // A host that spawns nothing durable: every identity answer is null, so a
-    // bare port exposure stays ownerless exactly as it always was.
-    facetManager: {
-      kill: () => false,
-      hasResidentProcess: () => false,
-      residentIdentity: async () => null,
-      listResidentApps: async () => [],
-      removeDurableApp: async () => false,
-    } satisfies NonNullable<ProgrammaticHost['facetManager']>,
-    viteDevServer: null,
-    cirrusReal: null,
-    _cpRegistry: workspace.registry,
-    _viteShimPid: null,
-    _viteShimPort: null,
-    ensureSqliteFs: () => undefined,
-    ensureFacetManager: () => undefined,
-    initSession: async () => { throw new Error('workspace is already composed'); },
-  };
+  return programmaticHostOver(workspace, { durable: durableState }).host;
 }
 
 function sdkBox(host: ProgrammaticHost) {
@@ -327,8 +274,11 @@ describe('hosted workspace preview capabilities', () => {
   });
 
   test('the actual worker route supports Cirrus HMR and generic guest upgrades', async () => {
-    const serverSocket = { serializeAttachment() {} };
-    const clientSocket = {};
+    // Unchecked and named: `WebSocket` is a platform class with no
+    // constructible form under bun; the route only accepts the server half
+    // and hands the client half back inside a 101, touching neither.
+    const serverSocket: WebSocket = Object.create({ serializeAttachment() {} });
+    const clientSocket: WebSocket = Object.create(null);
 
     class FakeWebSocketPair {
       0 = clientSocket;
@@ -340,9 +290,7 @@ describe('hosted workspace preview capabilities', () => {
       value: FakeWebSocketPair,
     });
 
-    const { routeCapabilityPort } = await import(
-      '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js'
-    );
+    const { routeCapabilityPort } = await import('@nimbus-sh/worker/port-capability');
 
     const { routeHostedWebSocket } = await import(
       '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js'
@@ -358,31 +306,53 @@ describe('hosted workspace preview capabilities', () => {
 
     if (!capability) throw new Error('port capability was not generated');
 
-    interface TestSocket { serializeAttachment?: () => void }
-
-    const acceptedSockets: TestSocket[] = [];
+    const acceptedSockets: WebSocket[] = [];
     let acceptedTags: string[] = [];
 
-    const host = {
+    // `routeCapabilityPort` reached `cirrusReal.attachHmrClient` directly in
+    // worker 0.6; 0.7 routes the HMR upgrade through `acceptCirrusHmrWs`, the
+    // session method that accepts the socket, attaches the client and echoes
+    // the vite-hmr subprotocol. The double plays that method's part over the
+    // pair declared above.
+    const cirrusReal = {
+      isRunning: true,
+      attachHmrClient(socket: WebSocket) {
+        acceptedSockets.push(socket);
+
+        return 'client-1';
+      },
+    };
+
+    const socketCtx = {
+      storage: { get: async () => undefined },
+      acceptWebSocket(socket: WebSocket, tags: string[]) {
+        acceptedSockets.push(socket);
+        acceptedTags = tags;
+      },
+    };
+
+    // Unchecked and named: the route reads `ctx.storage.get` for the port's
+    // reservation and `acceptWebSocket` through the HMR double above; the
+    // rest of `DurableObjectState` is never touched by a capability route.
+    const ctx: DurableObjectState = Object.create(socketCtx);
+
+    const host: SessionPortHost = {
       portRegistry,
       _viteShimPort: 4321,
       viteDevServer: null,
-      cirrusReal: {
-        isRunning: true,
-        attachHmrClient(socket: TestSocket) {
-          acceptedSockets.push(socket);
+      cirrusReal,
+      ctx,
+      acceptCirrusHmrWs(request: Request) {
+        socketCtx.acceptWebSocket(serverSocket, ['cirrus-hmr']);
+        cirrusReal.attachHmrClient(serverSocket);
+        const wantedProto = request.headers.get('Sec-WebSocket-Protocol') ?? '';
+        const useProto = wantedProto.split(',').map((s) => s.trim()).find((p) => p === 'vite-hmr' || p === 'vite-ping');
+        const headers: Record<string, string> = {};
 
-          return 'client-1';
-        },
+        if (useProto) headers['Sec-WebSocket-Protocol'] = useProto;
+
+        return new Response(null, { status: 101, webSocket: clientSocket, headers });
       },
-      ctx: {
-        storage: { get: async () => undefined },
-        acceptWebSocket(socket: TestSocket, tags: string[]) {
-          acceptedSockets.push(socket);
-          acceptedTags = tags;
-        },
-      },
-      _cirrusHmrWsClients: null,
     };
 
     const hmr = await routeCapabilityPort(

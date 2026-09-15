@@ -30,7 +30,9 @@ export interface SlateApps extends DurableApps {
   url(port: number, capability: string): Promise<WorkspacePreviewUrl>;
 }
 
-export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'content'> {
+export interface SlateHostDeps extends ResidentSlateDeps {
+  readonly ctx: DurableObjectState;
+  readonly workspace: string;
   /** Run a capability route as the caller: its own providers, its own role reach, its own read models, its own gates. */
   dispatch(caller: SlateCaller, route: SlateCapabilityRoute): Promise<JsonValue>;
   readonly apps: SlateApps;
@@ -106,7 +108,7 @@ export class SlateHost {
 
   constructor(private readonly deps: SlateHostDeps) {
     this.content = new SqliteSlateContentStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
-    this.resident = new ResidentSlateProcesses({ ...deps, content: this.content });
+    this.resident = new ResidentSlateProcesses({ session: deps.session, facetManager: deps.facetManager });
     this.store = new SqliteSlateStore(deps.ctx.storage.sql, (body) => deps.ctx.storage.transactionSync(body));
     this.state = new SqliteSlateStateStore(deps.ctx.storage.sql);
     initSlateLiveShareTables((ddl) => { deps.ctx.storage.sql.exec(ddl); });

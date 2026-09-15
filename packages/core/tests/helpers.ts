@@ -26,7 +26,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
-import { createWorkspace, nextWorkspaceGeneration, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import { createWorkspace, workspaceGenerationStorage, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
@@ -222,7 +222,7 @@ export function createWorkspaceBundle(db: Database) {
   return createWorkspace({
     sql,
     transactions: { storage: { transactionSync: <T,>(cb: () => T): T => db.transaction(cb)() } },
-    generation: nextWorkspaceGeneration(sql),
+    generation: workspaceGenerationStorage(sql),
   });
 }
 

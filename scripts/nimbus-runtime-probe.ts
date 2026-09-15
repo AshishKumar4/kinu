@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import bashRuntime from '@nimbus-sh/runtime-bash';
 import cpythonRuntime from '@nimbus-sh/runtime-cpython';
-import { createWorkspace, nextWorkspaceGeneration } from '@kinu.run/core/workspace';
+import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import { nimbusSql, localTransactions } from '../packages/cli-backend/src/runtime';
 
 const PROBES = [
@@ -56,7 +56,7 @@ const opened = performance.now();
 const workspace = createWorkspace({
   sql,
   transactions: localTransactions(db),
-  generation: nextWorkspaceGeneration(sql),
+  generation: workspaceGenerationStorage(sql),
   runtimes,
 });
 
