@@ -16,6 +16,7 @@ import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import { probeFacetManager } from './facet-manager';
 import {
   initWorkspaceSchema, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SqlExec, type SqlExecutor,
 } from '@kinu.run/core';
@@ -91,14 +92,12 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 
     initWorkspaceSchema({ execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
+    const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs });
+
     this.host = new SlateHost({
-      ctx, env, workspace: ctx.id.name ?? ctx.id.toString(),
+      ctx, workspace: ctx.id.name ?? ctx.id.toString(),
       session: async () => ({ vfs: this.vfs, processes: this.processes }),
-      registerPort: async (pid, port, target) => {
-        this.ports.bindFacetStub(pid, target);
-        this.ports.register(port, pid);
-      },
-      unregisterPorts: (pid) => { this.ports.unregisterByPid(pid); },
+      facetManager: async () => facets,
       dispatch: async (_caller, route) => {
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);
 

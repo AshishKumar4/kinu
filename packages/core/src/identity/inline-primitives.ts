@@ -7,7 +7,7 @@
  * `createWorkspace` over their host's own SQLite.
  */
 
-import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace';
+import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorage } from '../vfs/nimbus-workspace';
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
 import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
@@ -79,7 +79,7 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
           db.transaction(cb)(),
       },
     },
-    generation: nextWorkspaceGeneration(sql),
+    generation: workspaceGenerationStorage(sql),
   });
 }
 

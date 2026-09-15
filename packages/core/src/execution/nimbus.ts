@@ -13,7 +13,6 @@ import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { Shell, VFS } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { createInlineExecutor, type InlineExecutorDeps } from './inline';
-import { agentSessionFiles } from './nimbus-agent-files';
 import { makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
@@ -46,17 +45,17 @@ const NIMBUS_RANGE_READER = `const fs=require('node:fs');const r=JSON.parse(proc
  * of the RPC).
  */
 async function readNimbusOriginRange(
-  box: NimbusSandboxHandle, path: string, offset: number, length: number,
+  box: NimbusSandboxHandle, files: NimbusSandboxFiles, path: string, offset: number, length: number,
 ): Promise<Uint8Array> {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
     throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
   }
 
   const absolute = workspacePath(path);
-  const native = box.files.readRange;
+  const native = files.readRange;
 
   if (native) {
-    const bytes = await native.call(box.files, absolute, offset, length);
+    const bytes = await native.call(files, absolute, offset, length);
 
     if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
 
@@ -142,12 +141,16 @@ export interface NimbusStartResult {
   startedAt: number;
 }
 
-export interface NimbusSandboxHandle {
-  ready(): Promise<void>;
-  exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
-  startProcess?(command: string, options?: NimbusExecOptions): Promise<NimbusStartResult>;
-  runCode?(code: string, options?: NimbusRunCodeOptions): Promise<NimbusExecResult>;
-  files: {
+/**
+ * The workspace's file plane as the handle carries it. `as(cred)` is the same
+ * plane bound to one identity — the view `SqliteVFS.as(cred)` gives in
+ * process and the session's pid-less file RPCs give over a wire — so an
+ * agent whose home is its own uid reads and writes it through the file tools
+ * exactly as its commands do. Absent on a handle that cannot bind one; the
+ * credentialed plane then refuses rather than acting as the session user.
+ */
+export interface NimbusSandboxFiles {
+  as?(cred: VfsCred): NimbusSandboxFiles;
     read(path: string): Promise<string | null>;
     /** Raw-byte read (SDK ≥0.1.4) — the binary-safe counterpart of `read`. */
     readBytes?(path: string): Promise<Uint8Array | null>;
@@ -168,7 +171,14 @@ export interface NimbusSandboxHandle {
     exists(path: string): Promise<boolean>;
     mkdir?(path: string): Promise<void>;
     delete(path: string, options?: { recursive?: boolean }): Promise<void>;
-  };
+}
+
+export interface NimbusSandboxHandle {
+  ready(): Promise<void>;
+  exec(command: string, options?: NimbusExecOptions): Promise<NimbusExecResult>;
+  startProcess?(command: string, options?: NimbusExecOptions): Promise<NimbusStartResult>;
+  runCode?(code: string, options?: NimbusRunCodeOptions): Promise<NimbusExecResult>;
+  files: NimbusSandboxFiles;
   runtimes?: {
     ensure?(specs: string | string[], options?: { force?: boolean }): Promise<JsonValue | undefined>;
     install?(spec: string, options?: { force?: boolean }): Promise<JsonValue | undefined>;
@@ -1094,21 +1104,29 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
   removeRecursive(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
 } & Pick<VfsNativeReads, 'readRange'> {
-  if (cred) return agentSessionFiles(box, cred);
+  let files = box.files;
+
+  if (cred !== undefined) {
+    if (files.as === undefined) {
+      throw new KinuError('unsupported', 'this workspace handle has no credential-bound file plane, so it cannot act as the agent');
+    }
+
+    files = files.as(cred);
+  }
 
   return {
     async readFile(path, opts) {
       const absolute = workspacePath(path);
 
-      if (opts?.encoding !== 'utf8' && box.files.readBytes) {
-        const bytes = await box.files.readBytes(absolute);
+      if (opts?.encoding !== 'utf8' && files.readBytes) {
+        const bytes = await files.readBytes(absolute);
 
         if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
 
         return bytes;
       }
 
-      const content = await box.files.read(absolute);
+      const content = await files.read(absolute);
 
       if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
 
@@ -1117,19 +1135,19 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     /** The origin session's fixed Node reader reads exactly this prefix — the
      *  SDK file methods cannot express a range and would materialize the file. */
     async readRange(path, offset, length) {
-      return readNimbusOriginRange(box, path, offset, length);
+      return readNimbusOriginRange(box, files, path, offset, length);
     },
-    async writeFile(path, data) { await box.files.write(workspacePath(path), data); },
+    async writeFile(path, data) { await files.write(workspacePath(path), data); },
     // NO `writeFileIfRevision`. The SDK's `files.write` takes no precondition
     // and returns nothing, and its `stat` reports no revision, so this plane
     // has neither half of a compare-and-write. Declaring the method would mean
     // emulating it with read/compare/write, which cannot close the window it
     // claims to close; `writeExecutorFileOp` answers `unsupported` instead and
     // the editor stays read-only with that reason.
-    async readdir(path) { return (await box.files.list(workspacePath(path))).map((e) => e.name); },
+    async readdir(path) { return (await files.list(workspacePath(path))).map((e) => e.name); },
     async stat(path) {
-      if (box.files.stat) {
-        const st = await box.files.stat(workspacePath(path));
+      if (files.stat) {
+        const st = await files.stat(workspacePath(path));
 
         if (!st) return null;
 
@@ -1147,15 +1165,15 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
       return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: kind.join(' ') === 'directory' };
     },
-    async unlink(path) { await box.files.delete(workspacePath(path)); },
-    async removeRecursive(path) { await box.files.delete(workspacePath(path), { recursive: true }); },
+    async unlink(path) { await files.delete(workspacePath(path)); },
+    async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
     async rename(from, to) {
-      if (!box.files.rename) throw makeVfsError('EIO', 'Nimbus SDK handle does not expose rename', from);
-      await box.files.rename(workspacePath(from), workspacePath(to));
+      if (!files.rename) throw makeVfsError('EIO', 'Nimbus SDK handle does not expose rename', from);
+      await files.rename(workspacePath(from), workspacePath(to));
     },
     async mkdir(path, opts) {
-      if (box.files.mkdir) {
-        await box.files.mkdir(workspacePath(path));
+      if (files.mkdir) {
+        await files.mkdir(workspacePath(path));
 
         return;
       }
@@ -1166,6 +1184,6 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
         throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir '${path}'`, path);
       }
     },
-    async exists(path) { return box.files.exists(workspacePath(path)); },
+    async exists(path) { return files.exists(workspacePath(path)); },
   };
 }

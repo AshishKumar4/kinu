@@ -413,3 +413,47 @@ describe('a workspace whose host cannot compile node programs', () => {
     expect(refusal.reason).toBe('io');
   });
 });
+
+describe('the embedded workspace removes a tree natively', () => {
+  test('a populated directory under a mounted root goes in one removal, and a file removed twice is ENOENT', async () => {
+    const database = new Database(':memory:');
+    const bundle = createWorkspaceBundle(database);
+
+    try {
+      // `/home` is a mount the kernel's own in-memory nodes do not cover: this
+      // tree is exactly what once answered ENOENT to a recursive `rm`.
+      await bundle.vfs.mkdir('home/user/tree/a/b', { recursive: true });
+      await bundle.vfs.writeFile('home/user/tree/a/b/leaf.txt', 'leaf');
+      await bundle.vfs.writeFile('home/user/tree/top.txt', 'top');
+      await bundle.vfs.writeFile('home/user/keep.txt', 'keep');
+
+      await bundle.vfs.removeRecursive('home/user/tree');
+
+      expect(await bundle.vfs.exists('home/user/tree')).toBe(false);
+      expect(await bundle.vfs.exists('home/user/tree/a/b/leaf.txt')).toBe(false);
+      expect(await bundle.vfs.readFile('home/user/keep.txt', { encoding: 'utf8' })).toBe('keep');
+      await expect(bundle.vfs.removeRecursive('home/user/tree')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
+    } finally {
+      await bundle.destroy();
+      database.close();
+    }
+  });
+});
+
+describe('the workspace generation is fabric\u2019s counter over one row', () => {
+  test('each open of the same database adopts the next generation, and the pid floor follows it', async () => {
+    const database = new Database(':memory:');
+    const first = createWorkspaceBundle(database);
+    const firstPid = (await first.session()).processes.spawn('probe', [], '/home/user').pid;
+    // A second open over the same rows is what an eviction and a restart
+    // are: the counter continues, so no pid the first incarnation handed
+    // out can be handed out again.
+    const second = createWorkspaceBundle(database);
+    const secondPid = (await second.session()).processes.spawn('probe', [], '/home/user').pid;
+
+    expect(firstPid).toBeGreaterThan(1_000_000);
+    expect(secondPid).toBeGreaterThan(firstPid + 1_000_000 - 1);
+    expect([...database.query('SELECT value FROM kinu_workspace_generation WHERE id = 1').values()]).toEqual([[2]]);
+    database.close();
+  });
+});

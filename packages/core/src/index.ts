@@ -1262,7 +1262,6 @@ export {
   TurnEscalationLedger, ESCALATION_OUTCOMES,
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
-  AGENT_FS_CHUNK_BYTES,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
