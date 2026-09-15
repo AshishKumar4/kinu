@@ -169,7 +169,12 @@ function kvBackedStorage(kv: Map<string, JsonValue>) {
  * empty" and "not bound at all" are both states the readers handle and
  * neither is a session object.
  */
-function workspaceBindings(): Partial<Env> {
+/** The facet manager reads its optional knobs off the raw env once when it
+ *  is composed; Kinu binds none of them, so they are not `Env` members and
+ *  this suite lists them only so the strict proxy answers the read. */
+type NimbusKnob = 'NIMBUS_DEBUG' | 'NIMBUS_LAUNCH_CHUNK_BYTES' | 'NIMBUS_PROCESS_HOST';
+
+function workspaceBindings(): Partial<Env> & Record<NimbusKnob, undefined> {
   // Unchecked and named: `WorkerLoader` is a workerd binding with no
   // constructible form; the manager reads `load` and `get`, and neither is
   // reached by a suite that spawns nothing.
@@ -188,7 +193,7 @@ function workspaceBindings(): Partial<Env> {
   };
 }
 
-function strictEnv(bindings: Partial<Env>): Env {
+function strictEnv(bindings: Partial<Env> & Record<NimbusKnob, undefined>): Env {
   const held = new Map(Object.entries(bindings));
 
   const proxy = new Proxy({}, {
