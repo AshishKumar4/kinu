@@ -410,7 +410,7 @@
   "packages/core/src/strategy/swarm-expansion.ts#inheritedAsSerialized (unreached-export)",
   "packages/core/src/strategy/swarm-expansion.ts#readAnswer (unreached-export)",
   "packages/core/src/strategy/swarm-resume.ts#RECORD_SCHEMA_VERSION (unreached-export)",
-  "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.executeTool (unsupplied-field)",
+  "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.codemodeTool (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.logger (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.maxWallClockMs (unsupplied-field)",
   "packages/core/src/strategy/swarm-run.ts#SwarmRunDeps.reportModelCall (unsupplied-field)",

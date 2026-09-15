@@ -184,7 +184,7 @@ import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRu
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, localActorMission } from './actor-identity';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
-import { createNodeExecuteToolFactory } from './execute-tools-factory';
+import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps, type HostedHeadSeat } from './head-runtime';
 import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
@@ -1465,7 +1465,7 @@ export class LocalAgentSession implements BackendHost {
     return { executor: this.rt.executor, explorer: this.rt.llm };
   }
 
-  /** The codemode namespaces a head's execute_tools gets beyond its runtime's
+  /** The codemode namespaces a head's eval gets beyond its runtime's
    *  own executors: `web.*`. Pointedly NOT `agents.*`/`agent.*` — a head forks
    *  its parent's resources, never its authority to delegate. */
   private headCodemodeExtras(): CodemodeProvider[] {
@@ -4034,7 +4034,7 @@ export class LocalAgentSession implements BackendHost {
       // `agents.*` — the delegation tool projected into the sandbox, over
       // the same deps the top-level tool holds. Locally that is fork only.
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
-      // `state.*` — the provider the shared execute_tools description promises.
+      // `state.*` — the provider the shared eval description promises.
       // Absent, a CLI program calling `state.set` answered a bare ReferenceError;
       // the hosted backend already binds this same provider over the same SQL.
       createStateCodemodeProvider(this.rt.actor.programState),
@@ -4316,7 +4316,7 @@ export class LocalAgentSession implements BackendHost {
       escalations: this.actorSession.orchestrator.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
       vectorStore: null,
-      executeTools: (surface) => {
+      codemode: (surface) => {
         // Narrowed by the SAME set the native surface is narrowed by, so a role
         // cannot lose a tool natively and keep it through the sandbox — as a
         // `tools.<name>` binding or as a namespace. An unresolved profile
@@ -4329,7 +4329,7 @@ export class LocalAgentSession implements BackendHost {
           if (narrowing.allowsTool(name)) native[name] = entry;
         }
 
-        return createNodeExecuteToolFactory({
+        return createNodeCodemodeToolFactory({
           extraProviders: narrowing.narrowProviders(this.codemodeProviders(mode)),
         })({ ...surface, native });
       },

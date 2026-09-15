@@ -524,7 +524,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   could not tell a timeout from a denial from an OOM. They answer
   `{"reason":"<class>","error":"…"}` instead, reason first, on the same string
   channel; the declared codemode types say so, so LLM-generated code inside
-  `execute_tools` can branch on `reason` rather than matching prose. `parent` is
+  `eval` can branch on `reason` rather than matching prose. `parent` is
   the deliberate exception and stays as it was: `makeVfsError` already puts the
   parent's errno on its throws and the classifier reads errnos, so a code there
   would be one whose value never varies.
@@ -1011,7 +1011,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   holding another user's private tree, made `git add` refuse, and the engine
   reported that as `checkpoint staging failed: warning: could not open
   directory 'systemd-private-…'`, which failed the tool call the snapshot was
-  protecting: 3 of 4 `execute_tools` failures in one measured run. A path this
+  protecting: 3 of 4 `eval` failures in one measured run. A path this
   process cannot read is now skipped and NAMED in the checkpoint's own reason
   (`file write [skipped 2 unreadable: …]`), so `/undo` shows an incomplete
   snapshot as incomplete instead of the snapshot being lost entirely. Staging
@@ -1155,7 +1155,7 @@ bottom of this file) starts here.
   thin adapters over it instead of two drifting implementations.
 - **Tool surface consolidated** to 11 built-ins (`BUILTIN_TOOLS` in
   `packages/core/src/tools/registry.ts`). Filesystem work folds into the
-  `execute_tools` codemode sandbox rather than living as a dozen flat tools, and
+  `eval` codemode sandbox rather than living as a dozen flat tools, and
   crafted tools stay inside the sandbox namespace so the schema surface the
   model sees stays flat as the CraftStore grows.
 - **`mcts` is a settle policy, not a rung.** It scores fork branches against one

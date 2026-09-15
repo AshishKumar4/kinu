@@ -75,7 +75,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {
   makeSql, makeWorkspaceSchemaSql, type CLIRuntime,
 } from '../../packages/cli-backend/src/runtime';
-import { createNodeExecuteToolFactory } from '../../packages/cli-backend/src/execute-tools-factory';
+import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
 import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import {
   budgetRow, hardTaskFor, ledgerTotalsFromEvents, measuredToolErrorRate,
@@ -110,7 +110,7 @@ export type { LedgerTotals };
  *     ladder. The model is then not shown the surface it is being scored on
  *     reaching for.
  *   - without the codemode namespaces production wires as `extraProviders`
- *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `execute_tools` code the
+ *     (`agents.*`, `web.*`, `memory.*`, `tasks.*`), `eval` code the
  *     prompt teaches throws `not a function` inside the eval only.
  *
  * This builds BOTH from the roots `rebuildModelBoundState`
@@ -196,7 +196,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const tools = buildActorTools({
     rt,
     craftedToolExecute: createNodeCraftedExecute(),
-    executeTools: createNodeExecuteToolFactory({
+    codemode: createNodeCodemodeToolFactory({
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         createWebCodemodeProvider(webSearch),
@@ -711,7 +711,7 @@ export interface BehaviourHarnessOptions {
  * them would file a harness fault as an agent observation.
  *
  * This exists because the failure it catches is SILENT by construction.
- * `execute_tools` is built from `router?.getProviders() ?? []`
+ * `eval` is built from `router?.getProviders() ?? []`
  * (core/src/tools/builtins.ts:373), so a runtime with no router yields a tool
  * with an empty provider surface and no complaint — every `workspace.*` and
  * `codemode.*` call then fails with `is not a function`, which the ledger
@@ -724,7 +724,7 @@ export interface BehaviourHarnessOptions {
 export class DegenerateRuntimeError extends Error {
   constructor(readonly taskId: string, readonly reason: string) {
     super(`degenerate runtime for ${taskId}: ${reason}. The eval must not run: `
-      + '`execute_tools` would be built with an empty provider surface, so every '
+      + '`eval` would be built with an empty provider surface, so every '
       + '`workspace.*`/`tools.*` call fails with "is not a function" and scores '
       + 'as an ordinary tool result. Open the workspace through `openWorkspaceCLI` '
       + '(cli-backend/src/open.ts), which registers the inline ExecutorProvider — '
@@ -769,14 +769,14 @@ const SANDBOXED_EXECUTOR_KINDS: readonly string[] = ['workspace'];
  * `todos.txt` in the repo root, and the commit that swept them up was refused by
  * `gate:typecheck-coverage`. `createCLIRuntime` registers a `laptop`
  * ExecutorProvider rooted at `process.cwd()` unless told not to, and an episode
- * reaches every registered provider through `execute_tools` — so the harness
+ * reaches every registered provider through `eval` — so the harness
  * that omitted `hostRoot: null` handed each episode the developer's filesystem.
  */
 export class UnsandboxedRuntimeError extends Error {
   constructor(readonly taskId: string, readonly executor: string) {
     super(`unsandboxed runtime for ${taskId}: executor \`${executor}\` runs on the `
       + 'developer\'s own machine. The eval must not run: an episode reaches every '
-      + 'registered provider through `execute_tools`, and a corpus task that writes '
+      + 'registered provider through `eval`, and a corpus task that writes '
       + 'files then writes them into the repo the harness was launched from. Open the '
       + 'workspace with `hostRoot: null` (cli-backend/src/open.ts) — re-rooting the '
       + 'provider is not enough, because `laptop.writeFile` passes an absolute path '
@@ -924,7 +924,7 @@ export function requireVerifierShell(taskId: string, rt: AgentRuntime): Shell {
  * client, the daemon, `evolve` — goes through `openWorkspaceCLI`, which builds
  * the real one. The difference is not cosmetic: the degraded runtime registers
  * NO `ExecutorProvider`, so it has no `executionRouter` at all, and every
- * `execute_tools` block fails with `workspace.createTool is not a function`.
+ * `eval` block fails with `workspace.createTool is not a function`.
  * Measured both ways on the same scripted episode — degraded: no `craft_cycle`
  * row and `craft_reuse` eligible 0; opened: `crafted:["doubleIt"]`,
  * `reused:["doubleIt"]`, eligible 1. Three flash runs blamed that zero on the

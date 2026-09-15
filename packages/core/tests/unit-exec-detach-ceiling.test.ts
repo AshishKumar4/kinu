@@ -213,13 +213,13 @@ describe('every long-capable surface is declared backgroundable', () => {
   test('the shell and the code lane both ride the window, on every surface', () => {
     // A confined surface (a swarm node, a head) holds only these two, and the
     // actor's map is built FROM them — so the sandbox namespace reached through
-    // `execute_tools` and the shell reached through `run` cannot diverge. Read
+    // `eval` and the shell reached through `run` cannot diverge. Read
     // through the declared contract, which is what the wrapper indexes.
     const declared: Readonly<Record<string, BackgroundableTool>> = BACKGROUNDABLE_TOOLS;
     expect(declared.run?.completion).toBe('result');
-    expect(declared.execute_tools?.completion).toBe('result');
+    expect(declared.eval?.completion).toBe('result');
     expect(declared.run?.detachable({ command: 'x', runtime: 'sandbox' })).toBe(true);
-    expect(declared.execute_tools?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
+    expect(declared.eval?.detachable({ code: 'await sandbox.exec("x")' })).toBe(true);
   });
 });
 

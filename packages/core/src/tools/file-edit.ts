@@ -317,14 +317,14 @@ export function readFileSlice(
   if (kept === 0) {
     // One line, on its own, larger than the whole budget. Show its head and
     // name the way to get the rest: the same workspace.readFile-inside-
-    // execute_tools recipe every other oversize payload in Kinu uses.
+    // eval recipe every other oversize payload in Kinu uses.
     const line = requested[0] ?? '';
 
     return {
       output:
         `${line.slice(0, opts.maxChars)}\n\n` +
         `[line ${first} of ${opts.path} is ${line.length} chars and does not fit the ${opts.maxChars}-char cap; ` +
-        'read or slice it with workspace.readFile inside execute_tools]',
+        'read or slice it with workspace.readFile inside eval]',
       omitted: Math.max(0, requestedChars - opts.maxChars),
       first, last: first - 1, total,
     };

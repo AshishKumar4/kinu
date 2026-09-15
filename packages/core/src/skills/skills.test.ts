@@ -17,7 +17,7 @@
  *
  * No `skills` tool and no `skills.*` codemode namespace: read/create/edit/
  * delete are ordinary VFS operations, already reachable via
- * workspace.readFile/writeFile/readdir/exec inside execute_tools — a
+ * workspace.readFile/writeFile/readdir/exec inside eval — a
  * dedicated CRUD dispatcher would have been a second path to the same bytes.
  *
  * No mocking of internal helpers — uses an in-memory SkillsVfs that is the same

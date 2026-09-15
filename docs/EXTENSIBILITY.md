@@ -265,7 +265,7 @@ Effort, not an output-token cap, is the cheapness lever on most paths.
 
 `TOOL_REACH` (`core/src/tools/registry.ts:80`) is the authoritative map of
 native and codemode-only capabilities and their namespaces. `BUILTIN_TOOLS`
-line 151 marks 8 native tools: `execute_tools`, `run`, `file`, `agents`,
+line 151 marks 8 native tools: `eval`, `run`, `file`, `agents`,
 `memory`, `tasks`, `web`, `report`; `actorActiveTools()` narrows them per
 actor. `release` and `agent` are codemode-only. `skills` is neither. A SKILL.md
 is an ordinary `/workspace/skills/` path on the VFS that
@@ -273,7 +273,7 @@ is an ordinary `/workspace/skills/` path on the VFS that
 the same bytes. See [TOOLS.md](./TOOLS.md) for the full list and the
 owner-facing `experience` RPC.
 
-Inside `execute_tools`, the LLM also sees:
+Inside `eval`, the LLM also sees:
 
 - `workspace.*`: VFS, including exact-match `editFile`, shell, memory,
   `createTool`, `slate`; always available, and where `run` and `file`
@@ -288,7 +288,7 @@ Inside `execute_tools`, the LLM also sees:
 - Crafted tools: `tools.<name>(args)`, defined in the sandbox by the `tools`
   provider's prelude (`cf-backend/src/codemode-sandbox.ts`) or bound as the
   `tools` argument of the evaluated function
-  (`cli-backend/src/execute-tools-factory.ts`).
+  (`cli-backend/src/codemode-tool-factory.ts`).
 
 `tools.<name>(args)` is the one call form on every backend, for native builtins
 and crafted tools alike. `core/src/tools/sandbox-contract.ts` states it in one

@@ -5,7 +5,7 @@
  * A local runtime has TWO file planes and the difference is the whole design.
  * The agent's own state — SOUL.md, its scaffold, memory, transcripts — lives in
  * the Nimbus filesystem over its own SQLite, always. The WORKSPACE plane, which
- * is what `file`, `run`, `execute_tools` and AGENTS.md address, binds to a
+ * is what `file`, `run`, `eval` and AGENTS.md address, binds to a
  * physical directory when `config.cwd` names one, and every agent bound to that
  * directory is working on the same bytes. With no directory bound both planes
  * are the one in-SQLite tree, which is what an isolated fixture or an eval
@@ -81,7 +81,7 @@ interface CLIRuntimeOptions {
    * The physical directory this workspace's file and shell plane binds to —
    * the canonical cwd stored on the agent's local ref, never `process.cwd()`.
    *
-   * A string binds `file`, `run`, `execute_tools`, AGENTS.md discovery and the
+   * A string binds `file`, `run`, `eval`, AGENTS.md discovery and the
    * workspace shell to that directory, which is what makes every agent sharing
    * it a peer rather than a stranger holding a private copy. Absent keeps the
    * in-SQLite workspace filesystem, and absent deliberately does NOT mean

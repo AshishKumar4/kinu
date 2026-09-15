@@ -157,7 +157,7 @@ describe('BackgroundJobStore', () => {
 
   test('create stores input_json; getInput round-trips it for retry', () => {
     const s = newStore();
-    s.create({ id: 'd', kind: 'execute_tools', workMode: 'build', input: '{"code":"1+1"}', now: 1 });
+    s.create({ id: 'd', kind: 'eval', workMode: 'build', input: '{"code":"1+1"}', now: 1 });
     expect(s.getInput('d')).toBe('{"code":"1+1"}');
     expect(s.getInput('missing')).toBeNull();
   });
@@ -206,7 +206,7 @@ describe('serializeJobResult', () => {
   });
 
   test('non-serializable success (BigInt) degrades to a named reason, never thrown', () => {
-    // A backgrounded execute_tools can resolve a BigInt — JSON.stringify throws
+    // A backgrounded eval can resolve a BigInt — JSON.stringify throws
     // on it; the helper must degrade to a string that says so and carries the
     // thrown reason, so settle() still records it.
     expect(serializeJobResult(10n)).toMatch(/^unserializable job result: /);
@@ -315,12 +315,12 @@ describe('withBackgroundThreshold', () => {
 
 describe('isBackgroundOutcomeText — a handle names its job', () => {
   test('background:true without a jobId is not a background outcome; the historical refusal still is', () => {
-    expect(isBackgroundOutcomeText('{"background":true,"kind":"execute_tools"}')).toBe(false);
+    expect(isBackgroundOutcomeText('{"background":true,"kind":"eval"}')).toBe(false);
     expect(isBackgroundOutcomeText(
-      '{"background":true,"jobId":"j1","kind":"execute_tools","message":"still running"}',
+      '{"background":true,"jobId":"j1","kind":"eval","message":"still running"}',
     )).toBe(true);
     expect(isBackgroundOutcomeText(
-      '{"background":false,"kind":"execute_tools","message":"stayed foreground"}',
+      '{"background":false,"kind":"eval","message":"stayed foreground"}',
     )).toBe(true);
   });
 });

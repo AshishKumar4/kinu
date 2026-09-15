@@ -404,7 +404,7 @@ use it. Envelope keys nest fields. `createRecordingLogger()` keeps it assertable
 ## Why not `neverthrow`
 
 `AGENTS.md` rejects `Result<T, KinuError>` via `neverthrow`: it cannot
-cross `run`, `tool_call_end` or `execute_tools` structured clone.
+cross `run`, `tool_call_end` or `eval` structured clone.
 `{ reason, error }` crosses namespace boundaries; native invocations use the
 SDK's thrown-error channel. `KinuError` retains native `cause` and any
 producer-observed process exit metadata.

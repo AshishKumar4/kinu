@@ -1292,7 +1292,7 @@ const MESSAGES: UIMessage[] = [
     parts: [
       { type: "reasoning", text: "The coupon path goes through /api/cart/apply. I should reproduce first, then bisect: the handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
       { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
-      { type: "tool-execute_tools", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
+      { type: "tool-eval", toolCallId: "t2", state: "output-available", input: { code: "// Inspect coupon rows to find the missing kind\nconst rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
       // A real repair is a RUN of calls, not one — this is the case the chat
       // has to survive without becoming a wall of identical rows.
@@ -4257,7 +4257,7 @@ function MarksFrame() {
 
    `exposure` here is the registry's DECLARED reach (TOOL_REACH), so the eight
    builtins are "both" — every one of them is also a codemode namespace or, for
-   run/file, reachable through `workspace.*`; only execute_tools is native-only,
+   run/file, reachable through `workspace.*`; only eval is native-only,
    because it IS the sandbox. `wired` is the second, separate fact: whether this
    agent has the capability at all. `report` is photographed at wired:false
    because that is what an orchestrator looks like — it IS the report sink — and
@@ -4448,7 +4448,7 @@ const BACKGROUND_JOBS = [
     workMode: "build" as const, status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
   },
   {
-    id: "bgjob-2f8b1d04", kind: "execute_tools", label: "bun test packages/core",
+    id: "bgjob-2f8b1d04", kind: "eval", label: "bun test packages/core",
     workMode: "build" as const, status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
     createdAt: NOW - 42e5, settledAt: NOW - 33e5,
   },
@@ -5436,7 +5436,7 @@ const ACTIVITY_LOG: ActivitySnapshot["log"] = [
   { event: "steer_queued", detail: "look at the tests too", elapsedMs: 0, createdAt: NOW - 96e3 },
   { event: "beforeturn", detail: "streamText() called next", elapsedMs: 4, createdAt: NOW - 95e3 },
   {
-    event: "gettools_rebuilding", detail: "build:execute_tools,run,file,agents,memory,tasks,web:3:1757011200000:0 → build:execute_tools,run,file,agents,memory,tasks,web:4:1757011260000:0",
+    event: "gettools_rebuilding", detail: "build:eval,run,file,agents,memory,tasks,web:3:1757011200000:0 → build:eval,run,file,agents,memory,tasks,web:4:1757011260000:0",
     elapsedMs: 11, createdAt: NOW - 95e3,
   },
   {

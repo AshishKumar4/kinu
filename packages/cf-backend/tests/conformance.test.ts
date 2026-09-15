@@ -110,13 +110,13 @@ describe('cf backend conformance', () => {
     const observed = await observe(orchestratorHarness());
     expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
     expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
-    expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+    expect(observed.planes.tool!.has('eval')).toBe(true);
   });
 
   test('cf-subordinate: the observation sees a real surface at all', async () => {
     const observed = await observeSubordinate(orchestratorHarness());
     expect(observed.planes.tool!.size).toBeGreaterThanOrEqual(6);
     expect(observed.planes.table!.size).toBeGreaterThanOrEqual(30);
-    expect(observed.planes.tool!.has('execute_tools')).toBe(true);
+    expect(observed.planes.tool!.has('eval')).toBe(true);
   });
 });

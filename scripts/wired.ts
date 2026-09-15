@@ -557,7 +557,7 @@ function buildsATool(value: SyntaxNode | undefined): boolean {
   return callee === 'tool' || (callee !== undefined && TOOL_FACTORY.test(callee));
 }
 
-/** A factory whose product is a tool. `createExecuteToolsTool`,
+/** A factory whose product is a tool. `createCodemodeTool`,
  *  `withClampedToolResult` and the like — named by convention here, and the
  *  convention is what the assembly in `tools/builtins.ts` uses throughout. */
 const TOOL_FACTORY = /Tool(s)?(\b|$)|^with[A-Z]/;

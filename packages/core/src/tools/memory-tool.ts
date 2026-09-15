@@ -2,7 +2,7 @@
  * The durable memory surface: prose notes (save/search), keyed facts
  * (remember/recall/forget), and this agent's past conversation transcript.
  *
- * memory.* reaches this same implementation from execute_tools. One
+ * memory.* reaches this same implementation from eval. One
  * dispatcher serves both surfaces.
  */
 import type { Memory, MemorySearchResult, SqlExecutor } from '../types/primitives';

@@ -635,7 +635,7 @@ describe('buildBuiltinTools assertion', () => {
     // We monkey-patch BUILTIN_TOOL_DESCRIPTIONS via a local builtins copy
     // wouldn't be DRY; instead, recompute the guard inline against a known
     // bad shape so the contract stays in one place.
-    const tools = { execute_tools: {}, mcp_evil: {} };
+    const tools = { eval: {}, mcp_evil: {} };
     const offenders = Object.keys(tools).filter(isMcpToolKey);
     expect(offenders).toEqual(['mcp_evil']);
   });

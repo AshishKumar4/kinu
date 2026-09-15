@@ -30,7 +30,7 @@ import {
   projectJsonValue,
   type CraftedToolExecute,
   type CodemodeProvider,
-  type ExecuteToolsBuilder,
+  type CodemodeBuilder,
   type JsonValue,
   type WebSearchProvider,
 } from '../src/index';
@@ -39,9 +39,9 @@ const unusedCraftedExecute: CraftedToolExecute = () => async () => {
   throw new Error('This web-tool suite does not install crafted tools');
 };
 
-/** execute_tools builder that wires every injected provider namespace into the
+/** eval builder that wires every injected provider namespace into the
  *  sandbox by name (mirrors the cli-backend builder) so codemode `web.*` works. */
-function createNodeExecBuilder(codemodeProviders: CodemodeProvider[] = []): ExecuteToolsBuilder {
+function createNodeCodemodeBuilder(codemodeProviders: CodemodeProvider[] = []): CodemodeBuilder {
   return (surface) => {
     const codemode = surface.craftedTools();
     const nsBindings: Record<string, Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>> = {};
@@ -516,7 +516,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
   return buildActorTools({
     rt,
     craftedToolExecute: unusedCraftedExecute,
-    executeTools: createNodeExecBuilder([createWebCodemodeProvider(provider)]),
+    codemode: createNodeCodemodeBuilder([createWebCodemodeProvider(provider)]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
     webSearch: provider,
   });
@@ -590,7 +590,7 @@ describe('web builtin', () => {
     });
 
     const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(
-      buildWithWeb(rt, provider).execute_tools,
+      buildWithWeb(rt, provider).eval,
     );
 
     const searched = await execute({

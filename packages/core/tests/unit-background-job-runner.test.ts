@@ -310,9 +310,9 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
     expect(store.get(id)?.label).toBe('sandbox: npm test');
   });
 
-  test('an execute_tools call labels the code snippet', () => {
+  test('an eval call labels the code snippet', () => {
     const { runner, store } = setup();
-    const id = runner.create('execute_tools', { code: '  const x = await workspace.readFile("/a");\n  return x;' }, 'build', new AbortController());
+    const id = runner.create('eval', { code: '  const x = await workspace.readFile("/a");\n  return x;' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('const x = await workspace.readFile("/a");\n  return x;');
   });
 
@@ -1104,7 +1104,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // Blocker 1. The claim lands BEFORE the transfer is awaited, so a request
     // issued from that moment on is registered under the job at its own INSERT.
     // A handover that is only a snapshot taken at the crossing leaves a request
-    // the tool issues afterwards — an `execute_tools` script still launching
+    // the tool issues afterwards — an `eval` script still launching
     // laptop commands minutes later — belonging to nobody: the turn is over and
     // the transfer has already named its set.
     const ownership = new DeviceRequestOwnership();

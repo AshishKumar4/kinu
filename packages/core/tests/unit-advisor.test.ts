@@ -494,14 +494,14 @@ describe('the missed-capability class', () => {
 });
 
 // R6, advisor half. THE MEASURED COUNTERFACTUAL. On the production turn, all 12
-// native calls were `execute_tools` and 5 of them ran `agents.swarm`. Reading
+// native calls were `eval` and 5 of them ran `agents.swarm`. Reading
 // native names alone, this prompt would have listed `agents` among 14 unused
 // capabilities — so the likeliest note told the agent to delegate, which it had
 // just done five times. A note naming a capability the agent used is worse than
 // no note, for the same reason one naming a capability it never had is.
 describe('a capability reached through codemode counts as used', () => {
   const swarmed = (code: string): CompletedTurn => aTurn({
-    toolCalls: [{ name: 'execute_tools', args: { code }, result: 'ok' }],
+    toolCalls: [{ name: 'eval', args: { code }, result: 'ok' }],
   });
 
   test('a codemode agents.swarm is never reported unused', () => {

@@ -274,8 +274,8 @@ export const PERSISTENCE_SECTION = definePromptSection(
  * declaration it cannot read is free to disagree with it. The codemode
  * declarations own that documentation — every symbol with its doc comment in
  * the `agent.*` type block (tools/agent-self.ts TYPES), shipped to the model
- * in the same request inside the execute_tools description
- * (registry.ts renderExecuteToolsDescription), including scaffold gates,
+ * in the same request inside the eval description
+ * (registry.ts renderCodemodeDescription), including scaffold gates,
  * export shape, host-bridge restriction and rationale floor — and are emitted
  * only for wired providers. Both backends wire agent-self today (cf
  * orchestrator.ts, cli local-session.ts). A duplicate bullet list here would

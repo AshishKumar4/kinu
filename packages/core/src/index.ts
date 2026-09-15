@@ -607,14 +607,14 @@ export {
   DELEGATION_RUNGS,
   DELEGATION_CONVERSE,
   renderToolSchemaDescription,
-  renderExecuteToolsDescription, EXECUTE_TOOLS_CODE_DESCRIPTION,
+  renderCodemodeDescription, CODEMODE_CODE_DESCRIPTION,
   // The reach axis — which surfaces each capability is projected onto, and the
   // codemode namespace it owns. Read by both surface builders and by the Tools
   // panel, so none of them has to guess it from ToolSet keys.
   TOOL_REACH,
   isBuiltinToolName,
   // Role narrowing over BOTH surfaces from ONE merged allowed-tool set: the
-  // native ToolSet and the codemode namespaces `execute_tools` binds.
+  // native ToolSet and the codemode namespaces `eval` binds.
   narrowToolSurface,
   codemodeCapabilitiesFor,
   type ToolSurfaceNarrowing,
@@ -627,7 +627,7 @@ export {
 
 export {
   CRAFTED_TOOL_NAMESPACE,
-  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, executeToolsInputSchema,
+  craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema, codemodeInputSchema,
   renderToolsDeclaration, nativeToolFunctions, codemodeFunction, craftedFailureFunctions, slateToolReach, callCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   type CraftedDeclaration,
@@ -760,7 +760,7 @@ export {
 export {
   buildBuiltinTools,
   type BuiltinToolDeps,
-  type CraftedToolSet, type ExecuteToolsBuilder, type ExecuteToolsSurface,
+  type CraftedToolSet, type CodemodeBuilder, type CodemodeSurface,
   type ReportToolDeps,
 } from './tools/builtins';
 
@@ -789,7 +789,7 @@ export {
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index';
 
-// The release lane — codemode-only (release.* inside execute_tools). No
+// The release lane — codemode-only (release.* inside eval). No
 // native tool: see tools/builtins.ts's header for why.
 export {
   createReleaseCodemodeProvider, runReleaseAction,

@@ -43,7 +43,7 @@ import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-
 
 /**
  * The ONE declaration of the `agent.*` contract — the codemode type block that
- * reaches the model inside the execute_tools description.
+ * reaches the model inside the eval description.
  *
  * The prompt's Code-execution section points at this namespace instead of
  * restating its signatures, so a test that pins a signature pins it HERE,
@@ -148,12 +148,12 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
 
     const both = buildSystemPromptSync(rt, {
-      availableTools: ['agents', 'execute_tools'],
+      availableTools: ['agents', 'eval'],
       agentsActions: ['swarm'],
       registeredExecutors: [],
     });
 
-    expect(both).toContain('callable inside execute_tools as `agents.<action>`');
+    expect(both).toContain('callable inside eval as `agents.<action>`');
 
     // No sandbox → no namespace to advertise.
     const noSandbox = buildSystemPromptSync(rt, {
@@ -166,7 +166,7 @@ describe('buildSystemPromptSync', () => {
 
     // No delegation deps → the section is not rendered at all.
     const noDelegation = buildSystemPromptSync(rt, {
-      availableTools: ['execute_tools'],
+      availableTools: ['eval'],
       registeredExecutors: [],
     });
 
@@ -570,15 +570,15 @@ describe('buildSystemPromptSync', () => {
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toContain('workspace.createTool');
     expect(prompt).toContain('workspace.listTools()');
-    expect(prompt).toMatch(/next execute_tools call/);            // freshness, not "when injected"
+    expect(prompt).toMatch(/next eval call/);            // freshness, not "when injected"
     // The self-improvement lane is REACHABLE and named, but its signatures are
     // not restated here. Until 2026-08-25 this asserted `agent.proposeCurriculum`
     // in the prompt, which pinned a hand-written copy of a declaration that
     // ships in the same request (tools/agent-self.ts TYPES, carried into the
-    // execute_tools description by renderExecuteToolsDescription) — and the copy
+    // eval description by renderCodemodeDescription) — and the copy
     // was the weaker of the two. The pin now proves the same capability is
     // discoverable AND that its contract has exactly one home.
-    expect(prompt).toContain('`agent.*` namespace inside execute_tools');
+    expect(prompt).toContain('`agent.*` namespace inside eval');
     expect(prompt).toMatch(/curriculum/);
     expect(prompt).not.toContain('agent.proposeCurriculum(');
     expect(agentSelfTypes()).toContain('proposeCurriculum');
@@ -627,7 +627,7 @@ describe('buildSystemPromptSync', () => {
     // that is what this half of the test is for. It is advertised as the
     // NAMESPACE now rather than as a copied signature (see the note in the craft
     // test above); the signature itself is asserted against its one declaration.
-    expect(withoutTemporary).toContain('`agent.*` namespace inside execute_tools');
+    expect(withoutTemporary).toContain('`agent.*` namespace inside eval');
     expect(withoutTemporary).toMatch(/scaffold proposals/);
     expect(withoutTemporary).not.toContain('agent.proposeScaffold(');
     expect(agentSelfTypes()).toContain('proposeScaffold');
@@ -1068,7 +1068,7 @@ describe('buildSystemPromptSync', () => {
 
     expect(prompt).toContain('**memory**');
     expect(prompt).toContain('**web**');
-    expect(prompt).not.toContain('**execute_tools**');
+    expect(prompt).not.toContain('**eval**');
     expect(prompt).not.toContain('agent.schedule');
     // No delegation tool wired → no ladder at all.
     expect(prompt).not.toContain('## Delegation');
@@ -1403,7 +1403,7 @@ describe('buildSystemPromptSync', () => {
       //   only place BUILTIN_TOOL_SPECS.example reaches a model, and which is
       //   the split OpenAI's GPT-4.1 guide prescribes: examples in the prompt,
       //   contract in the description field.
-      // 2026-09-03: RAISED 1020 → 1100, measured 1048: the execute_tools
+      // 2026-09-03: RAISED 1020 → 1100, measured 1048: the eval
       //   example became a three-line Node-style program (`require('fs/promises')`
       //   + readdir), which is the shape the hosted sandbox now runs.
       'Tools available this turn': 1100,
@@ -1460,7 +1460,7 @@ describe('buildSystemPromptSync', () => {
       //   and its `cd /` test run backgrounded on the 30s window.
       'Execution environments': 3412,
       'Persistence': 700,
-      // 2026-08: −1 line. `execute_tools runs JavaScript against the active
+      // 2026-08: −1 line. `eval runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
       // 2026-08-12: +4 chars. Defect-B fix: the agent.jobResult bullet used to
       // read as a generic "read status and results" call; it now says a
@@ -1470,7 +1470,7 @@ describe('buildSystemPromptSync', () => {
       // 2026-08-25: LOWERED 1610 → 830, measured 801 (−425 on this surface,
       //   −777 with rlm.query present). The six `agent.*` API bullets were a
       //   hand-maintained second copy of the `agent.*` codemode type block,
-      //   which ships to the model inside the execute_tools description — and
+      //   which ships to the model inside the eval description — and
       //   the weaker copy: the proposeScaffold bullet omitted the required
       //   `async function* run(rt, task)` export, the host-bridge restriction
       //   and the rationale floor that the declaration states. One pointer at

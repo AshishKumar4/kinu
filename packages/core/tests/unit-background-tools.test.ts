@@ -3,10 +3,10 @@
 // Defect A (see bench artifact PROGRAM-LEDGER context): a fork sat 30s in the
 // interactive chat doing nothing visible before the OLD wrapper detached it,
 // because every backgroundable tool rode the SAME timed threshold regardless
-// of whether its duration was genuinely unknown (`run`, `execute_tools`) or
+// of whether its duration was genuinely unknown (`run`, `eval`) or
 // long by construction (`agents` fork). This file pins the fix at the wiring
 // layer: `agents` fork is 'spawn'-shaped and detaches the moment its spawn is
-// receive the wake (policy.wakesAfterTurn); `run`/`execute_tools` stay
+// receive the wake (policy.wakesAfterTurn); `run`/`eval` stay
 // 'result'-shaped and always ride the timed race, on every surface.
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
@@ -76,11 +76,11 @@ function executeTool<Args>(tools: ToolSet, name: string) {
   return toolExecute<Args, TestToolResult>(entry);
 }
 
-describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are result-shaped', () => {
-  test('BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/execute_tools=result', () => {
+describe('wrapToolsForBackground — fork is spawn-shaped, run/eval are result-shaped', () => {
+  test('BACKGROUNDABLE_TOOLS declares the completion axis: agents=spawn, run/eval=result', () => {
     expect(BACKGROUNDABLE_TOOLS.agents?.completion).toBe('spawn');
     expect(BACKGROUNDABLE_TOOLS.run?.completion).toBe('result');
-    expect(BACKGROUNDABLE_TOOLS.execute_tools?.completion).toBe('result');
+    expect(BACKGROUNDABLE_TOOLS.eval?.completion).toBe('result');
   });
 
   test('on the interactive surface, a fork detaches the instant it spawns — not after the 30s threshold', async () => {
@@ -146,7 +146,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
   });
 
   test('the one-shot inline rule is spawn-shaped only — result-shaped work still detaches there', async () => {
-    // `run`/`execute_tools` keep the timed race on every surface: what crosses
+    // `run`/`eval` keep the timed race on every surface: what crosses
     // there is the genuinely non-terminating work (a server, a VM) whose
     // result was never the point.
     const crossings: string[] = [];
@@ -197,7 +197,7 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     expect(out).toEqual({ subordinates: [] });
   });
 
-  test('run/execute_tools stay result-shaped even on the interactive surface — they race the threshold, never spawn-detach', async () => {
+  test('run/eval stay result-shaped even on the interactive surface — they race the threshold, never spawn-detach', async () => {
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 

@@ -4,7 +4,7 @@
  *
  * Two shapes of backgroundable work, one axis:
  *   'result' — the turn is waiting on the call's result and its duration is
- *              unknown (`run`, `execute_tools`), so it races the surface's
+ *              unknown (`run`, `eval`), so it races the surface's
  *              detach threshold and only work that proved slow crosses.
  *   'spawn'  — the call launches a process whose completion arrives as a wake
  *              event (`agents` swarm). Where a wake can arrive it detaches the
@@ -50,7 +50,7 @@ export interface BackgroundableTool {
  * make one call detachable and another not.
  */
 export const CONFINED_BACKGROUNDABLE_TOOLS = {
-  execute_tools: { completion: 'result', detachable: () => true },
+  eval: { completion: 'result', detachable: () => true },
   run: { completion: 'result', detachable: () => true },
 } as const satisfies Readonly<Record<string, BackgroundableTool>>;
 

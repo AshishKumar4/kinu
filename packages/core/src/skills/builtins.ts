@@ -178,7 +178,7 @@ A binding is a capability of YOURS handed to the slate under a name in \`slate.b
 - \`{ "kind": "namespace", "namespace": "workspace", "paths": ["/home/user/data"] }\` — \`readFile\`, \`writeFile\`, \`editFile\`, \`readdir\`, \`exists\` under those prefixes only. Without \`paths\`, the whole namespace with all its members.
 - \`{ "kind": "memory" | "tasks" | "web" }\`, \`{ "kind": "tool", "name": "file" }\`, \`{ "kind": "mcp", "server": "..." }\`, \`{ "kind": "rpc", "methods": [...] }\` for read models, \`{ "kind": "app", "id": "<other slate>" }\` to call another slate's methods.
 
-A slate cannot bind \`agents\` or \`execute_tools\`; it never delegates or steers you.
+A slate cannot bind \`agents\` or \`eval\`; it never delegates or steers you.
 
 ## A choice card in the chat
 

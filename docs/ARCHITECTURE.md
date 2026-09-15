@@ -105,7 +105,7 @@ hire, a branching head, a swarm node and an MCTS branch are rows in
 `HostedActor`s with their own runtime objects (session, stores, queue, abort,
 roles, loop pointer) under the root's lifecycle. A subordinate runs delegated
 turns through the common head-inference runner with the confined tool surface
-(execute_tools, run, file, web) plus the report lane that settles the
+(eval, run, file, web) plus the report lane that settles the
 `agents.hire` that gave it the work. A head runs the same runner over the
 parent's promoted loop with
 the head tool surface (evidence, decisions, depth-budgeted subheads). A node
@@ -448,7 +448,7 @@ Evolution runs across four timescales, each feeding the next. The step clock
 ticks inside one long turn. The other three belong to the `EvolutionEngine`
 (`core/src/evolution/engine.ts`):
 
-- In-episode: every settled `execute_tools` call scores crafted-tool
+- In-episode: every settled `eval` call scores crafted-tool
   fitness into `craft_scores` with one synchronous SQL write, no model call
   (`craft-cycle.ts` over `craft/in-episode.ts`).
 - Turn-level: `reviewTurn()` assesses the finished turn. A negative outcome

@@ -46,13 +46,13 @@ export interface AcpAgentDeps {
  *  `skills`, `release` and `experience` are absent on purpose: none of the
  *  three is a tool name a live turn produces. Skills are workspace.* file
  *  calls and release is a release.* codemode call — both surface as
- *  `execute_tools`, already mapped below — and experience is an owner-only
+ *  `eval`, already mapped below — and experience is an owner-only
  *  RPC, off the tool surface entirely. Entries for them would be dead code
  *  with no "old transcript" justification, since ACP maps calls as they
  *  happen rather than rendering stored history. */
 const TOOL_KINDS = new Map<string, ToolKind>([
   ['run', 'execute'],
-  ['execute_tools', 'execute'],
+  ['eval', 'execute'],
   ['memory', 'think'],
   ['tasks', 'think'],
   ['report', 'think'],

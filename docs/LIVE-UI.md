@@ -96,7 +96,7 @@ Schema: `packages/core/src/slates/project.ts`.
 
 ## One codemode operation
 
-Use `workspace.slate(operation)` through `execute_tools`. Each operation has a
+Use `workspace.slate(operation)` through `eval`. Each operation has a
 strict field set; there are no separate slate tools or codemode aliases.
 `TOOL_REACH.slate` is `{ native: false, codemode: "workspace", replay: "claimed" }`.
 The eight native builtins are unchanged.

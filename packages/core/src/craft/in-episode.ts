@@ -222,7 +222,7 @@ export function stripNonCode(source: string): string {
 }
 
 /**
- * The crafted tools whose call sites appear in one `execute_tools` submission.
+ * The crafted tools whose call sites appear in one `eval` submission.
  *
  * Deterministic, host-side, no model asked. `known` is the set of crafted
  * tools that actually exist, so an arbitrary `tools.whatever()` matches

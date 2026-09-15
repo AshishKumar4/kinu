@@ -1,4 +1,4 @@
-// The hosted `execute_tools` sandbox: what the prelude defines, how a crafted
+// The hosted `eval` sandbox: what the prelude defines, how a crafted
 // tool is guarded, and what `require()` hands a program.
 //
 // The shim module is the SOURCE the dynamic Worker loads (codemode-node-shim.ts).

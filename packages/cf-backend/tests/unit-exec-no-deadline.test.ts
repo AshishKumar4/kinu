@@ -14,7 +14,7 @@
 //     with no `timeout` must reach the PROCESS lane, not `exec`.
 //   * `@cloudflare/codemode` gives a dynamic Worker a 60s execution deadline by
 //     default, raced against the program as a generated `setTimeout`. An
-//     `execute_tools` program spends its life AWAITING host tool calls, so that
+//     `eval` program spends its life AWAITING host tool calls, so that
 //     deadline killed the caller of long work — after the 30s detach had already
 //     told the model the work was "still running, not cancelled".
 import { describe, test, expect } from "bun:test";

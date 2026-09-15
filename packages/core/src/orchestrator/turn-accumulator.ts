@@ -131,7 +131,7 @@ export class TurnAccumulator {
   readonly composition = new TurnContextMeter();
   /** The crafted tools this turn called. Written by the in-episode craft clock
    *  (orchestrator/craft-cycle.ts), which is the only thing that can see them:
-   *  a crafted tool is reached from inside an `execute_tools` block, so it is
+   *  a crafted tool is reached from inside an `eval` block, so it is
    *  never a `toolCalls` name. Read at turn end for the craft EMA and the
    *  durable turn↔craft usage row. Reset with the rest of the turn. */
   private readonly craftUsed = new Set<string>();
@@ -173,7 +173,7 @@ export class TurnAccumulator {
   }
 
   /** Record crafted tools the turn invoked — the craft clock's call-site scan
-   *  of a settled `execute_tools` block, deduped across the turn. */
+   *  of a settled `eval` block, deduped across the turn. */
   noteCraftedToolUse(names: readonly string[]): void {
     for (const name of names) this.craftUsed.add(name);
   }

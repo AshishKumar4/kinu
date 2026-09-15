@@ -42,10 +42,10 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — success records the output as the core ToolCallRecord', () => {
     const toolEvents: Array<{ name: string; toolCallId: string; args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolCallId: 'fixture-3', toolName: 'execute_tools', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
-    expect(a.toolCalls).toEqual([{ toolCallId: 'fixture-3', name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
+    a.recordToolCall({ toolCallId: 'fixture-3', toolName: 'eval', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
+    expect(a.toolCalls).toEqual([{ toolCallId: 'fixture-3', name: 'eval', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
     expect(a.hadError).toBe(false);
-    expect(toolEvents[0]).toMatchObject({ name: 'execute_tools', toolCallId: 'fixture-3' });
+    expect(toolEvents[0]).toMatchObject({ name: 'eval', toolCallId: 'fixture-3' });
   });
 
   test('recordToolCall — the durable event carries WHAT the call was asked to do', () => {
@@ -96,17 +96,17 @@ describe('TurnAccumulator', () => {
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
       const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-      a.recordToolCall({ toolCallId: 'fixture-7', toolName: 'execute_tools', success: false, reason: null, error });
+      a.recordToolCall({ toolCallId: 'fixture-7', toolName: 'eval', success: false, reason: null, error });
       expect(a.hadError).toBe(true);
       expect(toolEvents[0].error).toBe(FAILURE_WITHOUT_ERROR);
       expect(a.toolCalls[0]).toEqual({
         toolCallId: 'fixture-7',
-        name: 'execute_tools', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
+        name: 'eval', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
       });
       // And the census reads it back as its own reason rather than as `threw`.
       expect(classifyToolFailure({
         type: 'tool_call_end', eventIndex: 0, runId: 'r', timestamp: new Date().toISOString(),
-        name: 'execute_tools', toolCallId: 'tc-1', error: toolEvents[0].error,
+        name: 'eval', toolCallId: 'tc-1', error: toolEvents[0].error,
       })).toMatchObject({ reason: 'failed_without_error' });
     }
   });

@@ -2,7 +2,7 @@
  * Unit tests for the canonical tool surface.
  *
  * The agent's tool surface is deliberately SMALL (fewer tools → better LLM
- * selection). Always-on (no extra deps): execute_tools, run, file, memory —
+ * selection). Always-on (no extra deps): eval, run, file, memory —
  * the ONE durable-state tool, whose keyed-fact actions are themselves gated
  * on `facts` — and tasks.
  * Conditional (needs a specific dep in BuiltinToolDeps):
@@ -41,7 +41,7 @@ import {
   projectJsonValue,
   type CodemodeProvider,
   type CraftedToolExecute,
-  type ExecuteToolsBuilder,
+  type CodemodeBuilder,
   type JsonValue,
   type MemoryToolInput,
   type ReleaseApproval,
@@ -88,7 +88,7 @@ const nodeCraftedExecute: CraftedToolExecute = (t) => {
   };
 };
 
-const nodeExecBuilder: ExecuteToolsBuilder = (surface) => {
+const nodeCodemodeBuilder: CodemodeBuilder = (surface) => {
   return tool({
     description: 'test exec_tools',
     inputSchema: jsonSchema<{ code: string }>({
@@ -131,7 +131,7 @@ function tools(
     rt,
     escalations,
     craftedToolExecute: nodeCraftedExecute,
-    executeTools: nodeExecBuilder,
+    codemode: nodeCodemodeBuilder,
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
   });
 }
@@ -225,7 +225,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = buildActorTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
-      executeTools: nodeExecBuilder,
+      codemode: nodeCodemodeBuilder,
       facts: stubFacts,
       webSearch: stubWebSearch,
       agents: { mode: 'build', team: stubTeam, peers: stubPeers },
@@ -258,10 +258,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // ONE namespace for every tool the program can call, native and crafted. No
     // `codemode.*`: a refusing alias in the description is a name the model keeps
     // reaching for. `state.*` is what outlives a program.
-    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).not.toContain('codemode.*');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('`tools.<name>(input)`');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('`state.*`');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('canonical durable workspace');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).not.toContain('codemode.*');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`tools.<name>(input)`');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('`state.*`');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.eval).toContain('canonical durable workspace');
     expect(BUILTIN_TOOL_DESCRIPTIONS.run).toContain('shell over the canonical durable workspace');
     expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('small fixed command set');
     expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('running programs there fails');
@@ -497,7 +497,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   // ── memory.* / tasks.* / report.* codemode (Part 2 — every remaining
-  // builtin reachable from execute_tools, sharing its dispatcher with the
+  // builtin reachable from eval, sharing its dispatcher with the
   // native tool: one implementation, two callers) ──────────────────────────
 
   test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
@@ -686,10 +686,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     await expect(pending).rejects.not.toThrow('setShellApprovalMode');
   });
 
-  test('execute_tools exposes the workspace and tools globals', async () => {
+  test('eval exposes the workspace and tools globals', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
+    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
 
     const result = await tool.execute({
       code: "return typeof workspace + ',' + typeof tools;",
@@ -708,7 +708,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = tools(rt);
 
     const tool = {
-      execute: toolExecute<{ code: string }, { result: JsonValue | undefined; error?: string }>(t.execute_tools),
+      execute: toolExecute<{ code: string }, { result: JsonValue | undefined; error?: string }>(t.eval),
     };
 
     const result = await tool.execute({ code: 'return await tools.double(21);' });
@@ -725,7 +725,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'weak'`;
 
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
+    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
     const result = await tool.execute({ code: 'return typeof tools.weak;' });
     expect(result.result).toBe('undefined');
   });
@@ -748,10 +748,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       buildActorTools({
         rt,
         craftedToolExecute: nodeCraftedExecute,
-        executeTools: (surface) => {
+        codemode: (surface) => {
           injected = Object.keys(surface.craftedTools());
 
-          return nodeExecBuilder(surface);
+          return nodeCodemodeBuilder(surface);
         },
         effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1' },
       });
@@ -776,15 +776,15 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
  * Role narrowing over BOTH surfaces from ONE merged set.
  *
  * Narrowing is applied to the merged set. Applied to the native ToolSet alone,
- * while `execute_tools` builds its codemode providers from unfiltered deps, a role
- * that allows `execute_tools` and denies `agents` still delegates, hires and writes
+ * while `eval` builds its codemode providers from unfiltered deps, a role
+ * that allows `eval` and denies `agents` still delegates, hires and writes
  * memory through `agents.*` and `memory.*` — decorative narrowing for any role that
  * keeps the sandbox, which is every role that can do real work.
  */
 describe('a role narrows the sandbox as well as the tool list', () => {
   /** The shape a restricted role resolves to: it keeps the sandbox and the
    *  workspace, and loses delegation, memory and the task list. */
-  const RESTRICTED = ['execute_tools', 'run', 'file'];
+  const RESTRICTED = ['eval', 'run', 'file'];
 
   test('an excluded capability loses its namespace, not just its tool', () => {
     const narrowing = narrowToolSurface(RESTRICTED);
@@ -801,7 +801,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     }
 
     // And the providers actually go, which is the form a backend consumes:
-    // handing this list to `execute_tools` is what binds the namespaces.
+    // handing this list to `eval` is what binds the namespaces.
     expect(narrowing.narrowProviders([
       { name: 'agents' }, { name: 'memory' }, { name: 'tasks' }, { name: 'workspace' },
     ])).toEqual([{ name: 'workspace' }]);
@@ -810,9 +810,9 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   test('a namespace two capabilities reach survives while EITHER does', () => {
     // `run` and `file` both reach `workspace`. Losing one must not take the
     // filesystem away, and losing both must.
-    expect(narrowToolSurface(['execute_tools', 'run']).allowsNamespace('workspace')).toBe(true);
-    expect(narrowToolSurface(['execute_tools', 'file']).allowsNamespace('workspace')).toBe(true);
-    expect(narrowToolSurface(['execute_tools']).allowsNamespace('workspace')).toBe(false);
+    expect(narrowToolSurface(['eval', 'run']).allowsNamespace('workspace')).toBe(true);
+    expect(narrowToolSurface(['eval', 'file']).allowsNamespace('workspace')).toBe(true);
+    expect(narrowToolSurface(['eval']).allowsNamespace('workspace')).toBe(false);
   });
 
   test('an absent list allows everything — absent inherits, as it does in the resolver', () => {
@@ -824,7 +824,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
     expect(open.narrowProviders(providers)).toEqual(providers);
   });
 
-  test('an EXTERNAL namespace follows execute_tools, because no role list can name it', () => {
+  test('an EXTERNAL namespace follows eval, because no role list can name it', () => {
     // Executor planes and backend-wired providers have no reach row, so there is
     // no name an owner could write to keep them. Denying them per-namespace
     // would silently take the machine away from every narrowed role — a worse
@@ -857,8 +857,8 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   });
 
   test('a named codemode-only capability keeps its namespace', () => {
-    expect(narrowToolSurface(['execute_tools', 'release']).allowsNamespace('release')).toBe(true);
-    expect(narrowToolSurface(['execute_tools']).allowsNamespace('release')).toBe(false);
+    expect(narrowToolSurface(['eval', 'release']).allowsNamespace('release')).toBe(true);
+    expect(narrowToolSurface(['eval']).allowsNamespace('release')).toBe(false);
   });
 
   /** A provider namespace as a backend hands it to the sandbox: a name and the
@@ -891,7 +891,7 @@ describe('a role narrows the sandbox as well as the tool list', () => {
   }
 
   test('a namespace the role lost is not reachable from inside the sandbox', async () => {
-    // The end of the escape route: a role that keeps `execute_tools` and loses
+    // The end of the escape route: a role that keeps `eval` and loses
     // `agents` would delegate and hire through `agents.*` anyway if the providers
     // were built from unfiltered deps. `typeof` rather than a call,
     // because an unbound name throws a ReferenceError while a bound-but-empty

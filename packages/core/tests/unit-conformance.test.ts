@@ -29,7 +29,7 @@ describe('compareSurface can fail (canaries)', () => {
     const report = compareSurface(observing({ tool: new Set(['run']) }));
     const missing = report.findings.filter((f) => f.kind === 'missing').map((f) => f.name);
     // Every tool the manifest wires on cli except `run` must be reported.
-    expect(missing).toContain('execute_tools');
+    expect(missing).toContain('eval');
     expect(missing).toContain('memory');
     expect(missing).not.toContain('run');
   });
@@ -194,13 +194,13 @@ describe('phantomCallables', () => {
   });
   test('accepts real tools, namespaced calls under a wired root, and prose', () => {
     const callables = new Set<string>([...BUILTIN_TOOLS, 'workspace.*']);
-    const text = 'call workspace.readdir("/x"), then execute_tools(...), and run (verb) it';
+    const text = 'call workspace.readdir("/x"), then eval(...), and run (verb) it';
     expect(phantomCallables(text, callables)).toEqual([]);
   });
   test('a single-word tool is a phantom on a root that did not wire it', () => {
     // `web` is a real single-word tool, not prose: a root without it that
     // tells the model to `web(...)` names a callable that resolves to nothing.
-    expect(phantomCallables('call web(url) now', new Set(['execute_tools']))).toEqual(['web']);
+    expect(phantomCallables('call web(url) now', new Set(['eval']))).toEqual(['web']);
   });
   test('a wired single-word tool is real whatever its shape', () => {
     expect(phantomCallables('call web(url) now', new Set(['web']))).toEqual([]);

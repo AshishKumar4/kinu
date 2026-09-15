@@ -276,9 +276,9 @@ export interface NodeAgentDeps {
    * instead reports `shared-origin-plane`.
    */
   runtimeForWorkspace?: ((workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>) | null;
-  /** Backend-built `execute_tools`; absent on a runtime that wired none, and then
+  /** Backend-built `eval`; absent on a runtime that wired none, and then
    *  the tool is absent too rather than broken. */
-  executeTool?: unknown;
+  codemodeTool?: unknown;
   webSearch?: WebSearchProvider;
   /** The report contract's gate; see {@link NodeLoopDeps.gradeReport}. */
   gradeReport?: (candidate: string) => Promise<string | null>;
@@ -359,7 +359,7 @@ export interface NodeLoopDeps {
   reportDelta?: ReportHeadDelta;
   /** The search's arbiter, or null when no branch could be granted. */
   arbitrate: NodeArbiter | null;
-  executeTool?: unknown;
+  codemodeTool?: unknown;
   webSearch?: WebSearchProvider;
   /**
    * THE REPORT CONTRACT'S GATE: run the objective's instrument over what the node is
@@ -579,7 +579,7 @@ function buildNodeToolSet(input: {
     report,
     webSearch: deps.webSearch,
     admitted: NODE_BUILTIN_TOOLS,
-    executeTool: deps.executeTool,
+    codemodeTool: deps.codemodeTool,
     post: input.arbitrate ? buildProposeTool(input.arbitrate, scratch) : undefined,
     wrapFinished: (finished) => withHeadCaptureRecording(
       wrapToolsForBackground(finished, {
@@ -1051,7 +1051,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
 
   if (deps.mission !== undefined) loop.mission = deps.mission;
 
-  if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
+  if (deps.codemodeTool !== undefined) loop.codemodeTool = deps.codemodeTool;
 
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
 

@@ -984,12 +984,12 @@ describe('corpus quality — can this corpus rank anything at all', () => {
       },
       'probe-codemode-branch': {
         files: { 'diagnosis.txt': 'reason:unread' },
-        events: [toolEnd('execute_tools', 'run', undefined, true)],
+        events: [toolEnd('eval', 'run', undefined, true)],
       },
       'probe-codemode-throw': {
         files: { 'aftermath.txt': 'readFile threw: the file does not exist' },
         events: [
-          toolEnd('execute_tools', 'run', undefined, false),
+          toolEnd('eval', 'run', undefined, false),
           toolEnd('file', 'write', 'aftermath.txt', true),
         ],
       },
@@ -1066,11 +1066,11 @@ describe('corpus quality — can this corpus rank anything at all', () => {
 
     const escaped = await branch.verify({
       files: files({ 'diagnosis.txt': 'reason:unread' }),
-      events: [toolEnd('execute_tools', 'run', undefined, false)],
+      events: [toolEnd('eval', 'run', undefined, false)],
     });
 
     expect(escaped.find((s) => s.what === 'refusal-diagnosed')?.reached).toBe(true);
-    expect(escaped.find((s) => s.what === 'execute_tools-succeeded')?.reached).toBe(false);
+    expect(escaped.find((s) => s.what === 'eval-succeeded')?.reached).toBe(false);
 
     // A fact transcribed but never forgotten: value holds, forget misses.
     const facts = probeFor({ id: 'probe-memory-facts', env: PROBE_ENV });

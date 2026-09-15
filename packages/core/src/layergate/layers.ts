@@ -1315,7 +1315,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'delegation/tool-call-counts',
-        asserts: 'hiring / exploration / messaging / execute_tools calls are counted by agents action separately from total steps',
+        asserts: 'hiring / exploration / messaging / eval calls are counted by agents action separately from total steps',
         observe: (s) => s.delegationFeatures({
           steps: 7,
           durationMs: 95_000,
@@ -1324,7 +1324,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { name: 'agents', args: { action: 'dismiss' }, result: null },
             { name: 'agents', args: { action: 'swarm' }, result: null },
             { name: 'agents', args: { action: 'msg' }, result: null },
-            { name: 'execute_tools', args: {}, result: null },
+            { name: 'eval', args: {}, result: null },
             { name: 'run', args: {}, result: null },
           ],
         }),
@@ -1339,7 +1339,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the rendered evidence switches to minutes past a minute, with one decimal',
         observe: (s) => [4_000, 59_999, 60_000, 630_000].map((wallClockMs) =>
           s.renderDelegationFeatures({
-            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeToolsCalls: 3,
+            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeCodemodeCalls: 3,
             loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0, wallClockMs,
           })),
       },
@@ -1536,14 +1536,14 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           };
 
           return [
-            ['crafted', turn([{ toolName: 'execute_tools', code: 'await tools.sum(1); codemode.fmt(2)' }])],
+            ['crafted', turn([{ toolName: 'eval', code: 'await tools.sum(1); codemode.fmt(2)' }])],
             ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'run' }])],
-            ['mentioned-only', turn([{ toolName: 'execute_tools', code: '// tools.sum(1)' }])],
+            ['mentioned-only', turn([{ toolName: 'eval', code: '// tools.sum(1)' }])],
             ['across-blocks', turn([
-              { toolName: 'execute_tools', code: 'await tools.sum(1)' },
-              { toolName: 'execute_tools', code: 'await tools.sum(2); await tools.fmt(3)' },
+              { toolName: 'eval', code: 'await tools.sum(1)' },
+              { toolName: 'eval', code: 'await tools.sum(2); await tools.fmt(3)' },
             ])],
-            ['evolution-off', turn([{ toolName: 'execute_tools', code: 'await tools.sum(1)' }], false)],
+            ['evolution-off', turn([{ toolName: 'eval', code: 'await tools.sum(1)' }], false)],
           ];
         },
       },

@@ -230,7 +230,7 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
     const first: ModelMessage = { role: 'user', content: 'first: list your tools' };
-    const reply: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'execute_tools, run, file' }] };
+    const reply: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'eval, run, file' }] };
     const second: ModelMessage = { role: 'user', content: 'second: now use each one' };
 
     const turn = (messages: ModelMessage[]) => ({
@@ -243,7 +243,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(opening?.messages?.filter((message) => message.role === 'user')).toEqual([first]);
 
     await agent.onChatResponse({
-      message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'execute_tools, run, file' }] },
+      message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'eval, run, file' }] },
       requestId: 'req-1', continuation: false, status: 'completed',
     });
 

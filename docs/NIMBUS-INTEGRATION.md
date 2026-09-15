@@ -36,7 +36,7 @@ mount cannot unbind an outbound handler the host installed
 (`KinuSandbox.outboundHandlers`, `cf-backend/src/kinu-sandbox.ts`). The codemode
 patch adds the `./normalize` subpath export and the `dist/normalize.js` behind
 it, which `cli-backend/src/executor.ts` and
-`cli-backend/src/execute-tools-factory.ts` import as `normalizeCode`.
+`cli-backend/src/codemode-tool-factory.ts` import as `normalizeCode`.
 `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
 `package.json`, so it governs those eight. Its header still narrates the `@nimbus-sh/core` patch incident,

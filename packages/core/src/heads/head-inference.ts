@@ -158,7 +158,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
  * The head tool builders in this module record themselves (they also record
  * artifacts, which only they can classify, and per-tool outcomes only they can
  * name). This wrapper is for the SHARED builtin surface a backend hands a head —
- * `run`, `execute_tools`, `web` know nothing about heads, and without it
+ * `run`, `eval`, `web` know nothing about heads, and without it
  * `HeadReport.toolCalls` (which the journal persists and the no-prose fallback
  * summary reads) would be empty for exactly the tools a head does its real work
  * with. It records the one outcome a generic wrapper honestly knows — resolved
@@ -207,7 +207,7 @@ function recordingTool<Entry extends ToolSet[string]>(
 const HEAD_PROMPT_TOOL_NAMES = [
   'record_evidence',
   'record_decision',
-  'execute_tools',
+  'eval',
   'run',
   'file',
   'web',
@@ -217,7 +217,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const satisfies readonly BuiltinToolName[];
+const HEAD_WORK_TOOLS = ['eval', 'run', 'file'] as const satisfies readonly BuiltinToolName[];
 
 export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
 
@@ -241,14 +241,14 @@ function renderHeadToolConventions(
     lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
   }
 
-  if (hasHeadTool(tools, 'execute_tools')) {
+  if (hasHeadTool(tools, 'eval')) {
     const executionDoctrine = workspaceLayout === 'shared-workspace'
-      ? '- execute_tools runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
+      ? '- eval runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
         + '`workspace.*` is the canonical workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
         + '`sandbox.*` is its container, and `laptop.*` is the user\'s machine. '
         + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
         + '`web.*` is also in scope.'
-      : '- execute_tools runs JavaScript across the environments exposed to this local head: '
+      : '- eval runs JavaScript across the environments exposed to this local head: '
         + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
         + 'and `laptop.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
         + '`web.*` is also in scope.';
@@ -256,7 +256,7 @@ function renderHeadToolConventions(
     lines.push(
       executionDoctrine,
       ...(input.mode === 'plan'
-        ? ['- This is a Plan research head: use execute_tools only for read-only inspection. Do not call mutating workspace, process, port, release, or deployment operations.']
+        ? ['- This is a Plan research head: use eval only for read-only inspection. Do not call mutating workspace, process, port, release, or deployment operations.']
         : []),
     );
   }
@@ -279,7 +279,7 @@ function renderHeadToolConventions(
   if (hasHeadTool(tools, 'file')) {
     const filePlane = workspaceLayout === 'shared-workspace'
       ? 'the canonical workspace filesystem'
-      : 'your private scratch filesystem; use parent.* inside execute_tools for the canonical parent workspace';
+      : 'your private scratch filesystem; use parent.* inside eval for the canonical parent workspace';
 
     lines.push(input.mode === 'plan'
       ? `- file is available for reading ${filePlane}. Do not edit, write, or delete files in Plan mode.`

@@ -52,7 +52,7 @@ import {
   reportSettlesRun, runHostedTask,
   type HostedTaskProfile, type HostedTaskTurn, type SubordinateHostSeams,
 } from "./subordinate-hosting";
-import { createExecuteToolsFactory } from "./execute-tools";
+import { createCodemodeToolFactory } from "./codemode-tool";
 import { codemodeEgress } from "./codemode-egress";
 import type { ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
@@ -755,8 +755,8 @@ export class OrchestratorAgent extends ActorAgent {
         { homeHost: () => this.facetHomeHost(), directory: this.workspaceActors() },
         actor.record, actor.reference, 'head',
       ),
-      executeTool: (runtime, webSearch) => {
-        const factory = createExecuteToolsFactory({
+      codemodeTool: (runtime, webSearch) => {
+        const factory = createCodemodeToolFactory({
           loader: this.env.LOADER, egress: codemodeEgress(), rt: runtime,
           sql: this.boundSql, workspace: this.workspaceName(), webSearch,
         });
@@ -830,7 +830,7 @@ export class OrchestratorAgent extends ActorAgent {
    * fresh tree, so a subordinate holding the peer transport could leave its own
    * subtree in one call and the depth cap below would be decorative.
    *
-   * `executeTools` rather than a pre-built entry: the sandbox declares every
+   * `codemode` rather than a pre-built entry: the sandbox declares every
    * other tool as `tools.<name>`, so it is built last over the finished surface
    * and keeps the clamp and the effect claim the registry declares for it.
    *
@@ -844,7 +844,7 @@ export class OrchestratorAgent extends ActorAgent {
   private async hostedTaskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile> {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
-    const factory = createExecuteToolsFactory({
+    const factory = createCodemodeToolFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch,
       // `report.*` in the sandbox as well as at the top level, on the factory's
@@ -887,7 +887,7 @@ export class OrchestratorAgent extends ActorAgent {
         sql: turn.runtime.storage.sql,
         turnId: () => turn.input.id,
       },
-      executeTools: ({ native }) => factory.toolFor(native),
+      codemode: ({ native }) => factory.toolFor(native),
       craftedToolExecute: null,
       agents,
       // This actor's own semantic index and its own keyed world model — the
@@ -2177,7 +2177,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** release.* (tools/release-codemode.ts) is constructed once per DO
-   *  lifetime along with execute_tools, so it cannot re-check ownership on
+   *  lifetime along with eval, so it cannot re-check ownership on
    *  every call the way a callable RPC does. An unclaimed workspace gets a
    *  deps object whose every method rejects with the same honest reason,
    *  rather than a namespace that silently vanished or crashed on first use. */
@@ -2319,7 +2319,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** `agent.*` (self-steering) and `release.*` (the governed release lane —
    *  left the native surface; see tools/release-codemode.ts). Both read
    *  their deps lazily so a claimOwner mid-DO-lifetime lands without
-   *  rebuilding execute_tools. */
+   *  rebuilding eval. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
     return [
       createAgentSelfProvider(this),
@@ -4099,7 +4099,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /**
    * `agent.proposeScaffold` host method — the agent proposes a new version of
-   * its own agentic loop from inside execute_tools. Routes through the
+   * its own agentic loop from inside eval. Routes through the
    * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
    * status='pending' and is scored by the sampled shadow eval + promotion
    * gate (core queueTurnShadowTrial → runQueuedShadowTrials) like any other

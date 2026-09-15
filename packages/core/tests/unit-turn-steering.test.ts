@@ -119,13 +119,13 @@ async function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObjec
 describe('isFailingToolResult — invocation outcome is independent of rendering', () => {
   test('a recorded failure stays failed even when the display is truncated', () => {
     expect(isFailingToolResult({ toolName: 'run', args: {}, result: '{"error":"cut', success: false, reason: 'io', execution: { exitCode: 2 } })).toBe(true);
-    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: '', success: false, reason: null })).toBe(true);
+    expect(isFailingToolResult({ toolName: 'eval', args: {}, result: '', success: false, reason: null })).toBe(true);
   });
 
   test('successful error-shaped JSON and error-prefixed text remain data', () => {
     expect(isFailingToolResult({ toolName: 'run', args: {}, result: '{"reason":"denied","error":"history"}', success: true })).toBe(false);
     expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'Error report: zero failures', success: true })).toBe(false);
-    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: '{"error":"cut', success: true })).toBe(false);
+    expect(isFailingToolResult({ toolName: 'eval', args: {}, result: '{"error":"cut', success: true })).toBe(false);
   });
 
   test('a failure with unknown classification still fails', () => {
@@ -356,7 +356,7 @@ describe('no-progress trigger', () => {
   });
 
   test('a file touched for the first time is progress, and resets the stall', async () => {
-    // The half no tool-call signature can show: an `execute_tools` program is
+    // The half no tool-call signature can show: an `eval` program is
     // ONE call, and what it did is only visible in the shared file ledger.
     // Two near-threshold stalls with one new file between them: twice the
     // steps it takes to fire, and it does not, because the turn moved.
@@ -395,7 +395,7 @@ describe('no-progress trigger', () => {
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
       for (const o of [orch, missed]) {
         await o.turnExtension.onToolResult!({
-          toolName: 'execute_tools', args: { code: 'edit()' }, result: `attempt ${s}`, success: true,
+          toolName: 'eval', args: { code: 'edit()' }, result: `attempt ${s}`, success: true,
         });
       }
 
