@@ -1,0 +1,210 @@
+/**
+ * The ladder's content-addressed cache: a green gate is skipped only on a
+ * proof that nothing it can read has changed.
+ *
+ * The proof is a sha256 over the gate's input closure (`ladder-closure.ts`):
+ * the command, every closure file's working-tree bytes, the value of every
+ * environment name the closure declares or reads by literal, and the
+ * toolchain (bun, node, typescript, oxlint, wrangler, vitest, the platform).
+ * A recorded entry lives outside the tree at `~/.cache/kinu-ladder/<sha256>`
+ * and names the gate, the revision it was proved on, its wall seconds, the
+ * closure size and the tool versions. Nothing expires by time: an entry is
+ * either the hash of the tree you have or it is not consulted.
+ *
+ * What never records: a red result; a gate whose closure is uncomputable or
+ * live; a gate whose closure hashed differently after the run than before it
+ * (an edit landed mid-run, so the verdict is about a tree nobody can name).
+ *
+ * The store is a plain directory of JSON files so a hit is inspectable by
+ * hand and a wrong entry is deletable by hand. The key is never a per-gate
+ * allowlist and never a timestamp: `ladder-cache.test.ts` proves each of
+ * those directions red.
+ */
+
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import * as v from 'valibot';
+import { deriveClosure } from './ladder-closure';
+import type { Closure, Derived, Inputs, Repo } from './ladder-closure';
+
+const ToolVersionsSchema = v.object({
+  bun: v.string(),
+  node: v.string(),
+  typescript: v.string(),
+  oxlint: v.string(),
+  wrangler: v.string(),
+  vitest: v.string(),
+  platform: v.string(),
+});
+
+export type ToolVersions = v.InferOutput<typeof ToolVersionsSchema>;
+
+const PackageVersion = v.object({ version: v.string() });
+
+/** The toolchain a gate's verdict stands on. Package versions are read from
+ *  the installed manifests under `root` rather than spawned, so the key costs
+ *  no process; the runtimes are the ones running this program. A package that
+ *  is not installed is recorded as `absent`, which is a version too. */
+export function toolVersions(root: string): ToolVersions {
+  const installed = (name: string): string => {
+    const manifest = join(root, 'node_modules', name, 'package.json');
+
+    if (!existsSync(manifest)) return 'absent';
+
+    return v.parse(PackageVersion, JSON.parse(readFileSync(manifest, 'utf8'))).version;
+  };
+
+  return {
+    bun: Bun.version,
+    node: process.versions.node,
+    typescript: installed('typescript'),
+    oxlint: installed('oxlint'),
+    wrangler: installed('wrangler'),
+    vitest: installed('vitest'),
+    platform: `${process.platform}-${process.arch}`,
+  };
+}
+
+/** One recorded green run. */
+const EntrySchema = v.object({
+  run: v.string(),
+  revision: v.string(),
+  seconds: v.number(),
+  recordedAt: v.string(),
+  closureSize: v.number(),
+  tools: ToolVersionsSchema,
+});
+
+export type Entry = v.InferOutput<typeof EntrySchema>;
+
+export interface Store {
+  readonly directory: string;
+  lookup(key: string): Entry | undefined;
+  record(key: string, entry: Entry): void;
+}
+
+/** The default store location: `$XDG_CACHE_HOME/kinu-ladder` or
+ *  `~/.cache/kinu-ladder`. Outside the tree, so no gate can read it as corpus
+ *  and no checkout carries another's proofs. */
+export function defaultStoreDirectory(base = process.env.XDG_CACHE_HOME): string {
+
+  return join(base === undefined || base.length === 0 ? join(homedir(), '.cache') : base, 'kinu-ladder');
+}
+
+export function storeAt(directory: string): Store {
+  return {
+    directory,
+    lookup(key) {
+      const path = join(directory, key);
+
+      if (!existsSync(path)) return undefined;
+
+      return v.parse(EntrySchema, JSON.parse(readFileSync(path, 'utf8')));
+    },
+    record(key, entry) {
+      mkdirSync(directory, { recursive: true });
+      // Written whole then renamed: a concurrent reader sees a complete
+      // entry or none, never a truncated one.
+      const temporary = join(directory, `.${key}.${String(process.pid)}`);
+      writeFileSync(temporary, `${JSON.stringify(entry, null, 2)}\n`);
+      renameSync(temporary, join(directory, key));
+    },
+  };
+}
+
+/** A reader for one environment name. The key takes a READER rather than the
+ *  environment, for the reason every resolver in `packages/test-utils` does:
+ *  the closure walker can bound a read by name and cannot bound an object
+ *  handed over whole, and this module is in the closure of every gate that
+ *  imports the ladder. */
+export type EnvReader = (name: string) => string | undefined;
+
+export const ambientEnv: EnvReader = (name) => process.env[name];
+
+/** The key: sha256 over the run, the closure's bytes, the declared
+ *  environment values and the toolchain. Environment VALUES enter the
+ *  preimage only, so a secret named on a row never lands in the store. */
+export function keyFor(run: string, closure: Derived, tools: ToolVersions, repo: Repo, env: EnvReader = ambientEnv): string {
+  const hash = createHash('sha256');
+  hash.update(`run\0${run}\0`);
+  hash.update(`tools\0${JSON.stringify(tools)}\0`);
+
+  for (const file of closure.files) {
+    hash.update(`file\0${file}\0`);
+    hash.update(repo.read(file));
+    hash.update('\0');
+  }
+
+  for (const name of closure.env) hash.update(`env\0${name}\0${env(name) ?? '\u0001unset'}\0`);
+
+  return hash.digest('hex');
+}
+
+/** A gate's cache decision before it runs. */
+export type Plan =
+  | { readonly kind: 'hit'; readonly key: string; readonly entry: Entry; readonly closure: Derived }
+  | { readonly kind: 'miss'; readonly key: string; readonly closure: Derived }
+  | { readonly kind: 'uncacheable'; readonly closure: Exclude<Closure, Derived> };
+
+export function planGate(run: string, inputs: Inputs, repo: Repo, tools: ToolVersions, store: Store): Plan {
+  const closure = deriveClosure(run, inputs, repo);
+
+  if (closure.kind !== 'derived') return { kind: 'uncacheable', closure };
+  const key = keyFor(run, closure, tools, repo);
+  const entry = store.lookup(key);
+
+  if (entry === undefined) return { kind: 'miss', key, closure };
+
+  return { kind: 'hit', key, entry, closure };
+}
+
+/** Record a green run. The closure is re-derived and re-hashed AFTER the run:
+ *  an edit that landed while the gate ran changes the key, and the verdict is
+ *  then about a tree nobody can name, so nothing is recorded and the reason is
+ *  returned. */
+export function recordGreen(
+  plan: Extract<Plan, { kind: 'miss' }>,
+  run: string,
+  inputs: Inputs,
+  repo: Repo,
+  tools: ToolVersions,
+  store: Store,
+  result: { readonly seconds: number; readonly revision: string },
+): string | undefined {
+  const after = deriveClosure(run, inputs, repo);
+
+  if (after.kind !== 'derived') return `closure became ${after.kind} during the run`;
+  const key = keyFor(run, after, tools, repo);
+
+  if (key !== plan.key) return 'the closure changed while the gate ran; its verdict names no tree';
+
+  store.record(key, {
+    run,
+    revision: result.revision,
+    seconds: Math.round(result.seconds * 100) / 100,
+    recordedAt: new Date().toISOString(),
+    closureSize: after.files.length,
+    tools,
+  });
+
+  return undefined;
+}
+
+/** What the cache cannot see, printed on the green path of every cached tier. */
+export const CACHE_BLIND_SPOTS: readonly string[] = [
+  'node_modules — TRUSTED TO MATCH bun.lock AND patches/. The key hashes the lock and the '
+  + 'patches, never the installed tree; `bun run gate:patch-parity` is the gate for that equality.',
+  'A READ BY PATH — DECLARED, NOT SEEN. A file in a graph that opens the tree by path is '
+  + 'cacheable only with a `reads` list on its row, and the list is a claim; `--audit-closure` '
+  + 'runs the gate under strace and names every tree file opened outside the closure.',
+  'AN ENVIRONMENT READ BY COMPUTED KEY — DECLARED, NOT SEEN. Only literal `process.env.NAME` '
+  + 'reads and the row\'s `env` list enter the key; a name reached through a computed key that '
+  + 'the row does not declare is invisible. The environment read WHOLE is never cached.',
+  'OUTSIDE THE TREE — NOT AN INPUT. $HOME state, /etc, the clock and the network are not '
+  + 'hashed; a gate that reads them is declared `live` and never cached, and a gate that '
+  + 'reads them without saying so is a hole this cache cannot close.',
+  'THE VERDICT IS HASHED BEFORE AND AFTER THE RUN, NOT DURING IT. A file edited and restored '
+  + 'inside the run\'s window hashes identical at both ends and the run is recorded.',
+];

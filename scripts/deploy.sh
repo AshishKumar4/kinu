@@ -528,7 +528,7 @@ run_required_gate "React runtime identity" bun test scripts/react-runtime-identi
 run_required_gate "Nested container resolution" bun test scripts/nested-container-resolution.test.ts
 run_required_gate "Swarm-tree geometry" bun test scripts/swarm-tree-geometry.test.ts
 run_required_gate "Chat infinite scroll" bun test scripts/chat-scroll.test.ts
-run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts
+run_required_gate "Gate ladder wiring and cache soundness" bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts
 run_required_gate "Tier-budget ratchet" bun run gate:ladder-budget
 run_required_gate "Dead code" bun run gate:dead-code
 # The other direction of the same census: `gate:dead-code` reports a declaration

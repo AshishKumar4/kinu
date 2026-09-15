@@ -68,7 +68,7 @@ const REQUIRED_GATES = [
   "bun test scripts/nested-container-resolution.test.ts",
       "bun test scripts/swarm-tree-geometry.test.ts",
   "bun test scripts/chat-scroll.test.ts",
-  "bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts",
+  "bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts",
   "bun run gate:ladder-budget",
   "bun run gate:dead-code",
   "bun run gate:undeclared-imports",

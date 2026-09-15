@@ -1,5 +1,5 @@
 {
-  "reason": "the closure proof joined the ladder wiring row; file composition, 0.6s measured solo",
+  "reason": "the cache soundness proof joined the ladder wiring row; file composition, 1.25s measured for the three files",
   "tiers": {
     "commit": {
       "seconds": 82.24,
@@ -33,7 +33,7 @@
       }
     },
     "push": {
-      "seconds": 400.35,
+      "seconds": 400.65,
       "measuredAt": "2026-09-15",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -68,7 +68,7 @@
         "bun scripts/schema-drift.ts": 0.23,
         "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts": 24,
         "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
-        "bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts": 1,
+        "bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts": 1.3,
         "bun test scripts/deploy.test.ts": 87,
         "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts": 19,
         "bun test scripts/gate-set-equality.test.ts": 1.1,

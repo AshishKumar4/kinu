@@ -37,7 +37,7 @@
  */
 import { USER_AI_PROXY_PATH } from '@kinu.run/core';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
-import { LIVE_MODEL_ENV } from './ambient-env';
+import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 
 /** The three variables that decide identity and target. One object so a failure
  *  message, a shell script and the docs can name them without a second copy. */
@@ -233,7 +233,7 @@ export interface RefusedEvalEndpoint {
  * names come from {@link LIVE_MODEL_ENV} rather than a second list, so a
  * spelling added there is checked here.
  */
-export function refusedEvalEndpoint(env: EnvSource = process.env): RefusedEvalEndpoint | null {
+export function refusedEvalEndpoint(env: EnvSource = ambientByName(LIVE_MODEL_ENV.gatewayURL)): RefusedEvalEndpoint | null {
   for (const variable of LIVE_MODEL_ENV.gatewayURL) {
     const value = env[variable]?.trim();
 
@@ -275,7 +275,7 @@ export type EvalIdentityResolution =
  * tier that cannot run without a secret is a tier nobody can reproduce. What is
  * an error is a credential aimed at a deployment the allowlist does not cover.
  */
-export function resolveEvalIdentity(env: EnvSource = process.env): EvalIdentityResolution {
+export function resolveEvalIdentity(env: EnvSource = ambientByName(Object.values(EVAL_IDENTITY_ENV))): EvalIdentityResolution {
   const token = env[EVAL_IDENTITY_ENV.token]?.trim();
   // `evalTargetVerdict` normalizes, so this only has to choose the default.
   const origin = env[EVAL_IDENTITY_ENV.origin]?.trim() ?? EVAL_DEPLOYMENT_ORIGIN;
