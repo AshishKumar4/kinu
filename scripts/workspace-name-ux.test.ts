@@ -29,8 +29,10 @@ import { withGallery } from './gallery-harness';
  *  he was shown rather than a placeholder. */
 const SLUG = 'handwrought-walnut-4166c321';
 
-/** What an unnamed workspace reads as. `Untitled`, not `New`: a workspace
- *  nobody has named is still unnamed a month later. */
+/** What an unnamed workspace reads as, inline: this gate reads the rendered
+ *  words from the page and the placeholder, so it is the one user-facing
+ *  check and not a mirrored file-scope constant. `Untitled`, not `New`: a
+ *  workspace nobody has named is still unnamed a month later. */
 const UNTITLED = 'Untitled workspace';
 
 /** Everything the sidebar renders about one workspace row. */
@@ -129,9 +131,10 @@ describe('the workspace frame names an untitled workspace the same way', () => {
   // moment a person opened the workspace itself.
   let headerText: string;
   let headerLabels: string[];
+  let renamePlaceholder: string | null;
 
   beforeAll(async () => {
-    ({ headerText, headerLabels } = await withGallery(async ({ browser, origin }) => {
+    ({ headerText, headerLabels, renamePlaceholder } = await withGallery(async ({ browser, origin }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&ws=${SLUG}`, { waitUntil: 'networkidle0' });
@@ -142,7 +145,7 @@ describe('the workspace frame names an untitled workspace the same way', () => {
         { timeout: 60_000 }, UNTITLED,
       );
 
-      return page.evaluate(() => {
+      const partial = await page.evaluate(() => {
         const labels: string[] = [];
 
         for (const node of document.querySelectorAll('[title], [aria-label]')) {
@@ -155,9 +158,20 @@ describe('the workspace frame names an untitled workspace the same way', () => {
 
         return { headerText: document.body.innerText.replace(/\s+/g, ' '), headerLabels: labels };
       });
+
+      // The blank rename field hints the shared untitled label: click the
+      // title button and read the input it opens. Static markup never
+      // opens it, so only the browser can pin this half of the contract.
+      await page.evaluate((untitled: string) => {
+        const title = [...document.querySelectorAll('button')].find((button) => button.textContent?.includes(untitled));
+        title?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      }, UNTITLED);
+      await page.waitForSelector('input[placeholder]', { timeout: 60_000 });
+      const renamePlaceholder = await page.$eval('input[placeholder]', (input) => input.getAttribute('placeholder'));
+
+      return { ...partial, renamePlaceholder };
     }));
   }, 240_000);
-
   test('the workspace frame says Untitled workspace, never the slug', () => {
     expect(headerText).toContain(UNTITLED);
     expect(headerText).not.toContain(SLUG);
@@ -165,6 +179,10 @@ describe('the workspace frame names an untitled workspace the same way', () => {
 
   test('no tooltip or reader label hides the slug either', () => {
     for (const label of headerLabels) expect(label).not.toContain(SLUG);
+  });
+
+  test('the blank rename field hints the shared untitled label', () => {
+    expect(renamePlaceholder).toBe(UNTITLED);
   });
 });
 
