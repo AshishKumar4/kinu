@@ -50,21 +50,19 @@ export const DEVICE_CONSENT_UNANSWERED =
 
 /**
  * What linking a machine means, in the words a person needs before they say
- * yes. Every connect surface states it BEFORE the daemon is installed: the
- * install is the moment an agent gains reach into that machine, and it must
- * never happen as a side effect of typing a command or clicking a button.
+ * yes — exactly three lines. Every connect surface states it BEFORE the
+ * daemon is installed: the install is the moment an agent gains reach into
+ * that machine, and it must never happen as a side effect of typing a
+ * command or clicking a button.
  *
  * It lives here because the CLI prints it and the web connect panel renders
  * it. Two copies of a consent disclosure is how the two of them start saying
  * different things about the same grant.
  */
 export const DEVICE_CONNECT_DISCLOSURE: readonly string[] = [
-  'Connecting installs the Kinu daemon on this machine and links it to your account.',
-  'A workspace you approve runs commands in a sandbox: its own home plus folders you pick.',
-  'Your other files stay invisible to it.',
-  'You approve each workspace once. Revoke it under Account settings → Devices.',
-  'That page has one Sandbox switch per device. Off means this whole machine, as your user.',
-  'The daemon dials out and opens no inbound ports.',
+  'Kinu installs a small daemon here and links this machine to your account.',
+  'A workspace you approve runs in a sandbox: its own home plus folders you pick. Everything else stays invisible to it.',
+  'The daemon only dials out. Revoke it any time under Account settings → Devices.',
 ];
 
 export interface DeviceActionSummary {

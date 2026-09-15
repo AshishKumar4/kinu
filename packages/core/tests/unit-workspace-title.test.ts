@@ -9,26 +9,27 @@ import { describe, expect, test } from 'bun:test';
 
 import { workspaceDisplayTitle, workspaceTitleDraft } from '../src/read-models/workspace-title';
 
-/** The one string every untitled surface shares, pinned as a literal: the
- *  constant is module-private on purpose (surfaces ask the helper), so this
- *  literal is the pin that keeps the label itself from drifting. */
-const UNTITLED = 'Untitled workspace';
-
 describe('workspaceDisplayTitle', () => {
   test('a real title is what the surface shows', () => {
     expect(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: 'Fix the kiln' })).toBe('Fix the kiln');
   });
 
-  test('absent and blank titles read as the untitled label', () => {
-    expect(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: null })).toBe(UNTITLED);
-    expect(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: undefined })).toBe(UNTITLED);
-    expect(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: '   ' })).toBe(UNTITLED);
-  });
+  test('absent, blank and slug-stored titles all read as one shared label', () => {
+    // The property, not the words: every untitled shape answers the same
+    // non-empty label, and that label is never the slug. The visible words
+    // are asserted once, inline in the browser gate, which reads them from
+    // the rendered page and placeholder.
+    const blank = workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: null });
+    const missing = workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: undefined });
+    const spaces = workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: '   ' });
+    const echo = workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: 'ashen-kiln-386c2ec1' });
 
-  test('a stored slug is a placeholder, never a title', () => {
-    // The create-without-purpose row: display_name holds the slug itself.
-    expect(workspaceDisplayTitle({ name: 'ashen-kiln-386c2ec1', displayName: 'ashen-kiln-386c2ec1' }))
-      .toBe(UNTITLED);
+    for (const label of [blank, missing, spaces, echo]) {
+      expect(label.length).toBeGreaterThan(0);
+      expect(label).not.toBe('ashen-kiln-386c2ec1');
+    }
+
+    expect(new Set([blank, missing, spaces, echo]).size).toBe(1);
   });
 
   test('a title that merely LOOKS slug-like still shows — it was chosen', () => {
