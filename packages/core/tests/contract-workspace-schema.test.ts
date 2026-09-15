@@ -123,15 +123,18 @@ const OWNED = {
  * The surface a workspace ROOT has and an actor scope does not: the ownership
  * row and its fork lineage, the actor DIRECTORY (a subordinate binds its one
  * actor from its own identity row instead — `conformance/manifest.ts` states
- * that per root), and the root's slate publication tables.
+ * that per root), and the root's slate publication and sharing tables (a
+ * blueprint's recipients, a live share's grant, its named viewers and its
+ * viewer audit).
  */
 const ROOT_ONLY_TABLES = [
   'fork_lineage', 'fork_staged_files', 'fork_transfer',
   'slate_content', 'slate_content_chunks', 'slate_deployment_reservations',
-  'slate_deployments', 'slate_invocations', 'slate_previews', 'slate_publications',
+  'slate_deployments', 'slate_invocations', 'slate_live_share_users', 'slate_live_shares',
+  'slate_previews', 'slate_publications',
   'slate_receipts', 'slate_resource_reservations', 'slate_resources',
   'slate_share_users', 'slate_shares', 'slate_state', 'slate_versions',
-  'slates', 'workspace_actors', 'workspace_identity',
+  'slate_viewer_requests', 'slates', 'workspace_actors', 'workspace_identity',
 ];
 
 /** The three dialects initWorkspaceSchema takes, over one bun:sqlite handle.
