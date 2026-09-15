@@ -87,7 +87,7 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
-  observeSystemPromptHash,
+  observeSystemPromptHash, subordinateTurnContext, inheritedAsModelMessage,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -5881,13 +5881,17 @@ export abstract class ActorAgent extends Think<Env> {
       type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
     }));
 
-    this.actorSession.appendInput(lease, fileParts.length > 0
-      ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-      : { role: 'user', content: item.text });
-
-    // A re-opened turn's prior output follows its input: the model continues
-    // its own answer rather than starting one.
-    if (item.priorOutput !== undefined) this.actorSession.appendPriorOutput(lease, item.priorOutput);
+    // The one rule for where the turn's conversation comes from, shared with
+    // the local backend: a delivery's reply turn opens on the settled working
+    // revision (born from the delivery's conversation when this actor has
+    // none), every other turn appends, and prior output follows either.
+    this.actorSession.openTurnInput(lease, {
+      item,
+      message: fileParts.length > 0
+        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+        : { role: 'user', content: item.text },
+      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+    });
 
     const history = this.actorSession.history;
     // The conversation this turn was opened over, its own message included —
