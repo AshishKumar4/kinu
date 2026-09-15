@@ -39,7 +39,6 @@ describe('the activation refuses a hosted workspace whose SDK transcript store i
     // been built yet — which is exactly when the guard must ask.
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
-    await agent.harnessSettleBackgroundTasks();
     db.exec('DROP TABLE assistant_messages');
 
     await expect(wakeOverMovedTranscript(db)).rejects.toThrow('no `assistant_messages` table');

@@ -1,5 +1,5 @@
 {
-  "measured": "7d0522881: 1079 test files, 962 runnable suites, 12655 tests, 35 runners, 86 non-public product members",
+  "measured": "29d87a834: 1079 test files, 963 runnable suites, 12643 tests, 35 runners, 84 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -383,7 +383,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: recovers the active durable turn id after a reset before a device sweep :: harness bridge to a non-public member",
-      "count": 3
+      "count": 2
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-mid-turn-steer.test.ts :: restores a reset-lost steer from SQL before the resumed turn reaches its next step :: harness bridge to a non-public member",
@@ -427,10 +427,6 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: a fresh workspace wakes with the table and no rows yet :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: an activation whose store is gone throws, naming the table :: harness bridge to a non-public member",
       "count": 1
     },
     {
