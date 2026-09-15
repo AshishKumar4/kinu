@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
-import { claims, LADDER, gatesFor, deployGates } from './ladder';
+import { claims, LADDER, gatesFor } from './ladder';
 import { auditClosure } from './ladder-audit';
 import { CACHE_BLIND_SPOTS, keyFor, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
 import type { Plan, Store, ToolVersions } from './ladder-cache';
@@ -288,7 +288,7 @@ describe('ladder-cache — the audit sees what the walker cannot', () => {
 
 describe('ladder-cache — the live ladder declares what it never caches', () => {
   test('every row carries an inputs declaration, and every live row says why', () => {
-    for (const gate of gatesFor('deploy', deployGates())) {
+    for (const gate of gatesFor('deploy')) {
       expect(gate.inputs, `${gate.run} declares no inputs`).toBeDefined();
 
       if (gate.inputs.kind === 'live') expect(gate.inputs.why.length, `${gate.run} is live with no reason`).toBeGreaterThan(30);

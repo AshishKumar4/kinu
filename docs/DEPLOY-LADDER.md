@@ -5,10 +5,13 @@ times for one-file fixes. Every attempt re-ran all 66 pre-publish gates,
 5,184 declared seconds of work at width 6 with no cache. This document is the
 contract for making that fast without letting a stale green through.
 
-`scripts/ladder.ts` stays the one source of truth. `scripts/deploy.sh` mirrors
-it and `scripts/deploy.test.ts` proves the mirror. Tier membership and the set
-of required gates do not change here; what changes is which gates are
-re-executed, in what order, how wide, and when the run stops.
+`scripts/ladder.ts` is the one source of truth. `scripts/deploy.sh` consumes
+`bun scripts/ladder.ts --plan` and names no gate itself; `scripts/deploy.test.ts`
+drives the real script over that plan and asserts it holds no gate command.
+Every fact the runner needs — phase, label, weight, deadline, command — lives
+on the row. Tier membership and the set of required gates do not change here;
+what changes is which gates are re-executed, in what order, how wide, and when
+the run stops.
 
 ## The never-cache rule
 

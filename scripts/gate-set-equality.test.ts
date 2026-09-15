@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import {
   ENUMERATOR, NON_REPOSITORY_SCANS, auditGateProgram, gateCommands, gatePrograms,
 } from './gate-set-equality';
-import { LADDER, deployGates, claims, trackedTestFiles } from './ladder';
+import { LADDER, deployGates } from './ladder';
 import { isTestFile, isRunnableSuite, trackedFiles } from './sources';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
@@ -200,47 +200,17 @@ describe('silent: the legitimate shapes a naive reading mistakes for violations'
 });
 
 describe('the denominator, from both sides', () => {
-  test('gate commands are resolved from LADDER *and* deploy.sh, which are not the same set', () => {
-    // The warning that makes this gate honest: deriving "all gates" from either
-    // source alone certifies less than it governs.
-    //
-    // ONE DIRECTION IS EMPTY, AND THAT IS THE POINT. A gate deploy.sh runs that
-    // the LADDER does not declare gets synthesized by `gatesFor('deploy')` at a
-    // declared cost of zero, so pinning one example of that — `bun run
-    // verify:lean`, the bench command — would make the defect part of the
-    // contract. ladder.test.ts fails naming any deploy gate the LADDER does not
-    // declare, so the assertion here is the emptiness rather than an example.
-    //
-    // The union is what the denominator is derived from, for two reasons: the
-    // LADDER side genuinely carries entries deploy.sh does not run, and a gate
-    // added to deploy.sh tomorrow has to widen this denominator on the next run
-    // rather than be missed by a derivation that reads one file.
+  test('gate commands are resolved from LADDER, which the deploy plan is', () => {
+    // Until 2026-09-15 the denominator was the UNION of LADDER and a parse of
+    // deploy.sh, because the two could disagree; deploy.sh now consumes the
+    // ladder's plan, so the deploy set is the ladder minus the evals tier and
+    // the only shape left to assert is that the plan says so.
     const ladder = new Set(LADDER.map((gate) => gate.run));
     const deploy = deployGates();
-
-    const deployOnly = deploy.filter((run) => !ladder.has(run));
-    expect(deployOnly).toEqual([]);
-
-    // Ladder-only entries come in exactly two legitimate shapes. Tier `evals`
-    // is DELIBERATELY absent — live-model evidence with its own runner, `bun
-    // run evals:full`. Anything else may be absent by COMMAND only while its
-    // files are covered by a wider deploy gate; the orphan rule in
-    // ladder.test.ts proves that coverage, so here it is enough that the entry
-    // claims files at all. A third shape — absent and claiming nothing — is a
-    // gate the deploy silently lost.
+    expect(deploy.filter((run) => !ladder.has(run))).toEqual([]);
     const ladderOnly = LADDER.filter((gate) => !deploy.includes(gate.run));
+    expect(ladderOnly.map((gate) => gate.tier)).toEqual(ladderOnly.map(() => 'evals'));
     expect(ladderOnly.map((gate) => gate.run)).toContain('bun run test:eval');
-
-    for (const gate of ladderOnly) {
-      if (gate.tier === 'evals') continue;
-      expect(claims(gate.run, trackedTestFiles()).length).toBeGreaterThan(0);
-    }
-
-    // Resolved through `bun run`, so a deploy-only npm script contributes the
-    // program it names rather than reading as one opaque gate.
-    const commands = gateCommands();
-    expect(commands).toContain('bash scripts/verify-lean.sh');
-    expect(commands).toContain('bun scripts/secret-scan.ts');
   });
 
   test('a gate target resolving to no file throws instead of being skipped', () => {
