@@ -28,8 +28,15 @@ describe('needsOnboarding', () => {
 });
 
 describe('ONBOARDING_STEPS', () => {
-  test('the wizard has its four steps in order', () => {
-    expect(ONBOARDING_STEPS.map((s) => s.id)).toEqual(['profile', 'model', 'connections', 'showcase']);
+  test('the wizard has its three steps in order', () => {
+    expect(ONBOARDING_STEPS.map((s) => s.id)).toEqual(['profile', 'model', 'showcase']);
+  });
+
+  test('steps carry titles and no ledes', () => {
+    for (const step of ONBOARDING_STEPS) {
+      expect(step.title.length).toBeGreaterThan(0);
+      expect('lede' in step).toBe(false);
+    }
   });
 });
 
