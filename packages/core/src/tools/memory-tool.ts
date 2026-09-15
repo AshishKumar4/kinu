@@ -11,7 +11,7 @@ import type { VectorStore } from '../memory/vector-store';
 import { reciprocalRankFusion } from '../memory/vector-store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { appendMemoryNote } from '../memory/note';
-import { searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
+import { normalizeFactKey, searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import { ConversationSearchStore } from '../memory/conversation-search';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
@@ -172,21 +172,27 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       throw new KinuError('bad_input', 'key must be a non-empty string');
     }
 
+    // The store folds a key to one spelling on every call. The tool's own
+    // answers must name that same spelling — otherwise the model is told a
+    // fact is "every-tool probe" and reads it back as "every-tool_probe":
+    // two names for one row, and a caller checking its own echo misses.
+    const storedKey = normalizeFactKey(key.output);
+
     if (action === 'remember') {
       let value: JsonValue;
 
       try { value = decodeJsonValue({ value: args.value }); }
       catch (error) { throw new KinuError('bad_input', 'value not JSON-serializable', { cause: error }); }
 
-      facts.upsert(key.output, value, { confidence: args.confidence });
+      facts.upsert(storedKey, value, { confidence: args.confidence });
 
-      return { ok: true, key: key.output };
+      return { ok: true, key: storedKey };
     }
 
     if (action === 'recall') {
-      const f = facts.recall(key.output);
+      const f = facts.recall(storedKey);
 
-      if (!f) return { found: false, key: key.output };
+      if (!f) return { found: false, key: storedKey };
 
       return decodeJsonValue({ value: {
         found: true, key: f.key, value: f.value, confidence: f.confidence,
@@ -194,10 +200,10 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
       } });
     }
 
-    const existed = facts.recall(key.output) !== null;
-    facts.forget(key.output);
+    const existed = facts.recall(storedKey) !== null;
+    facts.forget(storedKey);
 
-    return { ok: true, key: key.output, existed };
+    return { ok: true, key: storedKey, existed };
   };
 
   const actions = memoryActionsFor(!!facts);
