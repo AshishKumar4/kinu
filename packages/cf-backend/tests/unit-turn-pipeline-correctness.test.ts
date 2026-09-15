@@ -1269,12 +1269,12 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
 
   test('the scope is the claim identity, not whatever turn is ambient', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-live');
+    const live = await thinkTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
 
     await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
 
     expect(harness.agent.harnessToolClaims('trial-7')).toEqual(['trial-7#0']);
-    expect(harness.agent.harnessToolClaims('u-live')).toEqual([]);
+    expect(harness.agent.harnessToolClaims(live.identity.turnId)).toEqual([]);
     expect(harness.agent.harnessToolClaims(WORKSPACE_RUN_ID)).toEqual([]);
   });
 
@@ -1286,7 +1286,7 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
    */
   test('a cold replay is answered from the first attempt row', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-live');
+    await thinkTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
     harness.agent.harnessFacts().upsert('trial-probe', 'as the trial saw it');
     const first = await harness.agent.harnessScaffoldCallTool('trial-7')('memory', RECALL);
 
@@ -1303,10 +1303,21 @@ describe('a recoverable rollout claims its tool calls on the rollout', () => {
    *  scope that would claim to be recoverable. */
   test('an unscoped rollout still claims against the live turn', async () => {
     const harness = orchestratorHarness();
-    harness.agent.declareTurnCheckpoint('u-live');
+    const live = await thinkTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'the live turn' }] });
 
     await harness.agent.harnessScaffoldCallTool()('memory', RECALL);
 
-    expect(harness.agent.harnessToolClaims('u-live')).toHaveLength(1);
+    expect(harness.agent.harnessToolClaims(live.identity.turnId)).toHaveLength(1);
+  });
+
+  /** Between turns there is no live turn to claim against, and the rollout
+   *  says so rather than inheriting the last turn's identity: the claim is
+   *  filed under the workspace, the one scope that outlives every turn. */
+  test('an unscoped rollout between turns claims against the workspace', async () => {
+    const harness = orchestratorHarness();
+
+    await harness.agent.harnessScaffoldCallTool()('memory', RECALL);
+
+    expect(harness.agent.harnessToolClaims(WORKSPACE_RUN_ID)).toHaveLength(1);
   });
 });

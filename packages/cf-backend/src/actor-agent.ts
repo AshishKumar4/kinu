@@ -1972,17 +1972,15 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The durable identity of the turn now settling — the id of the message it
    *  opened on. Read at the START of a terminal sequence and carried through
-   *  it: `_turnCheckpoint` outlives the turn on purpose (a background
-   *  continuation keeps tagging its originating turn) and the NEXT turn
-   *  overwrites it, so a detached effect that re-read it could close the wrong
-   *  turn's claim. */
+   *  it, because the loop's live turn is the NEXT one as soon as it opens, and
+   *  a detached effect that re-read it could close the wrong turn's claim. */
   protected durableTurnId(): string | null {
-    const live = this._chatLoop?.currentTurnId ?? this._turnCheckpoint?.turnId;
+    const live = this._chatLoop?.currentTurnId;
 
     if (live !== undefined && live !== null) return live;
 
-    // A cold activation has no checkpoint in RAM yet. The claim ledger is the
-    // handoff: the newest claim this ACTOR admitted and never settled is the
+    // A cold activation has no loop running a turn yet. The claim ledger is
+    // the handoff: the newest claim this ACTOR admitted and never settled is the
     // turn a Stop sweep must identify, and being actor-scoped it cannot answer
     // with a sibling actor's turn the way the old single `id = 1` row could.
     return this.stores.claims.unsettled(1)[0]?.turnId ?? null;
@@ -3257,7 +3255,7 @@ export abstract class ActorAgent extends Think<Env> {
         effectClaims: {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
-          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID,
+          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
         },
         clamp: {
           vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
@@ -4134,10 +4132,6 @@ export abstract class ActorAgent extends Think<Env> {
    *  Defaults to a conversation — every non-CLI surface (web chat, API, the
    *  REPL) is one. */
   protected _turnContinuity: TurnContinuity = 'conversation';
-  // Current turn identity for the device daemon's pre-mutation shadow-git
-  // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
-  // turn so background tool continuations keep tagging their originating turn.
-  protected _turnCheckpoint: { turnId: string; sessionId: string } | null = null;
 
   // The prepared streamText opts of the LAST live chat inference, stashed at
   // the end of beforeTurn — Think 0.8's one turn-assembly hook on the live
@@ -4169,8 +4163,8 @@ export abstract class ActorAgent extends Think<Env> {
   getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
     // The turn a device command belongs to is the loop's live turn: the id a
     // Stop sweep names, and the key the daemon's pre-mutation checkpoint is
-    // filed under. A declared checkpoint stands in where no loop runs.
-    const turnId = this._chatLoop?.currentTurnId ?? this._turnCheckpoint?.turnId;
+    // filed under.
+    const turnId = this._chatLoop?.currentTurnId;
 
     return turnId === undefined || turnId === null ? null : { turnId, sessionId: 'default' };
   }
@@ -5444,7 +5438,7 @@ export abstract class ActorAgent extends Think<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: claimScope === undefined
-            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
+            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
         },
         // The sandbox declares the FINISHED native surface, so core builds it

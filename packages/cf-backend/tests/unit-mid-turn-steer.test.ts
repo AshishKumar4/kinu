@@ -105,7 +105,6 @@ describe('a message typed while the agent is working', () => {
   test('recovers the active durable turn id after a reset before a device sweep', () => {
     const h = steerHarness();
     h.agent.harnessPersistActiveTurn('turn-before-reset');
-    h.agent.harnessClearTurnCheckpoint();
 
     expect(h.agent.harnessDurableTurnId()).toBe('turn-before-reset');
   });

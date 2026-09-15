@@ -427,17 +427,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   harnessAlarmHousekeeping(): Promise<void> { return this._onAlarmHousekeeping(); }
 
   /**
-   * The durable turn identity a turn opens on. Production sets it in
-   * `beforeTurn`, which needs a model; a suite that drives `onChatResponse`
-   * directly declares it, because it is the key the terminal transition claims
-   * against and an absent one means "unclaimed" rather than "first".
-   */
-  declareTurnCheckpoint(turnId: string): void {
-    this._turnCheckpoint = { turnId, sessionId: 'default' };
-    this.declareTurnEvolutionGate();
-  }
-
-  /**
    * The other half of what a turn opening establishes: whether this session
    * records evolution state at all.
    *
@@ -582,11 +571,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return super.getRawToolsForWorkMode(mode, claimScope);
   }
 
-  /** Start the durable pieces of a turn the model-free harness does not drive. */
-  harnessBeginTurn(turnId: string): void {
-    this.declareTurnCheckpoint(turnId);
-    this.orch.inbox.beginTurn(false);
-  }
   /** The model the next turns run on, scripted: the one override point a
    *  suite that runs a turn end to end scripts, instead of the platform's
    *  provider. Held, not consumed by one turn. */
@@ -644,7 +628,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     });
   }
 
-  harnessClearTurnCheckpoint(): void { this._turnCheckpoint = null; }
   harnessDurableTurnId(): string | null { return this.durableTurnId(); }
   /** Replace the delivery seam for a terminal-effect test. The actor still runs
    *  the real signal policy and terminal ledger around this one external port. */
