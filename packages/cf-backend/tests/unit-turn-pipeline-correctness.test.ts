@@ -13,30 +13,21 @@ import {
 import { SDK_SESSION_DDL } from '../../core/tests/helpers';
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, orchestratorHarness,
-  reactivateOrchestratorHarness,
+  reactivateOrchestratorHarness, thinkTurns,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { ExplorationHostSeams } from '../src/exploration-hosting';
 import type { ModelMessage, ToolSet, UIMessage } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
-import { MockLanguageModelV3 } from 'ai/test';
-import type { ChatResponseResult, PrepareStepContext } from '@cloudflare/think';
+import type { ChatResponseResult } from '@cloudflare/think';
 import * as v from 'valibot';
 
 /** The provider handle a live streamText also passes. `beforeStep` forwards
  *  only `stepNumber` and `messages` to the shared pipeline, so this is supplied
  *  as the model a step carries rather than asserted away. */
-const STEP_MODEL = new MockLanguageModelV3();
-
-/** The override half of a `PrepareStepResult`. `v.custom` keeps the element
- *  type without restating the SDK's message union. */
-const StepOverrideSchema = v.object({
-  messages: v.array(v.custom<ModelMessage>(() => true)),
-});
-
 /**
- * The messages one step actually carries, driven through the real Think hook.
+ * The messages one step actually carries, through the turn seam.
  *
  * Awaited: the shared pipeline is promoted to a Promise whenever a registered
  * extension must finish I/O before the model sees its rewrite, and this actor
@@ -44,15 +35,9 @@ const StepOverrideSchema = v.object({
  * "nothing changed" and silently passes the input back.
  */
 async function stepMessages(
-  agent: HarnessOrchestratorAgent, stepNumber: number, messages: ModelMessage[],
+  agent: HarnessOrchestratorAgent, stepNumber: number, messages: readonly ModelMessage[],
 ): Promise<ModelMessage[]> {
-  const context: PrepareStepContext = {
-    stepNumber, messages, steps: [], model: STEP_MODEL, experimental_context: undefined,
-  };
-
-  const rewritten = v.safeParse(StepOverrideSchema, await agent.beforeStep(context));
-
-  return rewritten.success ? rewritten.output.messages : messages;
+  return [...await thinkTurns(agent).step(stepNumber, messages)];
 }
 
 /** The turn-local block the ledger weaves into every step's request. */
@@ -174,9 +159,8 @@ describe('turn-pipeline correctness wiring', () => {
     const admit = (effort: ReasoningEffort) => {
       agent.harnessInstallCatalog({ tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, reasoningEffort: effort } } });
 
-      return agent.beforeTurn({ system: 'sys', messages: [{ role: 'user', content: effort }],
-        tools, model: 'harness-model', continuation: false, body: {},
-      });
+      return thinkTurns(agent).prepare({ messages: [{ role: 'user', content: effort }],
+        tools });
     };
 
     const turnA = await admit('low');
@@ -187,10 +171,7 @@ describe('turn-pipeline correctness wiring', () => {
     const invoke = toolExecute<Record<string, never>, unknown>(probe);
     const detached = invoke({});
     await started.promise;
-    await agent.onChatResponse({
-      message: { id: 'profile-A', role: 'assistant', parts: [{ type: 'text', text: 'detached' }] },
-      requestId: 'profile-A', continuation: false, status: 'completed',
-    });
+    await thinkTurns(agent).settle({ messageId: 'profile-A', text: 'detached', requestId: 'profile-A' });
     expect(agent.observeResolvedTurnProfile()).toBeNull();
     await admit('high');
     expect(agent.observeResolvedTurnProfile()?.tier.reasoningEffort).toBe('high');
@@ -207,14 +188,7 @@ describe('turn-pipeline correctness wiring', () => {
     const agent = harness.agent;
     agent.setObservedSoul('You are Atlas. Preserve the owner\'s exact requirements.');
 
-    const config = await agent.beforeTurn({
-      system: 'sys',
-      messages: [{ role: 'user', content: 'summarise this file' }],
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     expect(config?.system ?? '').toContain('You are Atlas. Preserve the owner\'s exact requirements.');
   });
@@ -233,21 +207,15 @@ describe('turn-pipeline correctness wiring', () => {
     const reply: ModelMessage = { role: 'assistant', content: [{ type: 'text', text: 'execute_tools, run, file' }] };
     const second: ModelMessage = { role: 'user', content: 'second: now use each one' };
 
-    const turn = (messages: ModelMessage[]) => ({
-      system: 'sys', messages, tools: {} satisfies ToolSet, model: 'harness-model',
-      continuation: false, body: {},
-    });
+    const turn = (messages: ModelMessage[]) => ({ messages });
 
-    const opening = await agent.beforeTurn(turn([first]));
+    const opening = await thinkTurns(agent).prepare(turn([first]));
 
     expect(opening?.messages?.filter((message) => message.role === 'user')).toEqual([first]);
 
-    await agent.onChatResponse({
-      message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'execute_tools, run, file' }] },
-      requestId: 'req-1', continuation: false, status: 'completed',
-    });
+    await thinkTurns(agent).settle({ messageId: 'a-1', text: 'execute_tools, run, file', requestId: 'req-1' });
 
-    const following = await agent.beforeTurn(turn([first, reply, second]));
+    const following = await thinkTurns(agent).prepare(turn([first, reply, second]));
     const request = following?.messages ?? [];
 
     // Both halves: the message that started this turn is in the request, and
@@ -265,26 +233,17 @@ describe('turn-pipeline correctness wiring', () => {
     const reply: ModelMessage = { role: 'assistant', content: 'answer' };
     const next: ModelMessage = { role: 'user', content: 'follow-up input' };
 
-    const turn = (messages: ModelMessage[]) => ({
-      system: 'sys', messages, tools: {} satisfies ToolSet, model: 'harness-model',
-      continuation: false, body: {},
-    });
+    const turn = (messages: ModelMessage[]) => ({ messages });
 
-    await agent.beforeTurn(turn([first]));
-    await agent.onChatResponse({
-      message: { id: 'edited-answer-1', role: 'assistant', parts: [{ type: 'text', text: 'answer' }] },
-      requestId: 'edited-req-1', continuation: false, status: 'completed',
-    });
+    await thinkTurns(agent).prepare(turn([first]));
+    await thinkTurns(agent).settle({ messageId: 'edited-answer-1', text: 'answer', requestId: 'edited-req-1' });
     const document = v.parse(v.string(), await runtime.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
     await runtime.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
     await expect(runtime.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
     declareShadowCandidate(runtime);
     runtime.actor.config.setShadowSampleRate(1);
-    const prepared = await agent.beforeTurn(turn([first, reply, next]));
-    await agent.onChatResponse({
-      message: { id: 'edited-answer-2', role: 'assistant', parts: [{ type: 'text', text: 'second answer' }] },
-      requestId: 'edited-req-2', continuation: false, status: 'completed',
-    });
+    const prepared = await thinkTurns(agent).prepare(turn([first, reply, next]));
+    await thinkTurns(agent).settle({ messageId: 'edited-answer-2', text: 'second answer', requestId: 'edited-req-2' });
     const trial = listQueuedShadowTrials(runtime.storage.sql, runtime.actor, 1)[0];
 
     if (trial === undefined || prepared?.messages === undefined) throw new Error('the turn did not retain its request and trial');
@@ -315,7 +274,7 @@ describe('turn-pipeline correctness wiring', () => {
     });
 
     unreachable.agent.setObservedSoul('You are Vesta. Answer on the tools you hold.');
-    const config = await unreachable.agent.beforeTurn(turn);
+    const config = await thinkTurns(unreachable.agent).prepare(turn);
     expect(config?.system ?? '').toContain('You are Vesta. Answer on the tools you hold.');
 
     const denied = orchestratorHarness({
@@ -323,7 +282,7 @@ describe('turn-pipeline correctness wiring', () => {
       failDescriptors: new KinuError('denied', 'the caller holds no capability'),
     });
 
-    await expect(denied.agent.beforeTurn(turn)).rejects.toMatchObject({ code: 'denied' });
+    await expect(thinkTurns(denied.agent).prepare(turn)).rejects.toMatchObject({ code: 'denied' });
   });
 
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
@@ -374,14 +333,7 @@ describe('turn-pipeline correctness wiring', () => {
     const pinned = await agent.setModel('workers-ai/pinned-model');
     expect(pinned).toEqual({ ok: true, spec: 'workers-ai/pinned-model' });
 
-    const config = await agent.beforeTurn({
-      system: 'sys',
-      messages: [{ role: 'user', content: 'hello' }],
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'hello' }] });
 
     expect(agent.observeResolvedTurnProfile()?.tier).toEqual({
       id: 'default', source: 'workspace', model: 'workers-ai/pinned-model',
@@ -482,9 +434,7 @@ describe('turn-pipeline correctness wiring', () => {
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'deploy the api' }];
 
-    const turn = await agent.beforeTurn({
-      system: 'sys', messages: handed, tools: {}, model: 'harness-model', continuation: false, body: {},
-    });
+    const turn = await thinkTurns(agent).prepare({ messages: handed });
 
     const admitted = turn?.messages ?? handed;
 
@@ -514,14 +464,11 @@ describe('turn-pipeline correctness wiring', () => {
       agent.modelFactory = () => model;
       const handed: ModelMessage[] = [{ role: 'user', content: `Run the ${mode} turn` }];
 
-      const turn = await agent.beforeTurn({
-        system: 'sys', messages: handed, tools: installed ? agent.getTools() : {},
-        model: 'harness-model', continuation: false, body: {},
-      });
+      const turn = await thinkTurns(agent).prepare({ messages: handed, tools: installed ? agent.getTools() : {} });
 
       if (!turn) throw new Error('the root turn must prepare a configuration');
       const messages = await stepMessages(agent, 0, turn.messages ?? handed);
-      await streamText({ model, system: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools }).text;
+      await streamText({ model, system: turn.system, messages, tools: turn.tools, activeTools: turn.activeTools === undefined ? undefined : [...turn.activeTools] }).text;
 
       expect(agent.observeResolvedTurnProfile()?.allowedTools).toContain('submit_plan');
       expect(model.doStreamCalls).toHaveLength(1);
@@ -536,13 +483,13 @@ describe('turn-pipeline correctness wiring', () => {
     const { agent } = orchestratorHarness();
     const handed: ModelMessage[] = [{ role: 'user', content: 'prepare one turn' }];
     const context = { system: 'sys', messages: handed, tools: {}, model: 'harness-model', continuation: false, body: {} };
-    const turn = await agent.beforeTurn(context);
+    const turn = await thinkTurns(agent).prepare(context);
     const admitted = turn?.messages ?? handed;
 
     expect((await stepMessages(agent, 0, admitted)).filter(isDynamicContextBlock)).toHaveLength(1);
     const abort = new AbortController();
     abort.abort(new Error('rejected preparation'));
-    await expect(agent.beforeTurn({ ...context, signal: abort.signal })).rejects.toThrow('rejected preparation');
+    await expect(thinkTurns(agent).prepare({ ...context, signal: abort.signal })).rejects.toThrow('rejected preparation');
     await expect(stepMessages(agent, 0, admitted)).rejects.toThrow('a model step requires a prepared profile and tool surface');
   });
 
@@ -744,9 +691,7 @@ describe('turn-pipeline correctness wiring', () => {
       id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
     };
 
-    await harness.agent.onChatResponse({
-      message, requestId: 'req-interrupted', continuation: false, status: 'aborted',
-    });
+    await thinkTurns(harness.agent).settle({ messageId: message.id, parts: message.parts, requestId: 'req-interrupted', status: 'aborted' });
 
     // No projection row anywhere.
     const mirrored = harness.db.prepare<{ c: number }, []>(
@@ -779,12 +724,7 @@ describe('turn-pipeline correctness wiring', () => {
     // fact into the recording rather than asking the host that recovers it.
     harness.agent.declareTurnEvolutionGate();
 
-    await harness.agent.onChatResponse({
-      message: {
-        id: 'a-cut', role: 'assistant', parts: [{ type: 'text', text: 'partial' }],
-      } satisfies UIMessage,
-      requestId: 'req-cut', continuation: false, status: 'aborted',
-    });
+    await thinkTurns(harness.agent).settle({ messageId: 'a-cut', text: 'partial', requestId: 'req-cut', status: 'aborted' });
 
     // The outcome-review buffer core's recordTurn appends to, and the turn's own
     // partial answer inside it — a row for some other turn would pass a bare
@@ -843,9 +783,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     test('a completed build turn claims them', async () => {
       const harness = settleOneTurn('build');
-      await harness.agent.onChatResponse({
-        message: settled, requestId: 'req-build', continuation: false, status: 'completed',
-      });
+      await thinkTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-build' });
       expect(harness.db.query('SELECT turn_id, session_id FROM alternate_takes').get())
         .toMatchObject({ turn_id: 'a-1', session_id: 'default' });
     });
@@ -857,9 +795,7 @@ describe('turn-pipeline correctness wiring', () => {
       // `actor_id` key change produced — would purge nothing and still read 0.
       expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
         .toMatchObject({ n: 1 });
-      await harness.agent.onChatResponse({
-        message: settled, requestId: 'req-plan', continuation: false, status: 'completed',
-      });
+      await thinkTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
       expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
         .toMatchObject({ n: 0 });
     });
@@ -946,10 +882,7 @@ describe('turn-pipeline correctness wiring', () => {
       boundDelivery(harness, 'evt-spliced');
       await spliceDrain(harness, 'evt-spliced');
 
-      await harness.agent.onChatResponse({
-        message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] },
-        requestId: 'req-spliced', continuation: false, status: 'completed',
-      });
+      await thinkTurns(harness.agent).settle({ messageId: 'a-1', text: 'the answer', requestId: 'req-spliced' });
 
       // Answered: the lease is closed and the BINDING is kept, so no drain can
       // select it again either.
@@ -968,10 +901,7 @@ describe('turn-pipeline correctness wiring', () => {
       // Think reported a completed stream, but no assistant row carries the
       // answer — a later activation reads this turn back as never having
       // happened, so the delivery is still owed.
-      await harness.agent.onChatResponse({
-        message: { id: '', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] },
-        requestId: 'req-nodurable', continuation: false, status: 'completed',
-      });
+      await thinkTurns(harness.agent).settle({ messageId: '', text: 'the answer', requestId: 'req-nodurable' });
 
       expect(await settledLease(harness)).toEqual({
         turn_id: 'evt-nodurable', consumed_at: LEASE_TAKEN_AT,
@@ -983,10 +913,7 @@ describe('turn-pipeline correctness wiring', () => {
       boundDelivery(harness, 'evt-failed');
       await spliceDrain(harness, 'evt-failed');
 
-      await harness.agent.onChatResponse({
-        message: { id: 'a-3', role: 'assistant', parts: [] },
-        requestId: 'req-failed', continuation: false, status: 'error', error: 'provider exploded',
-      });
+      await thinkTurns(harness.agent).settle({ messageId: 'a-3', requestId: 'req-failed', status: 'error', error: 'provider exploded' });
 
       expect(await settledLease(harness)).toEqual({
         turn_id: 'evt-failed', consumed_at: LEASE_TAKEN_AT,
@@ -1196,14 +1123,7 @@ describe('turn-pipeline correctness wiring', () => {
   test('the role rides the cacheable prefix; provenance never does', async () => {
     const { agent } = orchestratorHarness();
 
-    const config = await agent.beforeTurn({
-      system: 'sys',
-      messages: [{ role: 'user', content: 'summarise this file' }],
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     const system = config?.system ?? '';
     // The turn's resolved role is a prefix fact: it changes on a deliberate
@@ -1223,14 +1143,7 @@ describe('turn-pipeline correctness wiring', () => {
     // ladder's middle rung.
     const { agent } = orchestratorHarness();
 
-    const config = await agent.beforeTurn({
-      system: 'sys',
-      messages: [{ role: 'user', content: 'summarise this file' }],
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    const config = await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'summarise this file' }] });
 
     expect(config?.system ?? '').toContain('`hire` with `lifetime:"task"` runs one agent for one question');
   });
@@ -1239,14 +1152,7 @@ describe('turn-pipeline correctness wiring', () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
 
-    const turn = (content: string) => agent.beforeTurn({
-      system: 'sys',
-      messages: [{ role: 'user' as const, content }],
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    const turn = (content: string) => thinkTurns(agent).prepare({ messages: [{ role: 'user' as const, content }] });
 
     await turn('open the turn');
     const setMode = toolExecute<{ action: 'mode'; role: string }, unknown>(agent.getTools().tasks);
@@ -1268,14 +1174,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     if (!prepare) throw new Error('Expected turn steering prepareStep extension');
 
-    await agent.beforeTurn({
-      system: 'sys',
-      messages: [{ role: 'user', content: 'add caching to the api and update the docs' }],
-      tools: {} satisfies ToolSet,
-      model: 'harness-model',
-      continuation: false,
-      body: {},
-    });
+    await thinkTurns(agent).prepare({ messages: [{ role: 'user', content: 'add caching to the api and update the docs' }] });
     const messages = [{ role: 'user' as const, content: 'add caching to the api and update the docs' }];
     const stepped = await prepare.call(orch.turnExtension, { stepNumber: 0, messages });
     const rendered = JSON.stringify(stepped ?? messages);
