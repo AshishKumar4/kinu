@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import {
-  EXCLUSION_GROUPS, GATE_DEADLINES, LADDER, SERIAL_GATES, claims, deployDeadlines, deployExclusions,
-  deployWaves, deployWeights, gateWeight,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, claims, deployPlan, gateWeight, printPlan,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
@@ -16,12 +15,17 @@ import * as v from "valibot";
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
 
-/** Every gate spelled with a glob, resolved by the same `claims()` the ladder
- *  is measured with: the fixture writes exactly these files so bash expands
- *  each glob to the set the ladder credits it with, and the expected command
- *  line is that expansion. Derived from the tree, never listed: a suite that
- *  joins a family joins the fixture by existing. */
+/** The plan the runner consumes, and the same plan expanded the way bash
+ *  expands it inside the fixture: every glob word replaced by the files
+ *  `claims()` resolves it to, which is the set the ladder credits the gate
+ *  with. One derivation drives the files the fixture writes, the plan the
+ *  fixture's `bun` stub prints, and every expected command line below, so no
+ *  list here can drift from the ladder. */
 const tracked = trackedFiles();
+
+const PLAN = deployPlan();
+
+const PLAN_TEXT = printPlan(PLAN);
 
 function expandGlobs(run: string): string {
   if (!run.includes("*")) return run;
@@ -31,101 +35,20 @@ function expandGlobs(run: string): string {
   return [...words.filter((word) => !word.includes("/")), ...files].join(" ");
 }
 
-const GLOB_EXPANDED_FILES = [...new Set(LADDER.filter((gate) => gate.run.includes("*")).flatMap((gate) => claims(gate.run, tracked)))];
+const GLOB_EXPANDED_FILES = [...new Set(PLAN.filter((row) => row.run.includes("*")).flatMap((row) => claims(row.run, tracked)))];
 
-const REQUIRED_GATES = [
-  "bun scripts/preflight.ts",
-  "bun run lint",
-  "bun test packages/agent-core/drift.test.ts",
-  "bun run typecheck",
-  "bun test scripts/pattern-inventory.test.ts scripts/jsonc.test.ts",
-  "bun scripts/pattern-inventory.ts",
-  "bun test scripts/deploy.test.ts",
-  "bun run test:core",
-  "bun run test:spine",
-  "bun run gate:python-suites",
-  "bun run gate:mutation-fences",
-  "bun test packages/devbox/",
-  "bun test packages/test-utils/",
-  "bun test --parallel=4 packages/cf-backend/",
-  "bun run test:workerd",
-  "bun test --parallel=4 packages/cli-backend/",
-  "bun run test:cli",
-  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts",
-  expandGlobs("bun test scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts"),
-  "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts",
-  "bun scripts/secret-scan.ts",
-  "bun scripts/schema-drift.ts",
-  "bun scripts/tracing-gate.ts",
-  "bun test scripts/hammer.test.ts scripts/mutation-fences.test.ts",
-  "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts",
-  "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts",
-  "bun test scripts/gate-set-equality.test.ts",
-  "bun test scripts/wired.test.ts",
-  expandGlobs("bun test scripts/*-ux.test.ts scripts/computed-style.test.ts"),
-  "bun test scripts/public-pages.test.ts scripts/plan-demo-film.test.ts",
-  "bun test scripts/react-runtime-identity.test.ts",
-  "bun test scripts/nested-container-resolution.test.ts",
-      "bun test scripts/swarm-tree-geometry.test.ts",
-  "bun test scripts/chat-scroll.test.ts",
-  "bun test scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts",
-  "bun run gate:ladder-budget",
-  "bun run gate:dead-code",
-  "bun run gate:undeclared-imports",
-  "bun run gate:client-graph",
-  "bun run gate:core-layering",
-  "bun run gate:vendor-schema",
-  "bun run gate:wired",
-  "bun scripts/test-census.ts --ratchet",
-  "bun run gate:duplication",
-  "bun run gate:complexity",
-  "bun run gate:capability-parity",
-  "bun run gate:policy-drift",
-  "bun run gate:silent-drop",
-  "bun run gate:scratch-ownership",
-  "bun run gate:agents-fields",
-  "bun run gate:do-init",
-  "bun run gate:reachability",
-  "bun run gate:platform",
-  "bun run gate:egress-interception",
-  "bun run gate:typecheck-coverage",
-  "bun run gate:skip-ratchet",
-  "bun run gate:set-equality",
-  "bun run gate:literature-citations",
-  "bun run gate:commit-message",
-  "bun run gate:install-scripts",
-  "bun run gate:scanner-bundle",
-  "bun run gate:dependency-advisories",
-  "bun run gate:patch-parity",
-  "bun run gate:bench-corpus",
-  "bun test packages/pc-agent/",
-  "bun test ./tests/",
-  "bun run layergate",
-  "bun run layergate --matrix",
-  "bun run verify:lean",
-  "bun run gate:hammer",
-  "bun run gate:infra",
-] as const;
+/** Every pre-publish gate in plan order, as the fixture's event log spells it. */
+const REQUIRED_GATES: readonly string[] = PLAN.filter((row) => row.phase !== "post-publish").map((row) => expandGlobs(row.run));
 
-/**
- * The gates that run AFTER the upload, in file order.
- *
- * A SECOND LIST, and the split is the claim rather than bookkeeping. Everything
- * in `REQUIRED_GATES` runs before the first build mutation, which is what the
- * fixture below proves by failing the build and comparing the event log. A
- * post-deploy gate cannot appear in that comparison at all — the fixture's
- * build stub exits non-zero on purpose, so the pipeline never reaches step 4 —
- * and adding one to that list would turn a correct pipeline red.
- *
- * What IS asserted about these is structural and stronger for it: they are in
- * the parse of deploy.sh, they sit after the smoke test in the file, and they
- * share ONE wave — both measure the build that just shipped, and neither
- * perturbs what the other asserts.
- */
-const POST_DEPLOY_GATES = [
-  "bun run gate:first-run",
-  "bun run gate:trajectory",
-] as const;
+/** The gates that run AFTER the upload. The fixture's build stub exits
+ *  non-zero on purpose, so no run here reaches them; what is asserted about
+ *  them is structural: they are the plan's last phase. */
+const POST_DEPLOY_GATES: readonly string[] = PLAN.filter((row) => row.phase === "post-publish").map((row) => expandGlobs(row.run));
+
+/** The pre-publish waves, in order: each phase before `post-publish` is one. */
+const PRE_PUBLISH_WAVES: readonly (readonly string[])[] = DEPLOY_PHASES
+  .filter((phase) => phase !== "post-publish")
+  .map((phase) => PLAN.filter((row) => row.phase === phase).map((row) => expandGlobs(row.run)));
 
 function executable(path: string, source: string): void {
   writeFileSync(path, source);
@@ -160,6 +83,13 @@ function launchFailure(result: Bun.SyncSubprocess): string {
 function commandStub(name: string): string {
   return `#!/usr/bin/bash
 command_line="${name} $*"
+# The planner, answered from the file the fixture wrote: the plan is the
+# ladder's, and the stub only carries it. Not logged as an event, because it
+# is not a gate.
+if [ "$command_line" = "bun scripts/ladder.ts --plan" ]; then
+  cat "$KINU_DEPLOY_PLAN"
+  exit 0
+fi
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
 # WHAT THE INFRASTRUCTURE GATE ACTUALLY SAW. The phase travels in the
 # environment because the gate line has to stay one string for ladder.ts to
@@ -225,6 +155,9 @@ function runDeploy({
   mkdirSync(join(fixture, "node_modules"));
   mkdirSync(join(fixture, "packages", "cf-backend"), { recursive: true });
 
+  const planFile = join(fixture, "plan.tsv");
+  writeFileSync(planFile, `${PLAN_TEXT}\n`);
+
   for (const relativePath of GLOB_EXPANDED_FILES) {
     const path = join(fixture, relativePath);
     mkdirSync(dirname(path), { recursive: true });
@@ -277,6 +210,7 @@ exit 87
       // and one test points it somewhere that cannot exist.
       TMPDIR: temporaryRoot ?? fixture,
       KINU_DEPLOY_GATE_LOG: log,
+      KINU_DEPLOY_PLAN: planFile,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
       // Always set, so the assertion that the script overrides it is about the
@@ -325,52 +259,34 @@ describe("deploy gate", () => {
     expect(run.buildEnvironment).toBe("root");
   });
 
-  test("the pre-publish serial gates run alone, and everything else runs concurrently", () => {
-    // STRUCTURAL, over the waves deploy.sh declares, NOT the order in the stub
-    // log. Reading the order off that log cannot see a missing barrier: comment
-    // the preflight barrier out and preflight is still queue index 0, so the
-    // scheduler launches it first and the log looks identical. A grouping
-    // cannot be satisfied by luck.
-    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
-    const alone = waves.filter((wave) => wave.length === 1).flat();
+  // STRUCTURAL, over the plan the runner consumes: every phase but `source`
+  // holds gates that run alone, one wave each, in DEPLOY_PHASES order; the
+  // runner walks the phases in that order and puts a barrier after each. The
+  // preflight is first because nothing may report on a machine the preflight
+  // has not passed; the hammer and the account gate follow the source wave so
+  // a cheap source red fails first; the post-publish phase runs after the
+  // upload against the build that just shipped. Reading this off the stub log
+  // could not see a missing barrier, since the scheduler launches index 0
+  // first either way; the plan's phase column can.
+  test("every gate outside the source wave declares its phase and why it runs alone", () => {
+    expect(DEPLOY_PHASES).toEqual(["preflight", "source", "hammer", "infra", "post-publish"]);
+    const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, PLAN.filter((row) => row.phase === phase).map((row) => row.run)]));
+    expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
+    expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
+    expect(byPhase.infra).toEqual(["bun run gate:infra"]);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun run gate:trajectory"]);
+    expect(byPhase.source?.length).toBe(PLAN.length - 5);
 
-    const required: readonly string[] = REQUIRED_GATES;
-    const postDeploy: readonly string[] = POST_DEPLOY_GATES;
-    const serialPrePublish = Object.keys(SERIAL_GATES).filter((gate) => required.includes(gate));
-    // The post-publish tiers are declared serial too — SERIAL_GATES holds
-    // every gate that stays clear of the pre-publish waves — but they share one
-    // wave: both measure the build that just shipped and neither perturbs the
-    // other's assertions, so "runs alone" is asserted only over the
-    // pre-publish members.
-    expect(alone.sort()).toEqual(serialPrePublish.sort());
-    // FIVE waves: preflight, one concurrent source block, the hammer,
-    // infrastructure, and — after the upload and the smoke test — one wave
-    // holding both post-publish tiers. The hammer earned its own barrier by
-    // being the one gate whose subject is contention — it starves nproc/2
-    // threads on purpose, so anything beside it would be measured on a machine
-    // this gate is deliberately loading. Barriers around every source gate
-    // would satisfy `alone` and make the pipeline serial, so the middle size
-    // is pinned.
-    // DERIVED from the two lists above rather than written as a number: a
-    // literal here has to be edited every time a gate is added, and a number
-    // nobody can derive gets edited without being read. The property is the
-    // same either way, because a gate that leaves the middle wave has to be
-    // named in `SERIAL_GATES` and stay out of `REQUIRED_GATES` to satisfy the
-    // assertions around it.
-    // The last wave is the only one that runs against a DEPLOYED build — the
-    // first-run and trajectory tiers against the one just published. Until
-    // 2026-09-12 the trajectory tier ran alone, last before the build, where
-    // its only subject was the PREVIOUS build: it could refuse a regression
-    // but never a repair, and that day it refused the deploy carrying the fix
-    // it was red on. A red here is a red on what users have now.
-    expect(waves.length).toBe(5);
-    expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
-    expect(waves[1]?.length).toBe(REQUIRED_GATES.length - serialPrePublish.length);
-    expect(waves[2]).toEqual(["bun run gate:hammer"]);
-    expect(waves[3]).toEqual(["bun run gate:infra"]);
-    expect(waves[4]).toEqual([...postDeploy]);
-    expect(waves[4]).toContain("bun run gate:trajectory");
+    for (const gate of LADDER) {
+      if (gate.phase === undefined) {
+        expect(gate.alone, `${gate.run} explains running alone but runs in the source wave`).toBeUndefined();
+        continue;
+      }
+
+      expect(gate.alone?.length ?? 0, `${gate.run} runs alone with no reason`).toBeGreaterThan(80);
+    }
   });
+
 
   // The Worker version is what a persisted error names, so it has to name the
   // build. Asserted as text because the fixture cannot reach step 3: its build
@@ -383,35 +299,25 @@ describe("deploy gate", () => {
     expect(source).toContain('npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"');
   });
 
-  test("every gate has a process-tree deadline", () => {
+  test("every gate has a process-tree deadline, from its row or the shared figure", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain("GATE_DEADLINE_SECONDS=480");
-    expect(source).toContain(
-      'timeout --signal=TERM --kill-after=5s "${GATE_DEADLINES[${GATE_CMDS[pick]}]:-$GATE_DEADLINE_SECONDS}"'
-      + ' ${GATE_CMDS[pick]}',
-    );
+    expect(source).toContain('timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" ${GATE_CMDS[pick]}');
+    expect(GATE_DEADLINE_SECONDS).toBe(480);
 
-    // A PER-GATE EXCEPTION IS A DECLARATION, in both files. The runner is bash
-    // and cannot import the reason, so the two tables are written twice and
-    // held equal here — the same shape as the exclusion table above. Without
-    // this, the shared 480s wall could be lifted off every source gate by one
-    // edit that looks like it only touches one of them.
-    const declared = Object.fromEntries(
-      Object.entries(GATE_DEADLINES).map(([run, entry]) => [run, entry.seconds]),
-    );
+    for (const row of PLAN) {
+      const gate = LADDER.find((candidate) => candidate.run === row.run);
 
-    expect(deployDeadlines(source)).toEqual(declared);
+      if (gate?.deadline === undefined) {
+        expect(row.deadline, `${row.run} carries a deadline its row does not declare`).toBe(GATE_DEADLINE_SECONDS);
+        continue;
+      }
 
-    for (const [run, entry] of Object.entries(GATE_DEADLINES)) {
-      // Both lists: a post-deploy gate needs its own wall for the same reason
-      // a pre-deploy one might, and a deadline naming no gate is a stale
-      // declaration whichever half it belongs to.
-      const gates: string[] = [...REQUIRED_GATES, ...POST_DEPLOY_GATES];
-      expect(gates, `${run} has a deadline and is not a gate`).toContain(run);
-      expect(entry.seconds, `${run} declares no longer than the shared deadline`)
-        .toBeGreaterThan(480);
-      expect(entry.why.length, `${run} declares no reason for its own deadline`)
-        .toBeGreaterThan(80);
+      // A PER-GATE EXCEPTION IS A DECLARATION with a reason, longer than the
+      // shared wall: raising the shared figure would take the wall off every
+      // source gate at once.
+      expect(row.deadline).toBe(gate.deadline.seconds);
+      expect(gate.deadline.seconds, `${row.run} declares no longer than the shared deadline`).toBeGreaterThan(GATE_DEADLINE_SECONDS);
+      expect(gate.deadline.why.length, `${row.run} declares no reason for its own deadline`).toBeGreaterThan(80);
     }
   });
 
@@ -427,6 +333,33 @@ describe("deploy gate", () => {
   // deploy unable to finish. Asserted through a real run rather than by reading
   // the script: the source-text version of this test passed over a runner that
   // could not report.
+  // ONE SOURCE. deploy.sh consumes the plan the ladder prints and names no
+  // gate itself: a `bun test`, `bun run gate:` or `bun scripts/` command in
+  // the runner would be a second list, which is the defect this replaced
+  // (fifteen suites named by hand in three files on 2026-09-14).
+  test("deploy.sh names no gate; it consumes the ladder's plan", () => {
+    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+    const commands = source.split("\n").filter((line) => /^\s*(?:bun test |bun run gate:|bun scripts\/(?!ladder\.ts --plan))/.test(line));
+    expect(commands).toEqual([]);
+    expect(source).toContain('plan="$(bun scripts/ladder.ts --plan)"');
+    expect(source).toContain("run_phase preflight");
+    expect(source).toContain("run_phase source");
+    expect(source).toContain("run_phase post-publish");
+    expect(source).not.toContain("run_required_gate");
+
+    // The plan is machine-readable and complete: one line per gate, five
+    // tab-separated fields, no quotes, and every command a plain argv.
+    for (const line of PLAN_TEXT.split("\n")) {
+      const fields = line.split("\t");
+      expect(fields).toHaveLength(5);
+      const phases: readonly string[] = DEPLOY_PHASES;
+      expect(phases).toContain(fields[0] ?? "");
+      expect(Number(fields[2])).toBeGreaterThan(0);
+      expect(Number(fields[3])).toBeGreaterThan(0);
+      expect(fields[4]).not.toMatch(/['"]/u);
+    }
+  });
+
   test("a gate killed without a verdict of its own fails the deploy", () => {
     const run = runDeploy({ killGate: "bun run lint" });
 
@@ -456,36 +389,32 @@ describe("deploy gate", () => {
   // load: on 2026-09-16 a six-gate width put the eleven-suite UI row beside two
   // `--parallel=4` package suites and failed every deploy on a puppeteer wall,
   // while the same row passed alone. Each heavy gate declares the threads it
-  // occupies at peak, in scripts/ladder.ts, and the runner's table is held
-  // equal to it here — written twice because the runner is bash.
-  test("the weight table in the runner is the one the ladder's rows declare", () => {
+  // occupies at peak on its row; the plan carries it; the runner reads it.
+  test("every browser or multi-worker gate weighs more than one, and the plan carries it", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    const declared = Object.fromEntries(LADDER.filter((gate) => gate.weight !== undefined).map((gate) => [gate.run, gateWeight(gate)]));
-    expect(deployWeights(source)).toEqual(declared);
-    expect(source).toContain('weight="${GATE_WEIGHT[${GATE_CMDS[index]}]:-1}"');
+    expect(source).toContain('weight="${GATE_WEIGHTS[index]}"');
     expect(source).toContain('if [ "$running" -gt 0 ] && [ $((load + weight)) -gt "$budget" ]; then continue; fi');
 
-    for (const [run, weight] of Object.entries(declared)) {
-      // A weight of one is the default and a declaration of it is noise; a
-      // weight on a non-gate schedules nothing.
-      expect(weight, `${run} declares a weight of ${String(weight)}`).toBeGreaterThan(1);
-      const gates: string[] = [...REQUIRED_GATES];
-      expect(gates, `${run} has a weight and is not a gate`).toContain(expandGlobs(run));
+    for (const row of PLAN) {
+      const gate = LADDER.find((candidate) => candidate.run === row.run);
+      expect(row.weight).toBe(gate === undefined ? 1 : gateWeight(gate));
+
+      // A weight of one is the default and a declaration of it is noise.
+      if (gate?.weight !== undefined) expect(gate.weight, `${row.run} declares a weight of one`).toBeGreaterThan(1);
     }
 
     // Every browser suite and every multi-worker suite weighs more than one:
     // a row that opens Chrome or four workers and weighs one is the 2026-09-16
     // defect written back down. Derived from the tree, not from a list.
-    const browserSuites = trackedFiles().filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
+    const browserSuites = tracked.filter((file) => file.startsWith("scripts/") && file.endsWith(".test.ts")
       && /from ['"](?:\.\/gallery-harness|puppeteer)['"]/.test(readRepositoryFile(REPO_ROOT, file)));
 
-    const weighted = new Set(Object.keys(declared).map(expandGlobs));
+    for (const row of PLAN) {
+      const expanded = expandGlobs(row.run);
+      const opensChrome = browserSuites.some((file) => expanded.split(" ").includes(file));
+      const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
 
-    for (const gate of REQUIRED_GATES) {
-      const opensChrome = browserSuites.some((file) => gate.split(" ").includes(file));
-      const multiWorker = gate.includes("--parallel=") || gate === "bun run test:core" || gate === "bun run test:cli";
-
-      if (opensChrome || multiWorker) expect(weighted.has(gate), `${gate} opens Chrome or workers and weighs one`).toBeTrue();
+      if (opensChrome || multiWorker) expect(row.weight, `${row.run} opens Chrome or workers and weighs one`).toBeGreaterThan(1);
     }
   });
 
@@ -499,35 +428,6 @@ describe("deploy gate", () => {
     expect(gates).toEqual([...REQUIRED_GATES]);
     expect(run.stdout).toContain("within a budget of 1 threads");
   }, 30_000);
-
-  test("the exclusion table in the runner is the one the ladder declares", () => {
-    // Written twice because the runner is bash and cannot import the
-    // declaration, so it is asserted once. Without this the measured reason
-    // lives in TypeScript and the behaviour lives in shell, and either can move.
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-
-    const declared = Object.fromEntries(
-      Object.entries(EXCLUSION_GROUPS).map(([group, entry]) => [group, [...entry.gates].sort()]),
-    );
-
-    const inRunner = Object.fromEntries(
-      Object.entries(deployExclusions(source)).map(([group, gates]) => [group, [...gates].sort()]),
-    );
-
-    expect(inRunner).toEqual(declared);
-
-    // A group member that is not a gate excludes nothing, and a group of one
-    // excludes nothing either. Both read as a rule and are not one.
-    for (const [group, entry] of Object.entries(EXCLUSION_GROUPS)) {
-      expect(entry.gates.length, `group ${group} holds fewer than two gates`)
-        .toBeGreaterThan(1);
-
-      for (const gate of entry.gates) {
-        const gates: string[] = [...REQUIRED_GATES];
-        expect(gates, `${gate} is in group ${group} and is not a gate`).toContain(gate);
-      }
-    }
-  });
 
   test("the serial gates are the ends of the real run", () => {
     const run = runDeploy();
@@ -545,17 +445,11 @@ describe("deploy gate", () => {
   // ~3,200 process spawns.
   test("every gate fails closed even when the former skip variable is set", () => {
     const last = REQUIRED_GATES.at(-1);
-    // WHICH WAVE EACH DECLARED GATE IS IN, BY POSITION. deploy.sh spells one
-    // gate with a glob and REQUIRED_GATES carries what that glob expands to in
-    // the fixture, so matching the two by text finds nothing for that one line
-    // — and a not-found wave silently made the assertion below "no gate ran at
-    // all". Both lists are the same gates in the same order, which is what the
-    // set-equality test above already holds, so position is the exact mapping.
-    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
-    const waveOfGate = waves.flatMap((wave, index) => wave.map(() => index));
-    // Every gate deploy.sh declares, pre- and post-deploy: the mapping below is
-    // by POSITION, and the pre-deploy gates come first in file order, so
-    // `REQUIRED_GATES.indexOf` stays the exact index into it.
+    // WHICH WAVE EACH GATE IS IN, BY POSITION: the plan's phase index. The
+    // plan spells one gate with a glob and REQUIRED_GATES carries what that
+    // glob expands to in the fixture, so the mapping is positional rather
+    // than by text, and both lists are the plan in plan order.
+    const waveOfGate = PLAN.map((row) => DEPLOY_PHASES.indexOf(row.phase));
     expect(waveOfGate).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
 
     for (const gate of REQUIRED_GATES) {
@@ -697,12 +591,9 @@ describe("deploy gate", () => {
 
     // The WHOLE WAVE, and only the wave: a red wave still ends the pipeline
     // before the next barrier, so the hammer and the account gate never run.
-    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
     const audited = runDeploy({ failingGate: second, threads: 1, option: "--gates-only", options: ["--all"] });
     expect(audited.status).not.toBe(0);
-    // By POSITION, as the wave test above does: deploy.sh spells one gate with
-    // a glob and REQUIRED_GATES carries its expansion.
-    const prePublish = (waves[0]?.length ?? 0) + (waves[1]?.length ?? 0);
+    const prePublish = (PRE_PUBLISH_WAVES[0]?.length ?? 0) + (PRE_PUBLISH_WAVES[1]?.length ?? 0);
     expect(audited.events).toEqual(REQUIRED_GATES.slice(0, prePublish));
     expect(audited.stdout).toContain("every gate regardless of failures (--all)");
     expect(audited.events.some((event) => event.startsWith("MUTATE ")), "--all published on a red").toBe(false);
@@ -795,25 +686,17 @@ describe("deploy gate", () => {
     // declared-and-unobserved resource proves nothing, and an observed-but-
     // optional gate is a warning.
     expect(REQUIRED_GATES).toContain('bun run gate:infra');
-    const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
     // ITS OWN WAVE, AFTER EVERY SOURCE GATE, so an account that cannot be
-    // proved never reaches Wrangler deployment.
-    const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
-    expect(waves[infraWave]).toEqual(['bun run gate:infra']);
-    // THE LAST SOURCE-AND-ACCOUNT WAVE BEFORE THE UPLOAD, which is what the
-    // property has always meant. Nothing follows it before the build — the
-    // trajectory tier moved after the publish on 2026-09-12, beside first-run,
-    // because a pre-publish live gate can only measure the previous build and
-    // refused the deploy carrying its fix — so everything past this wave is
-    // post-deploy by construction.
+    // proved never reaches Wrangler deployment; and THE LAST WAVE BEFORE THE
+    // UPLOAD, which is what the property has always meant: the trajectory
+    // tier moved after the publish on 2026-09-12, beside first-run, because a
+    // pre-publish live gate can only measure the previous build and refused
+    // the deploy carrying its fix.
+    expect(PRE_PUBLISH_WAVES.at(-1)).toEqual(['bun run gate:infra']);
+    expect(POST_DEPLOY_GATES).toContain('bun run gate:trajectory');
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    const preDeployWaves = deployWaves(source.slice(0, source.indexOf('Step 2: Building Kinu')));
-    expect(infraWave).toBe(preDeployWaves.length - 1);
-    expect(preDeployWaves.at(-1)).toEqual(['bun run gate:infra']);
-    expect(waves.at(-1)).toContain('bun run gate:trajectory');
-    expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
-      'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
-    );
+    expect(source.indexOf('run_phase infra')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
+    expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));
   });
 
   test("the Worker demands an assertion for a subset of what Access is told to cover", () => {
