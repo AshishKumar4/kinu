@@ -3,6 +3,8 @@ import {
   type Draw, type Effect, type Geometry, type Gpu, type Surface, type Target,
 } from 'vgpu';
 
+import { VGPUError as CoreVGPUError } from '@vgpu/core';
+
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { type ArtFrame, type ArtPalette, type ArtRenderer, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE } from '@kinu.run/core/web/art';
 import blurSource from './blur.wgsl';
@@ -200,23 +202,49 @@ export async function createWebGpuRenderer(
         const nodeCount = Math.min(current.nodeCount, NODE_CAPACITY);
         const pulseCount = Math.min(current.pulseCount, PULSE_CAPACITY);
 
-        if (strokeCount > 0) strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE));
+        try {
+          // The writes are inside the try on purpose: `geometry.write` asserts
+          // the device is usable too, and a device that died between ticks
+          // throws the same DISPOSED/LOST here as `frame()` does below.
+          if (strokeCount > 0) strokeGeometry.write(current.strokes.subarray(0, strokeCount * STROKE_STRIDE));
 
-        if (nodeCount > 0) nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE));
+          if (nodeCount > 0) nodeGeometry.write(current.nodes.subarray(0, nodeCount * NODE_STRIDE));
 
-        if (pulseCount > 0) pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE));
+          if (pulseCount > 0) pulseGeometry.write(current.pulses.subarray(0, pulseCount * PULSE_STRIDE));
 
-        frame(gpu, (pass) => {
-          pass.pass({ target: scene, clear: [0, 0, 0, 0] }, (encoder) => {
-            encoder.draw(strokes, { instances: strokeCount });
-            encoder.draw(pulses, { instances: pulseCount });
-            encoder.draw(nodes, { instances: nodeCount });
+          frame(gpu, (pass) => {
+            pass.pass({ target: scene, clear: [0, 0, 0, 0] }, (encoder) => {
+              encoder.draw(strokes, { instances: strokeCount });
+              encoder.draw(pulses, { instances: pulseCount });
+              encoder.draw(nodes, { instances: nodeCount });
+            });
+            pass.pass({ target: bloomA }, bright);
+            pass.pass({ target: bloomB }, blurH);
+            pass.pass({ target: bloomA }, blurV);
+            pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
           });
-          pass.pass({ target: bloomA }, bright);
-          pass.pass({ target: bloomB }, blurH);
-          pass.pass({ target: bloomA }, blurV);
-          pass.pass({ target: canvasSurface, clear: [0, 0, 0, 0] }, composite);
-        });
+        } catch (thrown) {
+          // A dead device does not reach `gpu.onError` — `frame()` asserts
+          // usability and throws. The guard's own type is @vgpu/core's
+          // ValidationError, a sibling of vgpu's VGPUError rather than an
+          // instance of it, so the check has to name the shared base class —
+          // checking vgpu's VGPUError lets every real device loss escape,
+          // the playback loop dies, and the mount stays on 'webgpu' with a
+          // frozen frame. `DISPOSED` arriving while this renderer is alive
+          // can only be a device the GPU half killed under itself, so both
+          // codes are one fault here; anything else is a real bug and
+          // propagates.
+          if (thrown instanceof CoreVGPUError
+            && (thrown.code === 'VGPU-DEVICE-LOST' || thrown.code === 'VGPU-DEVICE-DISPOSED')) {
+            fault = thrown;
+            renderer.dispose();
+            faultHandler?.(thrown);
+
+            return;
+          }
+
+          throw thrown;
+        }
       },
       onFault(handler) {
         faultHandler = handler;

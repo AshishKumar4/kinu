@@ -28,7 +28,12 @@ const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
 
-const OWNER_EMAIL = 'owner@example.com';
+// Not `owner@example.com`: the observe feed memoizes on the derived userId
+// for a quarter of an hour, and every other suite that drives that email
+// through the Worker primes the memo for THIS file's calls — the row the
+// assertion counts simply never arrives. The address is the memo key's own,
+// so this suite names one no neighbor shares.
+const OWNER_EMAIL = 'index-feed-owner@example.com';
 
 const SECRET = 'index-feed-test-secret-0123456789';
 

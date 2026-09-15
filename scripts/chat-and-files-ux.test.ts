@@ -3207,6 +3207,123 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   }, 240_000);
+
+  test('an anonymous session reads and writes nothing — the signal still opens the column', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // `anon=1` answers the profile read null, so the hook never resolves an
+      // account key and every persist path is a no-op — not "no account yet":
+      // there is no account, and the seed row proves nothing wrote one.
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&anon=1`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+
+      // The signal opens the policy-collapsed column on the workspace's
+      // behalf — with no account it still opens, it just cannot persist.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 30_000 });
+
+      // The collapse control is still the user's own act; with no account it
+      // claims the close for the session and writes nothing anywhere.
+      await page.click('[data-inspector-collapse]');
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 10_000 });
+
+      const stored = await page.evaluate(() => ({ ...localStorage }));
+
+      expect(Object.keys(stored).filter((key) => key.startsWith('kinu.inspector.'))).toEqual([]);
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a stored collapse is the user\'s: the arriving signal does not reopen it', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // The workspace's own stored '0' outranks the first-visit signal — the
+      // port lands, the column stays behind its expand handle.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '300');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '0');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
+
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
+      // Settle past the window the signal would have opened in: the panel
+      // stays at its collapsed size and the choice is still '0'.
+      await page.waitForFunction(() => {
+        const width = () => Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1);
+
+        return new Promise<boolean>((resolve) => {
+          const first = width();
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(first <= 2 && width() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const stored = await page.evaluate(() => ({ ...localStorage }));
+
+      expect(stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
+
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a collapse issued while a reset is in flight still claims its target', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // Open at 300: the reset's claim and the collapse's claim are both the
+      // user's own acts — whichever report lands first, the close is '0' and
+      // the resting width is the one the collapse read.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '300');
+        localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 300;
+      }, { timeout: 10_000 });
+
+      // One task, two control acts: the dblclick's resetToDefault claims 340
+      // and issues the write; the collapse clicks before its report settles
+      // and claims the close at call time. If the library commits the resize
+      // synchronously the collapse reads 340 and persists it; if the report
+      // lands later the collapse read 300. The un-conditional half is the
+      // point: the close is '0' and the stored width is the column's own.
+      await page.evaluate(() => {
+        document.querySelector<HTMLElement>('[data-separator]')
+          ?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        document.querySelector<HTMLElement>('[data-inspector-collapse]')?.click();
+      });
+
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      expect(state.width).toBeLessThanOrEqual(2);
+      expect(state.stored['kinu.inspector.open.ashish@example.com.checkout-fixes']).toBe('0');
+      // The stored resting width is the reset's 340 or the pre-reset 300 —
+      // the collapse claims whichever the panel answered at call time, and
+      // the reset's own emission can never overwrite it.
+      expect(['300', '340']).toContain(state.stored['kinu.inspector.ashish@example.com']);
+
+      await page.close();
+    });
+  }, 240_000);
 });
 
 interface CreateProbe {
