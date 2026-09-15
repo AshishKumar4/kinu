@@ -74,6 +74,10 @@ export interface TestUserDO {
   installed: Map<string, string>;
   /** Workspace DOs the UserDO tore down (workspace delete). */
   destroyedWorkspaces: string[];
+  /** Reasons the UserDO aborted its own context with — the SDK's `destroy()`
+   *  ends in `ctx.abort('destroyed')` on the next tick, and an account delete
+   *  is only complete once that sentinel has been raised. */
+  aborted: string[];
   /** Socket-revocation pushes the UserDO fanned out, as `workspace:generation`
    *  — how a test reads that a revocation reached the workspaces holding the
    *  sockets, rather than only the row it wrote. */
@@ -315,6 +319,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
+  const aborted: string[] = [];
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const capabilityRepushes: string[] = [];
@@ -477,7 +482,28 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // REAL, not a callback passthrough: `userMcp_add`/`userMcp_update` claim a
     // server name by reading and writing inside one `transactionSync`, and a
     // fake turns that atomic claim into a torn one that still reports success.
-    storage: { sql, transactionSync: <T,>(closure: () => T): T => db.transaction(closure)() },
+    storage: {
+      sql,
+      transactionSync: <T,>(closure: () => T): T => db.transaction(closure)(),
+      // The SDK's `destroy()` runs these two before the abort. `deleteAll` on
+      // the platform takes every table and every key; over bun:sqlite the
+      // tables are the whole of what the UserDO wrote, so dropping each one is
+      // the same observable end state — a fresh object over this database
+      // recreates them empty, as a fresh activation would.
+      deleteAlarm: async (): Promise<void> => {},
+      deleteAll: async (): Promise<void> => {
+        // Virtual tables first: dropping an FTS table takes its shadow tables
+        // with it, and a shadow dropped on its own leaves the virtual table
+        // undroppable. `IF EXISTS` covers the shadows the first pass removed.
+        const tables = db.query<{ name: string }, []>(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+           ORDER BY CASE WHEN sql LIKE 'CREATE VIRTUAL%' THEN 0 ELSE 1 END, name`,
+        ).all();
+
+        for (const { name } of tables) db.exec(`DROP TABLE IF EXISTS "${name}"`);
+      },
+    },
+    abort: (reason: string): void => { aborted.push(reason); },
     // Tag-filtered, as the platform's is: a hub asking for `device:<id>` gets
     // THAT machine's socket and no other. A tag-blind answer here would hand
     // one machine's tunnel another machine's socket — a flap the real hub
@@ -557,7 +583,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   hub.current = userDO;
 
   return {
-    userDO, db, sql, installed, destroyedWorkspaces, revokedSocketPushes,
+    userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
     revokedSessionPushes, capabilityRepushes,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),

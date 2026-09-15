@@ -263,6 +263,11 @@ interface OwnerOnlyCall {
  * `owner_only` and refuses them before any method runs.
  */
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
+  // The account's own authorities: onboarding's finish and the owner's
+  // display name. A workspace token that could write either could reset
+  // every sibling workspace's setup or rename the account it lives under.
+  { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
+  { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
   { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
   // The device Sandbox switch. A workspace holds no device authority at all
   // after F5/F6; this one additionally names the reason it can never move to a
@@ -309,6 +314,12 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     }),
   },
   { capability: 'shares', name: 'sharesReceived_list', run: (u, c) => u.sharesReceived_list(c) },
+  { capability: 'shares', name: 'sharesReceived_forget', run: (u, c) => u.sharesReceived_forget(c, USER_ID) },
+
+  // LAST, because an owner reaching it destroys the object under every row
+  // above: its storage is dropped and its context aborted, so no later call
+  // could observe anything but a wiped harness.
+  { capability: 'account', name: 'deleteAccount', run: (u, c) => u.deleteAccount(c, USER_ID) },
 ];
 
 /** Did the boundary refuse this call, as opposed to the call failing for its

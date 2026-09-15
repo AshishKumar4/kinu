@@ -1,21 +1,17 @@
-import { type FormEvent, useCallback, useState, useTransition } from "react";
-import { Link } from "react-router-dom";
+import { type FormEvent, useState, useTransition } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
+import { SetupCard } from "@/components/account/SetupCard";
 import {
   CONNECT_AI_MESSAGE,
   MISSION_LABEL,
   MISSION_PLACEHOLDER,
   useCreateWorkspace,
 } from "@/hooks/use-create-workspace";
-import { APP_ROUTES } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-kinu";
-import { getWorkspaceOverview, type WorkspaceEntry } from "@/lib/user-api";
-import { timeAgo } from "@kinu.run/core";
-import { OverviewEvidence, OverviewLabel } from "@/pages/home-overview-label";
+import { RECENT_WORKSPACES } from "@/hooks/use-workspace-overviews";
+import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 
 export default function HomePage() {
   const [mission, setMission] = useState("");
@@ -37,7 +33,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-bg">
+    <div className="h-full overflow-y-auto">
       <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
           {/* Hero display heading: fluid clamp, the one type on the page above the scale. */}
@@ -89,18 +85,7 @@ export default function HomePage() {
         </form>
 
         <aside className="order-3 min-w-0 lg:order-none">
-          <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
-            <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
-            <Link to={APP_ROUTES.userSettings} className="block py-[5px] p-t-control p-accent">
-              Connect providers →
-            </Link>
-            <Link to={APP_ROUTES.userMcp} className="block py-[5px] p-t-control p-accent">
-              Add MCP servers →
-            </Link>
-            <a href="/install" className="block py-[5px] p-t-control p-accent">
-              Install the CLI →
-            </a>
-          </div>
+          <SetupCard returnTo="/" />
         </aside>
 
         {(listFailed || workspaces.length > 0) && (
@@ -110,67 +95,13 @@ export default function HomePage() {
               {listFailed && <span className="p-t-status p-warning">could not load</span>}
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
-              {workspaces.slice(0, 5).map((agent, index) => (
-                <HomeWorkspaceRow key={agent.name} workspace={agent} first={index === 0} />
+              {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (
+                <WorkspaceOverviewCard key={agent.name} workspace={agent} variant="row" first={index === 0} />
               ))}
             </div>
           </section>
         )}
       </main>
-    </div>
-  );
-}
-
-/** The shared cadence the workspace surfaces already poll at — the card asks
- *  the same question they do and inherits their rhythm rather than growing a
- *  second timer policy. Module scope because `useAsyncResource` keys its timer
- *  effect on this identity. */
-const overviewRevalidate = (): number => LIVE_DATA_REFRESH_MS;
-
-/** One workspace row: the name renders the moment the roster lands; the
- *  overview loads beside it and fails independently. The retry button sits
- *  BESIDE the link — a button inside an anchor is nested interactive content,
- *  so the row is a wrapper holding the link and the action separately. */
-function HomeWorkspaceRow({ workspace, first }: { workspace: WorkspaceEntry; first: boolean }) {
-  const load = useCallback(() => getWorkspaceOverview(workspace.name), [workspace.name]);
-  const { resource, reload } = useAsyncResource(load, overviewRevalidate, workspace.name);
-
-  const overview = lastValue(resource);
-  const stale = resource.status === "error" && overview !== null;
-  const unavailable = resource.status === "error" && overview === null;
-
-  return (
-    <div className={`flex items-center gap-2 px-[18px] py-3 transition-colors hover:p-elevated ${first ? "" : "border-t border-dashed border-[var(--c-dash)]"}`}>
-      <Link
-        to={`/workspace/${workspace.name}`}
-        className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 p-row-text p-text hover:p-accent"
-      >
-        <span className="w-full truncate">{workspace.displayName || workspace.name}</span>
-        <span
-          role="status"
-          aria-live="polite"
-          className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 p-t-status"
-        >
-          {workspace.lastVisited > 0 && (
-            <span className="hidden p-text-4 sm:inline">Opened {timeAgo(workspace.lastVisited)}</span>
-          )}
-          {resource.status === "loading" && <span className="p-text-4">…</span>}
-          {overview !== null && <OverviewLabel overview={overview} stale={stale} />}
-          {stale && <span className="p-text-4">Last checked {timeAgo(overview.observedAt)}</span>}
-          {unavailable && <span className="p-warning">unavailable</span>}
-          <span className="p-arrow" aria-hidden="true">→</span>
-          {overview !== null && <OverviewEvidence overview={overview} stale={stale} />}
-        </span>
-      </Link>
-      {(stale || unavailable) && (
-        <button
-          type="button"
-          onClick={() => reload()}
-          className="shrink-0 p-accent underline decoration-dotted underline-offset-2 p-t-status"
-        >
-          retry
-        </button>
-      )}
     </div>
   );
 }

@@ -26,6 +26,7 @@ import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import type { AuthIdentity } from '../auth/session';
 import { deriveUserId } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
+import { sharesGiven } from '../user/shares-given';
 import type { SharedBlueprintReceipt } from '../user/user-do';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER } from '../slates/bindings';
@@ -126,36 +127,27 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
 
   // Every share row lives in the workspace that holds the slate, so "my shared"
   // is each of my workspaces asked in turn; a row's id is minted here.
-  for (const workspace of await userDO.listActiveWorkspaces(owner)) {
-    const claim = await claimOwnedWorkspace(env, identity.userId, workspace.name);
+  for (const { workspace, shares } of await sharesGiven(env, owner, identity.userId)) {
+    const owned = workspaceOwner(env, workspace);
 
-    if (!claim.ok) continue;
-    // Ownership proven above; the Worker now acts as that workspace's root.
-    const owned = workspaceOwner(env, workspace.name);
-    const answer = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'shares' });
-
-    if (!answer.ok) throw new Error(`listing blueprints of ${workspace.name}: ${answer.reason}: ${answer.error}`);
-
-    for (const share of v.parse(v.array(v.object({
-      id: v.string(), slate: v.string(), createdAt: v.number(), revokedAt: v.nullable(v.number()), users: v.array(v.string()),
-    })), answer.value)) {
+    for (const share of shares) {
       if (share.revokedAt !== null) continue;
       const reading = await owned.readBlueprint(share.id);
 
       if (!reading.ok) continue;
-      const id = await mintBlueprintId(env, workspace.name, share.id);
+      const id = await mintBlueprintId(env, workspace, share.id);
 
       if (id === null) continue;
 
       mine.push({
         id, kind: 'blueprint', share: share.id, title: reading.value.view.title, description: reading.value.view.description,
-        createdAt: share.createdAt, bindings: reading.value.view.bindings.length, workspace: workspace.name, users: share.users,
+        createdAt: share.createdAt, bindings: reading.value.view.bindings.length, workspace, users: share.users,
       });
     }
 
     const live = await owned.slateAs(ROOT_SLATE_CALLER, { op: 'liveShares' });
 
-    if (!live.ok) throw new Error(`listing live shares of ${workspace.name}: ${live.reason}: ${live.error}`);
+    if (!live.ok) throw new Error(`listing live shares of ${workspace}: ${live.reason}: ${live.error}`);
 
     for (const share of v.parse(v.array(LiveShareRecordSchema), live.value)) {
       if (share.revokedAt !== null) continue;
@@ -166,7 +158,7 @@ async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Pro
       mine.push({
         id: share.id, kind: 'live', share: share.id, title: reading.value.title, description: reading.value.description,
         createdAt: share.createdAt, bindings: share.grant.members.length, visibility: share.visibility,
-        workspace: workspace.name, users: share.users,
+        workspace, users: share.users,
       });
     }
   }

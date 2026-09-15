@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-14",
-  "files": 2295,
-  "functions": 57184,
+  "measuredAt": "2026-09-15",
+  "files": 2336,
+  "functions": 57734,
   "ceiling": 125,
   "line": 36,
   "inventory": [
@@ -183,10 +183,6 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
-      "complexity": 37
-    },
-    {
-      "key": "packages/cli-backend/src/local-session.ts#LocalAgentSession.runTurn",
       "complexity": 37
     },
     {

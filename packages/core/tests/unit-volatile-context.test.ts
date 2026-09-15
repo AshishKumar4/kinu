@@ -536,6 +536,51 @@ describe('renderDynamicContextBlock', () => {
   });
 });
 
+describe('the crafted-tools plane', () => {
+  test('a reported empty set still renders its section — the listTools check answered in-line', () => {
+    // The doctrine tells the model to check `workspace.listTools()` before
+    // building, and an omitted section left that check unanswered: the model
+    // probed with a `execute_tools` call just to learn there was nothing to
+    // call. The empty set is itself the answer, so it renders.
+    const text = renderDynamicContextBlock({ craftedTools: [] })!;
+
+    expect(isDynamicBlock(text)).toBe(true);
+    expect(text).toContain('## Crafted tools available through execute_tools');
+    expect(text).toContain('No crafted tools exist in this workspace yet');
+    expect(text).toContain('`workspace.listTools()` returns an empty list');
+  });
+
+  test('an unreported set renders nothing — undefined is not an empty list', () => {
+    expect(renderDynamicContextBlock({ craftedTools: undefined })).toBeNull();
+    expect(renderDynamicContextBlock({ factsBlock: '- k = v' })).not.toContain('Crafted tools');
+  });
+
+  test('empty to non-empty renders as a change; non-empty to empty says none, never cleared', () => {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [{ role: 'user', content: 'build something' }];
+
+    ledger.weave(history, { craftedTools: [] });
+    history.push({ role: 'assistant', content: 'saved a tool' });
+
+    const gained = String(ledger.weave(history, {
+      craftedTools: [{ name: 'echo_back', description: 'Return the input' }],
+    }).at(-1)?.content);
+
+    expect(gained).toContain('kind="delta"');
+    expect(gained).toContain('## Crafted tools available through execute_tools');
+    expect(gained).toContain('echo_back');
+    expect(gained).not.toContain('Cleared:');
+
+    history.push({ role: 'assistant', content: 'removed it' });
+    const emptied = String(ledger.weave(history, { craftedTools: [] }).at(-1)?.content);
+
+    expect(emptied).toContain('kind="delta"');
+    expect(emptied).toContain('No crafted tools exist in this workspace yet');
+    expect(emptied).not.toContain('Cleared:');
+    expect(emptied).not.toContain('echo_back');
+  });
+});
+
 describe('the dynamic block carries every genuinely-live plane', () => {
   const job = (i: number) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` });
 

@@ -32,6 +32,7 @@ import { WorkspaceBar, type Altitude } from '@/components/WorkspaceBar';
 import { WorkSurface, type SurfaceKind } from '@/components/surfaces/WorkSurface';
 import { SLATE_PREFIX } from '@/components/surfaces/presence';
 import { SupervisePage } from '@/pages/SupervisePage';
+import { AccountProvider } from '@/hooks/use-account';
 import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
@@ -474,6 +475,10 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
 
   return (
     <MemoryRouter initialEntries={[`/workspace/${LANDING_WORKSPACE}`]}>
+      {/* The rail reads the account the way it does in the app (layout.tsx sits
+          under App.tsx's AccountProvider); on this signed-out page the read
+          refuses and the rail shows its signed-out row, as it always has. */}
+      <AccountProvider>
       <WorkspaceRosterProvider>
       <div
         ref={stageRef}
@@ -572,6 +577,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         )}
       </div>
       </WorkspaceRosterProvider>
+      </AccountProvider>
     </MemoryRouter>
   );
 }
