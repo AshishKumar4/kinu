@@ -473,6 +473,15 @@ async function parityControl(pathname: string, request: Request): Promise<Respon
   throw new Error(`probe-control: unhandled ${request.method} ${pathname}`);
 }
 
+/** The provider catalog, for a GET of `https://models.dev/api.json`; `null`
+ *  for any other request, so the caller's dispatch stays a host switch. */
+function catalogAnswer(url: URL, request: Request): Response | null {
+  if (url.host !== 'models.dev' || url.pathname !== '/api.json' || request.method !== 'GET') return null;
+  catalogHits += 1;
+
+  return Response.json(MODELS_DEV_CATALOG);
+}
+
 export async function probeOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
@@ -515,11 +524,9 @@ export async function probeOutbound(request: Request): Promise<Response> {
     throw new Error(`probe-control: unhandled ${request.method} ${url.pathname}`);
   }
 
-  if (url.host === 'models.dev' && url.pathname === '/api.json' && request.method === 'GET') {
-    catalogHits += 1;
+  const catalog = catalogAnswer(url, request);
 
-    return Response.json(MODELS_DEV_CATALOG);
-  }
+  if (catalog !== null) return catalog;
 
   if (url.host === 'fake-models.invalid') {
     if (url.pathname === '/v1/models' && request.method === 'GET') {
