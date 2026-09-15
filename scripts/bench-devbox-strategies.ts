@@ -3628,6 +3628,14 @@ async function headKey(fixture: Fixture, box: string, key: string): Promise<Head
   return await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
 }
 
+/** A cell's own setup command either ran to exit 0 or the cell ends with the
+ *  box's reason: a refused setup judged as if it ran is a witness of nothing. */
+function ranInBox(reply: ExecReply, what: string): void {
+  if (reply.ok === true && reply.exitCode === 0) return;
+
+  throw new Error(`${what}: ${reply.error ?? reply.stderr ?? `exit ${String(reply.exitCode ?? -1)}`}`);
+}
+
 /**
  * The chunked-absorption cell, extracted: publish a small marker delta, destroy
  * the container without another quiesce, then observe the wake that restores
@@ -3656,17 +3664,12 @@ async function observeChunkedAbsorption(
   // A SETUP THAT DID NOT RUN IS THE CELL'S OWN REFUSAL. In run `20260914234711`
   // this exec was answered "ask again" by a box that had just been quiesced,
   // the reply went unread, and the witness then judged a marker nobody wrote.
-  const seededMarker = await execInBox(
+  ranInBox(await execInBox(
     fixture,
     box,
     `find ${DEVBOX_WORK_DIR} -mindepth 1 -maxdepth 1 ! -name ${harness} -exec rm -rf {} + `
     + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
-  );
-
-  if (seededMarker.ok !== true || seededMarker.exitCode !== 0) {
-    throw new Error(`the marker was not written: ${seededMarker.error ?? seededMarker.stderr ?? `exit ${String(seededMarker.exitCode ?? -1)}`}`);
-  }
-
+  ), 'the marker was not written');
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
 
   // A tick preserves the base; this cell needs a delta sidecar to restore.
@@ -3722,14 +3725,9 @@ async function observeChunkedAbsorption(
   sample.markerInUpper = await readBoxFile(fixture, box, `${CHAIN_UPPER_DIR}/${markerFile}`);
 
   // A new write makes the next publication observable rather than a no-op.
-  const nextWrite = await execInBox(
+  ranInBox(await execInBox(
     fixture, box, `printf %s ${marker}-after > ${DEVBOX_WORK_DIR}/witness-composed-next.txt && sync`,
-  );
-
-  if (nextWrite.ok !== true || nextWrite.exitCode !== 0) {
-    throw new Error(`the post-wake write did not run: ${nextWrite.error ?? nextWrite.stderr ?? `exit ${String(nextWrite.exitCode ?? -1)}`}`);
-  }
-
+  ), 'the post-wake write did not run');
   await delay(MIN_CHECKPOINT_INTERVAL_MS);
   sample.nextCheckpoint = await checkpointOperation(fixture, box, 'tick', 'chunked-absorption next checkpoint');
   sample.afterState = await boxState(fixture, box);
