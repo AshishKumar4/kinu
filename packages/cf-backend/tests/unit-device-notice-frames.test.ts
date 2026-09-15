@@ -32,29 +32,31 @@ function renderRow(devices: Parameters<typeof DeviceOfflineRow>[0]['devices']): 
 
 describe('device notice socket frames', () => {
   test('a refused call with one registered machine names it', () => {
-    const text = renderRow([{ id: 'dev-1', label: 'ashish@studio', lastSeenAt: 1_769_000_000_000 }])
-      .replace(/<[^>]+>/g, '');
-
-    expect(text).toContain('ashish@studio is offline');
+    // The label is one contiguous text node, so the raw markup carries it:
+    // asserting on markup also proves the words sit inside the pill, not in
+    // an attribute or a stray sibling.
+    expect(renderRow([{ id: 'dev-1', label: 'ashish@studio', lastSeenAt: 1_769_000_000_000 }]))
+      .toContain('ashish@studio is offline');
   });
 
   test('several registered machines read as the fleet, not a list', () => {
-    const text = renderRow([
+    const html = renderRow([
       { id: 'dev-1', label: 'ashish@studio', lastSeenAt: 1_769_000_000_000 },
       { id: 'dev-2', label: 'ashish@tower', lastSeenAt: 1_768_999_000_000 },
-    ]).replace(/<[^>]+>/g, '');
+    ]);
 
-    expect(text).toContain('Your computers are offline');
-    expect(text).not.toContain('ashish@studio');
+    expect(html).toContain('Your computers are offline');
+    expect(html).not.toContain('ashish@studio');
   });
 
   test('no registered machine names the way out, once', () => {
     const html = renderRow([]);
-    const text = html.replace(/<[^>]+>/g, '');
 
-    expect(text).toContain('No computer connected');
+    expect(html).toContain('No computer connected');
     expect(html).toContain('/user/settings#devices');
-    expect(text).toContain('Connect');
+    // `>Connect<` is the anchor's own text — a bare 'Connect' could hide in a
+    // class or attribute and pass while the link's word was something else.
+    expect(html).toContain('>Connect<');
   });
 
   test('a connect clears the notice: null renders nothing', () => {
