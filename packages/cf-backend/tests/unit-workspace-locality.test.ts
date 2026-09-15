@@ -77,9 +77,9 @@ function actorObject(): ActorObject {
       },
     },
     transactionSync: <T,>(closure: () => T): T => database.transaction(closure)(),
-    get: async () => undefined,
-    put: async () => {},
-    delete: async () => true,
+    // The key-value half, over a map of its own: the facet manager's launch
+    // journal is listed on every composition, so a bare `get` is not enough.
+    ...kvBackedStorage(new Map<string, JsonValue>()),
     deleteAll: async () => {},
     deleteAlarm: async () => {},
   };
@@ -143,6 +143,7 @@ function kvBackedStorage(kv: Map<string, JsonValue>) {
       delete: async (key) => kv.delete(key),
       list: listRows,
     }),
+    sync: async () => undefined,
   };
 }
 
@@ -154,12 +155,31 @@ function kvBackedStorage(kv: Map<string, JsonValue>) {
  * the failure says which binding came back.
  */
 /**
- * EVERY binding a hosted workspace legitimately reads, and it is one: the R2
- * runtime catalogue, absent here. Present as an explicit `undefined` rather than
- * missing, because "bound but empty" and "not bound at all" are both states the
- * catalogue handles and neither is a session object.
+ * EVERY binding a hosted workspace legitimately reads. The R2 runtime
+ * catalogue, absent here, and the facet manager's: `LOADER`, which it
+ * requires, and four optional knobs it reads once when composed. Each absent
+ * one is an explicit `undefined` rather than missing, because "bound but
+ * empty" and "not bound at all" are both states the readers handle and
+ * neither is a session object.
  */
-const WORKSPACE_BINDINGS: Partial<Env> = { NIMBUS_RUNTIME_CACHE: undefined };
+function workspaceBindings(): Partial<Env> {
+  // Unchecked and named: `WorkerLoader` is a workerd binding with no
+  // constructible form; the manager reads `load` and `get`, and neither is
+  // reached by a suite that spawns nothing.
+  const LOADER: WorkerLoader = Object.create({
+    load() { throw new Error('the hosted workspace loaded a dynamic worker'); },
+    get() { throw new Error('the hosted workspace loaded a dynamic worker'); },
+  });
+
+  return {
+    NIMBUS_RUNTIME_CACHE: undefined,
+    LOADER,
+    ASSETS: undefined,
+    NIMBUS_DEBUG: undefined,
+    NIMBUS_LAUNCH_CHUNK_BYTES: undefined,
+    NIMBUS_PROCESS_HOST: undefined,
+  };
+}
 
 function strictEnv(bindings: Partial<Env>): Env {
   const held = new Map(Object.entries(bindings));
@@ -184,7 +204,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -216,7 +236,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -252,7 +272,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -273,7 +293,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       ctx: actor.ctx,
       // Only the runtime catalogue bucket is legitimately read, and this
       // deployment binds none — so EVERY property access throws by name.
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -296,7 +316,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -323,7 +343,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -359,7 +379,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
@@ -383,7 +403,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const workspace = createHostedWorkspace({
       ctx: actor.ctx,
-      env: strictEnv(WORKSPACE_BINDINGS),
+      env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
       ensureSlate: async (owner) => {
         redriven.push(owner);
@@ -447,7 +467,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     let source = 'old';
 
     const workspace = createHostedWorkspace({
-      ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
+      ctx: actor.ctx, env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       ensureSlate: async () => {
         source = 'edited';
@@ -479,7 +499,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const released: string[] = [];
 
     const workspace = createHostedWorkspace({
-      ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
+      ctx: actor.ctx, env: strictEnv(workspaceBindings()),
       previewUrl: async () => ({ url: 'https://preview.test/' }),
       ensureSlate: async () => null,
       slateInvocation: (port) => ({ value: `minted-${String(port)}`, release: () => { released.push(`minted-${String(port)}`); } }),
@@ -507,19 +527,20 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     Object.assign(actor.ctx.storage, kvBackedStorage(kv));
 
     const activate = () => createHostedWorkspace({
-      ctx: actor.ctx, env: strictEnv(WORKSPACE_BINDINGS),
+      ctx: actor.ctx, env: strictEnv(workspaceBindings()),
       previewUrl: async (_port, capability) => ({ url: 'https://preview.test/' + capability }),
     });
 
+    // The reservation is the slate host's act: an owner declares its port and
+    // is handed the capability its URL carries, before any process binds it.
     const first = activate();
+    const app = await first.apps.ensure({ owner: 'workspace/slate-A/caller-A', preferredPort: 20000 });
+    expect(app.port).toBe(20000);
+    const handle = app.capability.slice(0, 10);
     await first.registerPort(9000, 20000, { handleHttpRequest: async () => new Response('caller A') }, 'workspace/slate-A/caller-A');
-    const exposure = await first.box('agent:main').ports?.expose?.(20000);
-
-    if (!exposure?.url) throw new Error('The fixture did not expose its first listener');
-    const handle = new URL(exposure.url).pathname.slice(1, 11);
     expect(await (await first.routePreview(20000, handle, new Request('https://preview.test/'), '/')).text()).toBe('caller A');
-    // A new activation rebuilds the same owner at the same port: the expose
-    // reserved 20000 for that owner, so its registration re-adopts the stored
+    // A new activation rebuilds the same owner at the same port: the
+    // reservation names that owner, so its registration re-adopts the stored
     // capability and the URL answers again.
     const sameOwner = activate();
     await sameOwner.registerPort(9001, 20000, { handleHttpRequest: async () => new Response('caller A rebuilt') }, 'workspace/slate-A/caller-A');

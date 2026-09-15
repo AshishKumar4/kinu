@@ -32,6 +32,7 @@ import { pathToFileURL } from 'node:url';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { createHostedWorkspace, type HostedWorkspace } from '../src/workspace-host';
+import { durableStorage } from './helpers/programmatic-host';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { CRED_SESSION_USER, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpEnvelope, SupervisorOpName } from '@nimbus-sh/core/workspace/supervisor-op.js';
@@ -121,11 +122,9 @@ function actorCtx(exports?: ActorExports): DurableObjectState {
       },
     },
     transactionSync: <T,>(closure: () => T): T => database.transaction(closure)(),
-    get: async () => undefined,
-    put: async () => {},
-    delete: async () => true,
-    deleteAll: async () => {},
-    deleteAlarm: async () => {},
+    // The facet manager's launch journal and port reservations live in the
+    // object's key-value storage; a fresh map per actor, as a fresh object.
+    ...durableStorage(new Map()),
   };
 
   const context = {
@@ -191,6 +190,9 @@ function hostActor(): Actor {
         }),
       };
     },
+    // The facet manager composes over `LOADER.get` too — the cached-worker
+    // form its isolated esbuild transform uses — and nothing here transforms.
+    get() { throw new Error('no cached worker is served by this host'); },
   };
 
   // Unchecked and named: `WorkerLoader` is a workerd binding with no
@@ -247,11 +249,16 @@ function hostActor(): Actor {
  * the property name, not a fake it could pass against.
  */
 function strictEnv(bindings: ActorBindings): Env {
-  // The runtime catalogue binding is optional and read on every boot.
+  // The runtime catalogue binding is optional and read on every boot; the
+  // facet manager reads its four optional knobs once when it is composed.
   const served = new Map<string, WorkerLoader | WorkspaceHostNamespace | undefined>([
     ['LOADER', bindings.LOADER],
     ['OrchestratorAgent', bindings.OrchestratorAgent],
     ['NIMBUS_RUNTIME_CACHE', undefined],
+    ['ASSETS', undefined],
+    ['NIMBUS_DEBUG', undefined],
+    ['NIMBUS_LAUNCH_CHUNK_BYTES', undefined],
+    ['NIMBUS_PROCESS_HOST', undefined],
   ]);
 
   const target: Env = Object.create(null);
@@ -391,6 +398,7 @@ function serveRegistry(): LocalRegistry {
 function refusingBindings(): ActorBindings {
   const loader = {
     load() { throw new Error('no facet may spawn'); },
+    get() { throw new Error('no facet may spawn'); },
   };
 
   // Unchecked and named: see `hostActor`.

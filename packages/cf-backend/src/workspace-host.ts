@@ -49,24 +49,18 @@ import type {
 import { diagnostics, KinuError, tolerate, type Refusal } from '@kinu.run/core/obs';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { RouteableFacetTarget } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
-import { deleteFacetStorage } from '@nimbus-sh/fabric/workerd-facet-host.js';
+import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import { composeFacetManager, type ComposedFacetManager } from '@nimbus-sh/worker/workspace-host';
 import {
-  HOST_FABRIC_COMPOSITION,
   clearPortCapability,
-  freeDurableFacetSlot,
-  listPortReservations,
-  nimbusProgrammatic,
   readPortExposure,
   readPortReservationByOwner,
   releasePortReservation,
   restoreReservedPortCapability,
-  type ProgrammaticHost,
-  type ResidentAppSummary,
-} from './nimbus-programmatic';
+} from '@nimbus-sh/worker/port-capability';
+import { HOST_FABRIC_COMPOSITION, facetDiagnosticsHooks, nimbusProgrammatic, type ProgrammaticHost } from './nimbus-programmatic';
 import type { DurableApps } from '@kinu.run/core/slates';
 
 /**
@@ -273,13 +267,6 @@ function previewUnavailable(refusal: Refusal): Response {
   });
 }
 
-/** The identity of a resident process this host registered a port for. */
-interface ResidentPort {
-  readonly owner: string;
-  readonly port: number;
-}
-
-
 /**
  * Compose the workspace this Durable Object owns.
  *
@@ -306,25 +293,53 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
   // One registry per isolate, exactly as a session has one: a port is a live
   // listener in this isolate's memory. What survives an eviction is Nimbus's
-  // reservation record in `ctx.storage` — the owner that holds the port and
-  // the capability its URL carries. A resident process is re-driven from that
-  // record on the next request for its URL (`routePreview`), never on wake:
-  // an object that is never asked never boots anything.
+  // reservation record in `ctx.storage` and the manager's launch journal.
   const portRegistry = new PortRegistry();
-  // The resident processes this host registered a port for, by pid: the
-  // identity Nimbus's app verbs ask this host about (`residentIdentity`).
-  const residents = new Map<number, ResidentPort>();
+  let programmaticHost: ProgrammaticHost | undefined;
+  let facetManager: ComposedFacetManager | undefined;
   let composing: Promise<ProgrammaticHost> | undefined;
 
   const host = async (): Promise<ProgrammaticHost> => {
-    composing ??= (async (): Promise<ProgrammaticHost> => {
+    composing ??= (async () => {
       try {
         const session = await bundle.session();
-        // `git` over this filesystem: isomorphic-git against the SqliteVFS, with
-        // no child process and nothing reaching a host's git. The Durable Object
-        // context and env are what the NETWORK subcommands (clone/fetch/pull/push)
-        // reach through the git-network facet; local history needs neither, and
-        // both are real here. Registered the way the session registers its own.
+
+        // The session's own `ensureFacetManager` composes through the same
+        // factory — the published entry point is the composition, so this host
+        // carries only its own environment and hooks, not the manager wiring.
+        const composed = composeFacetManager({
+          ctx: deps.ctx,
+          env: deps.env,
+          processes: session.processes,
+          portRegistry,
+          vfs: session.vfs,
+          hooks: {
+            ...facetDiagnosticsHooks(),
+            // The session drives the pump with an alarm; this object's one
+            // alarm slot is the SDK scheduler's, so a timer plus waitUntil
+            // takes the pump onto a fresh turn instead. A timer dies with a
+            // hibernated isolate, which is why the pump below runs once per
+            // incarnation: the journal rows it drains are what a dead timer
+            // left owed.
+            requestLaunchTurn: (notBefore) => {
+              const delay = notBefore === undefined ? 0 : Math.max(0, notBefore - Date.now());
+              const sleep = Promise.withResolvers<void>();
+              setTimeout(sleep.resolve, delay);
+              deps.ctx.waitUntil(sleep.promise.then(() => composed.pumpLaunches()));
+            },
+          },
+        });
+
+        facetManager = composed;
+        // The first pump of an incarnation drains the launch journal's
+        // cold-start recovery: a launch a reset or a hibernation interrupted
+        // is re-driven here, on the wake that composed this manager.
+        deps.ctx.waitUntil(composed.pumpLaunches());
+        // `git` is a REAL command here — registered, not a refusal. The
+        // Durable Object context and env are what the NETWORK subcommands
+        // (clone/fetch/pull/push) reach through the git-network facet; local
+        // history needs neither, and both are real here. Registered the way
+        // the session registers its own.
         const { runGitCommand } = await nimbusProgrammatic();
         session.registry.register('git', (command) => runGitCommand(command, session.vfs, deps.ctx, deps.env));
 
@@ -333,7 +348,9 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // facets through the composed fabric, and `npm install` streams in
         // process — one tarball entry at a time, never a buffered whole — so
         // neither exhausts this isolate.
-        return programmaticHost(session, portRegistry, deps, residents);
+        programmaticHost = buildProgrammaticHost(session, portRegistry, deps, facetManager);
+
+        return programmaticHost;
       } catch (cause) {
         // Same rule as the bundle's `booting` and `planes`: this host lives for
         // the whole actor isolate, and a cached rejection would poison every
@@ -369,7 +386,6 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
       if (occupied !== undefined && occupied.pid !== pid) throw new KinuError('io', `Workspace port ${port} is already in use`);
 
-      residents.set(pid, { owner, port });
       portRegistry.bindFacetStub(pid, target);
       portRegistry.register(port, pid);
       // The capability is bound to identity, not to the port: the stored one
@@ -381,11 +397,10 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 
       if (adopted === null) await clearPortCapability({ ctx: deps.ctx, portRegistry }, port);
     },
-    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); residents.delete(pid); },
+    unregisterPorts(pid) { portRegistry.unregisterByPid(pid); },
     apps: {
       async ensure({ owner, preferredPort }) {
-        const self = await host();
-        const nimbus = await nimbusProgrammatic();
+        await host();
         const held = await readPortReservationByOwner(deps.ctx, owner);
 
         // The declaration moved: the identity moves with it. The old
@@ -397,7 +412,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
           await releasePortReservation(deps.ctx, { owner, port: held.port });
         }
 
-        const reserved = await nimbus.rpcEnsureDurableApp(self, { owner, preferredPort, visibility: 'scoped' });
+        const reserved = await facetManager!.apps.ensureDurableApp({ owner, preferredPort, visibility: 'scoped' });
 
         if (reserved.capability === null) {
           throw new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`);
@@ -406,7 +421,8 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         return { port: reserved.port, capability: reserved.capability };
       },
       async remove(owner) {
-        const removed = await (await nimbusProgrammatic()).rpcRemoveDurableApp(await host(), owner);
+        await host();
+        const removed = await facetManager!.apps.removeDurableApp(owner);
 
         return { removed: removed.removed, port: removed.port };
       },
@@ -455,14 +471,13 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       // a bare 404 (`routeCapabilityRequest` returns null without a live entry
       // whose capability matches).
       const listener = portRegistry.get(port);
-      const resident = listener === undefined ? undefined : residents.get(listener.pid);
 
       if (listener === undefined) {
-        refused('no-listener', exposure.owner, `residents=${String(residents.size)}`);
+        refused('no-listener', exposure.owner);
       } else if (listener.capability !== exposure.capability) {
         const state = (await bundle.session()).processes.get(listener.pid)?.state ?? 'absent';
 
-        refused('capability-mismatch', exposure.owner, `pid=${String(listener.pid)} residentOwner=${resident?.owner ?? ''} state=${state}`);
+        refused('capability-mismatch', exposure.owner, `pid=${String(listener.pid)} state=${state}`);
       }
 
       const publicRequest = new Request(request);
@@ -474,19 +489,16 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
 
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
-      const self = await host();
+      await host();
 
       // Nimbus routes with the WHOLE capability and checks it against the live
-      // registration itself; this object only ever compared the handle. An
-      // upgrade cannot cross a Durable Object RPC boundary as a 101, which is
-      // why Nimbus keeps a fetch route for exactly this case. This method is
-      // reached through the orchestrator's own `fetch`, so it can hand one back.
-      const programmatic = await nimbusProgrammatic();
-
+      // registration itself; this object only ever compared the handle. The
+      // composed apps answer upgrades and plain fetches alike — the manager
+      // is in-process, so a 101 never has to cross an RPC boundary.
       try {
-        const response = upgrade
-          ? await programmatic.routeCapabilityPort(self, port, exposure.capability, publicRequest, pathname)
-          : await programmatic.rpcRouteCapabilityPort(self, port, exposure.capability, publicRequest, pathname);
+        const response = await facetManager!.apps.routeCapabilityPort(
+          port, exposure.capability, publicRequest, pathname,
+        );
 
         // A 101 only OPENS the socket session: the invocation stays minted
         // for its life, released by the process's close listener — releasing
@@ -504,79 +516,6 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
 }
 
 /**
- * What Nimbus's application verbs ask the embedder about its resident
- * processes: who a pid is, whether it is one, how to end it, and what the
- * durable applications of this workspace are. Nimbus's own session answers
- * these from the launch journal its facet manager keeps; here the processes
- * are spawned by the slate host, so the host that registered their ports is
- * the one that knows them.
- */
-function residentFacetManager(
-  ctx: DurableObjectState,
-  portRegistry: PortRegistry,
-  residents: ReadonlyMap<number, ResidentPort>,
-  processes: SessionProcessSupervisor,
-): NonNullable<ProgrammaticHost['facetManager']> {
-  return {
-    kill: (pid) => processes.kill(pid),
-    hasResidentProcess: (pid) => residents.has(pid),
-    residentIdentity: async (pid) => {
-      const resident = residents.get(pid);
-
-      return resident === undefined ? null : { owner: resident.owner, ephemeral: false, port: resident.port };
-    },
-    listResidentApps: async () => {
-      const live = new Map<string, number>();
-
-      for (const [pid, resident] of residents) live.set(resident.owner, pid);
-      const apps: ResidentAppSummary[] = [];
-
-      for (const [port, reservation] of await listPortReservations(ctx)) {
-        if (reservation.owner === null) continue;
-        const pid = live.get(reservation.owner) ?? null;
-
-        apps.push({
-          owner: reservation.owner, name: reservation.name ?? null, port, pid,
-          status: pid === null ? 'stopped' : 'running',
-          visibility: reservation.visibility, capability: reservation.capability,
-          restart: 'never', diagnostic: null,
-        });
-      }
-
-      return apps;
-    },
-    // One ordered teardown, the order Nimbus's own manager keeps: the live
-    // process first (a durable facet's release only aborts, so nothing else
-    // ends it), then the reservation, then the facet's SQLite and its slot —
-    // last, so a crash mid-removal leaves a name still claimed rather than a
-    // store nobody can reach.
-    removeDurableApp: async (owner) => {
-      let removed = false;
-
-      for (const [pid, resident] of residents) {
-        if (resident.owner !== owner) continue;
-        processes.kill(pid);
-        removed = true;
-      }
-
-      const held = await readPortReservationByOwner(ctx, owner);
-
-      if (held !== null) {
-        await releasePortReservation(ctx, { owner, port: held.port });
-        const live = portRegistry.get(held.port);
-
-        if (live !== undefined && residents.get(live.pid)?.owner === owner) portRegistry.unregister(held.port);
-        removed = true;
-      }
-
-      const name = await freeDurableFacetSlot(ctx, owner, (slot) => { deleteFacetStorage(ctx, slot); });
-
-      return removed || name !== null;
-    },
-  };
-}
-
-/**
  * Nimbus's programmatic session host, over this workspace.
  *
  * `shell`, `sqliteFs`, `_cpRegistry` and `processes` are the workspace's OWN —
@@ -585,11 +524,11 @@ function residentFacetManager(
  * already revoked. `initSession` therefore refuses: the session is composed, and
  * the boot path that would compose a second one must never run.
  */
-function programmaticHost(
+function buildProgrammaticHost(
   session: WorkspaceSession,
   portRegistry: PortRegistry,
   deps: HostedWorkspaceDeps,
-  residents: ReadonlyMap<number, ResidentPort>,
+  facetManager: ComposedFacetManager,
 ): ProgrammaticHost {
   const storage = deps.ctx.storage;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
@@ -640,16 +579,17 @@ function programmaticHost(
     sqliteFs: session.vfs,
     processes: session.processes,
     portRegistry,
-    // The slate host spawns resident processes directly through Fabric; what
-    // Nimbus's application verbs need to know about them is answered here.
-    facetManager: residentFacetManager(deps.ctx, portRegistry, residents, session.processes),
+    // The one manager: what Nimbus's application verbs ask about a resident
+    // process is answered from the launch journal it keeps itself.
+    facetManager: facetManager.manager,
+    facetManagerComposed: facetManager,
     viteDevServer: null,
     cirrusReal: null,
     _cpRegistry: session.registry,
     _viteShimPid: null,
     _viteShimPort: null,
     ensureSqliteFs: () => undefined,
-    ensureFacetManager: () => undefined,
+    ensureFacetManager: () => facetManager,
     initSession: async () => {
       throw new Error(
         'the hosted workspace is already composed; Nimbus must not boot a second session over it',
