@@ -19,16 +19,16 @@
 import {
   callable,
   type AgentContext, type Connection, type ConnectionContext,
-  type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
+  type WSMessage,
 } from "agents";
 import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { SubordinateRosterEntry as SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType, parseProtocolMessage } from "agents/chat";
-import { bindChatInput } from './chat-intake';
 import { AssistantMessagesTranscript } from './chat-transcript';
+import { ChatWireTransport } from './chat-transport';
 import {
   CLI_BEARER_HEADER,
   CLI_SCOPES_HEADER,
@@ -49,33 +49,23 @@ import {
   createCompactionStateStore, createModelSummarizer, COMPACTION_PRESETS,
   type CompactionStateStore, type Logger as CompactionLogger,
 } from "@kinu.run/compaction";
-import { Think, Session } from "@cloudflare/think";
-import { streamText, generateText, convertToModelMessages } from "ai";
-import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage, TextStreamPart } from "ai";
+import { Think } from "@cloudflare/think";
+import { generateText, convertToModelMessages } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet, UIMessage, UIMessageChunk } from "ai";
 import {
   McpToolSurfaceCache,
 } from "./user/mcp";
 
-import type {
-  TurnContext, TurnConfig,
-  ToolCallResultContext, StepContext, ChunkContext,
-  PrepareStepContext, StepConfig,
-  ToolCallContext as ThinkToolCallContext,
-  ChatResponseResult,
-  ChatRecoveryConfig,
-  StreamableResult, SaveMessagesOptions,
-} from "@cloudflare/think";
 import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
   type EvolutionConfig, type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type HostedActor, type WorkspaceActorDirectory,
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
-  scaffoldInferenceTransform, prepareActorProgram, type ActorTurnProgram, type ScaffoldRunOptions,
+  type ActorTurnProgram, type ScaffoldRunOptions,
   // Durable admission — the claim a turn is issued under, and the per-step
   // context plane its revisions are recorded on.
-  initActorClaimTables, programIdentityOf, ActorClaimStore, initPendingSendTables, PendingSendStore,
-  type ActorTurnClaim, type ClaimOutcome,
+  initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
   createActorContextPlane, type ActorContextPlane,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory,
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
@@ -97,25 +87,22 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
-  observeSystemPromptHash,
+  observeSystemPromptHash, subordinateTurnContext, inheritedAsModelMessage,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
-  ExtensionHost, composePrepareStep,
-  describeLandedSteers, USER_MESSAGE_SIGNAL_KIND,
-  type UserSteer, type SendLanding, type PromptFile, PromptFileSchema,
+  ExtensionHost,
+  type SendLanding, type PromptFile, PromptFileSchema,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
-  OVERFLOW_RETRY_EVENT, type OverflowRecoveryDecision,
   // Shared turn lifecycle (run bracket, prompt-token trigger, overflow apply)
   // plus the run_end vocabulary and the classifier that derives it from raw
   // facts, so neither backend chooses the string — and the output-limit
   // continuation policy, which is the same three facts asked of a turn that
   // finished with more to say.
-  openTurnRun, closeTurnRun, classifyRunEnd, type RunEndClassification,
-  persistMeasuredPromptTokens, applyOverflowRecovery,
-  owesOutputLimitContinuation, OUTPUT_CONTINUATION_EVENT,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
-  TurnAccumulator, AgentOrchestrator, type BackendHost,
-  type SettledSignals, type InlineSteer,
+  TurnAccumulator, AgentOrchestrator, ActorSession, ChatSession, type AgentOrchestratorDeps, type BackendHost,
+  type ChatTurnInput, type PreparedTurn, type OwedTerminalEffectsInput, type ActorTurnLease, type ActorExecutionInput,
+  type KinuExtension, type OwedEffect,
+  type InlineSteer,
   type AgentsToolAction,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -137,7 +124,7 @@ import {
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
   MissionGovernor, type MissionSeam, type MissionBudgetRefusal,
   // The one normalized provider usage report
-  normalizeUsage, type Usage,
+  normalizeUsage, priceCall, type Usage,
   explorePrompt, reflectionPrompt,
   // Non-turn model calls: the row type, its sink, and where a call with no run
   // open is filed. The other 25 producers of workspace spend arrive this way.
@@ -148,7 +135,6 @@ import {
   buildModelCallEvent,
   // The ONE catalog pricing, so a model_call row prices exactly as the ledger
   // debits — and only when the rate belongs to the model that served it.
-  priceCall,
   // agent_facts world model
   type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -207,8 +193,7 @@ import {
   // Shared catalog view of the resolved model
   ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
-  assembleTurnMessages, measureCompactionTrigger,
-
+  measureCompactionTrigger,
   // AGENTS.md (agents.md standard) — cloud workspace discovery, and the trust
   // authority that decides whether discovered bytes earn system placement.
   collectWorkspaceAgentsMd, type AgentsMdSources,
@@ -218,23 +203,22 @@ import {
   openInstructionSource, admitInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   stepContextLimit,
-  mergeProviderOptions, reasoningEffortOptions,
-  uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
+  reasoningEffortOptions,
+  uiMessageText, tableExists,
   // memory.* / tasks.* — codemode projections of the same-named native tools
-  JsonObjectSchema, JsonValueSchema, projectJsonValue, changeActiveRole,
+  JsonObjectSchema, JsonValueSchema, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
-  runOperationProfile, operationProfileStream, type OperationProfile,
+  type OperationProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   beginModelOperation, toolSurfaceTokens, McpToolSurfaceSchema,
   // Plan mode's one completion surface and the deps-gated report tool. Both sat
   // outside BUILTIN_TOOLS as bare strings with no link to the tools they name.
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
-  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, renderToolResult, successfulToolOutcome,
-  toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
+  type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
+  toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount, type DeviceStatus,
   type AgentInbox,
   type NimbusSandboxHandle, childContextResolver,
@@ -253,8 +237,6 @@ import {
   // terminal-result discipline — and this backend's three cf-minted lane names.
   classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER,
-  // What the chat roster knows about a turn this isolate is not running.
-  openChatTurnResponses,
   // The recovery budget this backend DECLARES (handed to the SDK below), and
   // the budget-first pass that applies it before the framework allocates.
   sweepUnrecoverableFibers, fiberRowStore,
@@ -281,8 +263,7 @@ import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
 import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
-  promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
-  type PromptCacheStrategy,
+  promptCachePlan, markLastToolForAnthropicCache,
 } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
@@ -319,18 +300,6 @@ interface ModelDimensions {
  *  attributed an unresolvable spec to some real provider would be worse than one
  *  that says it does not know. */
 const UNRESOLVED_MODEL: ModelDimensions = { provider: '', model: '' };
-
-interface SettledTurnEvents {
-  drainTurnId: string | undefined;
-  programmaticUserMessage: UIMessage | null;
-  errorText: string | undefined;
-  completed: boolean;
-  injectedSignals: SettledSignals;
-  /** Whether this settled turn owes the ONE output-limit continuation (core
-   *  `owesOutputLimitContinuation`). Decided in the shared spine, because both
-   *  actors settle through it and the answer must not be derived twice. */
-  outputContinuation: boolean;
-}
 
 /** What the settled turn's telemetry established for the roster that follows it:
  *  the retry the overflow policy earned, and the ONE name this turn's end
@@ -388,11 +357,6 @@ interface AssembledTurn {
   readonly cacheOptions: ReturnType<typeof promptCachePlan>['providerOptions'];
   readonly reasoningOptions: ReturnType<typeof reasoningEffortOptions>;
   readonly promptModel: ReturnType<ActorAgent['promptModelContext']>;
-}
-
-interface SettledTurnTelemetry {
-  readonly overflowRecovery: OverflowRecoveryDecision | null;
-  readonly end: RunEndClassification;
 }
 
 interface AsyncTaskOwner {
@@ -470,10 +434,10 @@ function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
   return recorded;
 }
 
-const PlanApprovalMetadataSchema = v.pipe(v.string(), v.parseJson(), v.object({
+const PlanApprovalMetadataSchema = v.looseObject({
   kinuEvent: v.literal('plan_approved'), planId: v.string(),
   revision: v.pipe(v.number(), v.integer(), v.minValue(1)), decision: v.literal('approve'),
-}));
+});
 
 /** Extract plain text from the last user message in a ModelMessage[]. Used
  *  by skills resolution to look for `/skill-name` invocations and keyword
@@ -652,24 +616,6 @@ interface WorkspaceTitleInputs {
 }
 
 
-
-/** The chat-request body as the busy route reads it: the user messages the
- *  client is sending, by id, with their parts and the mode they were typed in. */
-const BusyChatBodySchema = v.looseObject({
-  messages: v.array(v.looseObject({
-    id: v.pipe(v.string(), v.nonEmpty()),
-    role: v.string(),
-    parts: v.array(v.looseObject({
-      type: v.string(),
-      text: v.optional(v.string()),
-      mediaType: v.optional(v.string()),
-      url: v.optional(v.string()),
-      filename: v.optional(v.string()),
-    })),
-    metadata: v.optional(v.unknown()),
-  })),
-  trigger: v.optional(v.string()),
-});
 
 /** The failure classes under which a turn runs on builtins alone because the
  *  owner's MCP catalog could not be reached or finished: a hop that failed, timed
@@ -934,31 +880,26 @@ export abstract class ActorAgent extends Think<Env> {
   // decides whether THIS turn may submit into it: an owner-driven additional
   // agent does; a task delegated by its parent keeps the report lane instead.
 
-  private _turnTaskPlan: TaskPlanContext | undefined;
-  private approvedTaskPlan(messageId: string | null): TaskPlan | null {
-    const sql = this.boundSql;
+  /** The approved plan the running turn implements, when the turn IS a plan
+   *  approval's handoff: read off the admitted item — its metadata names the
+   *  plan, its idempotency key is the decision's — and honoured only while
+   *  the row still says approved. Null for every other turn. */
+  private approvedTaskPlan(): TaskPlan | null {
+    const item = this._turnItem;
 
-    if (messageId === null || !tableExists(sql, 'cf_think_submissions')) return null;
+    if (item === null || item.kind !== 'programmatic') return null;
+    const parsed = v.safeParse(PlanApprovalMetadataSchema, item.metadata);
 
-    const rows = sql<{ metadata_json: string | null; idempotency_key: string | null }>
-      `SELECT metadata_json,idempotency_key FROM cf_think_submissions
-       WHERE status='running' AND EXISTS
-         (SELECT 1 FROM json_each(messages_json) WHERE json_extract(value,'$.id')=${messageId})`;
+    if (!parsed.success) return null;
+    const input = parsed.output;
+    const prefix = `plan:${input.planId}:${input.revision}:approve:`;
+    const key = item.idempotencyKey ?? '';
 
-    for (const row of rows) {
-      if (row.idempotency_key === null) continue;
-      const parsed = v.safeParse(PlanApprovalMetadataSchema, row.metadata_json);
+    if (!key.startsWith(prefix) || !/^\d+$/.test(key.slice(prefix.length))) return null;
+    const plan = this.planReviews.get(input.planId, input.revision);
 
-      if (!parsed.success) continue;
-      const input = parsed.output;
-      const prefix = `plan:${input.planId}:${input.revision}:approve:`;
-
-      if (!row.idempotency_key.startsWith(prefix) || !/^\d+$/.test(row.idempotency_key.slice(prefix.length))) continue;
-      const plan = this.planReviews.get(input.planId, input.revision);
-
-      if (plan?.status === 'approved' && plan.sessionId === 'default') {
-        return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
-      }
+    if (plan?.status === 'approved' && plan.sessionId === 'default') {
+      return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
     }
 
     return null;
@@ -1514,17 +1455,21 @@ export abstract class ActorAgent extends Think<Env> {
     // its workspace says so, as a `workspace` field; the rest are honestly
     // unattributed. See `analytics/install.ts`.
     installAnalyticsDiagnostics(this.env);
-    // The orchestrator's per-turn extension: the turn steering's observation
-    // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
-    // through closures because `orch` is built lazily and this runs in the
-    // constructor.
-    this.extensions.register({
-      name: 'kinu.inbox',
-      onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
-      onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
-      prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
-    });
+    // The vendor base's connection hooks, captured before Think's `onStart`
+    // rebinds them around its own chat handshake: Think's connect serves its
+    // in-memory message cache, which this backend no longer keeps fresh —
+    // the transcript store writes straight through the SDK provider — so the
+    // gate below reaches the base directly and the transport serves the
+    // durable rows. Captured here because the base installs its own wrappers
+    // in ITS constructor, which ran before this line.
+    this.baseOnConnect = this.onConnect;
+    this.baseOnClose = this.onClose;
   }
+  /** The vendor base's connection hooks, before Think's `onStart` rebinds
+   *  them: see the constructor. Null until it runs, which is before any
+   *  socket arrives. */
+  private baseOnConnect: ActorAgent['onConnect'] | null = null;
+  private baseOnClose: ActorAgent['onClose'] | null = null;
   /** Think installs protocol dispatch before the actor onStart callback. */
   protected installClientMessageGate(): void {
     const dispatchMessage = this.onMessage;
@@ -1564,243 +1509,52 @@ export abstract class ActorAgent extends Think<Env> {
         return;
       }
 
-      try {
-        const hasMessage = (id: string) => this.chatTranscript.has(id);
+      // The chat protocol is the transport's — core's loop over the SDK's own
+      // primitives; every other frame (RPC, state sync) is the Agent base's.
+      if (v.is(v.string(), message) && await this.chatTransport.onMessage(connection, message)) return;
 
-        if (event?.type === 'chat-request') {
-          const routed = await this.routeBusyChat(event, hasMessage);
+      return await dispatchMessage.call(this, connection, message);
+    };
 
-          if (routed !== null) {
-            connection.send(JSON.stringify({
-              type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: '', done: true, landed: routed,
-            }));
+    // The connect and close the transport was built for: a socket that opens
+    // mid-turn is told what is resuming and reads the transcript as it is
+    // NOW — the loop's durable rows, not the vendor cache Think's own
+    // handshake would serve. Reached past Think's wrappers (see the
+    // constructor): a chat connection never sees Think's handshake, a
+    // sub-agent connection never sees ours.
+    const baseOnConnect = this.baseOnConnect;
+    const baseOnClose = this.baseOnClose;
 
-            return;
-          }
-        }
+    this.onConnect = async (connection, ctx) => {
+      if (await this.refuseRevokedSocketAuthority(connection, '')) return;
 
-        const bound = v.is(v.string(), message) ? bindChatInput(message, this.stores.claims, hasMessage) : message;
+      if (this._cf_requestTargetsSubAgent(ctx.request)) return await baseOnConnect?.call(this, connection, ctx);
 
-        return await dispatchMessage.call(this, connection, bound);
-      } finally {
-        if (event?.type === 'clear') {
-          this.dynamicLedger.reset();
-          this.contextPlane.hydrate([]);
-          this._pendingDrainReplyTurns.clear();
+      await baseOnConnect?.call(this, connection, ctx);
+      this.chatTransport.onConnect(connection);
+    };
 
-          try {
-            await this.compactionState.plans.save(this.name, null);
-          } catch (err) {
-            diagnostics.failure('compaction.reset_failed', toKinuError({
-              doing: 'clearing the persisted compaction plan after clear-history',
-              cause: err,
-              otherwise: 'io',
-            }), { workspace: this.name });
-          }
-        }
+    this.onClose = async (connection, code, reason, wasClean) => {
+      this.chatTransport.onClose(connection);
+      await baseOnClose?.call(this, connection, code, reason, wasClean);
+    };
+
+    // The transcript seed the hook fetches: Think's route serves its
+    // in-memory cache, stale since the store moved beneath it, so the gate
+    // answers this one path from the durable rows instead.
+    const dispatchRequest = this.onRequest;
+
+
+    this.onRequest = async (request) => {
+      const url = new URL(request.url);
+
+      if (url.pathname === '/get-messages' || url.pathname.endsWith('/get-messages')) {
+        return Response.json(this.chatTranscript.history());
       }
+
+      return await dispatchRequest.call(this, request);
     };
   }
-  /**
-   * A chat request that arrives while a turn exists is the user's message to
-   * THAT turn: it goes through the inbox under the client's own message id
-   * and lands at the turn's next step, and the SDK never queues a turn for
-   * it. Answers where it landed, or null when the request is the SDK's to
-   * run — the actor is idle (the SDK turn IS the start-a-turn path), the
-   * request is a regenerate, or it carries no user message this actor has
-   * not already persisted (a reconnect replaying an admitted intake).
-   *
-   * Attachments ride as file parts, exactly as the idle path carries them;
-   * the mode is the message's own `kinuMode`, a fact on the message.
-   */
-  private async routeBusyChat(
-    event: { readonly id: string; readonly init: { readonly method?: string; readonly body?: string | null } },
-    hasMessage: (id: string) => boolean,
-  ): Promise<SendLanding | null> {
-    if (!this.orch.inbox.busy || event.init.method !== 'POST' || !event.init.body) return null;
-    const body = v.safeParse(v.pipe(v.string(), v.parseJson(), BusyChatBodySchema), event.init.body);
-
-    if (!body.success || body.output.trigger === 'regenerate-message') return null;
-    const fresh = body.output.messages.filter((input) => input.role === 'user' && !hasMessage(input.id));
-
-    if (fresh.length === 0) return null;
-    let landed: SendLanding = 'mid-turn';
-
-    for (const input of fresh) {
-      const text = input.parts.flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('');
-
-      const files: PromptFile[] = input.parts.flatMap((part) => part.type === 'file' && part.url !== undefined
-        ? [{ filename: part.filename ?? 'attachment', mediaType: part.mediaType ?? 'application/octet-stream', url: part.url }]
-        : []);
-
-      const mode = v.is(v.object({ kinuMode: v.string() }), input.metadata) && isWorkMode(input.metadata.kinuMode) ? input.metadata.kinuMode : 'build';
-      landed = await this.acceptSend(text, files, mode, input.id);
-    }
-
-    return landed;
-  }
-
-  /** The settled turn's actor-generic front half — every actor's
-   *  onChatResponse calls this FIRST (before anything that can throw or
-   *  return early). Resolves the drain identity, clears in-flight turn
-   *  state, and settles mid-turn signal delivery: absorbed signals keep their
-   *  reply dispatch with this turn's answer, and whatever the model never saw
-   *  re-delivers through the same seam (which queues it, since the turn is
-   *  over) — so the event card and reply dispatch work unchanged. */
-  protected async settleTurnEvents(result: ChatResponseResult): Promise<SettledTurnEvents> {
-    // Three sources, in order of how close each is to the turn that ran:
-    // the in-memory stash of a turn this activation itself enqueued, the
-    // re-delivery map of a batch whose replies were still pending, and — for a
-    // turn that arrived through DURABLE ADMISSION — the `drainTurnId` the
-    // enqueue seam stamped on the message itself. The third is what makes an
-    // admitted-then-evicted drain answerable at all: the activation that runs it
-    // is not the one that submitted it, so it holds no stash, and without this
-    // its batch's replies were never dispatched and its lease never closed.
-    const drainTurnId = this._activeDrainTurnId
-      ?? this._pendingDrainReplyTurns.get(result.requestId)
-      ?? this.turnDrainTurnId();
-
-    const programmaticUserMessage = this._activeProgrammaticUserMessage;
-    this._activeDrainTurnId = null;
-    this._activeProgrammaticUserMessage = null;
-    // Persist the provider error TEXT, not just the status — Think keeps only
-    // the LAST terminal error, which the next failure overwrites, so this row
-    // (and the run_end event in recordTurnTelemetry) is the durable evidence
-    // trail.
-    const errorText = result.error?.slice(0, 500);
-    this.logActivity("response_complete", errorText ? `${result.status} — ${errorText}` : result.status);
-    // The turn's durable claim closes here, named by what the response did.
-    // The claim carries an OUTCOME rather than vanishing, so a later reader can
-    // tell a turn that completed from one an eviction left open — which a
-    // deleted row could not say, and which is what recovery has to know.
-    // Snapshot this turn's input and response, including landed steers. The
-    // SDK transcript can already hold later queued inputs; none belongs in
-    // the working revision until its own request is admitted.
-    const claimedTurn = this._turnClaim;
-
-    if (claimedTurn !== null) {
-      const response = await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true });
-      this.contextPlane.endTurn({
-        turnId: claimedTurn.turnId,
-        history: [...this._turnDurableInput, ...this.orch.inbox.replayInto(response)],
-      });
-    }
-
-    if (this._turnRequestId !== null) this.stores.claims.settleInput(this._turnRequestId);
-
-    this.settleTurnClaim(result.status === 'completed'
-      ? 'completed'
-      : result.status === 'aborted' ? 'aborted' : 'error');
-    // Conversion and the durable context/claim close still belong to this
-    // foreground owner. Requeues begin only after that ownership is released.
-    this._inFlight = false;
-    this._turnOperation = null;
-    this._cliCwd = null;
-    const completed = result.status === 'completed';
-    const injectedSignals = this.orch.inbox.settle({ completed });
-
-    // THE OUTPUT-LIMIT CONTINUATION, decided here because this is the one place
-    // both actors settle through and the one moment all three facts are still
-    // readable: the accumulator's last finish reason (reset at the next turn's
-    // start), the driving message, and what this turn absorbed.
-    //
-    // A turn already IS the continuation two ways, and both spend it. It was
-    // queued as its own turn — the `kinuEvent` stamp on the message driving it —
-    // or it was spliced into a turn already running, which is the same signal
-    // reaching the model at a step boundary instead. Reading only the first
-    // would let a spliced continuation earn a second one, and the CLI's bound is
-    // exactly one: a SECOND `length` is honest partial completion.
-    const outputContinuation = owesOutputLimitContinuation({
-      completed,
-      lastFinishReason: this.acc.lastFinishReason,
-      turnWasContinuation:
-        this.turnUserMessageEvent(programmaticUserMessage) === OUTPUT_CONTINUATION_EVENT
-        || injectedSignals.absorbed.some((signal) => signal.kind === OUTPUT_CONTINUATION_EVENT),
-    });
-
-    if (outputContinuation) {
-      this.logActivity('output_limit_reached', 'the answer was cut at the output limit — one continuation owed');
-    }
-
-    return {
-      drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
-      outputContinuation,
-    };
-  }
-
-  protected turnTextParts(
-    result: ChatResponseResult,
-    programmaticUserMessage: UIMessage | null,
-  ) {
-    const userMessages = this.messages.filter((message) => message.role === 'user');
-    const lastUserMessage = programmaticUserMessage ?? userMessages.at(-1);
-
-    const userText = lastUserMessage?.parts
-      ?.filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('') ?? '';
-
-    const assistantText = result.message.parts
-      ?.filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('') ?? '';
-
-    return { userText, assistantText };
-  }
-
-  /**
-   * The identity of one terminal sequence: the durable turn plus the response
-   * being settled. Both travel because Think fires the hook once per response
-   * and a continuation keeps the turn's user-message id. An empty assistant id
-   * is not an identity: every per-effect scope derives from this value, so two
-   * such responses would share one scope and the second would read the first's
-   * work as its own.
-   */
-  protected transitionFor(result: ChatResponseResult): { turnId: string; messageId: string } | null {
-    const durableTurnId = this.durableTurnId();
-
-    if (durableTurnId === null || result.message.id === '') return null;
-
-    return { turnId: durableTurnId, messageId: result.message.id };
-  }
-
-  /**
-   * The user's message, through the inbox. A running turn takes it at its next
-   * step (`'mid-turn'`, announced before the model has it — the person who
-   * pressed Enter needs to know their words were taken); an idle actor runs it
-   * as the next ordinary turn (`'turn'`, answered when that turn has run). The
-   * decision is the inbox's, in one synchronous slice with the durable
-   * reservation {@link PendingSendStore.reserve} writes, so a mid-turn message
-   * exists in SQL before the client hears it queued and an eviction cannot
-   * turn an acknowledged chip into forgotten RAM. The caller never re-sends.
-   *
-   * The id is minted HERE and carried through both announcements and the
-   * durable row, so a surface tracking a message never sees it twice under two
-   * names. `mode` is the composer's, a fact the message carries: a turn it
-   * starts runs under it, and a splice leaves the running turn's mode alone.
-   */
-  protected async acceptSend(
-    text: string, files: readonly PromptFile[], mode: WorkMode, id = `steer-${nanoid(12)}`,
-  ): Promise<SendLanding> {
-    const body = text.trim();
-
-    if (!body && files.length === 0) throw new Error('send requires the message text');
-
-    const outcome = await this.orch.inbox.send({
-      kind: USER_MESSAGE_SIGNAL_KIND, text: body,
-      user: { id, mode, ...(files.length > 0 && { files }) },
-    });
-
-    if (outcome === 'mid-turn') {
-      this.logActivity('steer_queued', body.slice(0, 120));
-
-      return 'mid-turn';
-    }
-
-    if (outcome === 'queued') return 'turn';
-    throw new Error('the turn had already finished and this could not be queued as a new message — send it again');
-  }
-
   /**
    * The ONE pending-send store — core's {@link PendingSendStore} over this
    * actor's executor and actor id. Lazy for the reason every store here is:
@@ -1812,253 +1566,36 @@ export abstract class ActorAgent extends Think<Env> {
     return this._pendingSends ??= new PendingSendStore(this.boundSql, this.actorHandle().actorId);
   }
 
-  /** The driving message id of a turn this actor has handed to the queue and
-   *  that has not yet opened — what a message arriving in that window binds
-   *  its reservation to. Null outside the window. */
-  private _startingTurnId: string | null = null;
-
-  /**
-   * A drain happened: the model has these steers as of the step now starting.
-   *
-   * Each becomes a VERBATIM user row in the session tree — `addMessages`
-   * appends without enqueuing a turn and is explicitly safe from inside a live
-   * one, and the row parents off the current leaf (the message that started
-   * this turn), so the assistant answer chains after it. That chain is what
-   * makes the walk-back fork able to cut at a steer, exactly as it can on the
-   * CLI (local-session persist()).
-   *
-   * The row keeps the steer's own id, so the live chip and the durable message
-   * are the same thing to the chat pane and it renders one, never both.
-   *
-   * It also keeps `atStep`. A turn is ONE assistant message — Think persists it
-   * once, after the stream drains — so a row appended beside it sorts before or
-   * after the whole turn and nowhere else. The step index is the only durable
-   * statement of where inside the turn the model actually read this, and both
-   * the live splice and the reloaded transcript place the bubble from it.
-   */
-  private async recordLandedSteers(steers: readonly UserSteer[], atStep: number): Promise<void> {
-    // Core builds the rows: it assigns the fallback id and stamps BOTH metadata
-    // keys together — a row carrying the steer key without the step key is
-    // indistinguishable from an ordinary user turn at rest. What stays here is
-    // transport: Durable Object messages. The 'landed' steer_status frame is
-    // the seam's, broadcast after this resolves — same key order, same bytes.
-    const rows = describeLandedSteers(steers, atStep);
-    await this.addMessages(rows.map((row, index) => ({
-      id: row.id,
-      role: 'user' as const,
-      parts: [
-        ...(steers[index]?.files ?? []).map((f) => ({ type: 'file' as const, url: f.url, mediaType: f.mediaType, filename: f.filename })),
-        { type: 'text' as const, text: row.text },
-      ],
-      metadata: row.metadata,
-    })));
-
-    this.pendingSends.retire(rows.map((row) => row.id));
+  /** Does the loop owe a turn nothing in this activation is running: a run
+   *  the last process died inside, or a send it acknowledged and never
+   *  drained? Both are rows the loop's own construction re-opens and reruns,
+   *  so an activation that finds either owes a wake — the loop is built under
+   *  that wake, never inside the init gate, because a turn is external work. */
+  protected chatLoopOwesWork(): boolean {
+    return this.eventRecorder.openTurn() !== null || this.pendingSends.restore().length > 0;
   }
+
+  /** The loop's own recovery, under the wake: constructing it re-opens the
+   *  turn the last process left and reruns the sends it acknowledged. Idle
+   *  otherwise — a loop with nothing owed is just built. */
+  protected resumeChatLoop(): ChatSession {
+    return this.chatLoop;
+  }
+
 
   /** The reconnect snapshot reads SQL, not the RAM drain: RAM vanishes on an
    *  eviction while these rows are the acknowledged steers still awaiting a
-   *  step boundary. */
+   *  step boundary. A STEER is a row bound to a turn — accepted mid-turn, or
+   *  swept to a rerun of a dead one. The unbound rows are the loop's own
+   *  sends: the message a running or queued turn was admitted from, which the
+   *  transport already wrote to the transcript and the tab already shows as
+   *  the message it is, never as a chip. */
   protected pendingSteerRuns(): InlineSteer[] {
     return this.pendingSends.restore()
+      .filter((row) => row.turnId !== null)
       .map((row) => ({ id: row.id, text: row.text, state: 'queued' as const, atStep: null }));
   }
 
-  /**
-   * Rows whose turn is gone — an activation that died with steers acknowledged —
-   * rerun as a USER-origin turn. The LIVE turn's own leftovers are the inbox's:
-   * they rerun from Inbox.settle, so this sweep reads only rows bound to a
-   * turn id nobody holds.
-   *
-   * Each carries the operator's own words, so it says so: without the stamp the
-   * enqueue seam would read a row with no author and the programmatic id prefix
-   * it gives every row, and file the operator's sentence as the harness's.
-   * Admission deletes the rows (see host.enqueueTurn): a durable admission and
-   * the reservation's removal are one fact. Detached: a restore must never
-   * block on the next turn's queue slot.
-   */
-  private readonly _rerunningSteerKeys = new Set<string>();
-  private _rerunningSteerTask: AsyncTaskOwner | null = null;
-  private _rerunningSteerPending = false;
-
-  protected sweepOrphanedSteers(): void {
-    this._rerunningSteerPending = true;
-
-    if (this._rerunningSteerTask !== null) return;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._rerunningSteerTask = owner;
-    owner.promise = (async () => {
-      let steers = 0;
-
-      try {
-        await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
-          ctx.stash({ lane: TERMINAL_LANE_FIBER });
-
-          while (this._rerunningSteerPending) {
-            this._rerunningSteerPending = false;
-
-            // Orphan rows come from SQL, not the RAM drain: a reset has
-            // already lost RAM, while these rows are the operator words we
-            // acknowledged. One rerun turn per dead turn, in seq order, under
-            // plan if any of its rows was typed in plan — the inbox's own
-            // rule for a turn's leftovers, so a reset changes nothing about
-            // how the words come back. The live turn's rows are excluded —
-            // its leftovers rerun from the inbox at settle, not from here.
-            const rows = this.pendingSends.sweepDead(this.durableTurnId() ?? '');
-
-            steers = rows.length;
-            let index = 0;
-
-            while (index < rows.length) {
-              const first = rows[index]!;
-              const group = [first];
-              index++;
-
-              while (index < rows.length && rows[index]!.turnId === first.turnId) group.push(rows[index++]!);
-              const mode: WorkMode = group.some((row) => row.mode === 'plan') ? 'plan' : 'build';
-              const idempotencyKey = `steer-rerun:${first.turnId}:${mode}:${first.id}`;
-
-              // A duplicate terminal callback can arrive before the first admission
-              // resolves. RAM closes that window; the durable idempotency key closes
-              // the same window across an activation reset.
-              if (this._rerunningSteerKeys.has(idempotencyKey)) continue;
-              this._rerunningSteerKeys.add(idempotencyKey);
-              const files = group.flatMap((row) => this.pendingSends.files(row.id));
-
-              try {
-                await this.host.enqueueTurn({
-                  text: group.map((row) => row.text).join('\n\n'),
-                  metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: mode },
-                  idempotencyKey,
-                  origin: 'user',
-                  steerIds: group.map((row) => row.id),
-                  ...(files.length > 0 && { files }),
-                });
-              } finally {
-                this._rerunningSteerKeys.delete(idempotencyKey);
-              }
-            }
-          }
-        });
-      } catch (cause) {
-        diagnostics.failure('steer.rerun_failed', toKinuError({
-          doing: 'enqueuing terminal leftover steers', cause, otherwise: 'io',
-        }), { steers });
-      } finally {
-        if (this._rerunningSteerTask === owner) {
-          this._rerunningSteerTask = null;
-
-          if (this._rerunningSteerPending) this.sweepOrphanedSteers();
-        }
-      }
-    })();
-  }
-
-  /** The settled turn's telemetry — the measured compaction trigger, the
-   *  shared overflow-recovery policy, and the durable turn_end/run_end
-   *  events. Runs for completed AND aborted/errored turns.
-   *
-   *  Hands back what the roster after it needs: the retry this turn earned, and
-   *  the run's own classified end. The second one is handed OVER rather than
-   *  re-derived by each caller — deriving one answer twice lets two readers
-   *  disagree about how a turn ended, so the ledger and the roster agree by
-   *  construction. */
-  protected recordTurnTelemetry(result: ChatResponseResult, turn: {
-    errorText: string | undefined;
-    completed: boolean;
-    programmaticUserMessage: UIMessage | null;
-    workMode: WorkMode;
-  }): SettledTurnTelemetry {
-    const { errorText, completed, programmaticUserMessage } = turn;
-    let overflowRecovery: OverflowRecoveryDecision | null = null;
-    // The NEXT turn's measured compaction trigger (core turn-lifecycle).
-    persistMeasuredPromptTokens(this.compactionState, this.name, this.acc.lastPromptTokens, this._turnDurableLength);
-
-    // Overflow planning and compaction arming are synchronous. If this turn
-    // earned a retry, the caller records it as `overflow_retry` in the terminal
-    // roster before any asynchronous effect runs.
-    if (!completed && result.error) {
-      overflowRecovery = applyOverflowRecovery({
-        error: result.error,
-        lastPromptTokens: this.acc.lastPromptTokens,
-        contextWindow: this._turnContextWindow > 0 ? this._turnContextWindow : this.sessionContextWindow(),
-        turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
-        state: this.compactionState,
-        sessionKey: this.name,
-      });
-
-      if (overflowRecovery.forceCompaction) {
-        this.logActivity('overflow_detected',
-          `${overflowRecovery.failureClass} — force compaction armed${overflowRecovery.enqueueRetry ? ', retry owed' : ''}`);
-      }
-    }
-
-    // Seal the durable run: turn_end + run_end (core turn-lifecycle).
-    //
-    // `reason` is core's vocabulary and the classifier takes RAW FACTS, so
-    // neither backend picks a string. A bare string passed straight through
-    // from Think's `result.status` reads 'aborted' here and 'error' on the
-    // CLI for the same Stop, and every cross-backend reader of run ledgers
-    // counts local stops as failures. It returns the error text too: a run
-    // sealed 'aborted' must not still carry an interruption sentence in `error`,
-    // which is the same drift wearing a new label.
-    //
-    // `lastFinishReason` is the fourth fact, and it is the one this backend was
-    // missing entirely: Think reports status 'completed' for a turn its own stop
-    // condition cut, so `completed` alone cannot tell a finished turn from a
-    // truncated one. The model's last word can.
-    const end = classifyRunEnd({
-      completed,
-      interrupted: result.status === 'aborted',
-      errorText,
-      lastFinishReason: this.acc.lastFinishReason,
-    });
-
-    if (this._currentRunId) {
-      closeTurnRun(this.eventRecorder, this._currentRunId, {
-        turnIndex: this.orch.sessionTurnIndex,
-        usage: this.acc.usage,
-        context: this.acc.context,
-        files: this.acc.files,
-        escalations: this.acc.escalations,
-        steering: this.orch.steering.snapshot(),
-        craft: this.orch.craft.snapshot(),
-        recoveries: this.orch.recoverySnapshot(),
-        workMode: turn.workMode,
-        ...end,
-      });
-    }
-
-    // The effect claims are NOT released here, and the ordering is the whole
-    // point. This method runs at the TOP of every actor's onChatResponse, and
-    // everything with a downstream effect runs after it: the reply a drained
-    // email batch owes, the takes claim, the extension turn-end, the evolution
-    // lanes. Releasing the claims here dropped the once-only ledger before the
-    // effects it exists to protect had happened, so an interruption anywhere in
-    // that sequence left a prefix nobody could tell from a completed turn.
-    // Core's `TerminalTransitions.end` owns the release now, at the far end,
-    // and only once the ledger holds nothing owed.
-    // The fleet row. Separate from the durable run above and deliberately not a
-    // projection of it: `closeTurnRun` writes one workspace's own history, which
-    // is only readable by opening that workspace, and the question this answers —
-    // are turns getting slower, is one model failing, what is the fleet spending
-    // — cannot be asked of a per-workspace log at all. It carries no message and
-    // no error text; the classification and the numbers are the whole row.
-    recordTurnRow(this.env, {
-      workspace: this.workspaceName(),
-      agentKind: this.actorKind(),
-      ...this.analyticsModel(),
-      outcome: completed ? 'ok' : errorText === undefined ? 'refused' : 'failed',
-      code: '',
-      durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
-      steps: this.acc.stepCount,
-      toolCalls: this.acc.toolCalls.length,
-      usage: this.acc.usage,
-      usd: this.priceAt(this.acc.usage),
-    });
-
-    return { overflowRecovery, end };
-  }
 
   // ── The terminal transition ───────────────────────────────────────────
   //
@@ -2259,8 +1796,11 @@ export abstract class ActorAgent extends Think<Env> {
   private turnMayStillRun(turnId: string): boolean {
     if (this._inFlight && this.durableTurnId() === turnId) return true;
 
-    return openChatTurnResponses(this.boundSql, turnId)
-      .some((requestId) => !this._settlingChatRequests.has(requestId));
+    // A run the ledger holds open for this turn is a response that started and
+    // has not finished: the restart re-opens it as a continuation. The
+    // settling response's own run is already closed when it settles, so it is
+    // never mistaken for one still running.
+    return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
 
 
@@ -2432,51 +1972,21 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The durable identity of the turn now settling — the id of the message it
    *  opened on. Read at the START of a terminal sequence and carried through
-   *  it: `_turnCheckpoint` outlives the turn on purpose (a background
-   *  continuation keeps tagging its originating turn) and the NEXT turn
-   *  overwrites it, so a detached effect that re-read it could close the wrong
-   *  turn's claim. */
+   *  it, because the loop's live turn is the NEXT one as soon as it opens, and
+   *  a detached effect that re-read it could close the wrong turn's claim. */
   protected durableTurnId(): string | null {
-    const live = this._turnCheckpoint?.turnId;
+    const live = this._chatLoop?.currentTurnId;
 
-    if (live !== undefined) return live;
+    if (live !== undefined && live !== null) return live;
 
-    // A cold activation has no checkpoint in RAM yet. The claim ledger is the
-    // handoff: the newest claim this ACTOR admitted and never settled is the
+    // A cold activation has no loop running a turn yet. The claim ledger is
+    // the handoff: the newest claim this ACTOR admitted and never settled is the
     // turn a Stop sweep must identify, and being actor-scoped it cannot answer
     // with a sibling actor's turn the way the old single `id = 1` row could.
     return this.stores.claims.unsettled(1)[0]?.turnId ?? null;
   }
 
-  /** The claim the in-flight turn is issued under. Written in `beforeTurn`
-   *  before Think can start inference, read by `beforeStep` to record the exact
-   *  context each step consumes, and settled once the response is named. */
-  private _turnClaim: ActorTurnClaim | null = null;
 
-  /**
-   * The durable half of the in-flight turn's assembled request: the history
-   * `assembleTurnMessages` produced, without the turn-local tail it appends.
-   * Set in `beforeTurn`, handed to the context plane at the boundary. The
-   * plane's revision ledger is the durable hand-off between turns; this field
-   * only names what to record there.
-   */
-  private _turnDurableInput: readonly ModelMessage[] = [];
-  private _turnRequestId: string | null = null;
-  private _turnInputMessage: Pick<UIMessage, 'id' | 'metadata'> | null = null;
-  private _turnIngress: { readonly requestId: string; readonly trigger: string } | null = null;
-
-  /** Think emits this inside the admitted slot, before constructing ctx.body.
-   * Programmatic turns inherit lastBody, so that body alone cannot identify
-   * whether a pending chat token belongs to the turn now running. */
-  protected override _emit(
-    type: Parameters<Think<Env>['_emit']>[0], payload?: Parameters<Think<Env>['_emit']>[1],
-  ): void {
-    if (type === 'chat:turn:start') {
-      this._turnIngress = v.parse(v.object({ requestId: v.string(), trigger: v.string() }), payload);
-    }
-
-    super._emit(type, payload);
-  }
 
   /**
    * THE actor's context plane, ONE per activation.
@@ -2516,17 +2026,6 @@ export abstract class ActorAgent extends Think<Env> {
     return this.env.CF_VERSION_METADATA?.id ?? null;
   }
 
-  /** Name the outcome of the in-flight turn's claim. Idempotent per turn: a
-   *  second settle for one claim is refused by the ledger's own guard, so this
-   *  drops the reference first. */
-  private settleTurnClaim(outcome: ClaimOutcome): void {
-    const claim = this._turnClaim;
-
-    if (claim === null) return;
-    this._turnClaim = null;
-    this.stores.claims.settle(claim, outcome);
-  }
-
   /**
    * The terminal sequence this actor started most recently, resolved once its
    * disposition is written.
@@ -2555,9 +2054,7 @@ export abstract class ActorAgent extends Think<Env> {
    * Shared by every actor here: the ordering — hold, join, then dispose — is the
    * guarantee, not a per-actor preference.
    */
-  protected holdTerminalClose(
-    transition: TerminalTransition, close: () => Promise<void>, chatRequestId: string,
-  ): void {
+  protected holdTerminalClose(transition: TerminalTransition, close: () => Promise<void>): void {
     const prior = this._terminalReported;
     const owner: AsyncTaskOwner = { promise: null };
     this._terminalReportedOwner = owner;
@@ -2569,16 +2066,7 @@ export abstract class ActorAgent extends Think<Env> {
         await prior;
         await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: TERMINAL_LANE_FIBER });
-          // NAMED for the duration of the close, because the close asks the chat
-          // roster whether anything else may still act under this turn and the
-          // response being closed usually still owns a row of its own.
-          this._settlingChatRequests.add(chatRequestId);
-
-          try {
-            await close();
-          } finally {
-            this._settlingChatRequests.delete(chatRequestId);
-          }
+          await close();
         });
       } catch (cause) {
         // RELEASED on a handled rejection. An eviction needs no cleanup — nothing
@@ -2655,17 +2143,8 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /**
-   * A usage report priced at the actor's own catalog rate, or undefined when the
-   * catalog holds none.
-   *
-   * Undefined rather than 0: an unpriced call and a free one are different facts,
-   * and the dataset keeps them apart with its own `priced` witness so an average
-   * cost cannot be diluted by calls nobody could price. Whether the rate IS the
-   * call's own is the CALLER's guard — pricing a judge, which `selectJudgeModel`
-   * sends cross-family on purpose, at the actor's rate would put a fabricated
-   * number in the dataset.
-   */
+  /** What a usage report costs at the catalog rate the model carries now —
+   *  the fleet row's price, undefined when the catalog has no rate for it. */
   private priceAt(usage: Usage): number | undefined {
     const pricing = this.modelCatalog.pricing();
 
@@ -2724,8 +2203,12 @@ export abstract class ActorAgent extends Think<Env> {
    *  the directory row `ensureSchema` creates. Every other port dereferences
    *  `this` lazily, so nothing heavy (the CF runtime, the model) is built
    *  before it is first needed. */
+  /** The compaction extension this actor registered, handed to every turn the
+   *  loop runs; core adds the inbox's own turn extension itself. */
+  private _compactionExtension: KinuExtension | null = null;
+
   protected registerCompactionExtension(): void {
-    this.extensions.register(createCompactionExtension({
+    this._compactionExtension = createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
@@ -2752,7 +2235,8 @@ export abstract class ActorAgent extends Think<Env> {
         // fresh block at the tail. A byte-stable replay keeps positions valid.
         if (outcome !== 'replayed') this.dynamicLedger.reset();
       },
-    }));
+    });
+    this.extensions.register(this._compactionExtension);
   }
 
   /** Persist the verified connect-ticket scopes, the CLI bearer behind them,
@@ -2976,10 +2460,109 @@ export abstract class ActorAgent extends Think<Env> {
   // cadence + the event→turn reactor). The DO provides the BackendHost
   // (broadcast + programmatic-turn via saveMessages) + the cf sinks. The CLI
   // backend builds the same AgentOrchestrator with its own host.
-  private _orch: AgentOrchestrator | null = null;
-  protected get orch(): AgentOrchestrator {
-    if (!this._orch) {
-      this._orch = new AgentOrchestrator({
+  /**
+   * THE ONE ActorSession for the workspace root. The subordinate host builds
+   * every child's session from these same seams (`actor-hosting.ts`); the root
+   * builds its own here, synchronously, because `onStart` may not await and
+   * every turn of this actor claims against it.
+   */
+  private _actorSession: ActorSession | null = null;
+  protected get actorSession(): ActorSession {
+    if (!this._actorSession) {
+      this._actorSession = new ActorSession({
+        runtime: this.rt,
+        claims: this.stores.claims,
+        installedBuild: this.installedBuildIdentity(),
+        events: this.stores.eventRecorder,
+        orchestration: this.orchestrationDeps(),
+      });
+    }
+
+    return this._actorSession;
+  }
+
+  /** The turn loop, from core — see {@link ChatSession} for the invariants.
+   *  This actor is its adapter: the driver API delegates to it, and the ports
+   *  it was built over are this actor's own methods. */
+  private _chatLoop: ChatSession | null = null;
+  protected get chatLoop(): ChatSession {
+    if (!this._chatLoop) {
+      this._chatLoop = new ChatSession({
+        actorSession: this.actorSession,
+        sessionId: 'default',
+        transcript: this.chatTranscript,
+        pendingSends: this.pendingSends,
+        eventLog: this.eventLog,
+        eventRecorder: this.eventRecorder,
+        compactionState: this.compactionState,
+        // A synchronous run inside a Durable Object is already atomic;
+        // answering through the platform's own primitive keeps the commit one
+        // unit whatever core comes to put between the statements.
+        transaction: (body) => this.ctx.storage.transactionSync(body),
+        transport: this.chatTransport,
+        mintAnswerId: () => this.mintAnswerId(),
+        ports: {
+          prepareTurn: (item, lease) => this.prepareTurn(item, lease),
+          owedTerminalEffects: (input) => this.owedTerminalEffects(input),
+          terminal: () => this.terminal,
+          holdTerminalClose: (transition, close) => { this.holdTerminalClose(transition, close); },
+          driverGate: () => this.driverGate(),
+          // The workspace UI IS the review surface: a plan turn is admitted.
+          planTurnRefusal: () => null,
+          modelWindow: () => ({
+            contextWindow: this.sessionContextWindow(),
+            modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+          }),
+        },
+      });
+      this.chatTranscript.answersFrom({
+        answer: (id) => this.chatTransport.answer(id),
+        streamed: (id) => this.chatTransport.streamed(id),
+      });
+      this.observeFleetRows();
+      // The working history this activation resumes from — the recorded
+      // working revision, else the transcript — BEFORE the loop's first pump,
+      // which the constructor deferred to a microtask: a turn re-opened from
+      // the ledger continues over the conversation it was admitted against.
+      this._chatLoop.restoreHistory();
+    }
+
+    return this._chatLoop;
+  }
+
+  /** The chat protocol over this actor's sockets — core's ChatTransport on the
+   *  SDK's own primitives. What it asks of the actor is the connection set,
+   *  the transcript as the client sees it, and the loop's driver API. */
+  private _chatTransport: ChatWireTransport | null = null;
+  protected get chatTransport(): ChatWireTransport {
+    if (!this._chatTransport) {
+      this._chatTransport = new ChatWireTransport({
+        sql: this.boundSql,
+        broadcast: (message, exclude) => { this.broadcast(message, exclude); },
+        getConnection: (id) => this.getConnection(id),
+        history: () => this.chatTranscript.history(),
+        // Held by the loop: as a row once it landed, as a reservation from
+        // the moment the send was accepted until then.
+        admitted: (id) => this.chatTranscript.has(id) || this.pendingSends.has(id),
+        send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
+        interrupt: () => { this.chatLoop.interrupt(); },
+        clear: () => this.clearConversation(),
+      });
+    }
+
+    return this._chatTransport;
+  }
+
+  protected get orch(): AgentOrchestrator { return this.actorSession.orchestrator; }
+
+  /** What the settled turn owes, as this actor's roster declares it. */
+  protected abstract owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
+
+  /** The orchestration this actor's session runs over: the host seam, the
+   *  engine, the event log, the governor, and the cf sinks. */
+  private orchestrationDeps(): AgentOrchestratorDeps {
+    {
+      return {
         host: this.host,
         engine: this.engine,
         eventLog: this.eventLog,
@@ -2989,7 +2572,22 @@ export abstract class ActorAgent extends Think<Env> {
         // evolution debt like any agent, and its refiner is the port above.
         refinementLane: () => this.runRefinementLane(),
         sinks: {
-          logActivity: (e, d) => this.logActivity(e, d),
+          logActivity: (e, d) => {
+            // Time to first token, at the accumulator's own once-only latch —
+            // the activity line it writes for it. Measured from the turn's own
+            // start, so it is USER-VISIBLE first token on whatever provider
+            // served it, not a transport first byte.
+            if (e === 'first_chunk' && this.acc.startedAt > 0) {
+              recordTtftRow(this.env, {
+                workspace: this.workspaceName(),
+                agentKind: this.actorKind(),
+                ...this.analyticsModel(),
+                ttftMs: Date.now() - this.acc.startedAt,
+              });
+            }
+
+            this.logActivity(e, d);
+          },
           onToolCallEvent: (ev) => {
             // The fleet row first, because the durable emit below is the one that
             // can throw and a caught failure there must not also cost the count.
@@ -3025,26 +2623,10 @@ export abstract class ActorAgent extends Think<Env> {
             }
           },
         },
-      }, {
-        onAccept: (steer) => {
-          // Bound to the turn it will land in: the running turn's durable id,
-          // or, for a message that arrived while a turn this actor admitted was
-          // still opening, that turn's driving message id — the same id
-          // `restoreTurnCheckpoint` will derive for it. This backend has no
-          // idle-queued lane: a send with no turn to name is refused, not
-          // reserved.
-          const turnId = this.durableTurnId() ?? this._startingTurnId;
-
-          if (turnId === null) throw new Error('running turn has no durable identity');
-          this.pendingSends.reserve({ ...steer, turnId });
-        },
-        onDrain: (steers, atStep) => this.recordLandedSteers(steers, atStep),
-        turnId: () => this.durableTurnId(),
-      });
+      };
     }
-
-    return this._orch;
   }
+
   protected get acc(): TurnAccumulator { return this.orch.acc; }
 
   /** The actor's mission budget governor — the cumulative cap a scheduled run
@@ -3268,17 +2850,16 @@ export abstract class ActorAgent extends Think<Env> {
     })();
   }
 
-  /** The advisor's whole input, read while the turn is still in memory. Recorded
-   *  by the caller that OWES the review, because `_lastTurnOpts` is null on a
-   *  cold activation and an advisor that re-derived `reachable` there would
-   *  review a different tool surface from the one the turn ran with. */
-  protected advisorSnapshotFor(turn: CompletedTurn): AdvisorRecoverySnapshot {
+  /** The advisor's whole input, recorded by the roster that OWES the review
+   *  while the turn is still in memory: an advisor that re-derived
+   *  `reachable` on a cold activation would review a different tool surface
+   *  from the one the turn ran with. `reachable` is the turn's OWN ToolSet
+   *  keys — what the actor demonstrably had, not what this actor class can
+   *  have — as the loop reports them at the settle. */
+  protected advisorSnapshotFor(turn: CompletedTurn, reachable: readonly string[]): AdvisorRecoverySnapshot {
     return {
       turn,
-      // The turn's OWN ToolSet keys: what the actor demonstrably had, not what
-      // this actor class can have. A capability the turn never carried must
-      // never be named at it.
-      reachable: Object.keys(this._lastTurnOpts?.tools ?? {}),
+      reachable: [...reachable],
       minSeverity: this.config.getAdvisorMinSeverity(),
       recent: [...this.engine.recentAdvisorNotes()],
     };
@@ -3310,10 +2891,10 @@ export abstract class ActorAgent extends Think<Env> {
    * `CompletedTurnSchema` the `completed_turns` table persists a turn with, so
    * the size policy lives upstream where the turn's parts are clamped.
    *
-   * Both reads off `_lastTurnOpts` happen BEFORE the fiber starts. `runFiber`
-   * awaits `keepAlive()` before it runs the body, so reading them inside would
-   * read them after an await, which is how a later turn's tool set bleeds into
-   * this turn's review.
+   * The snapshot is recorded by the roster at the settle, BEFORE the fiber
+   * starts: `runFiber` awaits `keepAlive()` before it runs the body, and a
+   * read inside would come after that await, which is how a later turn's tool
+   * set would bleed into this turn's review.
    *
    * Governed off the TURN's labels rather than the governor's active scope, as
    * the engine's own review is: this runs after the turn ended, when the active
@@ -3321,7 +2902,7 @@ export abstract class ActorAgent extends Think<Env> {
    * this backend (it is the one-shot CLI surface's mechanism), so `gateOpen` is
    * false here by construction.
    */
-  protected reviewTurnInBackground(turn: CompletedTurn, recorded?: AdvisorRecoverySnapshot): Promise<void> {
+  protected reviewTurnInBackground(turn: CompletedTurn, snapshot: AdvisorRecoverySnapshot): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return Promise.resolve();
 
     // ONE lane per turn, ever STARTED. A terminal replay arriving after the
@@ -3331,7 +2912,6 @@ export abstract class ActorAgent extends Think<Env> {
     // its own note. Recovery re-drives the fiber this accepted; it does not come
     // back through here. An unkeyed turn has no replay to guard against.
     if (advisorLaneStarted(this.boundSql, this.actorHandle(), turn)) return Promise.resolve();
-    const snapshot: AdvisorRecoverySnapshot = recorded ?? this.advisorSnapshotFor(turn);
     const checkpointed = Promise.withResolvers<void>();
     const taskKey = nanoid();
     const owner: AsyncTaskOwner = { promise: null };
@@ -3551,61 +3131,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  scaffold is the inference loop for. Read per call, so a scaffold running
    *  across a turn sees the messages as they stand when it looks. */
   protected makeScaffoldHistory(): NonNullable<ScaffoldRunOptions['history']> {
-    return createScaffoldHistory(() => this._lastTurnOpts?.messages ?? []);
-  }
-
-  /**
-   * Inference seam override — THE single production chat path on Think, for
-   * EVERY actor. A facet that evolves a scaffold it cannot run is a dead
-   * loop, so this lives on the substrate, not on one subclass.
-   *
-   * Think's `_runInferenceLoop` is private and calls the AI SDK `streamText`
-   * itself; this protected transform is the one seam a subclass gets that can
-   * replace the stream every turn entry path consumes (the old
-   * `runStreamText` override had zero callers on 0.8.2 — the scaffold was
-   * silently dead until this re-wire). We route through the agent's mutable
-   * scaffold IFF it has evolved one (current version > 0). An un-evolved
-   * agent (still on the bootstrap v0) returns Think's result untouched —
-   * same behaviour as before, zero overhead — until the evolution loop
-   * proves + promotes a better scaffold via shadow eval. Once promoted, that
-   * scaffold becomes the agent's live inference loop. One method, one
-   * decision, no parallel paths (core scaffold/inference-transform.ts owns
-   * the routing + orphan-stream semantics).
-   *
-   * The scaffold runs in the codemode sandbox and reaches the model/tools/
-   * memory only through the `host.*` bridge (the live result object can't
-   * cross the boundary). `host.defaultInference()` streams exactly THIS
-   * prepared result back, so a delegating scaffold is byte-faithful to the
-   * default; a custom scaffold can wrap or replace it.
-   */
-  protected _transformInferenceResult(result: StreamableResult): StreamableResult {
-    const selected = this._turnProgram;
-    const operation = this.operationProfile();
-
-    if (selected === null) throw new KinuError('missing', 'the actor turn program was not prepared');
-
-    if (operation === null) throw new KinuError('missing', 'the actor turn profile was not admitted');
-
-    const transformed = runOperationProfile(operation, () => runTaskPlan(this._turnTaskPlan ?? null, () => scaffoldInferenceTransform({
-      program: selected.program,
-      result,
-      run: {
-        rt: this.rt,
-        workMode: this.turnWorkMode(),
-        signal: selected.signal,
-        // beforeTurn stashed this turn's prepared opts just before streamText
-        // fired (turns are serialized on the TurnQueue, so it is THIS turn's).
-        task: extractLastUserText(this._lastTurnOpts?.messages ?? []),
-        llmStream: this.makeScaffoldLLMStream(selected.signal),
-        callTool: this.makeScaffoldCallTool(undefined, selected.signal),
-        history: this.makeScaffoldHistory(),
-      },
-    })));
-
-    return {
-      output: transformed.output,
-      toUIMessageStream: options => operationProfileStream(transformed.toUIMessageStream(options), operation),
-    };
+    return createScaffoldHistory(() => this.actorSession.history);
   }
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
@@ -3619,137 +3145,16 @@ export abstract class ActorAgent extends Think<Env> {
       const armWake = this.durableWakeOwner();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
-        enqueueTurn: async ({ text, metadata, idempotencyKey, yieldsToUserMessage, origin, files, steerIds }) => {
-          const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
-            ? metadata.drainTurnId
-            : null;
-
-          // The id is the row's provenance FALLBACK (core transcriptRole): every
-          // turn the harness enqueues is prefixed, keyed or not. Where the
-          // producer named the FACT, the id is that name — and the message
-          // store's primary key is then what makes a re-announcement land on the
-          // row the first one wrote instead of beside it.
-          //
-          // The AUTHOR is stamped here rather than left to the producer, because
-          // this is the seam every programmatic row is written through: a turn
-          // that reaches it without saying who wrote it is the harness speaking,
-          // and the chat pane must never draw it as the owner's bubble.
-
-          // A user-origin turn (the seam's steer rerun) carries the operator's
-          // words: attachments become file parts ahead of the text, the same
-          // shape a FileUIPart is converted to.
-          const fileParts = origin === 'user'
-            ? (files ?? []).map((f) => ({ type: 'file' as const, url: f.url, mediaType: f.mediaType, filename: f.filename }))
-            : [];
-
-          const message: UIMessage = {
-            id: `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${idempotencyKey ?? crypto.randomUUID()}`,
-            role: 'user' as const, parts: [...fileParts, { type: 'text' as const, text }],
-            metadata: stampTurnAuthor(metadata),
-          };
-
-          // Admission is what retires the acknowledged rows: the steer exists
-          // as its own turn's durable message from here, so the pending_steers
-          // row — which exists only to outlive an eviction — is spent.
-          const retireSteerRows = () => {
-            if (origin !== 'user' || steerIds === undefined) return;
-
-            this.pendingSends.retire(steerIds);
-          };
-
-          // A message arriving before this turn opens binds its reservation
-          // to the turn's driving message id — the id `restoreTurnCheckpoint`
-          // derives once the turn runs, so the row is that turn's to restore.
-          this._startingTurnId = message.id;
-
-          if (idempotencyKey) {
-            let result;
-
-            try {
-              result = await this.submitMessages([message], { idempotencyKey, metadata });
-            } finally {
-              if (this._startingTurnId === message.id) this._startingTurnId = null;
-            }
-
-            if (result.accepted === true || (result.accepted === false
-              && (result.status === 'pending' || result.status === 'running' || result.status === 'completed'))) {
-              retireSteerRows();
-            }
-
-            return {
-              status: result.status === 'aborted' || result.status === 'skipped' || result.status === 'error'
-                ? 'skipped'
-                : 'queued',
-              durable: {
-                submissionId: result.submissionId,
-                accepted: result.accepted,
-                status: result.status,
-              },
-            };
-          }
-
-          // A `yieldsToUserMessage` turn is a move OFFERED to an agent nobody
-          // has spoken to (today: genesis, which carries no idempotency key and
-          // so never takes the durable submission path). The offer is decided
-          // INSIDE the turn's slot — `saveMessages`' `shouldApplyMessages`
-          // gate, the check Think runs after dequeuing the turn and before its
-          // messages are appended or the model is called — against the durable
-          // transcript. An operator row there is somebody already speaking:
-          // the offer is withdrawn unanswered, and that message's own queued
-          // turn is the first turn. Reading earlier would close nothing: the
-          // race is a message landing between the enqueue and the start.
-          //
-          // `shouldApplyMessages` rides under `SaveMessagesOptions` because the
-          // vendored runner honors it and the declared option type does not
-          // name it (the submission drain passes it the same way, think.js
-          // `_executeSubmission`).
-          let yielded = false;
-
-          const turnOptions: SaveMessagesOptions & { shouldApplyMessages?: () => boolean } | undefined
-            = yieldsToUserMessage === true ? {
-              shouldApplyMessages: () => {
-                if (yielded) return false;
-
-                if (!this.chatTranscript.operatorSpoke()) return true;
-
-                yielded = true;
-                diagnostics.event('genesis.yielded_to_message', {
-                  signal: v.is(v.string(), metadata?.kinuEvent) ? metadata.kinuEvent : 'unknown',
-                });
-                this.logActivity('genesis.yielded_to_message');
-
-                return false;
-              },
-            } : undefined;
-
-          try {
-            const result = await this.saveMessages(() => {
-              this._activeDrainTurnId = drainTurnId;
-              this._activeProgrammaticUserMessage = message;
-
-              return [message];
-            }, turnOptions);
-
-            if (yielded) return { status: 'yielded' };
-
-            if (result.status === 'completed') retireSteerRows();
-
-            return { status: result.status === 'completed' ? 'queued' : 'skipped' };
-          } finally {
-            if (this._startingTurnId === message.id) this._startingTurnId = null;
-
-            if (this._activeProgrammaticUserMessage === message) {
-              this._activeDrainTurnId = null;
-              this._activeProgrammaticUserMessage = null;
-            }
-          }
-        },
+        // Every programmatic turn — a wake, a drain, a rerun of the operator's
+        // own words — is admitted by the ONE loop, behind everything queued,
+        // under the producer's own name for the fact it announces.
+        enqueueTurn: (input) => this.chatLoop.enqueueTurn(input),
         // A signal lands on the agent's next step, so this answers whether
         // there will be one. The read is synchronous and the seam's buffer
         // push happens in the same tick, so the turn observed here is the one
         // whose prepareStep will drain it (turns are TurnQueue-serialized); a
         // turn that settles first re-delivers the signal from settle().
-        turnInFlight: () => this._inFlight,
+        turnInFlight: () => this.chatLoop.turnInFlight(),
         // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
         // the evolution hooks already rely on) holds the DO through the window
         // + the drain so the debounced drain completes within the live
@@ -3850,7 +3255,7 @@ export abstract class ActorAgent extends Think<Env> {
         effectClaims: {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
-          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID,
+          turnId: () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID,
         },
         clamp: {
           vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
@@ -3932,6 +3337,46 @@ export abstract class ActorAgent extends Think<Env> {
   // truth.
   protected get eventRecorder(): RunEventRecorder {
     return this.stores.eventRecorder;
+  }
+
+  /** The fleet row, at the run ledger's own seal. Separate from the durable
+   * run the loop just closed and deliberately not a projection of it:
+   * `closeTurnRun` writes one workspace's own history, which is only readable
+   * by opening that workspace, and the question this answers — are turns
+   * getting slower, is one model failing, what is the fleet spending — cannot
+   * be asked of a per-workspace log at all. It carries no message and no
+   * error text; the classification and the numbers are the whole row. Read
+   * at the `run_end` event itself, which the loop emits synchronously while
+   * the accumulator still holds the turn's numbers.
+   *
+   * Only for runs the loop itself ran: the wake reconcile seals runs a dead
+   * activation left open (`closeUnterminatedRuns`), and those seals carry no
+   * turn — no accumulator numbers, no `startedAt` — so a row for one is a row
+   * about whatever turn happens to be live. The loop's current run is the
+   * membership: `closeRun` seals through this same event path while it is
+   * still the current run, and a reconcile seal names a run the loop never
+   * opened. */
+  private _fleetRowsObserved = false;
+  protected observeFleetRows(): void {
+    if (this._fleetRowsObserved) return;
+    this._fleetRowsObserved = true;
+    this.eventRecorder.observe((event) => {
+      if (event.type !== 'run_end') return;
+
+      if (event.runId !== this._chatLoop?.currentRunId) return;
+      recordTurnRow(this.env, {
+        workspace: this.workspaceName(),
+        agentKind: this.actorKind(),
+        ...this.analyticsModel(),
+        outcome: event.reason === 'completed' ? 'ok' : event.error === undefined ? 'refused' : 'failed',
+        code: '',
+        durationMs: this.acc.startedAt > 0 ? Date.now() - this.acc.startedAt : 0,
+        steps: this.acc.stepCount,
+        toolCalls: this.acc.toolCalls.length,
+        usage: this.acc.usage,
+        usd: this.priceAt(this.acc.usage),
+      });
+    });
   }
 
   /** The actor's durable claim ledger — the identity a turn's effects are
@@ -4470,8 +3915,12 @@ export abstract class ActorAgent extends Think<Env> {
     return deps;
   }
 
-  /** Convenience: current runId for event emission. One run per turn. */
-  protected _currentRunId = '';
+  /** The run the loop holds open right now, for event emission — one run per
+   *  turn, minted by the loop; empty between turns and before the loop exists,
+   *  so a between-turn emit files under the workspace aggregate. */
+  protected get _currentRunId(): string {
+    return this._chatLoop?.currentRunId ?? '';
+  }
 
   // ── Skills (turn-scoped) ───────────────────────────────────────
   /** Immutable role/tier/tool profile resolved once for the active turn. */
@@ -4636,9 +4085,11 @@ export abstract class ActorAgent extends Think<Env> {
   private _turnT0 = 0;
 
   // Per-turn in-flight flag — forkAgent rejects with "agent busy" while set.
-  // Set in beforeTurn, cleared in onChatResponse (after durable persist;
-  // evolution is fire-and-forget and does not extend the busy window).
-  protected _inFlight = false;
+  /** A turn is running: the loop's own answer, read live. What routes a
+   *  signal into the running turn's next step, keeps its tool claims, and
+   *  reports the actor busy — one source of truth, cleared by nothing here
+   *  because the loop's pump is the thing that ends. */
+  protected get _inFlight(): boolean { return this._chatLoop?.pumping === true && this._chatLoop.currentTurnId !== null; }
   /**
    * Whether THIS turn records evolution state: core's own derivation, captured
    * where the turn opened.
@@ -4655,16 +4106,6 @@ export abstract class ActorAgent extends Think<Env> {
   protected turnRecordsEvolution(): boolean {
     return this.engine.enabled && this.turnWorkMode() !== 'plan';
   }
-  /** The chat requests whose terminal close this activation is running — the
-   *  responses {@link turnMayStillRun} must not read as somebody else. */
-  private readonly _settlingChatRequests = new Set<string>();
-  /** Synthetic drain id captured when its programmatic queue entry actually
-   *  starts. `this.messages` may already contain a newer queued user message
-   *  by the time this turn finishes. */
-  protected _activeDrainTurnId: string | null = null;
-  protected _activeProgrammaticUserMessage: UIMessage | null = null;
-  /** Standalone drains may span Think auto-continuations under one request id. */
-  protected readonly _pendingDrainReplyTurns = new Map<string, string>();
 
   /** The public extension seam on the cloud backend — the SAME ExtensionHost
    *  contract `runChat` drives on the CLI, bridged onto Think's subclass
@@ -4682,7 +4123,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  whenever the model-visible stream changed shape ('planned'/'invalidated')
    *  because the frozen block positions are meaningless against a rewritten
    *  stream. */
-  private readonly dynamicLedger = new DynamicContextLedger();
+  protected readonly dynamicLedger = new DynamicContextLedger();
   protected _cliCwd: string | null = null;
   /** Whether the message that opened the CURRENT turn was a conversational
    *  reply or an independent one-shot task (`kinu exec` against this
@@ -4691,10 +4132,6 @@ export abstract class ActorAgent extends Think<Env> {
    *  Defaults to a conversation — every non-CLI surface (web chat, API, the
    *  REPL) is one. */
   protected _turnContinuity: TurnContinuity = 'conversation';
-  // Current turn identity for the device daemon's pre-mutation shadow-git
-  // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
-  // turn so background tool continuations keep tagging their originating turn.
-  protected _turnCheckpoint: { turnId: string; sessionId: string } | null = null;
 
   // The prepared streamText opts of the LAST live chat inference, stashed at
   // the end of beforeTurn — Think 0.8's one turn-assembly hook on the live
@@ -4710,7 +4147,6 @@ export abstract class ActorAgent extends Think<Env> {
   // the TurnQueue and the shadow eval captures the reference synchronously
   // in the same onChatResponse, so it cannot be overwritten by a later turn;
   // after a DO restart the shadow falls back to the task-only reconstruction.
-  protected _lastTurnOpts: Parameters<typeof streamText>[0] | null = null;
   private _turnProgram: { readonly program: ActorTurnProgram; readonly signal: AbortSignal | undefined } | null = null;
   /** The signal of the turn running right now, or undefined between turns.
    *  Read per call, never captured: a long-lived collaborator built once (the
@@ -4725,7 +4161,12 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   getCheckpointMetaForDevice(): { turnId: string; sessionId: string } | null {
-    return this._turnCheckpoint;
+    // The turn a device command belongs to is the loop's live turn: the id a
+    // Stop sweep names, and the key the daemon's pre-mutation checkpoint is
+    // filed under.
+    const turnId = this._chatLoop?.currentTurnId;
+
+    return turnId === undefined || turnId === null ? null : { turnId, sessionId: 'default' };
   }
 
   // ── Bound SQL executor ────────────────────────────────────────────────
@@ -4746,6 +4187,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  TranscriptStore over `assistant_messages`. Lazy for the reason every store
    *  here is: `actorHandle()` resolves the directory row `ensureSchema` creates. */
   private _chatTranscript: AssistantMessagesTranscript | null = null;
+  /** Build the transcript store, and with it its table, before anything asks. */
+  protected resumeChatTranscript(): AssistantMessagesTranscript {
+    return this.chatTranscript;
+  }
+
   protected get chatTranscript(): AssistantMessagesTranscript {
     return this._chatTranscript ??= new AssistantMessagesTranscript(this, this.boundSql, this.actorHandle());
   }
@@ -5632,7 +5078,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.ensureSchema();
     const attachments = v.parse(v.array(PromptFileSchema), files);
 
-    return { landed: await this.acceptSend(text, attachments, isWorkMode(mode) ? mode : 'build') };
+    return { landed: await this.chatLoop.send({ text, files: attachments }, { mode: isWorkMode(mode) ? mode : 'build' }) };
   }
 
   /** Stop the turn on screen — the composer's Stop button. Aborts the in-flight
@@ -5650,7 +5096,7 @@ export abstract class ActorAgent extends Think<Env> {
     const turnId = this.durableTurnId();
 
     return await cancelCurrentWork({
-      cancelChats: () => this.cancelAllChats(),
+      cancelChats: () => { this.chatLoop.stop(); },
       activeToolControllers: this._activeToolControllers,
       broadcast: (payload) => this.broadcast(payload),
       stopDeviceCommands: turnId === null ? undefined : async () => {
@@ -5932,11 +5378,13 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   getTools(): ToolSet {
-    // The Think chat loop's tool source (first hook called by _runInferenceLoop).
-    // Returns the CHAT view = the raw surface + the auto-background wrap (#173).
-    // Internal eval side-streams use getRawTools() instead, so a >30s tool run
-    // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
-    // injects an unsolicited "job completed" turn into the user's chat.
+    // The chat turn's tool source, read once per turn as prepareTurn opens.
+    // Returns the CHAT view = the raw surface + the auto-background wrap (#173)
+    // + the operation profile. Internal eval side-streams use getRawTools()
+    // instead, so a >30s tool run inside a shadow-eval / scaffold / GEPA
+    // evaluation never detaches a job or injects an unsolicited "job
+    // completed" turn into the user's chat. Also starts the turn clock every
+    // activity line is stamped against.
     this._turnT0 = performance.now();
 
     const tools = this.wrapToolsForBackground(this.getRawTools());
@@ -5990,7 +5438,7 @@ export abstract class ActorAgent extends Think<Env> {
           actor: this.actorHandle(),
           sql: this.rt.storage.sql,
           turnId: claimScope === undefined
-            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._turnCheckpoint?.turnId ?? WORKSPACE_RUN_ID
+            ? () => currentOperationProfile(this.actorHandle())?.turnId ?? this._chatLoop?.currentTurnId ?? WORKSPACE_RUN_ID
             : () => claimScope,
         },
         // The sandbox declares the FINISHED native surface, so core builds it
@@ -6099,33 +5547,42 @@ export abstract class ActorAgent extends Think<Env> {
   /**
    * The SDK's transcript store, asserted present at wake.
    *
-   * Think's activation runs before this actor's `onStart` (`think.js`
-   * `startThink`: `Session.create(this)`, the hydrating session read, then the
-   * subclass hook), and that session read is what creates `assistant_messages`
-   * — so on every activation whose Think booted, the table exists by the time
-   * this runs. Every conversational reader in core answers from that table
-   * where it exists and falls to plain `actor_messages` where it does not
+   * Think's own `onStart` hydrates its session before it reaches this actor's
+   * (`@cloudflare/think` 0.17.0 `think.js` `startThink`: the
+   * `transcript-hydration` step runs `_syncMessages`, whose first session read
+   * declares the provider's DDL, and `_onStart` — the subclass's — is awaited
+   * after it; read 2026-09-15). So by the time this runs, the vendor has
+   * declared whatever table it keeps the transcript in, and the question is
+   * whether that table is the one Kinu's readers name. Every conversational
+   * reader in core answers from `assistant_messages` where it exists and
+   * falls to plain `actor_messages` where it does not
    * (`identity/conversation-store.ts` `hasPaneStore`): right for a local
-   * workspace and for a harness that boots the actor half alone (no Think, no
-   * `session`), and silently WRONG for a hosted workspace whose SDK has moved
-   * the transcript. `@cloudflare/think`'s `brisk-chats-branch` changeset lifts
+   * workspace, and silently WRONG for a hosted workspace whose SDK has moved
+   * the transcript. The Agents SDK's `brisk-chats-branch` changeset lifts
    * `assistant_messages`, `assistant_compactions` and `assistant_config` into
-   * `cf_agents_session_*` on first wake and drops them, after which the fork
-   * cut, the archive export, conversation search, the eval split and
+   * `cf_agents_session_*` and drops them, after which the fork cut, the
+   * archive export, conversation search, the eval split and
    * {@link readInheritedContext} would each read an empty default chat and
-   * report a conversation of zero messages. Asked with `tableExists`, never by
-   * catching: the throw IS the loud failure, at wake, before any of them runs.
+   * report a conversation of zero messages.
+   *
+   * Asked BEFORE this actor's own store is built, with `tableExists` and never
+   * by catching. The store's provider is the same vendor provider, so building
+   * it first would declare the table this guard then finds — under every SDK,
+   * including the one that moved it — and the guard would never fire.
    */
   protected assertSessionStore(): void {
-    if (this.session === undefined) return;
+    if (tableExists(this.boundSql, 'assistant_messages')) {
+      this.resumeChatTranscript();
 
-    if (tableExists(this.boundSql, 'assistant_messages')) return;
+      return;
+    }
+
     throw new Error(
-      'Think booted its session but the workspace database has no `assistant_messages` table: '
+      'The transcript store booted but the workspace database has no `assistant_messages` table: '
       + 'the SDK stores the transcript somewhere Kinu\'s conversational readers '
       + '(fork, archive, search, eval split, inherited context) do not read. Refusing to wake, '
       + 'because every one of them would otherwise answer with an empty conversation. '
-      + 'This is the `@cloudflare/think` session replatform (changeset `brisk-chats-branch`, '
+      + 'This is the Agents SDK session replatform (changeset `brisk-chats-branch`, '
       + '`cf_agents_session_*`); the readers must move with it before this version ships.',
     );
   }
@@ -6153,15 +5610,18 @@ export abstract class ActorAgent extends Think<Env> {
 
     type Row = { id: string; role: string; content: string; created_at: string };
 
+    // `created_at` is second-grained, and a turn writes its rows inside one
+    // second: the rowid is the order they were written in, and the only
+    // order two rows of one second have.
     const rows = this.sql<Row>`
       SELECT id, role, content, created_at
       FROM (
-        SELECT id, role, content, created_at
+        SELECT id, role, content, created_at, rowid AS written
         FROM assistant_messages
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, rowid DESC
         LIMIT ${INHERITED_CONTEXT_CAP}
       ) sub
-      ORDER BY created_at ASC`;
+      ORDER BY created_at ASC, written ASC`;
 
     // The SAME predicate on the total: a count over every actor's transcript
     // beside a page from one actor's would report a fork inheriting context it
@@ -6254,16 +5714,6 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  configureSession(session: Session): Session {
-    // The turn's context is the system prompt `beforeTurn` assembles plus the
-    // persisted conversation and the dynamic/turn-local split, never Think's
-    // freezable context blocks. No Session policy attaches here: compaction
-    // is the transformContext extension (registerCompactionExtension), which
-    // rewrites the turn's model-visible history without touching the stored
-    // messages.
-    return session;
-  }
-
   /** Resolved `<provider>/<modelId>` the next turn will actually use — core's
    *  one resolution, over this actor's registry. Falls back to the raw spec
    *  only pre-claim (no provider registry yet).
@@ -6290,7 +5740,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  on default-configured agents, which leaves model-family guidance
    *  inert on the primary hosted path without it — the same raw-spec class
    *  of bug effectiveModelSpec() fixes for the compaction threshold. */
-  private promptModelContext(): PromptModelContext {
+  protected promptModelContext(): PromptModelContext {
     const spec = this.effectiveModelSpec();
 
     if (!spec) return {};
@@ -6339,50 +5789,11 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Think lifecycle hooks ──────────────────────────────────────
 
-  /** Think otherwise stringifies only Error.message before terminal settlement. */
-  override onChatError(error: Parameters<Think<Env>['onChatError']>[0]): string {
-    return renderThrownChain({ cause: error });
-  }
-
   // Tools the model is allowed to call. Think merges workspace tools (read, write,
   // edit, list, find, grep, delete) with ours, bloating the request by ~2800 tokens.
   // activeTools restricts the model to the built-in tools + session context tools,
   // preventing Think's workspace tools from being sent in the request payload.
   // BUILTIN_TOOLS is sourced from @kinu.run/core/tools/registry (single truth).
-
-  /** Tags this turn for device-side file checkpoints and restores its own
-   *  pending steers. The user message id is what the web turn card holds,
-   *  so restore-by-turn resolves directly. A reset loses the seam's pending
-   *  queue, never the acknowledged rows: this turn restores only its OWN
-   *  steers, and rows whose turn is gone are swept into a user-origin turn,
-   *  never spliced into a later conversation. */
-  private restoreTurnCheckpoint(): void {
-    let lastUserId: string | undefined = this._turnInputMessage?.id;
-
-    for (let i = this.messages.length - 1; lastUserId === undefined && i >= 0; i--) {
-      const candidate = this.messages[i];
-
-      if (candidate.role !== 'user') continue;
-      lastUserId = candidate.id;
-      break;
-    }
-
-    this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
-
-    // No handoff row is written here. The durable claim written later in
-    // `beforeTurn` IS the handoff, and it carries what a row here could not:
-    // which issued actor owns the turn, which execution epoch owns it, and the
-    // program identity the turn was admitted on.
-    const pending = this.pendingSends.forTurn(this._turnCheckpoint.turnId)
-      .map((row) => {
-        const files = this.pendingSends.files(row.id);
-
-        return files.length > 0 ? { ...row, files } : row;
-      });
-
-    if (pending.length > 0) this.orch.inbox.restorePending(pending);
-    this.sweepOrphanedSteers();
-  }
 
   /**
    * The turn-local message tail: the unapproved instruction files, then the
@@ -6425,231 +5836,145 @@ export abstract class ActorAgent extends Think<Env> {
     ];
   }
 
-  private async turnInputHistory(ctx: TurnContext): Promise<readonly ModelMessage[]> {
-    this._turnRequestId = null;
-    this._turnInputMessage = null;
+  /** The item the loop admitted for the turn in flight: what the three
+   *  readers of the driving message's metadata (`turnWorkMode`,
+   *  `turnProvenance`, `turnUserMetadata`) answer from. */
+  private _turnItem: ChatTurnInput | null = null;
 
-    if (ctx.continuation) return ctx.messages;
+  /**
+   * Assemble one admitted turn — the ChatSession's `prepareTurn` port.
+   *
+   * The loop has opened the turn (the run row, the lease); this backend
+   * supplies what only it knows — the owner-side reads, the profile, the
+   * skills and MCP tools, the prompt, the model, the tools — and places the
+   * turn's input on the actor's working history. Everything after the reads is
+   * `assembleTurn`, unchanged from the turn Think used to run.
+   */
+  protected async prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn> {
+    this._turnItem = item;
+    this._turnProgram = null;
+    // The CHAT view, not the raw surface: a slow `run` must detach into a
+    // background job whose settle wakes a turn, and that wrap lives here. The
+    // workerd background-wake proof is what tells the two apart.
+    const tools = this.getTools();
+    const reads = await this.readTurnInputs(tools);
+    this._executorsUsedThisTurn.clear();
+    const body = item.metadata === undefined ? {} : jsonObject(item.metadata);
+    this._cliCwd = readCliCwd(body);
+    this._turnContinuity = readTurnContinuity(body);
+    // The evolution gate, read WHERE THE TURN OPENS: core derives the same value
+    // at `beginTurn`, and the recorded turn carries it so a recovering host's
+    // own engine cannot re-judge a turn it did not run.
+    this._turnEvolutionEnabled = this.turnRecordsEvolution();
 
-    const body = jsonObject(ctx.body);
-    const requestId = v.is(v.string(), body.kinuRequestId) ? body.kinuRequestId : null;
+    // A real user message is the verdict on the previous turn — dispatch the
+    // detached outcome review. Programmatic turns (reactor / job wake) are not
+    // user verdicts.
+    if (item.kind === 'user') this.orch.observeUserTurn(item.text, this._turnContinuity);
+    // Each run opens a new analytics write window.
+    openAnalyticsWindow(this.env);
 
-    const ids = this._turnIngress?.trigger === 'ws-chat' && this._activeProgrammaticUserMessage === null && requestId !== null
-      ? this.stores.claims.input(requestId) : null;
+    // Attachments ride as ModelMessage file parts, the shape ai's
+    // convertToModelMessages emits for FileUIParts, so multimodal models
+    // receive them natively.
+    const fileParts = (item.files ?? []).map((f) => ({
+      type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
+    }));
 
-    let input: UIMessage[];
+    // The one rule for where the turn's conversation comes from, shared with
+    // the local backend: a delivery's reply turn opens on the settled working
+    // revision (born from the delivery's conversation when this actor has
+    // none), every other turn appends, and prior output follows either.
+    this.actorSession.openTurnInput(lease, {
+      item,
+      message: fileParts.length > 0
+        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
+        : { role: 'user', content: item.text },
+      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
+    });
 
-    if (this._activeProgrammaticUserMessage !== null) {
-      input = [this._activeProgrammaticUserMessage];
-    } else if (ids !== null && ids.length > 0) {
-      input = ids.map((id) => {
-        const row = this.sql<{ content: string }>`SELECT content FROM assistant_messages WHERE id = ${id}`[0];
+    const history = this.actorSession.history;
+    // The conversation this turn was opened over, its own message included —
+    // what a hire with context:'inherit' is born from, frozen here so a
+    // background re-drive carries the conversation the caller actually had.
+    this._turnOriginContext = Object.freeze(structuredClone([...history]));
+    const assembled = await this.assembleTurn({ history, tools, body, reads });
+    this._turnDurableLength = assembled.rawMessages.length;
+    // The profile the turn runs under, bound exactly once before execution —
+    // the actor session's own guard, and where the CLI adapter binds it too.
+    this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);
 
-        if (row === undefined) throw new KinuError('missing', 'The admitted chat input is absent from the transcript.');
-        const parsed = recordedUiMessage(v.parse(v.pipe(v.string(), v.parseJson(), JsonValueSchema), row.content));
+    const liveTurn: ActorExecutionInput['chat'] = {
+      model: assembled.model,
+      modelContext: {
+        id: assembled.promptModel.id,
+        contextWindow: assembled.contextWindow,
+        modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+      },
+      system: assembled.system,
+      attachments: {
+        accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
+      },
+      turnLocal: assembled.turnLocal.length > 0 ? assembled.turnLocal : undefined,
+      tools: assembled.tools,
+      activeTools: assembled.activeTools,
+      // NO STEP CAP, stated rather than inherited: the agentic loop runs until
+      // the model stops calling tools, and what bounds it is the budget
+      // governor and the caller's cancel (see core chat.ts, UNBOUNDED_STEPS).
+      stopWhen: UNBOUNDED_STEPS,
+      transformTrigger: assembled.measured.trigger,
+      cache: {
+        providerId: assembled.promptModel.provider,
+        modelId: assembled.promptModel.id,
+        sessionKey: this.ownedModelServices.affinityKey,
+        retention: this.config.getCacheRetention(),
+      },
+      budget: this.budget,
+      countInputTokens: assembled.countInputTokens,
+      observeStream: (chunks: ReadableStream<UIMessageChunk>) => this.chatTransport.observe(chunks),
+    };
 
-        return { ...parsed, id };
-      });
-      this._turnRequestId = requestId;
-    } else if (this._turnIngress?.trigger === 'submission') {
-      const row = this.sql<{ messages_json: string }>`SELECT messages_json FROM cf_think_submissions
-        WHERE request_id = ${this._turnIngress.requestId} AND status = 'running'`[0];
-
-      if (row === undefined) throw new KinuError('missing', 'The admitted durable submission is absent from the SDK ledger.');
-      const stored = v.parse(v.pipe(v.string(), v.parseJson(), v.array(JsonValueSchema)), row.messages_json);
-      input = stored.map((value) => ({
-        ...recordedUiMessage(value), id: v.parse(v.object({ id: v.string() }), value).id,
-      }));
-    } else {
-      return ctx.messages;
+    if (assembled.measured.providerReportedTokens !== undefined) {
+      liveTurn.providerReportedTokens = assembled.measured.providerReportedTokens;
     }
 
-    const driving = input.filter((message) => message.role === 'user').at(-1) ?? input.at(-1);
+    if (assembled.reasoningOptions) liveTurn.providerOptions = assembled.reasoningOptions;
+    const runtime = this.rt;
+    this.acc.composition.openTurn({ system: assembled.system, tools: assembled.tools });
 
-    if (driving === undefined) throw new KinuError('missing', 'The admitted turn has no input messages.');
-    this._turnInputMessage = driving;
-    const messages = await convertToModelMessages(input, { ignoreIncompleteToolCalls: true });
-
-    return this.stores.claims.historyForInput(driving.id, messages, []);
+    return {
+      execution: {
+        loopVersion: await runtime.identity.scaffold.version(),
+        chat: liveTurn,
+        // This actor's registered extensions, every one: the turn composes its
+        // own host over them and adds the orchestrator's inbox extension itself.
+        extensions: this.extensions.list(),
+        dynamic: (profile, tools) => this.dynamicContextSnapshot(profile, tools, assembled.memoryTail),
+        scaffoldSpend: { source: 'scaffold', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+      },
+      sessionKey: this.name,
+      contextWindow: assembled.contextWindow,
+      historyLength: assembled.rawMessages.length,
+    };
   }
 
-  async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    this._turnDynamicSnapshot = null;
+  /** The conversation cleared, on the client's ask: the transcript, the
+   *  working history, the dynamic ledger, the compaction plan. */
+  private async clearConversation(): Promise<void> {
+    this.chatTranscript.clear();
+    this.dynamicLedger.reset();
+    this.contextPlane.hydrate([]);
+    this.actorSession.restoreWorkingHistory(() => []);
 
-    return runOperationProfile(null, async () => {
-      const turnMessages = await this.turnInputHistory(ctx);
-      this._turnProgram = null;
-      ctx.signal?.throwIfAborted();
-      const reads = await this.readTurnInputs(ctx.tools);
-      // Per-turn accounting reset + the turn's mission scope, together: what the
-      // turn is allowed to spend is part of what the turn is.
-      // The continuation flag resets mid-turn signal splice state: a continuation
-      // turn re-absorbs the just-settled signals so they ride into it the way the
-      // queued path's durable message does. Signals still waiting ride either way.
-      this.orch.beginTurn(Date.now(), this.turnUserMetadata(), ctx.continuation);
-      this._executorsUsedThisTurn.clear();
-      const body = jsonObject(ctx.body);
-      this._cliCwd = readCliCwd(body);
-      this._turnContinuity = readTurnContinuity(body);
-      this._inFlight = true;
-      // The evolution gate, read WHERE THE TURN OPENS: core derives the same value
-      // at `beginTurn`, and the recorded turn carries it so a recovering host's
-      // own engine cannot re-judge a turn it did not run.
-      this._turnEvolutionEnabled = this.turnRecordsEvolution();
-      this._turnOriginContext = Object.freeze(structuredClone([...turnMessages]));
-      this.logActivity("beforeturn", "streamText() called next");
-
-      // A real user message is the verdict on the previous turn — dispatch the
-      // detached outcome review (Hermes-style forked background review). Runs
-      // concurrently with this turn; never blocks it. Programmatic turns
-      // (reactor / job wake) are not user verdicts.
-      if (!this.lastUserTurnIsProgrammatic()) {
-        this.orch.observeUserTurn(extractLastUserText(turnMessages), this._turnContinuity);
-      }
-
-      // Start a new run for the event log, with provenance so cross-run history
-      // (Supervise altitude) can show what kicked each run off. This is the chat
-      // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
-      this._currentRunId = `run-${nanoid()}`;
-      // Each run opens a new analytics write window.
-      openAnalyticsWindow(this.env);
-      this.restoreTurnCheckpoint();
-      openTurnRun(this.eventRecorder, this._currentRunId, {
-        agentId: this.actorHandle().actorId,
-        causedBy: 'chat',
-        userMessage: extractLastUserText(turnMessages),
-        turnIndex: this.orch.sessionTurnIndex,
-      });
-
-
-      const assembled = await this.assembleTurn({ history: turnMessages, tools: ctx.tools, body, reads });
-      const { system: systemOverride, turnLocal } = assembled;
-
-      const cfg: TurnConfig = {
-        system: systemOverride,
-        model: assembled.model,
-      };
-
-      // The shared turn-context assembly (core orchestrator/turn-context.ts) —
-      // the SAME ordering runChat runs on the CLI: attachment sanitize →
-      // extension onTurnStart → awaited transformContext (compaction, over the
-      // DURABLE history only) → turn-local tail. Dynamic context is NOT assembled
-      // here: it is re-read and re-woven at every step by beforeStep.
-      const assembly: Parameters<typeof assembleTurnMessages>[0] = {
-        system: systemOverride,
-        history: assembled.rawMessages,
-        attachments: {
-          accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
-        },
-        extensions: this.extensions,
-        abortSignal: this.currentTurnSignal(),
-        turnLocal,
-        sessionKey: this.name,
-        contextWindow: this._turnContextWindow,
-        trigger: assembled.measured.trigger,
-      };
-
-      if (assembled.measured.providerReportedTokens !== undefined) {
-        assembly.providerReportedTokens = assembled.measured.providerReportedTokens;
-      }
-
-      assembly.admission = {
-        count: assembled.countInputTokens,
-        // Think filters the merged surface by activeTools before submission.
-        // Count that exact subset: including inactive workspace tools inflates
-        // the request while omitting native active tools undercounts it.
-        tools: assembled.activeToolSurface,
-        limits: { contextWindow: this._turnContextWindow, modelOutputLimit: this.modelCatalog.modelOutputLimit() },
-      };
-      cfg.messages = await assembleTurnMessages(assembly);
-      this._turnDurableInput = cfg.messages.slice(0, cfg.messages.length - turnLocal.length);
-      cfg.tools = assembled.tools;
-      cfg.activeTools = assembled.activeTools;
-
-      const providerOptions = mergeProviderOptions(assembled.cacheOptions, assembled.reasoningOptions);
-
-      if (providerOptions) cfg.providerOptions = providerOptions;
-
-      // THE TURN'S STEP BOUND, on the config Think actually consumes.
-      //
-      // `_lastTurnOpts` is a mirror only the shadow-eval replay reads, and only
-      // ever for its `messages` and `tools`: a bound set there never reaches
-      // the live loop.
-      //
-      // `maxSteps` is the lever: Think resolves `config.maxSteps ?? this.maxSteps`
-      // and OR-s `stepCountIs(...)` of it ahead of anything the caller passes.
-      // `stopWhen` rides beside it so the caller's slot is declared where the live
-      // config is assembled — a future real stop condition composes here, and a
-      // grep for the name now lands on the loop instead of the mirror.
-      cfg.maxSteps = UNBOUNDED_MAX_STEPS;
-      cfg.stopWhen = UNBOUNDED_STEPS;
-      // AI SDK reports provider failures as typed error chunks, before Think's
-      // message-only serializer. Keep the native cause graph until this boundary.
-      cfg.experimental_transform = () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
-        transform(chunk, controller) {
-          controller.enqueue(chunk.type === 'error'
-            ? { ...chunk, error: renderThrownChain({ cause: chunk.error }) }
-            : chunk);
-        },
-      });
-
-      const runtime = this.rt;
-      const mode = this.turnWorkMode();
-      const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
-      this._turnProgram = { program, signal: ctx.signal };
-      // THE DURABLE CLAIM, and this is the last statement before Think starts
-      // inference — everything above it is preparation that has issued nothing.
-      // It persists the issued actor, this activation's run, the turn, the next
-      // execution epoch, the immutable work mode, the SELECTED program's identity
-      // (version + the digest of the source that version retains, or the builtin
-      // loop and the build this host publishes for it) and the exact context the
-      // turn was admitted against. A crash after this leaves a claim a recovery
-      // can verify; a crash before it leaves a turn that provably did nothing.
-      const turnId = this.durableTurnId() ?? this._currentRunId;
-
-      // The plane rebases before the claim, not after: `admitted.messages` is this
-      // actor's history with any edit staged while the turn was preparing already
-      // applied, and with input delivered since preserved after it exactly once.
-      // The claim records THAT array, so the context a turn was admitted against
-      // and the context its first request carries are one value.
-      //
-      // The LIVE array, always. The plane lays its active revision over the
-      // prefix this array shares with it and keeps the rest — the previous
-      // answer and the message that started this turn — after it. Handing it a
-      // copy of the previous boundary instead made that copy the whole history.
-      const admitted = this.contextPlane.startTurn({ turnId, history: this._turnDurableInput });
-      this._turnDurableInput = admitted.messages;
-      const requestMessages = [...admitted.messages, ...turnLocal];
-
-      this._turnClaim = this.stores.claims.admit({
-        runId: this._currentRunId,
-        turnId,
-        workMode: mode,
-        program: programIdentityOf(program, this.installedBuildIdentity()),
-        context: requestMessages,
-        workingRevision: admitted.workingRevision,
-      });
-      cfg.messages = requestMessages;
-
-      const lastTurnOpts: Parameters<typeof streamText>[0] = {
-        model: cfg.model ?? ctx.model,
-        system: systemOverride,
-        messages: this.stores.claims.admittedFor(this._turnClaim).messages,
-        tools: { ...ctx.tools, ...cfg.tools },
-        activeTools: cfg.activeTools,
-      };
-
-      if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
-      this._lastTurnOpts = lastTurnOpts;
-      // The tool-call repair rides core's own loop; Think's needs it named here.
-      cfg.repairToolCall = repairToolCall();
-      // The turn's constants for the per-step context breakdown. Tool schemas
-      // ride every request of the turn and are otherwise invisible to anyone
-      // asking where the window went.
-      this.acc.composition.openTurn({ system: systemOverride, tools: this._lastTurnOpts.tools });
-
-      return cfg;
-    });
+    try {
+      await this.compactionState.plans.save(this.name, null);
+    } catch (err) {
+      diagnostics.failure('compaction.reset_failed', toKinuError({
+        doing: 'clearing the persisted compaction plan after clear-history',
+        cause: err,
+        otherwise: 'io',
+      }), { workspace: this.name });
+    }
   }
 
   /**
@@ -6701,6 +6026,27 @@ export abstract class ActorAgent extends Think<Env> {
    * the turn is open (`orch.beginTurn`, the run row) and before the first
    * model call.
    */
+  /** The id a turn's answer is persisted under — every durable row of the
+   *  answer is keyed on it. Random here; a harness that must read the rows it
+   *  names back overrides this and nothing else about the identity. */
+  protected mintAnswerId(): string {
+    return crypto.randomUUID();
+  }
+
+  /** Whether this process may drive the loop right now. Nothing coordinates
+   *  two activations of one Durable Object — the platform serializes them —
+   *  so it always may; named so a suite can state the one refusal the loop
+   *  answers a send with. */
+  protected driverGate(): Refusal | null {
+    return null;
+  }
+
+  /** The model a turn runs on, bound from the profile's tier. ONE override
+   *  point: a harness scripts the model here and nothing else about a turn. */
+  protected turnModel(spec: string): LanguageModel {
+    return this.ownedModelServices.resolveModel(spec);
+  }
+
   private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn> {
     const { profileInputs, mcpTools, deviceStatus, identity } = input.reads;
     const activeRoleId = this.activeRoleLabel();
@@ -6878,7 +6224,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.recordSystemPromptHash(systemOverride);
 
 
-    const languageModel = this.ownedModelServices.resolveModel(profile.tier.model);
+    const languageModel = this.turnModel(profile.tier.model);
 
     // The measured compaction trigger, read from the durable state by core in
     // the one correct order (orchestrator/turn-context.ts). Attachment
@@ -6926,10 +6272,8 @@ export abstract class ActorAgent extends Think<Env> {
       providers.registry.get(tierModel.provider), tierModel.modelId, providers.deps, request,
     );
 
-    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
-    this._turnTaskPlan = taskPlan;
+    const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan() });
     const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
-    this._turnDynamicSnapshot = () => this.dynamicContextSnapshot(profile, activeToolSurface, memoryTail);
 
 
     // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
@@ -6947,9 +6291,6 @@ export abstract class ActorAgent extends Think<Env> {
       retention: this.config.getCacheRetention(),
     });
 
-    this._turnCachePlan = hasCacheMarkers(cachePlan.strategy)
-      ? { strategy: cachePlan.strategy, system: cachePlan.system }
-      : null;
     const cacheOptions = cachePlan.providerOptions;
 
     const reasoningOptions = reasoningEffortOptions(
@@ -6964,19 +6305,12 @@ export abstract class ActorAgent extends Think<Env> {
     };
   }
 
-  /** The in-flight turn's prompt-cache plan — set in beforeTurn, non-null only
-   *  for marker strategies (Anthropic / OpenRouter-Claude), whose breakpoints
-   *  beforeStep re-rolls onto the newest tail each step. */
-  private _turnCachePlan: { strategy: PromptCacheStrategy; system: string | SystemModelMessage } | null = null;
 
   /** The in-flight turn's resolved context window — set in beforeTurn, read
    *  by beforeStep's prune budget every step. */
   protected _turnContextWindow = 0;
   private _turnOriginContext: readonly ModelMessage[] = [];
 
-  /** The prepared profile, actual active surface and awaited memory tail,
-   *  captured together before this turn can issue a model step. */
-  private _turnDynamicSnapshot: (() => DynamicContext) | null = null;
 
   /**
    * The planes only a subclass's own stores can answer, as typed source
@@ -7013,44 +6347,6 @@ export abstract class ActorAgent extends Think<Env> {
     });
   }
 
-  beforeStep(ctx: PrepareStepContext): StepConfig | void {
-    const snapshot = this._turnDynamicSnapshot;
-
-    if (snapshot === null) throw new Error('a model step requires a prepared profile and tool surface');
-
-    // The shared step pipeline (core prompting/prepare-step.ts, identical on
-    // the CLI): typed SDK error projection, extension rewrites, tool-output
-    // pruning against the window budget, dynamic-context weave,
-    // then the replay re-key for the provider about to receive this request,
-    // then the cache plan rolls the tail breakpoints onto the FINAL message
-    // array so each request of the agentic loop reads the prefix the previous
-    // step wrote.
-    //
-    // `destinationProviderId` is read here rather than stashed by `beforeTurn`,
-    // from the same synchronous resolution the cache plan reads: the
-    // destination is a property of the request being composed, and a per-turn
-    // mirror of it would be a second place for the answer to be stale.
-    return composePrepareStep({
-      extensions: this.extensions,
-      abortSignal: this.currentTurnSignal(),
-      cache: this._turnCachePlan,
-      destinationProviderId: this.promptModelContext().provider,
-      prune: this._turnContextWindow > 0
-        ? {
-          contextWindow: this._turnContextWindow,
-          modelOutputLimit: this.modelCatalog.modelOutputLimit(),
-        }
-        : null,
-      budget: this.budget,
-      dynamic: { ledger: this.dynamicLedger, snapshot },
-      meter: this.acc.composition,
-      // The claim's context plane: the array this step consumes becomes the
-      // revision it ran on, recorded here — the one place holding the FINAL
-      // composed request — and before the request leaves.
-      context: this._turnClaim === null ? undefined : this.contextPlane.steps(this._turnClaim),
-    }, { stepNumber: ctx.stepNumber, messages: ctx.messages, steps: ctx.steps });
-  }
-
   /** The byte-stability invariant as telemetry: the system prompt hash should
    *  change only on real agent events (soul/skill/craft/device/model), never
    *  between two vanilla consecutive turns. A "(changed)" entry in the
@@ -7063,31 +6359,12 @@ export abstract class ActorAgent extends Think<Env> {
     this.logActivity('system_prompt_hash', status === 'first' ? hash : `${hash} (${status})`);
   }
 
-  onChunk(_ctx: ChunkContext): void {
-    // Time to first token, read before the accumulator latches its flag: this is
-    // the last moment the answer to "was this the first chunk" is still yes.
-    //
-    // Measured from the turn's own start, so it is USER-VISIBLE first token on
-    // whatever provider served it — not a transport first byte, which excludes
-    // SDK parsing and only exists on one of the two transports.
-    if (!this.acc.firstChunkSeen && this.acc.startedAt > 0) {
-      recordTtftRow(this.env, {
-        workspace: this.workspaceName(),
-        agentKind: this.actorKind(),
-        ...this.analyticsModel(),
-        ttftMs: Date.now() - this.acc.startedAt,
-      });
-    }
-
-    this.acc.onFirstChunk();
-  }
-
   /** Whether the in-flight turn was injected programmatically (an event drain,
    *  a background-job wake, an overflow retry) — a queued signal stamps
    *  kinuEvent metadata on the saved user message; real chat messages carry
    *  none. */
   protected lastUserTurnIsProgrammatic(): boolean {
-    return this.turnUserMessageEvent(null) !== null;
+    return this.turnUserMessageEvent() !== null;
   }
 
   /** The surface THIS turn runs on. A chat turn is interactive — a human is
@@ -7105,31 +6382,17 @@ export abstract class ActorAgent extends Think<Env> {
     // drives it, the same discriminator every other programmatic-turn decision
     // reads. Continuity alone would miss the whole autonomous population,
     // which is the population the one-shot policy was measured on.
-    const programmatic = this.turnUserMessageEvent(this._activeProgrammaticUserMessage) !== null;
+    const programmatic = this.turnUserMessageEvent() !== null;
 
     return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
-  /** The synthetic drain turn this turn is answering, off the DURABLE metadata
-   *  of the message that drove it. The same stamp the `Inbox` writes for
-   *  every queued signal, read back — so a drain that crossed an eviction on
-   *  the submission ledger still knows which batch it owes a reply to. */
-  private turnDrainTurnId(): string | undefined {
-    const metadata = this.turnDrivingMetadata();
-
-    return v.is(v.string(), metadata?.drainTurnId) ? metadata.drainTurnId : undefined;
-  }
-
-  /** The turn's kinuEvent metadata value — from the active programmatic
-   *  message when one drove the turn, else the last durable user message.
+  /** The turn's kinuEvent metadata value — off the item the loop admitted.
    *  Null for real chat turns. */
-  protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
-    const metadata = programmaticUserMessage ? programmaticUserMessage.metadata : this.turnUserMetadata();
-    const parsed = v.safeParse(JsonObjectSchema, metadata);
+  protected turnUserMessageEvent(): string | null {
+    const metadata = this.turnUserMetadata();
 
-    if (!parsed.success) return null;
-
-    return v.is(v.string(), parsed.output.kinuEvent) ? parsed.output.kinuEvent : null;
+    return metadata !== undefined && v.is(v.string(), metadata.kinuEvent) ? metadata.kinuEvent : null;
   }
   /** What the turn may do. Plan is explicit user intent on the driving
    * message; everything else is ordinary unconstrained work. */
@@ -7147,86 +6410,24 @@ export abstract class ActorAgent extends Think<Env> {
    * message when one drove it, else the last durable user message. Parsed at
    * this boundary so both axes read one already-narrowed shape. */
   private turnDrivingMetadata(): JsonObject | undefined {
-    if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();
-    const parsed = v.safeParse(JsonObjectSchema, this._activeProgrammaticUserMessage.metadata);
+    return this.turnUserMetadata();
+  }
+
+  /** What this turn was started BY: the metadata on the item the loop admitted
+   *  — a signal's `kinuEvent` / `signalId` / mission labels, the composer's
+   *  mode, or nothing at all for a chat turn the operator typed. With no turn
+   *  running, the newest user row's: the idle reads (the tool listing) narrow
+   *  their mode off the last message, as they did off Think's cache. */
+  protected turnUserMetadata(): JsonObject | undefined {
+    // The item is the turn's for as long as the loop holds the turn — through
+    // its settle — and a finished turn's item names nothing any more. Read off
+    // the loop only when one exists: an idle read must not build it.
+    const metadata = this._chatLoop?.turnInFlight() === true ? this._turnItem?.metadata : undefined;
+
+    if (metadata === undefined) return this.chatTranscript.lastUserMetadata();
+    const parsed = v.safeParse(JsonObjectSchema, metadata);
 
     return parsed.success ? parsed.output : undefined;
-  }
-
-  /** What this turn was started BY: the metadata on the message that drives it
-   *  — a signal's `kinuEvent` / `signalId` / mission labels, or nothing at
-   *  all for a chat turn the operator typed. */
-  protected turnUserMetadata(): JsonObject | undefined {
-    if (this._turnInputMessage !== null) {
-      const parsed = v.safeParse(JsonObjectSchema, this._turnInputMessage.metadata);
-
-      return parsed.success ? parsed.output : undefined;
-    }
-
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      const candidate = this.messages[i];
-
-      if (candidate.role !== 'user') continue;
-      const parsed = v.safeParse(JsonObjectSchema, candidate.metadata);
-
-      return parsed.success ? parsed.output : undefined;
-    }
-
-    return undefined;
-  }
-
-  async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
-    // Extension observation before the tool's execute runs (returning void =
-    // allow with the original input — the seam observes, it does not gate).
-    await this.extensions.emitToolCall({
-      toolName: ctx.toolName,
-      toolCallId: ctx.toolCallId,
-      args: jsonObject(ctx.input),
-    });
-  }
-
-  async afterToolCall(ctx: ToolCallResultContext): Promise<void> {
-    // Think 0.4 shape (toolName/input/output/success/durationMs) → the core
-    // accumulator records it + fires the activity log + run-event sinks.
-    const input = jsonObject(ctx.input);
-    const outcome = ctx.success ? successfulToolOutcome(ctx.toolName, ctx.output) : failedToolOutcome({ cause: ctx.error });
-
-    const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
-      toolName: ctx.toolName,
-      toolCallId: ctx.toolCallId,
-      input,
-      durationMs: ctx.durationMs,
-      ...outcome,
-    };
-
-    if (ctx.success && ctx.output !== undefined) recorded.output = projectJsonValue({ value: ctx.output });
-
-    if (!ctx.success) recorded.error = ctx.error;
-    this.acc.recordToolCall(recorded);
-    await this.extensions.emitToolResult({
-      toolName: ctx.toolName,
-      toolCallId: ctx.toolCallId,
-      args: input,
-      result: ctx.success ? renderToolResult(ctx.output) : renderThrownChain({ cause: ctx.error }),
-      ...outcome,
-    });
-  }
-
-  onStepFinish(ctx: StepContext): void {
-    // The SDK seam. Two things are read here and nowhere else: the provider's
-    // usage dialect, normalized once so everything downstream speaks `Usage`,
-    // and the getter-backed fields of the SDK's StepResult — `text`,
-    // `toolCalls` and `toolResults` live on its PROTOTYPE (ai
-    // dist/index.js:3964-3994), so handing the object on by spread would drop
-    // them and the step would log as empty.
-    this.acc.recordStep({
-      text: ctx.text,
-      finishReason: ctx.finishReason,
-      toolCalls: ctx.toolCalls,
-      toolResults: ctx.toolResults,
-      usage: normalizeUsage(ctx.usage),
-      response: ctx.response,
-    });
   }
 
   /** The shared background wrap (core jobs/background-wrap): shallow clone, 30s
@@ -7412,20 +6613,50 @@ export abstract class ActorAgent extends Think<Env> {
   // `onFiberRecovered` hands it this actor's transports and nothing else.
 
   /**
-   * Wrap every chat turn in a recovery fiber, so an interrupted turn resumes
-   * after eviction with nobody watching.
+   * Classify each interrupted fiber, and hand its work to a carrier that is
+   * allowed to take as long as the work takes.
    *
-   * Since cloudflare/agents#2071 the fiber is unconditional — `false` is no
-   * longer a value — so what this field decides is the BUDGET: `true` is the
-   * SDK's defaults, and an object tunes them. Set EXPLICITLY, and as a class
-   * field rather than in `onStart`, for two separate reasons the SDK states. A
-   * default is not a decision: every owner turn and every subordinate turn on
-   * this substrate depends on it, so it is declared here rather than
-   * inherited. And the SDK evaluates recovery budgets on every wake — it may
-   * seal an interrupted turn before `onStart` runs — so a value assigned there
-   * would arrive after the recovery it was meant to configure.
+   * NOT `async`, and that is the enforcement rather than a style. The SDK awaits
+   * this hook from `_checkRunFibers`, which `startAgent` awaits inside
+   * partyserver's `blockConcurrencyWhile` — so a promise this method hands back
+   * is a promise every `fetch`, websocket frame and alarm on this object waits
+   * on, and at `do.block_concurrency.cancel_ms` the runtime cancels the gate and
+   * RESETS the object. A non-async method cannot await, so the only thing the
+   * gate can wait on here is the classification itself, which is synchronous by
+   * construction (./fiber-recovery.ts) and hands every re-drive to
+   * {@link redriveRecoveredLane}. `scripts/do-init-gate.ts` holds both halves of
+   * that shape.
+   *
+   * The roster owns the dispatch, the per-lane semantics and the terminal-result
+   * discipline — it never throws, because a thrown hook re-offers the row for a
+   * day; this override only supplies what a fresh activation can re-resolve.
    */
-  override chatRecovery: ChatRecoveryConfig = true;
+  override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
+    this.actorHandle();
+
+    return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
+  }
+
+  /** The transports {@link onFiberRecovered}'s arms classify against and hand
+   *  their re-drives to: stub calls, a fresh model route, this activation's own
+   *  storage. Built fresh per recovery rather than captured at interruption time
+   *  — the whole point of a wake is that the world moved. */
+  private get fiberLanes(): FiberLaneTransports {
+    return {
+      jobs: this.jobRunner,
+      runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
+      hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
+      reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
+      sql: this.boundSql,
+      actor: this.actorHandle(),
+      appendMemory: (path, text) => this.rt.memory.append(path, text),
+      armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
+      deliverSignal: (signal) => this.orch.inbox.send(signal),
+      redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
+    };
+  }
+
+  /**
 
   /**
    * The recovery budgets this backend DECLARES rather than inherits.
@@ -7556,63 +6787,6 @@ export abstract class ActorAgent extends Think<Env> {
    *  frame runs instead of a hand-folded copy of it. */
   protected maintenanceSweeps(): boolean {
     return this.sweepUnrecoverableFiberRows();
-  }
-
-  /**
-   * No stall watchdog, stated as a value rather than left to a default.
-   *
-   * The watchdog measures the gap between UI-message-stream chunks, and no
-   * chunks flow while a server-side tool runs — so any finite value is a
-   * wall-clock bound on a TURN wearing a transport timeout, and this project
-   * does not bound a turn by elapsed time (core/src/chat.ts: a turn runs until
-   * its work is done, the caller cancels it, or the provider or a tool fails
-   * definitively). A hung provider is caught by the same recovery path above,
-   * which is bounded by attempts rather than by seconds.
-   */
-  override chatStreamStallTimeoutMs = 0;
-
-  /**
-   * Classify each interrupted fiber, and hand its work to a carrier that is
-   * allowed to take as long as the work takes.
-   *
-   * NOT `async`, and that is the enforcement rather than a style. The SDK awaits
-   * this hook from `_checkRunFibers`, which `startAgent` awaits inside
-   * partyserver's `blockConcurrencyWhile` — so a promise this method hands back
-   * is a promise every `fetch`, websocket frame and alarm on this object waits
-   * on, and at `do.block_concurrency.cancel_ms` the runtime cancels the gate and
-   * RESETS the object. A non-async method cannot await, so the only thing the
-   * gate can wait on here is the classification itself, which is synchronous by
-   * construction (./fiber-recovery.ts) and hands every re-drive to
-   * {@link redriveRecoveredLane}. `scripts/do-init-gate.ts` holds both halves of
-   * that shape.
-   *
-   * The roster owns the dispatch, the per-lane semantics and the terminal-result
-   * discipline — it never throws, because a thrown hook re-offers the row for a
-   * day; this override only supplies what a fresh activation can re-resolve.
-   */
-  override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
-    this.actorHandle();
-
-    return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
-  }
-
-  /** The transports {@link onFiberRecovered}'s arms classify against and hand
-   *  their re-drives to: stub calls, a fresh model route, this activation's own
-   *  storage. Built fresh per recovery rather than captured at interruption time
-   *  — the whole point of a wake is that the world moved. */
-  private get fiberLanes(): FiberLaneTransports {
-    return {
-      jobs: this.jobRunner,
-      runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
-      hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
-      reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
-      sql: this.boundSql,
-      actor: this.actorHandle(),
-      appendMemory: (path, text) => this.rt.memory.append(path, text),
-      armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
-      deliverSignal: (signal) => this.orch.inbox.send(signal),
-      redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
-    };
   }
 
   /**

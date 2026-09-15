@@ -83,7 +83,18 @@ export type ChatEvent =
    *  delta and appends it to the run's durable log. Carried by reference and
    *  never copied: a 40-step turn must not re-serialize its transcript 40
    *  times. */
-  | { type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage }
+  | {
+    type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
+    /** How the step ended, the SDK's mapped reason: the accumulator keeps the
+     *  LAST one for the settle classifier and the output-limit continuation. */
+    finishReason?: string;
+    /** What the step produced, for the step's own record: its text, its calls
+     *  and their results. Read off the SDK step here because they are
+     *  getter-backed on its prototype, which a spread would drop. */
+    text?: string;
+    toolCalls?: ReadonlyArray<{ toolName: string }>;
+    toolResults?: ReadonlyArray<unknown>;
+  }
   /** A failure the turn survived. `runChat` itself never yields this — it
    *  throws, and the caller owns the turn-failure policy. The scaffold seam
    *  (scaffold/chat-transform.ts) does: an evolved scaffold reports a failed
@@ -167,6 +178,10 @@ export interface ChatOptions {
   /** Request-level provider options contributed by the caller. They are
    *  merged by provider namespace with the cache options assembled here. */
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+  /** The subset of `tools` the model may CALL this turn, when the caller
+   *  narrows one: the rest stay wired for execution but are not offered.
+   *  Absent, every tool is offered. */
+  activeTools?: readonly string[];
   /** The actor's mission budget governor. When the turn runs under a label
    *  whose cumulative cap is spent, the step pipeline declines the next
    *  request instead of issuing it. Unscoped turns are unaffected. */
@@ -355,6 +370,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     stepIndex: number;
     responseMessages: readonly ModelMessage[];
     usage?: Usage;
+    finishReason?: string;
+    text?: string;
+    toolCalls?: ReadonlyArray<{ toolName: string }>;
+    toolResults?: ReadonlyArray<unknown>;
   }
 
   /** What ONE provider call of this turn ended with. */
@@ -520,6 +539,41 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     let responseSoFar: readonly ModelMessage[] = [];
     const pendingStepEvents: PendingStepEvent[] = [];
 
+  /** The subset of `tools` the model may CALL, when the caller narrowed one:
+   *  the rest stay wired for execution but are not offered. One decision per
+   *  turn, not per provider call.
+   *
+   *  SAFETY: the names come from the caller that built `tools`; the SDK
+   *  ignores a name the set does not carry, which is the narrowing a caller
+   *  asked for and not a fault. */
+  const offeredTools = opts.activeTools === undefined
+    ? {}
+    : { activeTools: [...opts.activeTools] as Array<keyof ToolSet> };
+
+
+  /** One finished step, as the accumulator reads it: how it ended, what it
+   *  produced, and what it cost. `text`, `toolCalls` and `toolResults` are
+   *  read off the SDK step here because they are getter-backed on its
+   *  prototype, which a spread would drop. The dispatched-call bookkeeping
+   *  rides along: a call the model has now answered is no longer outstanding.
+   */
+  const recordStepFinish = async (step: StepResult<ToolSet>): Promise<void> => {
+    stepCount++;
+    responseSoFar = [...step.response.messages];
+
+    for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
+    const usage = normalizeUsage(step.usage);
+
+    pendingStepEvents.push({
+      stepIndex: stepCount, responseMessages: responseSoFar,
+      finishReason: step.finishReason, text: step.text,
+      toolCalls: step.toolCalls.map((call) => ({ toolName: call.toolName })), toolResults: step.toolResults,
+      ...(usageReported(usage) && { usage }),
+    });
+    await opts.onStep?.(step);
+  };
+
+
     const result = streamText({
       model: opts.model,
       system: cache.system,
@@ -529,6 +583,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       maxRetries: PROVIDER_SDK_RETRIES,
       messages: [...request],
       tools,
+      ...offeredTools,
       // NO STEP CAP. The agentic loop runs until the model stops calling tools;
       // what bounds it lives entirely inside this file and the budget governor —
       // see UNBOUNDED_STEPS.
@@ -572,18 +627,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           meter: opts.meter,
           context: opts.stepContext,
         }, { stepNumber: stepOffset + stepNumber, messages, steps }),
-      onStepFinish: async (step) => {
-        stepCount++;
-        const usage = normalizeUsage(step.usage);
-        responseSoFar = [...step.response.messages];
-
-        for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
-        const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
-
-        if (usageReported(usage)) event.usage = usage;
-        pendingStepEvents.push(event);
-        await opts.onStep?.(step);
-      },
+      onStepFinish: recordStepFinish,
     });
 
     // A call that never finishes a step — the provider failed before one, or the

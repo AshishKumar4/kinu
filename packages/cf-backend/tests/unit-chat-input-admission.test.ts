@@ -1,16 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import * as v from 'valibot';
-import type { ModelMessage, UIMessage } from 'ai';
-import { ActorClaimStore, JsonObjectSchema, type JsonObject } from '@kinu.run/core';
+import type { ModelMessage } from 'ai';
+import { ActorClaimStore } from '@kinu.run/core';
 import { makeSql, SDK_SESSION_DDL } from '../../core/tests/helpers';
-import { bindChatInput } from '../src/chat-intake';
-import { orchestratorHarness, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, reactivateOrchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const GENESIS = { role: 'user', content: 'Read your standing brief and ask what to do first.' } satisfies ModelMessage;
-
-const Envelope = v.pipe(v.string(), v.parseJson(), v.object({ init: v.object({
-  body: v.pipe(v.string(), v.parseJson(), v.looseObject({ kinuRequestId: v.optional(v.string()) })),
-}) }));
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
@@ -18,42 +12,14 @@ function claims(harness: Harness): ActorClaimStore {
   return new ActorClaimStore(makeSql(harness.db), harness.agent.observeRuntime().actor, (write) => write());
 }
 
-function capturedInput(harness: Harness, id: string, text: string) {
-  const message: UIMessage = { id, role: 'user', parts: [{ type: 'text', text }] };
-
-  const wire = JSON.stringify({ type: 'cf_agent_use_chat_request', id: `wire-${id}`, init: {
-    method: 'POST', body: JSON.stringify({ messages: [message], trigger: 'submit-message', kinuRequestId: 'forged' }),
-  } });
-
-  const bound = bindChatInput(wire, claims(harness),
-    (key) => harness.db.prepare('SELECT id FROM assistant_messages WHERE id = ?').get(key) !== null);
-
-  const body = v.parse(JsonObjectSchema, v.parse(Envelope, bound).init.body);
-
-  return {
-    body,
-    persist() {
-      harness.db.run('INSERT INTO assistant_messages (id, session_id, role, content) VALUES (?, ?, ?, ?)',
-        [id, '', 'user', JSON.stringify(message)]);
-    },
-  };
-}
-
-function config(messages: ModelMessage[], body: JsonObject = {}, continuation = false) {
-  return { system: 'sys', messages, tools: {}, model: 'harness-model', continuation, body };
-}
-
 async function settle(harness: Harness, id: string, text: string): Promise<void> {
-  await harness.agent.onChatResponse({
-    message: { id, role: 'assistant', parts: [{ type: 'text', text }] },
-    requestId: `response-${id}`, continuation: false, status: 'completed',
-  });
+  await thinkTurns(harness.agent).settle({ messageId: id, text, requestId: `response-${id}` });
 }
 
 async function opening(): Promise<Harness> {
   const harness = orchestratorHarness();
   harness.db.run(SDK_SESSION_DDL);
-  await harness.agent.beforeTurn(config([GENESIS]));
+  await thinkTurns(harness.agent).prepare({ messages: [GENESIS] });
 
   return harness;
 }
@@ -67,8 +33,10 @@ describe('request-owned chat inputs', () => {
   // from its provider prefix' (a programmatic turn cannot consume pending B),
   // and 'keeps a queued chat on its durable token through a cold reset and
   // replay' (durable token identity, continuation never consumes pending, and a
-  // settled token is not replayed). The cases kept here exercise the
-  // synchronous bindChatInput read and the alarm/conversion lifecycle directly.
+  // settled token is not replayed). What the chat transport admits — a
+  // client's message under its own id, before the loop is asked, and nothing
+  // a replay carries — is unit-chat-transport.test.ts. The cases kept here
+  // exercise the alarm/conversion lifecycle directly.
   test('alarm recovery leaves the live Think root claim with its foreground owner', async () => {
     const harness = await opening();
     const turn = claims(harness).latestTurn();
@@ -107,62 +75,16 @@ describe('request-owned chat inputs', () => {
     const turn = claims(warm).latestTurn();
 
     if (turn === null) throw new Error('no root turn was admitted');
+    // GENUINELY idle: the process died after the turn committed and its run
+    // closed, before the claim settled. A run the ledger still held open would
+    // not be idle — the next activation's loop re-opens it and continues the
+    // turn under its claim — and a send still reserved would rerun; so the
+    // reservation is spent and the run closed here, the way the commit spends
+    // and the loop closes them, and only the claim is left unverified.
+    warm.db.query('DELETE FROM pending_steers').run();
+    warm.agent.harnessEventRecorder.emit(turn.runId, { type: 'run_end', reason: 'error', error: 'the process died before the claim settled' });
     const cold = await reactivateOrchestratorHarness(warm.db);
     await cold.agent._kinuTerminalRetryTick();
     expect(claims(cold).read(turn.turnId)).toMatchObject({ status: 'settled', outcome: 'indeterminate' });
-  });
-  test('input binding reserves each frame before asynchronous persistence interleaves', async () => {
-    const harness = orchestratorHarness();
-    harness.db.run(SDK_SESSION_DDL);
-    const delayed = Promise.withResolvers<void>();
-    const entered = Promise.withResolvers<void>();
-    const seen: JsonObject[] = [];
-
-    const receive = async (wire: string) => {
-      const bound = bindChatInput(wire, claims(harness), () => false);
-      const parsed = v.parse(Envelope, bound);
-      const body = v.parse(JsonObjectSchema, parsed.init.body);
-      seen.push(body);
-
-      if (seen.length === 1) {
-        entered.resolve();
-        await delayed.promise;
-      }
-    };
-
-    const wire = (id: string) => JSON.stringify({ type: 'cf_agent_use_chat_request', id, init: {
-      method: 'POST', body: JSON.stringify({ messages: [{ id, role: 'user', parts: [{ type: 'text', text: id }] }] }),
-    } });
-
-    const a = receive(wire('a'));
-
-    await entered.promise;
-    await receive(wire('b'));
-    expect(seen).toHaveLength(2);
-    expect(claims(harness).input(String(seen[0]?.kinuRequestId))).toEqual(['a']);
-    expect(claims(harness).input(String(seen[1]?.kinuRequestId))).toEqual(['b']);
-    delayed.resolve();
-    await a;
-  });
-
-  test('full browser history cannot reserve old or already pending inputs again', async () => {
-    const harness = orchestratorHarness();
-    harness.db.run(SDK_SESSION_DDL);
-    const old = capturedInput(harness, 'old', 'old');
-    old.persist();
-    const pending = capturedInput(harness, 'pending', 'same text');
-
-    const wire = JSON.stringify({ type: 'cf_agent_use_chat_request', id: 'new', init: { method: 'POST', body: JSON.stringify({
-      messages: [
-        { id: 'old', role: 'user', parts: [] },
-        { id: 'pending', role: 'user', parts: [{ type: 'text', text: 'same text' }] },
-        { id: 'new', role: 'user', parts: [{ type: 'text', text: 'same text' }] },
-      ],
-    }) } });
-
-    const bound = bindChatInput(wire, claims(harness), (id) => id === 'old');
-    const body = v.parse(Envelope, bound).init.body;
-    expect(claims(harness).input(String(body.kinuRequestId))).toEqual(['new']);
-    expect(claims(harness).input(String(pending.body.kinuRequestId))).toEqual(['pending']);
   });
 });

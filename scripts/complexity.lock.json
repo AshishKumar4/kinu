@@ -230,6 +230,10 @@
       "complexity": 36
     },
     {
+      "key": "packages/core/src/chat.ts#runChat>callModel",
+      "complexity": 36
+    },
+    {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
       "complexity": 36
     },

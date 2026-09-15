@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { createProviderRegistry } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, thinkTurns, orchestratorHarness } from './helpers/actor-harness';
 
 function modelCallingFile() {
   return scriptedTurnModel({ doGenerate: options => {
@@ -43,7 +43,7 @@ test('Think orchestrator sends typed native error feedback in the NEXT provider 
   const model = modelCallingFile();
   agent.modelFactory = () => model;
   await agent.onStart();
-  await agent.runTurn({ input: 'Try the file operation.' });
+  await thinkTurns(agent).run('Try the file operation.');
   assertNativeFeedback(model);
 });
 
@@ -61,14 +61,17 @@ test('parallel hosted native calls retain their SDK identities after reverse com
     return await readFile(...args);
   };
 
-  const observed = agent.afterToolCall.bind(agent);
+  // The order the tools SETTLED in, read where the loop's runner reports each
+  // result: the actor's extension host.
   const order: string[] = [];
-  agent.afterToolCall = async (context) => {
-    await observed(context);
-    order.push(context.toolCallId);
+  agent.harnessRegisterExtension({
+    name: 'probe.tool-order',
+    onToolResult: (context) => {
+      order.push(context.toolCallId ?? '');
 
-    if (context.toolCallId === 'call-B') first.resolve();
-  };
+      if (context.toolCallId === 'call-B') first.resolve();
+    },
+  });
 
   let step = 0;
 
@@ -88,7 +91,7 @@ test('parallel hosted native calls retain their SDK identities after reverse com
   agent.modelFactory = () => model;
 
   try {
-    await agent.runTurn({ input: 'Read the file twice in parallel.' });
+    await thinkTurns(agent).run('Read the file twice in parallel.');
     const run = (await agent.listRuns()).items[0];
 
     if (run === undefined) throw new Error('the chat did not retain a run');
@@ -107,7 +110,6 @@ test('parallel hosted native calls retain their SDK identities after reverse com
   } finally {
     first.resolve();
     files.readFile = readFile;
-    agent.afterToolCall = observed;
   }
 });
 

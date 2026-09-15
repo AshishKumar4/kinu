@@ -20,46 +20,36 @@ import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OUTPUT_LIMIT_REACHED,
   type AgentSignal,
 } from '@kinu.run/core';
-import { orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
 /** One settled assistant response, as Think reports it. */
-function settledResponse(messageId: string, text = 'the answer so far'): Parameters<
-  HarnessOrchestratorAgent['onChatResponse']
->[0] {
-  return {
-    message: { id: messageId, role: 'assistant', parts: [{ type: 'text', text }] },
-    requestId: `req-${messageId}`, continuation: false, status: 'completed',
-  };
-}
-
 /**
  * The turn's last step, recorded exactly as Think's `onStepFinish` records it:
  * the actor's hook maps the SDK step onto this call, and `lastFinishReason` is
  * what it leaves behind for the settle to read.
  */
-function finishTurnWith(harness: ActorHarness<HarnessOrchestratorAgent>, reason: string): void {
-  harness.agent.observeOrch().acc.recordStep({ text: 'the answer so far', finishReason: reason });
-}
-
-/** Drive one settled response and collect every signal its terminal sequence
- *  delivered. The deliverer is the one port replaced; the roster, the claim
- *  ledger and the effect bodies around it are production's. */
+/** Drive one settled response, its model step ending the way `reason` says,
+ *  and collect every signal its terminal sequence delivered. The deliverer is
+ *  the one port replaced; the model's finish is the scripted answer's, and the
+ *  loop, the roster, the claim ledger and the effect bodies are production's. */
 async function settle(
-  harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string,
-): Promise<AgentSignal[]> {
+  harness: ActorHarness<HarnessOrchestratorAgent>, turnId: string, messageId: string, reason: 'stop' | typeof OUTPUT_LIMIT_REACHED,
+): Promise<{ delivered: AgentSignal[]; effects: ReturnType<HarnessOrchestratorAgent['harnessTerminalEffects']> }> {
   const delivered: AgentSignal[] = [];
   harness.agent.harnessSetSignalDeliverer(async (signal) => {
     delivered.push(signal);
 
     return 'queued';
   });
-  harness.agent.declareTurnCheckpoint(turnId);
-  await harness.agent.onChatResponse(settledResponse(messageId));
+  await thinkTurns(harness.agent).settle({ turnId, messageId, text: 'the answer so far', finishReason: reason });
+  // The sequence's rows, read while the sequence is still open: once every
+  // effect has settled and the close is reported, the rows are pruned.
+  const effects = harness.agent.harnessTerminalEffects(turnId, messageId);
   await harness.agent.harnessTerminalReported();
   await joinHarnessFibers();
 
-  return delivered;
+  return { delivered, effects };
 }
 
 const continuations = (signals: readonly AgentSignal[]): AgentSignal[] =>
@@ -69,9 +59,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
   test('a truncated answer owes one continuation, keyed on the response it continues', async () => {
     const harness = orchestratorHarness();
     harness.agent.harnessDrivingUserMessage('write the whole report');
-    finishTurnWith(harness, OUTPUT_LIMIT_REACHED);
-
-    const delivered = await settle(harness, 'u-cut', 'a-cut');
+    const { delivered, effects } = await settle(harness, 'u-cut', 'a-cut', OUTPUT_LIMIT_REACHED);
 
     const owed = continuations(delivered);
     expect(owed).toHaveLength(1);
@@ -83,8 +71,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     // half of the effect's contract, and what stops the same continuation from
     // being re-delivered by every later retry tick. Scoped to this row: the
     // harness UserDO cannot answer the titling effect beside it.
-    expect(harness.agent.harnessTerminalEffects('u-cut', 'a-cut')
-      .find((row) => row.effect_key === 'v1:output_continuation:a-cut'))
+    expect(effects.find((row) => row.effect_key === 'v1:output_continuation:a-cut'))
       .toMatchObject({ status: 'completed' });
   });
 
@@ -96,13 +83,10 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
   test('a turn that finished on its own owes no continuation', async () => {
     const harness = orchestratorHarness();
     harness.agent.harnessDrivingUserMessage('write the whole report');
-    finishTurnWith(harness, 'stop');
-
-    const delivered = await settle(harness, 'u-done', 'a-done');
+    const { delivered, effects } = await settle(harness, 'u-done', 'a-done', 'stop');
 
     expect(continuations(delivered)).toEqual([]);
-    expect(harness.agent.harnessTerminalEffects('u-done', 'a-done')
-      .some((row) => row.effect_key.includes('output_continuation'))).toBe(false);
+    expect(effects.some((row) => row.effect_key.includes('output_continuation'))).toBe(false);
   });
 
   /**
@@ -119,9 +103,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     harness.agent.harnessDrivingUserMessage(OUTPUT_CONTINUATION_TEXT, {
       kinuEvent: OUTPUT_CONTINUATION_EVENT,
     });
-    finishTurnWith(harness, OUTPUT_LIMIT_REACHED);
-
-    const delivered = await settle(harness, 'u-second', 'a-second');
+    const { delivered } = await settle(harness, 'u-second', 'a-second', OUTPUT_LIMIT_REACHED);
 
     expect(continuations(delivered)).toEqual([]);
   });
@@ -138,7 +120,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
     // A turn is RUNNING, so the real delivery seam buffers the continuation for
     // its next step instead of queueing a turn — and the step boundary is where
     // the model actually takes it in.
-    harness.agent.declareTurnInFlight(true);
+    await harness.agent.declareTurnInFlight(true);
 
     const routed = await harness.agent.observeOrch().inbox.send({
       kind: OUTPUT_CONTINUATION_EVENT, text: OUTPUT_CONTINUATION_TEXT,
@@ -146,9 +128,7 @@ describe('a cloud turn cut at the output limit is continued exactly once', () =>
 
     expect(routed).toBe('mid-turn');
     await harness.agent.observeOrch().inbox.prepareStep({ stepNumber: 0, messages: [] });
-    finishTurnWith(harness, OUTPUT_LIMIT_REACHED);
-
-    const delivered = await settle(harness, 'u-spliced', 'a-spliced');
+    const { delivered } = await settle(harness, 'u-spliced', 'a-spliced', OUTPUT_LIMIT_REACHED);
 
     expect(continuations(delivered)).toEqual([]);
   });

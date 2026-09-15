@@ -1140,11 +1140,9 @@ export {
 
 export { pumpScaffoldEvents } from './scaffold/event-pump';
 
-export { scaffoldEventsToUIStream } from './scaffold/ui-stream';
 
 // The two backend inference seams: the DO's UI message stream and a local
 // turn's ChatEvent stream. Same decision, same delegation contract.
-export { scaffoldInferenceTransform, type InferenceStreamResult } from './scaffold/inference-transform';
 
 export { scaffoldChatTransform } from './scaffold/chat-transform';
 
@@ -1791,7 +1789,7 @@ export {
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';
 
-export { withTaskPlan, bindTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
+export { withTaskPlan, bindTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
@@ -1807,7 +1805,7 @@ export {
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
 export {
-  ChatSession, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
+  ChatSession, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from './orchestrator/chat-session';
 
