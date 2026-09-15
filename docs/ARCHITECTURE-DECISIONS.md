@@ -254,6 +254,26 @@ per provider that supports caching.
 
 O2. The tier wall at thread budget 12 against 24, on a quiet box, before any
 budget other than `nproc` is chosen; and `bun run test:workerd`'s 399 to
-439 s solo wall against its 480 s deadline — 139 to 159 s of it is module
-import across 36 serial files, which a per-file import cache or a smaller
-worker bundle would take back.
+439 s solo wall against its 480 s deadline. Measured 2026-09-15: one file
+with 73 ms of tests costs 15.2 s (transform 4.3 s, import 11.5 s), and the
+36 files' own walls sum to 115 s of a 393 s run, so the wall is the per-file
+boot and import, about 280 s. Per file the runner transforms and workerd
+evaluates 1,311 modules (transform itself is 0.9 s; evaluation is the rest):
+
+| modules | source |
+| --- | --- |
+| 615 | `packages/core/src` (read-models 38, prompts 37, providers 35, events 31, evolution 31, tools 30, execution 28, orchestrator 26, …) |
+| 201 | vite-skipped |
+| 83 | `zod` |
+| 59 | `yaml` |
+| 43 | `@nimbus-sh/core` |
+| 29 | `@opentelemetry/api` |
+| 23 each | `agents`, `agent-core`, `mdast-util-to-markdown`, `micromark-core-commonmark` |
+
+The graph is that wide because `tests/workerd/worker.ts` re-exports fifteen
+probe Durable Objects, each importing the real product, and the installed
+`@cloudflare/vitest-pool-workers` 0.22 evaluates the worker once per test
+file with no shared-worker or isolated-storage option in its own code. No
+single lever cuts 60 s without a redesign: the lever is splitting the main
+test worker so a file boots only the probe family it drives, which is a
+harness change across 36 files and stays open.
