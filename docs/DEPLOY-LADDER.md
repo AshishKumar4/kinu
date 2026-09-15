@@ -94,69 +94,12 @@ off its graph.
 
 ## Measured
 
-Push tier at 8a151ec0d on the 24-thread workstation, 2026-09-15, load 0.6
-at start: cold (store emptied) 0 hits, 32 recorded, 15 never cached,
-429.6 s; warm on the same tree 32 hits, 0 recorded, 15 never cached,
-301.3 s. The never-cached rows and the one cause each names are in
-`docs/ARCHITECTURE-DECISIONS.md` L2.
-
-## The soundness gate
-
-`scripts/ladder-cache.test.ts` builds a throwaway repository and runs the
-real planner and recorder over it. It proves each direction red before green:
-
-- after a green run, a rerun hits every cacheable gate and prints the hash;
-- touching one file in a gate's closure misses exactly the gates whose
-  closure holds it, and hits the rest;
-- a gate with no computable closure never hits;
-- a red result leaves no store entry;
-- a tool version change misses everything;
-- a `live` row is never planned as a hit, read from the declaration;
-- a tree that changes while a gate runs is not recorded.
-
-## Scheduling
-
-Gates in a tier run cheapest first by declared seconds, with the serial gates
-in their declared positions, at the measured width. On the first red no new
-gate is scheduled, running gates finish, and every red is reported with its
-reproduce line. `--all` runs the whole tier anyway for a full audit.
-
-## Width
-
-The wave is not scheduled by a count of gates. Each heavy gate declares the
-threads it occupies at peak (`GATE_WEIGHTS` in `scripts/ladder.ts`, mirrored
-as `GATE_WEIGHT` in `scripts/deploy.sh`) and the runner launches a gate only
-while the running weight fits the box's thread count.
-
-Measured 2026-09-15 on the 24-thread workstation (i9-12900K), sampled by
-process tree once a second:
-
-| gate | peak threads | mean | samples | declared weight |
-| --- | --- | --- | --- | --- |
-| `bun test scripts/react-runtime-identity.test.ts` (one Chrome) | 4.3 | 2.4 | 11 | 5 |
-| `bun test --parallel=4 packages/cf-backend/` | 10.5 | 5.1 | 23 | 11 |
-| `bun run gate:dead-code` | 1.7 | 0.9 | 37 | 1 |
-
-Under a six-gate width the eleven-suite UI row failed every deploy on a
-puppeteer wall beside two `--parallel=4` rows: six browser rows and two
-worker rows is forty threads on a box with twenty-four. Under the budget the
-pre-publish tier ran twice on 2026-09-15 with the UI row inside it: 390 s on
-19f9c6666 (one connectome pin red, see below) and 602 s including the
-account gate on 1c82aee60, every source gate green.
-
-The budget-6, 12 and 18 curve the brief asked for is not measured. The
-scheduler no longer has a gate-count width to sweep; the measurement that
-replaces it is the weight table above, and the next figure to take is the
-tier wall at budget 12 against budget 24.
-
-## Timing pins under contention
-
-A wall-clock pin is a latency contract and is not converted to CPU time by
-this track. The one pin that went red under the wave was already a CPU-time
-pin, and CPU time is not contention-invariant on this box either: the mesh
-frame read 0.61 ms alone and 1.13 ms under twelve busy threads. It is now a
-ratio against a calibration unit measured in the same loop (3.9 to 5.2 under
-both conditions), proved red at ten steps per frame.
+Push tier on the 24-thread workstation, 2026-09-15. At 8a151ec0d (load 0.6):
+cold 429.6 s, 0 hits, 32 recorded, 15 never cached; warm 301.3 s, 32 hits.
+At d1aa2e0d6 (load 5.1), after the computed-import, child-environment and
+check/test split commits: cold 434.8 s, 0 hits, 42 recorded, 8 never cached;
+warm 194.9 s, 42 hits. The never-cached rows and the one cause each names
+are in `docs/ARCHITECTURE-DECISIONS.md` L2.
 
 ## Blind spots, printed on the green path
 
