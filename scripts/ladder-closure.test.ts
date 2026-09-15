@@ -127,6 +127,18 @@ describe('ladder-closure — what a closure holds', () => {
     expect(closure.kind === 'derived' && closure.corpus).toBeTrue();
   });
 
+  test('a row that declares corpus holds every tracked file, and its path reads need no list', () => {
+    const repo = fixture({
+      'scripts/g.ts': "import { readFileSync } from 'node:fs';\nexport const g = readFileSync('docs/note.md');",
+      'docs/note.md': 'prose',
+      'packages/x/far.ts': 'export const far = 1;',
+    });
+
+    const closure = deriveClosure('bun scripts/g.ts', { kind: 'derived', corpus: true }, repo);
+    expect(derived(closure)).toContain('packages/x/far.ts');
+    expect(derived(closure)).toContain('docs/note.md');
+  });
+
   test('tsc and oxlint script parts read the whole corpus', () => {
     const repo = fixture({ 'packages/x/far.ts': 'export const far = 1;' }, { check: 'tsc --noEmit -p packages/x' });
 
