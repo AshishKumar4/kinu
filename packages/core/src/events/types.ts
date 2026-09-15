@@ -11,7 +11,7 @@
 
 import type { ModelMessage } from 'ai';
 import type { ContextBudgetSnapshot } from '../context-budget';
-import type { JsonValue } from '../utils/json';
+import type { JsonObject, JsonValue } from '../utils/json';
 import type { ContextComposition } from '../context-meter';
 import type { FileEditSnapshot } from '../types/file-edits';
 import type { DbOpRecord } from '../types/app-store';
@@ -47,6 +47,7 @@ export type RunEventType =
   | 'turn_start'
   | 'tool_call_end'
   | 'step_finish'
+  | 'step_partial'
   | 'model_call'
   | 'model_operation'
   | 'head_split'
@@ -104,6 +105,32 @@ export interface RunEventBase {
   readonly timestamp: string;
 }
 
+/**
+ * The turn a run was opened for, as the loop needs it to re-open the same turn
+ * after the process that ran it died: the opening row's id, the answer's id,
+ * the words, and the pending-send rows the words came from (their files are
+ * read back from those rows). Present only on runs the turn loop opens.
+ */
+export interface OpenTurnIdentity {
+  readonly turnId: string;
+  readonly messageId: string;
+  readonly kind: 'user' | 'programmatic';
+  readonly text: string;
+  readonly metadata?: JsonObject;
+  readonly pendingSendId?: string;
+  readonly steerIds?: readonly string[];
+}
+
+/** One tool call the in-flight step had issued when its partial was written,
+ *  with its result when the tool had answered before the write. */
+export interface PartialToolCall {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly args: JsonValue;
+  readonly result?: string;
+  readonly error?: string;
+}
+
 export type RunEvent =
   | (RunEventBase & { type: 'run_start'; agentId: string; userMessage?: string;
       /** What kicked off this run: 'chat' | 'webhook' | 'timer' | 'peer' | … */
@@ -111,7 +138,8 @@ export type RunEvent =
       /** Ingress descriptor kind for event-triggered runs (webhook_hmac, …). */
       ingress_kind?: string;
       /** The trigger that fired this run, when event-driven. */
-      trigger_id?: string })
+      trigger_id?: string;
+      turn?: OpenTurnIdentity })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
   /** One completed tool call, and — in `args` — WHAT it was asked to do.
    *
@@ -162,6 +190,12 @@ export type RunEvent =
       modelId?: string;
       context?: ContextComposition;
     })
+  /** The in-flight step's output so far — the text and the tool calls it has
+   *  issued — written at the loop's partial cadence so a process that dies
+   *  mid-step leaves the step where it stopped. Superseded by the step's own
+   *  `step_finish`; the newest row of a run whose last step never finished is
+   *  where a continuation resumes. */
+  | (RunEventBase & { type: 'step_partial'; stepIndex: number; text: string; toolCalls: readonly PartialToolCall[] })
   /** A model call that was NOT a turn step — a judge, the fast tier, the
    *  evolution engine, a compaction fold, a scaffold's own loop, the memory
    *  embedder. `source` is which of them

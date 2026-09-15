@@ -1,5 +1,5 @@
 {
-  "measured": "731629858: 1013 test files, 909 runnable suites, 12236 tests, 33 runners, 62 non-public product members",
+  "measured": "6b90e1866: 1048 test files, 939 runnable suites, 12487 tests, 33 runners, 62 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -411,7 +411,7 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: (file scope) :: harness bridge to a non-public member",
-      "count": 2
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a branch the activation sealed is dropped, not still drawn as running :: harness bridge to a non-public member",
@@ -568,18 +568,6 @@
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: activation classifies owed deliveries; only the durable wake dispatches :: memberBody() over source text",
       "count": 3
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: attachment sanitization runs on the whole history BEFORE the extension transform :: expect(<source text>).not.toContain",
-      "count": 3
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: beforeTurn merges profile reasoning effort with cache provider options :: expect(<source text>).not.toContain",
-      "count": 1
-    },
-    {
-      "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: beforeTurn merges profile reasoning effort with cache provider options :: expect(<source text>).toContain",
-      "count": 6
     },
     {
       "key": "source_text :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the admission count and the submitted model resolve ONE spec, not two :: expect(<source text>).not.toContain",

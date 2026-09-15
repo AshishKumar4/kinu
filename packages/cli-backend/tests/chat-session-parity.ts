@@ -14,9 +14,15 @@
  * `chat-session-parity.test.ts` asserts the snapshot against the one recorded
  * before the extraction; the recorder that wrote that fixture ran this same
  * scenario on the pre-extraction tree.
+ *
+ * The loop's tool-call repair (`experimental_repairToolCall`, shared by both
+ * backends since the hosted root moved onto ChatSession) changes no row here:
+ * it fires only on a call the SDK cannot parse — a case-drifted name, fenced or
+ * double-encoded arguments — and every call this script's model makes is
+ * well-formed. Its own pin is core's unit-chat-event-fidelity.
  */
 import { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu.run/test-utils';
+import { parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import type { LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
@@ -34,15 +40,16 @@ const USAGE: LanguageModelV2Usage = { inputTokens: 5, outputTokens: 7, totalToke
 type PromptMessage = LanguageModelV2CallOptions['prompt'][number];
 
 /** Streams one answer in two deltas and finishes. */
-function answeringModel(answer: string): TestLanguageModelV2 {
+function answeringModel(answer: string, prompts: PromptMessage[][] = []): TestLanguageModelV2 {
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
 
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doStream: async () => ({
+    doStream: async (options) => ({
       stream: new ReadableStream({
         start(controller) {
+          prompts.push(options.prompt);
           controller.enqueue({ type: 'stream-start', warnings: [] });
           controller.enqueue({ type: 'text-start', id: '0' });
           controller.enqueue({ type: 'text-delta', id: '0', delta: a });
@@ -179,6 +186,41 @@ async function waitFor(pred: () => boolean, timeoutMs = 5000): Promise<void> {
   }
 }
 
+/** The harness-authored blocks a request carries beside the conversation —
+ *  runtime state and instruction material, whose wording is the harness's to
+ *  change and not a fact the loop decides. */
+const HARNESS_BLOCK = /^<(dynamic_context|workspace_instructions|unverified_instructions)\b/u;
+
+/** One model call as the script decides it: each message's role and, for the
+ *  assistant and tool messages a continuation re-enters, what they carry. A
+ *  harness block is named by its tag, never by its prose. */
+function promptView(prompt: readonly PromptMessage[]): JsonValue {
+  return prompt.map((message): JsonValue => {
+    if (message.role === 'system') return { role: 'system' };
+
+    const parts: JsonValue[] = message.content.map((part): JsonValue => {
+      switch (part.type) {
+        case 'text': {
+          const block = HARNESS_BLOCK.exec(part.text)?.[1];
+
+          return block === undefined ? { type: 'text', text: part.text } : { type: 'text', block };
+        }
+
+        case 'tool-call': return { type: 'tool-call', toolName: part.toolName, toolCallId: part.toolCallId };
+
+        case 'tool-result': return {
+          type: 'tool-result', toolCallId: part.toolCallId,
+          output: part.output.type === 'text' || part.output.type === 'error-text' ? part.output.value : part.output.type,
+        };
+
+        default: return { type: part.type };
+      }
+    });
+
+    return { role: message.role, parts };
+  });
+}
+
 /** The events of the n-th turn (1-based) a session has started, so a wait
  *  reads that turn's own stream and not an earlier turn's leftovers. */
 function turnEvents(events: readonly SessionEvent[], n: number): readonly SessionEvent[] {
@@ -210,48 +252,6 @@ function frontendView(event: SessionEvent): JsonValue {
   }
 }
 
-/**
- * Every minted id and clock reading replaced by its order of appearance, so
- * two runs of one conversation compare equal on everything the script decides.
- */
-function normalizer() {
-  const seen = new Map<string, string>();
-  const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
-  const STEER = /\bsteer-[A-Za-z0-9_-]{12}\b/g;
-  const CLOCK_KEY = /(?:At|Ms|_at|_ms)$/;
-
-  const name = (id: string, kind: string): string => {
-    const known = seen.get(id);
-
-    if (known !== undefined) return known;
-    const minted = `<${kind}#${String(seen.size + 1)}>`;
-    seen.set(id, minted);
-
-    return minted;
-  };
-
-  const text = (value: string): string =>
-    value.replace(UUID, (id) => name(id, 'uuid')).replace(STEER, (id) => name(id, 'steer'));
-
-  const json = (value: JsonValue): JsonValue => {
-    if (v.is(v.string(), value)) return text(value);
-
-    if (Array.isArray(value)) return value.map(json);
-
-    if (v.is(v.record(v.string(), JsonValueSchema), value)) {
-      return Object.fromEntries(Object.entries(value).map(([key, entry]) =>
-        [key, CLOCK_KEY.test(key) && v.is(v.number(), entry) ? '<clock>' : json(entry)]));
-    }
-
-    return value;
-  };
-
-  /** A whole-column id (an event-log id, a trace id) that has no recognisable shape. */
-  const opaque = (value: string | null, kind: string): string | null => value === null ? null : name(value, kind);
-
-  return { text, json, opaque };
-}
-
 /** The durable record at one point of the script: one row per entry. */
 const DurableRowsSchema = v.object({
   actorMessages: v.array(JsonValueSchema),
@@ -275,11 +275,13 @@ export const ParitySnapshotSchema = v.object({
   events: v.array(v.array(JsonValueSchema)),
   /** What each driver call answered. */
   landings: JsonValueSchema,
+  /** The restarted process's model calls, as the continuation shaped them. */
+  restartedCalls: v.array(JsonValueSchema),
 });
 
 export type ParitySnapshot = v.InferOutput<typeof ParitySnapshotSchema>;
 
-function durableRows(db: Database, norm: ReturnType<typeof normalizer>): DurableRows {
+function durableRows(db: Database, norm: ParityNormalizer): DurableRows {
   const parseJson = (column: string | null): JsonValue => column === null ? null : norm.json(decodeJsonValue({ value: JSON.parse(column) }));
 
   const actorMessages = db.query<{
@@ -354,7 +356,7 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
   ]);
 
   const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
-  const norm = normalizer();
+  const norm = parityNormalizer();
 
   // 1. An idle send runs as a turn of its own.
   await a.send('one');
@@ -379,6 +381,8 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
 
   // 4. A send with a file acknowledged mid-turn, then the process dies before
   //    the drain.
+  // Its landing is never read: this is the turn the process dies inside, and
+  // the model producers it parks on stay parked (see the end of the script).
   const turnFour = a.send('four');
   await waitFor(() => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
   const landingFour = await a.send({ text: 'four-steer', files: [NOTE_FILE] });
@@ -387,7 +391,8 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
   // 5. The restart: the next process replays what the dead one acknowledged,
   //    then takes a fresh send.
   const eventsB: SessionEvent[] = [];
-  const modelB = sequencedModel([answeringModel('answer four again'), answeringModel('answer five')]);
+  const restartedPrompts: PromptMessage[][] = [];
+  const modelB = sequencedModel([answeringModel('answer four again', restartedPrompts), answeringModel('answer five', restartedPrompts)]);
   const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => eventsB.push(event) });
   await waitFor(() => eventsB.some((event) => event.type === 'turn-end'));
   const landingFive = await b.send('five');
@@ -398,16 +403,17 @@ export async function runParityScenario(): Promise<ParitySnapshot> {
     end: durableRows(db, norm),
     events: [eventsA, eventsB].map((stream) => stream.map((event) => norm.json(frontendView(event)))),
     landings: { landingTwo, landingThree, returned, landingFour, landingFive },
+    restartedCalls: restartedPrompts.map((prompt) => norm.json(promptView(prompt))),
   };
 
-  // The dead session's parked turn is released only after the record is
-  // taken: a real process death never runs this, so nothing it writes counts.
-  a.interrupt();
-  await turnFour;
-  four.stepGate.resolve();
-  four.endGate.resolve();
-  await a.end();
-  await b.end();
+  // The dead session is never resumed: a process that died mid-turn ran no
+  // more of it, and letting it settle here would write through a claim the
+  // restarted session has re-admitted under a newer epoch — which the claims
+  // fence refuses, exactly as it would refuse a stale activation. Its parked
+  // model producers stay parked, so the promise that awaits them never
+  // settles; racing it against the live session's close is what lets the
+  // script end without ever resuming the dead one.
+  await Promise.race([turnFour, b.end()]);
   db.close();
 
   return record;
