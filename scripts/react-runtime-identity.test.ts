@@ -405,12 +405,34 @@ interface Origin {
   close(): void;
 }
 
-async function serveArtifact(outDir: string): Promise<Origin> {
+/** The `/api/user/profile` body the artifact server can stand in for: the
+ *  client's `UserProfile` wire shape, spelled out so a fixture that drops a
+ *  field fails here rather than as a schema refusal inside the browser. */
+interface ServedProfile {
+  readonly email: string;
+  readonly displayName: string | null;
+  readonly createdAt: number;
+  readonly lastSeenAt: number;
+  readonly onboardedAt: number | null;
+  readonly workspaceCount: number;
+}
+
+async function serveArtifact(outDir: string, profile?: ServedProfile): Promise<Origin> {
   const root = join(CF, outDir, 'client');
   const upgrades: string[] = [];
 
   const server: Server = createServer((request, response) => {
     const path = new URL(request.url ?? '/', 'http://artifact.invalid').pathname;
+
+    // The gate's one read: a served profile lets a test photograph the app's
+    // routing under a real account instead of the signed-out path below.
+    if (path === '/api/user/profile' && profile !== undefined) {
+      response.statusCode = 200;
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify(profile));
+
+      return;
+    }
 
     // No worker is running. Answering /api/* as JSON keeps the application on
     // its signed-out path instead of feeding it the SPA shell as a JSON body.
@@ -806,4 +828,57 @@ describe('the probe rejects a development artifact', () => {
   test('the development build reports bundleType 1 at runtime', () => {
     expect(developmentHome.renderers.map((renderer) => renderer.bundleType)).toEqual([1]);
   });
+});
+
+
+describe('the onboarding gate routes on the account the profile describes', () => {
+  test('an established account reaches its workspace; a fresh one lands on the wizard', async () => {
+    // The served profile is the whole fixture: the gate reads
+    // onboardedAt + workspaceCount from /api/user/profile and decides the
+    // route. onboardedAt null + one workspace is every account that existed
+    // before the wizard shipped — it must reach /workspace, never /welcome.
+    const profile = {
+      email: 'probe@kinu.run', displayName: 'Probe',
+      createdAt: 0, lastSeenAt: 0, onboardedAt: null,
+    };
+
+    const browser = await launch();
+
+    try {
+      const established = await serveArtifact(PRODUCTION_OUT, { ...profile, workspaceCount: 1 });
+
+      try {
+        const page = await browser.newPage();
+
+        try {
+          await page.goto(`${established.origin}${WORKSPACE}`, { waitUntil: 'networkidle0', timeout: 120_000 });
+          await page.waitForSelector('button[aria-label="Work"]', { timeout: 30_000 });
+          expect(new URL(page.url()).pathname).toBe(WORKSPACE);
+        } finally {
+          await page.close();
+        }
+      } finally {
+        established.close();
+      }
+
+      const fresh = await serveArtifact(PRODUCTION_OUT, { ...profile, workspaceCount: 0 });
+
+      try {
+        const page = await browser.newPage();
+
+        try {
+          await page.goto(`${fresh.origin}${WORKSPACE}`, { waitUntil: 'networkidle0', timeout: 120_000 });
+          await page.waitForFunction(() => location.pathname === '/welcome', { timeout: 30_000 });
+          await page.waitForSelector('[data-welcome-step]', { timeout: 30_000 });
+          expect(await page.$('button[aria-label="Work"]')).toBeNull();
+        } finally {
+          await page.close();
+        }
+      } finally {
+        fresh.close();
+      }
+    } finally {
+      await browser.close();
+    }
+  }, 120_000);
 });

@@ -463,6 +463,10 @@ export interface UserProfile {
    *  never run to `finish()`. Lives in `user_onboarding`, a table of its own —
    *  the genesis lock refuses a new column on the shipped `user_profile`. */
   onboardedAt: number | null;
+  /** The roster's size, counted the way `listWorkspaces`' `total` counts it.
+   *  The gate reads it beside the stamp: an account that already owns a
+   *  workspace is established and never sees the wizard, stamp or not. */
+  workspaceCount: number;
 }
 
 export interface WorkspaceEntry {
@@ -921,10 +925,21 @@ export class UserDO extends Agent<Env> {
     return row?.completed_at ?? null;
   }
 
+  /** The roster's size under the same predicate `listWorkspaces`' `total`
+   *  uses: live rows only, so a pending fork reservation or a workspace mid-
+   *  teardown cannot make a brand-new account look established. */
+  private rosterCount(): number {
+    return this.sqlx<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM user_workspaces
+       WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
+    )[0].n;
+  }
+
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     await this.requireTier(caller, 'profile');
     const now = Date.now();
     const onboardedAt = this.onboardingCompletedAt();
+    const workspaceCount = this.rosterCount();
 
     const existing = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
@@ -942,6 +957,7 @@ export class UserDO extends Agent<Env> {
         createdAt: existing.created_at,
         lastSeenAt: now,
         onboardedAt,
+        workspaceCount,
       };
     }
 
@@ -950,7 +966,7 @@ export class UserDO extends Agent<Env> {
       email, displayName ?? null, now, now,
     );
 
-    return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now, onboardedAt };
+    return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now, onboardedAt, workspaceCount };
   }
 
   async getProfile(caller: UserCaller): Promise<UserProfile | null> {
@@ -968,6 +984,7 @@ export class UserDO extends Agent<Env> {
       createdAt: row.created_at,
       lastSeenAt: row.last_seen_at,
       onboardedAt: this.onboardingCompletedAt(),
+      workspaceCount: this.rosterCount(),
     };
   }
 
