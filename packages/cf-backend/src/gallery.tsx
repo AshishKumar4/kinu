@@ -115,6 +115,7 @@ import {
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark } from "@kinu.run/core";
+import { mcpPresetById } from "@kinu.run/core";
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from "@kinu.run/core";
@@ -188,7 +189,8 @@ import type {
   ForkRunSummary, HeadRunView, MountInfo, NodeTranscriptView, Page, PageRequest,
   PendingAction, ProducerSpend, RunSummary, SearchNode, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
-import type { ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import type { McpServerSummary, ModelMenuEntry, UserDevice, WorkspaceEntry } from "@/lib/user-api";
+import { McpServerSummarySchema } from "@/lib/user-api";
 import * as v from "valibot";
 import { galleryServerPush, serveGalleryRpc } from "@/gallery-agent-stub";
 
@@ -318,6 +320,71 @@ function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Re
     headers: { "content-type": "application/json" },
   });
 }
+
+/** The wire shape the plugins page's add call sends — a preset id, or the
+ *  full custom-server form. */
+const GalleryMcpAddSchema = v.object({
+  name: v.optional(v.string()),
+  serverUrl: v.optional(v.string()),
+  transport: v.optional(v.picklist(['auto', 'sse', 'streamable-http'])),
+  headers: v.optional(v.record(v.string(), v.string())),
+  allowedTools: v.optional(v.array(v.string())),
+  presetId: v.optional(v.string()),
+});
+
+/** The MCP server roster, mutable for the page's lifetime so the preset add
+ *  flow is observable: a POST lands here and the next GET — the panel's own
+ *  refresh — shows the row. `mcp-preset=connected` on the frame URL swaps the
+ *  generic github row for the two preset-tagged states a screenshot needs —
+ *  Connected and Needs sign-in; `mcp-preset=open` drops it so every preset is
+ *  unclaimed (its name would refuse the GitHub preset's). */
+let galleryMcpRows: McpServerSummary[] = [
+  {
+    id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
+    transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
+    authUrl: null, error: null, presetId: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
+  },
+  {
+    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+    transport: "sse", status: "authenticating", toolsCount: 0,
+    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+    error: null, presetId: null, createdAt: NOW - 864e5, updatedAt: NOW,
+  },
+];
+
+const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
+
+if (mcpPresetVariant === "connected") {
+  galleryMcpRows = [
+    {
+      id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
+      transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
+      authUrl: null, error: null, presetId: "github", createdAt: NOW - 864e5, updatedAt: NOW,
+    },
+    {
+      id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
+      transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
+      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
+      presetId: "cloudflare", createdAt: NOW - 3600e3, updatedAt: NOW,
+    },
+    galleryMcpRows[1]!,
+  ];
+} else if (mcpPresetVariant === "open") {
+  // Every preset unclaimed: the custom github row would refuse the GitHub
+  // preset's name, so this variant keeps only linear.
+  galleryMcpRows = [galleryMcpRows[1]!];
+}
+
+/** Which `oauth-app` presets the frame pretends the deployment carries the
+ *  registered app for. `mcp-secrets=github` means GitHub alone; absent means
+ *  every oauth-app preset is configured, the production-shaped default. */
+const mcpSecrets = (() => {
+  const raw = new URLSearchParams(location.search).get("mcp-secrets");
+
+  const listed = raw === null ? ["github", "google"] : raw.split(",");
+
+  return new Set(listed.filter((entry) => entry.length > 0));
+})();
 
 /** What the plugins page reads beyond the settings reads: the device grants
  *  (one for the plugins frame; the settings frames keep an empty list because
@@ -473,23 +540,74 @@ function workspaceRosterFixture(path: string): Response | null {
   return fixtureJson(STUB_DATA["/api/user/workspaces"]);
 }
 
-/** The MCP server rows: one ready, one mid-OAuth with a tool allowlist. */
-function mcpServersFixture(path: string): Response | null {
-  if (path !== "/api/user/mcp/servers") return null;
+/** The MCP rows: the preset availability report, the add POST that claims a
+ *  name and answers a sign-in URL where an app exists, and the mutable roster. */
+function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (path === "/api/user/mcp/presets") {
+    return fixtureJson([
+      { id: "github", appConfigured: mcpSecrets.has("github") },
+      { id: "cloudflare", appConfigured: true },
+      { id: "google", appConfigured: mcpSecrets.has("google") },
+    ]);
+  }
 
-  return fixtureJson([
-    {
-      id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
-      transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-      authUrl: null, error: null, createdAt: NOW - 3 * 864e5, updatedAt: NOW,
-    },
-    {
-      id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
-      transport: "sse", status: "authenticating", toolsCount: 0,
-      allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
-      error: null, createdAt: NOW - 864e5, updatedAt: NOW,
-    },
-  ]);
+  if (path === "/api/user/mcp/servers" && method === "POST") {
+    const addBody = v.safeParse(GalleryMcpAddSchema, JSON.parse(v.parse(v.string(), body)));
+
+    if (!addBody.success) return fixtureJson({ error: "Body must be a JSON object." }, 400);
+
+    const preset = addBody.output.presetId !== undefined
+      ? mcpPresetById(addBody.output.presetId)
+      : undefined;
+
+    const name = preset?.title ?? addBody.output.name ?? "";
+
+    // The claim a second preset add collides with: name is the identity, so
+    // the refusal is the same sentence the UserDO's transaction raises.
+    if (galleryMcpRows.some((row) => String(row.name).toLowerCase() === name.toLowerCase())) {
+      return fixtureJson({ error: `An MCP server named '${name}' already exists.` }, 400);
+    }
+
+    // Sign-in answers only where an authorize URL exists: a DCR server
+    // unconditionally, an oauth-app preset only while the frame claims the
+    // app. Without it, the add needs a token — the same refusal the DO sends.
+    const signIn = preset?.auth === 'oauth'
+      || (preset?.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+
+    if (preset?.auth === 'oauth-app' && !signIn && addBody.output.headers === undefined) {
+      return fixtureJson({ error: `'${preset.title}' needs either the deployment's OAuth app or a token in \`headers\`.` }, 400);
+    }
+
+    const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
+
+    const authUrl = signIn
+      ? `${new URL(preset.serverUrl).origin}/authorize?${id}`
+      : null;
+
+    // The last add body, the way the device fixture hands the gate its state:
+    // a click that posts the wrong payload is what the gate is watching for.
+    localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
+
+    galleryMcpRows = [...galleryMcpRows, {
+      id, name,
+      serverUrl: preset?.serverUrl ?? addBody.output.serverUrl ?? "",
+      transport: preset?.transport ?? addBody.output.transport ?? "auto",
+      status: authUrl === null ? "ready" : "authenticating",
+      toolsCount: authUrl === null ? 21 : 0,
+      allowedTools: addBody.output.allowedTools ?? null,
+      authUrl, error: null,
+      presetId: preset?.id ?? null,
+      createdAt: NOW, updatedAt: NOW,
+    }];
+
+    return fixtureJson({ id, authUrl }, 201);
+  }
+
+  if (path === "/api/user/mcp/servers") {
+    return fixtureJson(v.parse(v.array(McpServerSummarySchema), galleryMcpRows));
+  }
+
+  return null;
 }
 
 /** The device rows: the incident pair (revoke, then acknowledge the unstopped

@@ -205,11 +205,13 @@ export interface TestUserDOOptions {
    *  MISSED. Asked per call, so a test can strand a replica on the first push
    *  and let the reconciliation retry converge on the next. */
   capabilityPushMissed?: () => number;
+  /** Which `oauth-app` presets the deployment pretends to carry the
+   *  registered app for — preset ids (`'github'`, `'google'`), filled with
+   *  fixed test values under the keys `MCP_APP_ENV` names. Absent means no
+   *  preset app is configured. */
+  mcpAppCredentials?: readonly string[];
 }
 
-/** One machine of a fleet, faked: the socket the hub holds for it, the frames
- *  that reached it, and the two things a machine can do to the hub — speak
- *  and leave. */
 export interface FakeDaemon {
   readonly deviceId: string;
   /** Frames the hub sent to THIS machine, in order. */
@@ -249,6 +251,10 @@ const DeviceFrameSchema = v.object({
 interface TestUserEnvironment {
   CREDENTIAL_ENCRYPTION_KEY: string;
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+  MCP_GITHUB_CLIENT_ID?: string;
+  MCP_GITHUB_CLIENT_SECRET?: string;
+  MCP_GOOGLE_CLIENT_ID?: string;
+  MCP_GOOGLE_CLIENT_SECRET?: string;
   OrchestratorAgent: {
     idFromName(name: string): string;
     get(name: string): {
@@ -586,6 +592,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   if (options.credentialEncryptionKeyPrevious) {
     env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS = options.credentialEncryptionKeyPrevious;
   }
+
+  for (const preset of options.mcpAppCredentials ?? []) {
+    if (preset === 'github') {
+      env.MCP_GITHUB_CLIENT_ID = 'test-github-client-id';
+      env.MCP_GITHUB_CLIENT_SECRET = 'test-github-client-secret';
+    } else if (preset === 'google') {
+      env.MCP_GOOGLE_CLIENT_ID = 'test-google-client-id';
+      env.MCP_GOOGLE_CLIENT_SECRET = 'test-google-client-secret';
+    }
+  }
+
 
   const partialContext: Partial<AgentContext> = {};
   Object.assign(partialContext, ctx);
