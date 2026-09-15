@@ -100,16 +100,24 @@ KINU_BOOTSTRAP=0
 # from this path, on the argv and never from the environment, so no ambient
 # variable can turn a deploy into a rehearsal.
 KINU_GATES_ONLY=0
-case "${1:-}" in
-  "") ;;
-  --bootstrap) KINU_BOOTSTRAP=1 ;;
-  --gates-only) KINU_GATES_ONLY=1 ;;
-  *)
-    echo -e "${RED}Unknown option '$1'.${NC}"
-    echo "Usage: scripts/deploy.sh [--bootstrap|--gates-only]"
-    exit 2
-    ;;
-esac
+# `--all` is the full audit: a wave keeps LAUNCHING after its first red, so
+# every red in the tier is reported in one run rather than the first few. The
+# default stops launching on the first red — the fastest path to the first
+# finding — and still lets every running gate finish and report. Neither
+# changes what a red means: a deploy with any red gate publishes nothing.
+KINU_GATES_ALL=0
+for option in "$@"; do
+  case "$option" in
+    --bootstrap) KINU_BOOTSTRAP=1 ;;
+    --gates-only) KINU_GATES_ONLY=1 ;;
+    --all) KINU_GATES_ALL=1 ;;
+    *)
+      echo -e "${RED}Unknown option '$option'.${NC}"
+      echo "Usage: scripts/deploy.sh [--bootstrap] [--gates-only] [--all]"
+      exit 2
+      ;;
+  esac
+done
 # Read by scripts/infra-verify.ts when no environment is given on its argv, so
 # the `bun run gate:infra` line below stays one string for scripts/ladder.ts to
 # parse while still checking the environment being deployed.
@@ -312,14 +320,18 @@ flush_gates() {
   local running=0 load=0 settled=0 failures=0
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
 
-  echo "Running $total gate(s) within a budget of $budget threads"
+  if [ "$KINU_GATES_ALL" = "1" ]; then
+    echo "Running $total gate(s) within a budget of $budget threads, every gate regardless of failures (--all)"
+  else
+    echo "Running $total gate(s) within a budget of $budget threads, stopping new launches at the first failure"
+  fi
   while [ "$settled" -lt "$total" ]; do
     # Take the FIRST gate that is neither launched nor blocked by a peer in its
     # own group and whose weight fits the remaining budget — or, when nothing
     # is running, the first gate regardless, so a gate heavier than the whole
     # budget still runs. A plain queue pointer would stall the whole wave
     # behind a gallery gate waiting for its turn.
-    while [ "$failures" -eq 0 ]; do
+    while [ "$failures" -eq 0 ] || [ "$KINU_GATES_ALL" = "1" ]; do
       pick=-1
       for ((index = 0; index < total; index++)); do
         if [ "${launched[index]}" -eq 1 ]; then continue; fi
