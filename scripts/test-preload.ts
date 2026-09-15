@@ -9,16 +9,19 @@ import { afterAll, setDefaultTimeout } from 'bun:test';
 import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
 
-afterAll(release);
-
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
 // 2026-09-15 it read red on a test that passes alone, under the deploy wave's
 // load. A test ends on its condition or on the process's own end; a hang is
 // killed by the deploy ladder at the gate's deadline, which names the gate.
 // `0` disables the default (measured on bun 1.4.0: a 5.6 s test passes under
-// this preload and fails without it). `gate:test-clocks` pins this line and
+// this preload and fails without it). FIRST, before any hook: bun reads the
+// default when a hook is registered, so an `afterAll` above this line keeps
+// the 5 s clock (measured 2026-09-15: the release hook below timed out at
+// 5000 ms with this call after it). `gate:test-clocks` pins this line and
 // refuses per-test durations in the corpus.
 setDefaultTimeout(0);
+
+afterAll(release);
 
 // The two `cloudflare:` builtins the Agents SDK's ROOT module imports
 // (`EmailMessage` from cloudflare:email, `RpcTarget`/`exports` from
