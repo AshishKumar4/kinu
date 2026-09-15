@@ -136,9 +136,6 @@ export function McpServersPanel() {
         <section className="p-card p-8 text-center space-y-2">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
           <div className="text-sm font-medium">No MCP servers yet</div>
-          <p className="text-xs p-text-3 max-w-md mx-auto">
-            Connect a server to give every agent its tools. Most servers redirect you to their OAuth page.
-          </p>
         </section>
       ) : (
         <section className="p-card overflow-hidden">
