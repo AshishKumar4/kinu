@@ -658,7 +658,7 @@ describe('whether the container may be disturbed', () => {
 
   test('a live turn counts — it is the most likely caller of a container tool', async () => {
     const { agent } = orchestratorHarness();
-    agent.declareTurnInFlight(true);
+    await agent.declareTurnInFlight(true);
     expect(await agent.hasSandboxBackgroundWork()).toBe(true);
   });
 
