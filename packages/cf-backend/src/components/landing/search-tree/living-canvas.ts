@@ -62,6 +62,8 @@ export interface LivingCanvas<Frame extends ArtFrame, Art extends LivingArt<Fram
   renderer(): 'webgpu' | 'canvas' | 'static' | 'pending';
   frameTimes(): FrameTimes;
   time(): number;
+  /** Step the picture by `dt` on its own clock, off the rAF loop, and show it. */
+  advance(dt: number): void;
   /** The host's contents moved: hand the picture `fit` again and, when still, repaint. The box is unchanged. */
   align(): void;
   dispose(): void;
@@ -278,6 +280,10 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
     renderer: () => (renderer === null ? 'pending' : still ? 'static' : renderer.kind),
     frameTimes: () => playback.frameTimes(),
     time: () => art.time,
+    advance: (dt: number) => {
+      art.step(dt);
+      show(art, still);
+    },
     align,
     dispose() {
       disposed = true;
