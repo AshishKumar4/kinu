@@ -20,6 +20,7 @@
   "packages/cf-backend/src/hooks/use-pending-attachments.ts#admitAttachments (unreached-export)",
   "packages/cf-backend/src/lazy-route.tsx#CHUNK_RELOAD_KEY (unreached-export)",
   "packages/cf-backend/src/lazy-route.tsx#loadRouteChunk (unreached-export)",
+  "packages/cf-backend/src/slates/resident.ts#slateRunnerSource (unreached-export)",
   "packages/cli-backend/src/cgroup-limits.ts#readCgroupLimits (unreached-export)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.base (unsupplied-field)",
   "packages/cli-backend/src/checkpoints.ts#HostCheckpointsOpts.gitBin (unsupplied-field)",
