@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import { WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kinu.run/core';
 import { Session } from 'agents/experimental/memory/session';
 import type { UIMessage } from 'ai';
-import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { orchestratorHarness, thinkTurns, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
 
@@ -314,7 +314,7 @@ describe('the workspace takes its own first turn', () => {
 
     // The admitted message's own queued turn is the first turn, and its model
     // request carries the message and no genesis text.
-    await harness.agent.saveMessages((current) => current.slice(-1));
+    await thinkTurns(harness.agent).runQueuedMessage();
     expect(turns).toHaveLength(1);
     expect(turns[0]!.text).toBe('Summarize the incident timeline first.');
     expect(turns[0]!.request).toContain('Summarize the incident timeline first.');
@@ -368,7 +368,7 @@ describe('the workspace takes its own first turn', () => {
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
 
     // Its own turn runs next, as the ordinary second turn.
-    await harness.agent.saveMessages((current) => current.slice(-1));
+    await thinkTurns(harness.agent).runQueuedMessage();
     expect(turns).toHaveLength(2);
     expect(turns[1]!.text).toBe('Late but admitted.');
     harness.db.close();
