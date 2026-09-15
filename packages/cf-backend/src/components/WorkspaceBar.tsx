@@ -223,6 +223,7 @@ export function InlineRenameTitle({ title, editValue, onRename, subject, textCla
           autoFocus
           value={value}
           maxLength={60}
+          placeholder={title}
           onFocus={(event) => event.currentTarget.select()}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape") setEditing(false); }}
