@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "./ui/FilledButton";
+import { tabCls, tabStripH } from "./ui/form";
 import { HouseIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { Modal } from "./ui/Modal";
@@ -83,12 +84,12 @@ export function SubordinateTabs({
           it: the strip scrolls horizontally once the roster outgrows the
           column, and anything within it scrolls away with the tabs. They carry
           the same bottom rule so the two still read as one line. */}
-      <div className="flex shrink-0 items-stretch">
-        <nav aria-label="Workspace agents" className="p-tabstrip flex min-w-0 flex-1 items-stretch border-b p-border px-2">
+      <div className={`flex shrink-0 items-stretch ${tabStripH}`}>
+        <nav aria-label="Workspace agents" className={`p-tabstrip flex min-w-0 flex-1 items-center border-b p-border px-2 ${tabStripH}`}>
           <Link
             to={mainPath}
             aria-current={!activeName ? "page" : undefined}
-            className={`p-tab -mb-px flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition-colors ${!activeName ? "p-tab-active font-medium" : ""}`}
+            className={`${tabCls} px-3 ${!activeName ? "p-tab-active font-medium" : ""}`}
           >
             <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} />
             Main
@@ -103,7 +104,7 @@ export function SubordinateTabs({
                   to={`${mainPath}/agents/${subordinate.name}`}
                   aria-current={active ? "page" : undefined}
                   title={subordinate.currentTask ?? title}
-                  className={`p-tab -mb-px flex h-full max-w-52 items-center gap-2 py-2 pl-3 pr-8 text-xs transition-colors ${active ? "p-tab-active font-medium" : ""}`}
+                  className={`${tabCls} h-full max-w-52 pl-3 pr-8 ${active ? "p-tab-active font-medium" : ""}`}
                 >
                   <span className={`truncate ${subordinate.displayName ? "" : "italic p-text-3"}`}>{title}</span>
                   <StatusMark subordinate={subordinate} />

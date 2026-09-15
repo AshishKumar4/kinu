@@ -8,7 +8,7 @@ import type { SlateSummary, PendingAction, PlanReview } from "@kinu.run/core";
 import type { WorkspacePlanArrival } from "@/hooks/use-kinu";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { HeadDeltas } from "@kinu.run/core";
-import { tabCls } from "@/components/ui/form";
+import { tabCls, tabStripH } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-kinu";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
@@ -209,11 +209,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
           `ml-auto` holds only while the tabs fit; Kinu can append its own, so
           the strip overflows and an `ml-auto` button scrolls away with
           everything else. */}
-      <div className="border-b p-border shrink-0 flex items-stretch">
-        {/* Text labels match the mock and fit at its 430px inspector width.
-            The longer route names stay internal; the visible words are
-            Explore and Env, as in the owner's surface switcher. */}
-        <div ref={strip} className="p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px">
+      <div className={`border-b p-border shrink-0 flex items-stretch ${tabStripH}`}>
+        <div ref={strip} className={`p-tabstrip flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px ${tabStripH}`}>
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
 

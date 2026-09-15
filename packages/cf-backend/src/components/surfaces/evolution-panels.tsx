@@ -53,7 +53,7 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
     return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   }
 
-  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" hint="Run scaffold self-tuning from Settings. Candidates and the Pareto front appear here." />;
+  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" />;
 
   const loadedDetail = lastValue(detail);
   const paretoIds = new Set((loadedDetail?.pareto ?? []).map((p) => p.candidateId));
@@ -162,7 +162,7 @@ export function QualityView({ rpc }: { rpc: Rpc }) {
   const bothEmpty = loadedRows !== null && loadedRows.length === 0
     && loadedAlignment !== null && !hasAlignment;
 
-  if (bothEmpty) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay evaluations score the live scaffold against graded turns. This panel shows loss, K_align, and the latest result." />;
+  if (bothEmpty) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" />;
 
   return (
     <div className="space-y-4 animate-fade-in overflow-y-auto h-full">

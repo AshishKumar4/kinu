@@ -44,8 +44,33 @@ import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
 
-/** The primary nav, in the order the rail draws it. Home is the mission form
- *  and is only active at `/` exactly; the other three are their own pages. */
+/** The primary nav rows, in the order the rail draws them. One component with
+ *  one class string on the default scale, so the rail reads the same on
+ *  every page — the workbench flag lives on the workspace's content root, not
+ *  on html, and cannot reach this column. */
+function PrimaryNavRow({ to, label, Icon, end }: {
+  to: string; label: string; Icon: React.ComponentType<{ size?: number; className?: string }>; end: boolean;
+}) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        `flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${
+          isActive ? 'bg-[var(--c-elevated)] p-text' : 'p-text-2 hover:bg-[var(--c-elevated)]'
+        }`
+      }
+    >
+      {({ isActive }) => (
+        <>
+          <Icon size={15} className={isActive ? 'p-accent' : 'p-text-3'} />
+          <span>{label}</span>
+        </>
+      )}
+    </NavLink>
+  );
+}
+
 const PRIMARY_NAV = [
   { to: APP_ROUTES.home, label: "Home", Icon: HouseIcon, end: true },
   { to: APP_ROUTES.workspaces, label: "Workspaces", Icon: SquaresFourIcon, end: false },
@@ -290,25 +315,7 @@ export default function Sidebar() {
       {/* Primary nav — the four places an account goes, in the workspace
           rows' own rhythm and on their active token, above the roster. */}
       <nav aria-label="Primary" className="px-2 pt-1">
-        {PRIMARY_NAV.map(({ to, label, Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              `flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${
-                isActive ? 'bg-[var(--c-elevated)] p-text' : 'p-text-2 hover:bg-[var(--c-elevated)]'
-              }`
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <Icon size={15} className={isActive ? 'p-accent' : 'p-text-3'} />
-                <span>{label}</span>
-              </>
-            )}
-          </NavLink>
-        ))}
+        {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto pt-2 pb-3">
