@@ -353,9 +353,9 @@ describe('turn-pipeline correctness wiring', () => {
     // behavioural test can state it without a turn harness that captures which
     // provider was asked for a count, and the harness has no such seam. The
     // property each site upholds alone is checked in unit-agent-registry.
-    const beforeTurn = memberBody(actor, 'async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void>');
-    expect(beforeTurn).toContain('parseModelSpec(providers.normalizeSpecSync(profile.tier.model))');
-    expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
+    const assembleTurn = memberBody(actor, 'private async assembleTurn(input: TurnAssemblyInput): Promise<AssembledTurn>');
+    expect(assembleTurn).toContain('parseModelSpec(providers.normalizeSpecSync(profile.tier.model))');
+    expect(assembleTurn).not.toContain('parseModelSpec(profile.tier.model)');
   });
 
   test('a pinned model is the model the next turn\'s request names', async () => {
@@ -434,11 +434,17 @@ describe('turn-pipeline correctness wiring', () => {
     // newest lessons in-turn. The tail is the ONE dynamic-context input behind
     // an await, so it is sourced once at turn assembly and closed over by the
     // per-step snapshot — never rendered into the cacheable prefix.
-    const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)');
+    // The tail is read inside the turn assembly, which `beforeTurn` awaits
+    // before it assembles the messages: the read sits before the await in the
+    // file, and the await before the assembly.
     const sourceIdx = actor.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
-    expect(assembleIdx).toBeGreaterThan(-1);
+    const assembledIdx = actor.indexOf('await this.assembleTurn(');
+    const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)');
     expect(sourceIdx).toBeGreaterThan(-1);
-    expect(sourceIdx).toBeLessThan(assembleIdx);
+    expect(assembledIdx).toBeGreaterThan(-1);
+    expect(assembleIdx).toBeGreaterThan(-1);
+    expect(assembledIdx).toBeLessThan(assembleIdx);
+    expect(actor.match(/readMemoryTail\(/g)).toHaveLength(1);
 
     // Everything else the block carries is now read live inside core, at the
     // step the snapshot is called: WHICH planes exist is agentDynamicContext's
@@ -554,7 +560,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).toContain('tierModel.provider');
     expect(beforeTurn).not.toContain('parseModelSpec(profile.tier.model)');
     expect(beforeTurn).toContain('reasoningEffortOptions');
-    expect(beforeTurn).toContain('mergeProviderOptions(cacheOptions, reasoningOptions)');
+    expect(beforeTurn).toContain('mergeProviderOptions(assembled.cacheOptions, assembled.reasoningOptions)');
     expect(beforeTurn).toContain('cfg.providerOptions = providerOptions');
     expect(beforeTurn).toContain('lastTurnOpts.providerOptions = providerOptions');
   });
@@ -1132,7 +1138,7 @@ describe('turn-pipeline correctness wiring', () => {
     const assemble = beforeTurn.indexOf('const assembly: Parameters<typeof assembleTurnMessages>[0] = {');
     expect(assemble).toBeGreaterThan(-1);
     const args = beforeTurn.slice(assemble);
-    expect(args).toContain('history: rawMessages');
+    expect(args).toContain('history: assembled.rawMessages');
     expect(args).toContain('accepts: this.sessionAcceptedMedia()');
     expect(args).toContain('vfs: this.rt.storage.vfs');
     expect(args).toContain('extensions: this.extensions');

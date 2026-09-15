@@ -2179,6 +2179,10 @@ export class LocalAgentSession implements BackendHost {
     } else {
       this.actorSession.appendInput(lease, message);
     }
+
+    // A re-opened turn's prior output follows its input: the model continues
+    // its own answer rather than starting one.
+    if (item.priorOutput !== undefined) this.actorSession.appendPriorOutput(lease, item.priorOutput);
   }
 
   /**

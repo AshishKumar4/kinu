@@ -143,6 +143,8 @@ export interface LandedSteerRow {
   readonly atStep: number;
   /** Both steer keys, always together — see {@link describeLandedSteers}. */
   readonly metadata: JsonObject;
+  /** The attachments the steer carried, for a store whose rows hold them. */
+  readonly files?: ReadonlyArray<PromptFile>;
 }
 
 /**
@@ -170,6 +172,7 @@ export function describeLandedSteers(
     text: steer.text,
     atStep,
     metadata: { [STEER_METADATA_KEY]: true, [STEER_STEP_METADATA_KEY]: atStep },
+    ...(steer.files !== undefined && { files: steer.files }),
   }));
 }
 

@@ -85,6 +85,10 @@ import type {
   ExerciseResult,
   HttpCall,
   InputReceipt,
+  ParityCompleted,
+  ParityFrame,
+  ParityPrepared,
+  ParityRows,
   PendingSteer,
   PendingSteerFile,
   PreparedConversation,
@@ -95,6 +99,10 @@ import {
   DriveOnceResultSchema,
   ExerciseResultSchema,
   HttpCallSchema,
+  ParityCompletedSchema,
+  ParityFrameSchema,
+  ParityPreparedSchema,
+  ParityRowsSchema,
   PreparedConversationSchema,
 } from './two-turn-shapes';
 import type { UserDO } from '../../src/user/user-do';
@@ -127,7 +135,8 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'inboxState');
     Reflect.deleteProperty(this, 'seedStaleDrainEvent');
     Reflect.deleteProperty(this, 'runEventWake');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'submissionRows', 'inboxState', 'seedStaleDrainEvent', 'runEventWake']);
+    Reflect.deleteProperty(this, 'parityRows');
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'inputReceipts', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'submissionRows', 'inboxState', 'seedStaleDrainEvent', 'runEventWake', 'parityRows']);
   }
 
   /** The request-owned input rows the real chat intake persisted, exactly as
@@ -211,6 +220,34 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
    *  `routeBusyChat` does. */
   async inboxState(): Promise<{ busy: boolean }> {
     return { busy: this.orch.inbox.busy };
+  }
+
+  /** The durable record the parity script compares: the transcript, the
+   *  pending-send ledger, the event log, the terminal ledger and the run
+   *  ledger's continuation rows — every one read raw, in table order, so the
+   *  test's normalizer is the only thing that decides what "the same" means. */
+  async parityRows(): Promise<ParityRows> {
+    const sql = this.actorState.storage.sql;
+
+    return v.parse(ParityRowsSchema, {
+      assistantMessages: sql.exec('SELECT id, parent_id, role, content FROM assistant_messages ORDER BY rowid').toArray()
+        .map((row) => ({ id: String(row.id), parentId: row.parent_id === null ? null : String(row.parent_id), role: String(row.role), content: String(row.content) })),
+      pendingSteers: await this.pendingSteers(),
+      pendingSteerFiles: await this.pendingSteerFileRows(),
+      agentLog: sql.exec('SELECT id, kind, turn_id, variant, consumed_at, payload FROM agent_log ORDER BY rowid').toArray()
+        .map((row) => ({
+          id: String(row.id), kind: String(row.kind), turnId: row.turn_id === null ? null : String(row.turn_id),
+          variant: row.variant === null ? null : String(row.variant), consumed: row.consumed_at !== null, payload: String(row.payload),
+        })),
+      terminalEffects: sql.exec('SELECT sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome, attempts, settled_at FROM terminal_effects ORDER BY rowid').toArray()
+        .map((row) => ({
+          sequenceId: String(row.sequence_id), effectKey: String(row.effect_key), effectName: String(row.effect_name), scope: String(row.scope),
+          seq: Number(row.seq), input: String(row.input_json), lane: String(row.lane), status: String(row.status),
+          outcome: row.outcome === null ? null : String(row.outcome), attempts: Number(row.attempts), settled: row.settled_at !== null,
+        })),
+      runEvents: sql.exec("SELECT run_id, type, payload FROM run_events WHERE type IN ('run_start', 'step_finish', 'tool_call_end', 'run_end') ORDER BY rowid").toArray()
+        .map((row) => ({ runId: String(row.run_id), type: String(row.type), payload: String(row.payload) })),
+    });
   }
   /** The state a dead activation leaves behind: an event bound to a drain turn
    *  whose lease outlived it. `consumed_at = 0` is older than any grace, so the
@@ -403,7 +440,7 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
-  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'submissionRows' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake'>;
+  & Pick<ObservedOrchestrator, 'inputReceipts' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'submissionRows' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows'>;
 
 const SocketHistorySchema = v.array(v.object({ id: v.string(), role: v.string() }));
 
@@ -440,6 +477,15 @@ async function awaitFactsCompressed(
     setTimeout(tick.resolve, 50);
     await tick.promise;
   }
+}
+
+/** A bounded wait on one promise, naming what did not arrive. */
+async function awaitWithLimit<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  const expiry = Promise.withResolvers<never>();
+  const timer = setTimeout(() => expiry.reject(new Error(what)), ms);
+
+  try { return await Promise.race([work, expiry.promise]); }
+  finally { clearTimeout(timer); }
 }
 
 /** Bounded quiescence: the isolate is quiet when no diagnostic line lands for
@@ -945,6 +991,231 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       await awaitQuiet(recording);
 
       return { http: await this.httpCalls(), receipts: await target.inputReceipts(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows() };
+    } finally {
+      restore();
+    }
+  }
+
+  // ── The parity drive ────────────────────────────────────────────────────
+  //
+  // One scripted conversation over real sockets, the same script the local
+  // backend's `chat-session-parity.ts` runs: an idle send, a send mid-turn
+  // carrying a file, an interrupt, a tool-calling turn evicted after its tool
+  // step settled and its answer had begun, a send acknowledged mid-turn before
+  // the eviction, and the restart. `parityPrepare` runs to the instant of the
+  // eviction and hands back everything durable plus every frame the sockets
+  // saw; the test evicts; `parityComplete` reconnects, resumes, and finishes.
+
+  /** A socket that records every frame it receives, in order, under a name. */
+  private async paritySocket(
+    target: QueueTarget, workspace: string, name: string, frames: ParityFrame[],
+  ): Promise<{ socket: WebSocket; done: (id: string) => Promise<ParityFrame>; seen: (match: (frame: ParityFrame) => boolean, what: string) => Promise<void> }> {
+    const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
+      headers: { Upgrade: 'websocket' },
+    }));
+
+    const socket = response.webSocket;
+
+    if (response.status !== 101 || socket === null) throw new Error(`parity socket ${name} did not open`);
+    socket.accept();
+    const waiters = new Map<string, ReturnType<typeof Promise.withResolvers<ParityFrame>>>();
+
+    socket.addEventListener('message', (event) => {
+      const raw = v.is(v.string(), event.data) ? event.data : '';
+
+      if (!raw.startsWith('{')) return;
+
+      const parsed = v.safeParse(v.looseObject({
+        type: v.string(), id: v.optional(v.string()), done: v.optional(v.boolean()), error: v.optional(v.boolean()),
+        landed: v.optional(v.string()), replay: v.optional(v.boolean()), continuation: v.optional(v.boolean()),
+        body: v.optional(v.string()),
+      }), JSON.parse(raw));
+
+      if (!parsed.success) return;
+      const { type, id, done, error, landed, replay, continuation, body } = parsed.output;
+
+      const frame = v.parse(ParityFrameSchema, {
+        socket: name, type,
+        ...(id !== undefined && { id }), ...(done !== undefined && { done }), ...(error !== undefined && { error }),
+        ...(landed !== undefined && { landed }), ...(replay !== undefined && { replay }),
+        ...(continuation !== undefined && { continuation }),
+        ...(body !== undefined && body !== '' && { body }),
+      });
+
+      frames.push(frame);
+
+      // A done frame resolves the waiter for its request whether that waiter
+      // was asked for before or after the frame arrived: the script asks for
+      // a parked turn's done only after releasing the model, and the frame can
+      // land in between.
+      if (type === 'cf_agent_use_chat_response' && done === true && id !== undefined) {
+        const waiter = waiters.get(id) ?? Promise.withResolvers<ParityFrame>();
+        waiters.set(id, waiter);
+        waiter.resolve(frame);
+      }
+    });
+
+    return {
+      socket,
+      done: (id) => {
+        const waiter = waiters.get(id) ?? Promise.withResolvers<ParityFrame>();
+        waiters.set(id, waiter);
+
+        return awaitWithLimit(waiter.promise, 20000, `parity: no done frame for ${id}`);
+      },
+      seen: async (match, what) => {
+        const began = Date.now();
+
+        while (!frames.some(match)) {
+          if (Date.now() - began > 20000) throw new Error(`parity: socket ${name} never saw ${what}`);
+          const tick = Promise.withResolvers<void>();
+          setTimeout(tick.resolve, 20);
+          await tick.promise;
+        }
+      },
+    };
+  }
+
+  private parityFrame(text: string, file?: { filename: string; mediaType: string; url: string }): string {
+    return JSON.stringify({
+      type: 'cf_agent_use_chat_request', id: text,
+      init: { method: 'POST', body: JSON.stringify({
+        messages: [{ id: `input-${text}`, role: 'user', parts: [
+          ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
+          { type: 'text', text },
+        ] }],
+        trigger: 'submit-message',
+      }) },
+    });
+  }
+
+  private async parityModelCalls(): Promise<Array<{ users: string[]; toolResults: string[]; roles: string[] }>> {
+    return (await this.httpCalls()).filter((call) => call.model === 'probe-parity').map((call) => ({
+      users: call.users.filter((u) => !u.startsWith('<')),
+      toolResults: call.toolResults,
+      roles: call.conversation.map((m) => m.role),
+    }));
+  }
+
+  async parityPrepare(): Promise<ParityPrepared> {
+    const workspace = 'parity-workspace';
+    const owner = 'parity-owner';
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    const caller = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(owner));
+    await userDO.registerWorkspace(caller, workspace, 'Parity');
+    const claim = await target.claimOwner(owner);
+    await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
+    await userDO.setCredential(caller, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: 'http://fake-models.invalid/v1', apiKey: 'probe-fixture-key',
+    });
+    await target.setModel('openai-compat/probe-parity');
+    await target.setSoul('# Parity\n\n## Mission\n\nFollow the owner\'s exact request.');
+    await this.httpReset();
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    const frames: ParityFrame[] = [];
+    const landings: Record<string, string | null> = {};
+    const file = { filename: 'note.txt', mediaType: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' };
+    let afterTwo: ParityRows | null = null;
+
+    try {
+      const { socket, done, seen } = await this.paritySocket(target, workspace, 'A', frames);
+
+      try {
+        // 1. An idle send runs as a turn of its own.
+        socket.send(this.parityFrame('PARITY-ONE'));
+        landings['PARITY-ONE'] = (await done('PARITY-ONE')).landed ?? null;
+        await awaitFactsCompressed(recording, 1);
+
+        // 2. A send mid-turn, carrying a file, while the turn's model call is
+        //    parked. The echo lane has no second step, so the steer reruns as
+        //    the operator's next turn once the parked turn settles.
+        await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
+        socket.send(this.parityFrame('PARITY-TWO'));
+        await fetch('http://probe-control.invalid/parity/arrived');
+        socket.send(this.parityFrame('PARITY-TWO-STEER', file));
+        landings['PARITY-TWO-STEER'] = (await done('PARITY-TWO-STEER')).landed ?? null;
+        await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
+        landings['PARITY-TWO'] = (await done('PARITY-TWO')).landed ?? null;
+        await awaitFactsCompressed(recording, 3);
+        await awaitQuiet(recording);
+        afterTwo = await target.parityRows();
+
+        // 3. An interrupt while the turn's model call is parked.
+        await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'first' }) });
+        socket.send(this.parityFrame('PARITY-THREE'));
+        await fetch('http://probe-control.invalid/parity/arrived');
+        socket.send(JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'PARITY-THREE' }));
+        landings['PARITY-THREE'] = (await done('PARITY-THREE')).landed ?? null;
+        await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
+        await awaitQuiet(recording);
+
+        // 4. A tool-calling turn: its tool step settles, its answer streams one
+        //    delta and parks — then a send acknowledged mid-turn, and the
+        //    eviction the test performs while everything is parked.
+        await fetch('http://probe-control.invalid/parity/hold', { method: 'POST', body: JSON.stringify({ parkAt: 'partial' }) });
+        socket.send(this.parityFrame('PARITY-FOUR-TOOL'));
+        // The join is the socket's own evidence: the tool step's settled result
+        // and the answer's first delta both reached the client before anything
+        // else happens, so the state the eviction cuts is the same every run.
+        await fetch('http://probe-control.invalid/parity/arrived');
+        await seen((frame) => frame.id === 'PARITY-FOUR-TOOL' && frame.body !== undefined && frame.body.includes('"text-delta"'), "the parked answer's first delta");
+        socket.send(this.parityFrame('PARITY-FOUR-STEER', file));
+        landings['PARITY-FOUR-STEER'] = (await done('PARITY-FOUR-STEER')).landed ?? null;
+      } finally {
+        socket.close(1000, 'parity prepared');
+      }
+
+      if (afterTwo === null) throw new Error('parity: the second turn never settled');
+
+      return v.parse(ParityPreparedSchema, {
+        workspace, owner, frames, landings, afterTwo,
+        beforeRestart: await target.parityRows(),
+        modelCallsBefore: await this.parityModelCalls(),
+      });
+    } finally {
+      restore();
+    }
+  }
+
+  async parityComplete(prepared: ParityPrepared): Promise<ParityCompleted> {
+    const target: QueueTarget = await this.queueTarget(prepared.workspace);
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    const frames: ParityFrame[] = [];
+    const landings: Record<string, string | null> = {};
+    const callsBefore = prepared.modelCallsBefore.length;
+
+    try {
+      // 5. The reconnect: the client asks to resume, the parked producer is
+      //    released (the dead activation never consumes it), the wake
+      //    continues the evicted turn and replays the acknowledged steer.
+      const { socket, done } = await this.paritySocket(target, prepared.workspace, 'B', frames);
+
+      try {
+        socket.send(JSON.stringify({ type: 'cf_agent_stream_resume_request' }));
+        await fetch('http://probe-control.invalid/parity/release', { method: 'POST' });
+        await awaitQuiet(recording);
+        await awaitFactsCompressed(recording, 1);
+        await awaitQuiet(recording);
+
+        // 6. A fresh send on the restarted actor.
+        socket.send(this.parityFrame('PARITY-FIVE'));
+        landings['PARITY-FIVE'] = (await done('PARITY-FIVE')).landed ?? null;
+        await awaitFactsCompressed(recording, 2);
+        await awaitQuiet(recording);
+      } finally {
+        socket.close(1000, 'parity complete');
+      }
+
+      return v.parse(ParityCompletedSchema, {
+        frames, landings,
+        end: await target.parityRows(),
+        modelCallsAfter: (await this.parityModelCalls()).slice(callsBefore),
+        failures: recording.emitted.filter((e) => e.code !== null).map((e) => ({ event: e.event, code: e.code ?? '', cause: e.cause ?? '' })),
+      });
     } finally {
       restore();
     }
