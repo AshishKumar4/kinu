@@ -81,6 +81,8 @@ export async function desktopCommand(action: string | undefined, opts: { label?:
     console.log(`${DIM('Daemon log:')} ${status.logPresent ? OK('present') : 'missing'} ${DIM(DAEMON_LOG_PATH)}`);
     console.log(`${DIM('Daemon process:')} ${status.daemonPid ? OK(`running (pid ${status.daemonPid})`) : 'not running'}`);
 
+    if (status.restoredPreviousBuild) console.log(DIM('A self-update did not connect; the previous daemon build was restored and started.'));
+
     return;
   }
 
