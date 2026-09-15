@@ -13,7 +13,7 @@
  * so the card is a wrapper holding the link and the action separately.
  */
 import { Link } from "react-router-dom";
-import { overviewHeadline, timeAgo, type WorkspaceHeadline, type WorkspaceOverview } from "@kinu.run/core";
+import { overviewHeadline, timeAgo, workspaceDisplayTitle, type WorkspaceHeadline, type WorkspaceOverview } from "@kinu.run/core";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useWorkspaceOverview } from "@/hooks/use-workspace-overviews";
 import type { WorkspaceEntry } from "@/lib/user-api";
@@ -77,7 +77,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   const overview = lastValue(resource);
   const stale = resource.status === "error" && overview !== null;
   const unavailable = resource.status === "error" && overview === null;
-  const title = workspace.displayName || workspace.name;
+  const title = workspaceDisplayTitle(workspace);
   const mission = missionOf(overview);
 
   const retry = (stale || unavailable) && (

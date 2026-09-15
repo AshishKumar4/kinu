@@ -39,7 +39,8 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { agentTitle, workspaceTitle } from "./SubordinateTabs";
+import { agentTitle } from "./SubordinateTabs";
+import { isPlaceholderWorkspaceTitle, workspaceDisplayTitle } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
@@ -171,7 +172,7 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => { if (event.key === "Escape" && !saving) onCancel(); }}
           className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-          aria-label={`Rename ${workspaceTitle(workspace.displayName)}`}
+          aria-label={`Rename ${workspaceDisplayTitle(workspace)}`}
         />
         <button
           type="submit"
@@ -339,7 +340,7 @@ export default function Sidebar() {
             const isActive = a.name === agentId;
             // A workspace is titled by its first prompt, so a row can be blank.
             // The slug is not the fallback: it is the address this row links to.
-            const shown = workspaceTitle(a.displayName);
+            const shown = workspaceDisplayTitle(a);
 
             return (
               <li key={a.name}>
@@ -375,7 +376,7 @@ export default function Sidebar() {
                                 ? <span className="block size-1.5 rounded-full p-dot-accent" />
                                 : null}
                         </span>
-                        <span className={`min-w-0 flex-1 truncate p-row-text ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${a.displayName.trim() ? '' : 'italic p-text-3'}`}>{shown}</span>
+                        <span className={`min-w-0 flex-1 truncate p-row-text ${isActive ? 'font-semibold p-text' : 'font-semibold p-text-2'} ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? 'italic p-text-3' : ''}`}>{shown}</span>
                         {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <Link
@@ -501,7 +502,7 @@ export default function Sidebar() {
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
-            Remove <span className="font-medium p-text">{workspaceTitle(deleteTarget.displayName)}</span> and clear its
+            Remove <span className="font-medium p-text">{workspaceDisplayTitle(deleteTarget)}</span> and clear its
             server-side state? This cannot be undone.
           </p>
           {deleteError && (

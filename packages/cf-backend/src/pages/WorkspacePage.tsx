@@ -40,10 +40,10 @@ import { SLATE_PREFIX } from "@/components/surfaces/presence";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { SupervisePage } from "./SupervisePage";
-import { SubordinateTabs, agentTitle, workspaceTitle } from "@/components/SubordinateTabs";
+import { SubordinateTabs, agentTitle } from "@/components/SubordinateTabs";
 import { WorkspaceBar, InlineRenameTitle, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import type { PendingConsent, Rpc, SubordinateActivityEvent } from "@kinu.run/core";
+import { workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type Rpc, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
 // The model picker reads /api/user/models (which unions the connected
@@ -1108,7 +1108,8 @@ export default function WorkspacePage() {
   // NOT `|| agentId`. `agentId` is the slug in the address bar, and falling
   // back to it is what titled a new workspace `handwrought-walnut-4166c321`.
   // The URL still carries the id for anyone who needs one.
-  const shownTitle = workspaceTitle(as?.displayName || rosterTitle);
+  const storedTitle = as?.displayName || rosterTitle;
+  const shownTitle = workspaceDisplayTitle({ name: agentId, displayName: storedTitle });
 
 
   return (
@@ -1147,6 +1148,7 @@ export default function WorkspacePage() {
           mission-control) ⇄ SUPERVISE (the agent over time). */}
       <WorkspaceBar
         title={shownTitle}
+        editValue={workspaceTitleDraft({ name: agentId, displayName: storedTitle })}
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}

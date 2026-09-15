@@ -41,6 +41,10 @@ const ALTITUDE_TABS = [
 
 export interface WorkspaceBarProps {
   title: string;
+  /** The stored title the rename field opens with — "" on an untitled
+   *  workspace so saving cannot persist the "Untitled workspace" label as a
+   *  name. See InlineRenameTitle. */
+  editValue?: string;
   onRename: (displayName: string) => Promise<string>;
   connectionStatus: ConnectionStatus;
   /** The agent is mid-turn — the pulse the whole workspace shares. */
@@ -109,7 +113,7 @@ function TaskIndicator({ working, providerWait, waitingOnYou }: { working: boole
 }
 
 export function WorkspaceBar({
-  title, onRename, connectionStatus, working, providerWait = null, waitingOnYou = false, model, forkParent,
+  title, editValue, onRename, connectionStatus, working, providerWait = null, waitingOnYou = false, model, forkParent,
   altitude, onAltitude,
 }: WorkspaceBarProps) {
   const { mode } = useTheme();
@@ -119,7 +123,7 @@ export function WorkspaceBar({
     // a phone cannot hold a name, a pill and a switch on one line.
     <div className="@container flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b p-border p-sidebar px-5 py-2">
       <div className="flex min-w-0 basis-full items-center gap-3 @[30rem]:basis-0 @[30rem]:flex-1">
-        <InlineRenameTitle title={title} onRename={onRename} subject="workspace" />
+        <InlineRenameTitle title={title} editValue={editValue} onRename={onRename} subject="workspace" />
         <ConnectionIndicator status={connectionStatus} />
         <TaskIndicator working={working} providerWait={providerWait} waitingOnYou={waitingOnYou} />
         {model && (
@@ -174,18 +178,25 @@ export function WorkspaceBar({
  * `subject` labels the accessible controls; `textClass` carries the mounting
  * row's type scale so the still text and the editor agree.
  */
-export function InlineRenameTitle({ title, onRename, subject, textClass = "text-[15px] font-semibold" }: {
+export function InlineRenameTitle({ title, editValue, onRename, subject, textClass = "text-[15px] font-semibold" }: {
   title: string;
+  /** What the field opens with. The shown title is the label a person reads —
+   *  "Untitled workspace" included — and pre-filling it would persist the
+   *  label AS the title on a save without edits, so the caller passes the
+   *  stored value it actually renames from. Defaults to `title`: every
+   *  already-titled surface wants the name it shows. */
+  editValue?: string;
   onRename: (displayName: string) => Promise<string>;
   subject: string;
   textClass?: string;
 }) {
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(title);
+  const [value, setValue] = useState(editValue ?? title);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { if (!editing) setValue(title); }, [editing, title]);
+  useEffect(() => { if (!editing) setValue(editValue ?? title); }, [editing, title, editValue]);
+
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
