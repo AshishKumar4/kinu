@@ -18,6 +18,7 @@ import {
   type StepResult,
   type StopCondition,
   type TextStreamPart,
+  type UIMessageChunk,
 } from 'ai';
 import {
   assertToolsSupportedByModel,
@@ -36,6 +37,7 @@ import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { ExtensionHost } from './extension';
 import { mergeProviderOptions } from './strategy/effort';
 import { describeProviderError, toProviderError } from './providers/util';
+import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './prompts/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, type JsonObject } from './utils/json';
@@ -149,6 +151,17 @@ export interface ChatOptions {
    *  OpenAI-compatible family. `retention` sets how long the provider keeps
    *  the prefix (default `short`). See prompting/cache-breakpoints.ts. */
   cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
+  /**
+   * A second reader of each model call's stream, handed the SDK's own
+   * UIMessage chunk conversion of it. The turn loop reads the call through
+   * `fullStream`; a transport that speaks the SDK's chat protocol reads the
+   * same call here, in the vocabulary the SDK's clients and stores expect,
+   * without a second request. The SDK tees the underlying stream per reader
+   * (`StreamTextResult.teeStream`), so neither consumer starves the other; the
+   * loop awaits the reader's return before it settles the turn, so the answer
+   * it persists carries every part the transport relayed.
+   */
+  observeStream?: (chunks: ReadableStream<UIMessageChunk>) => Promise<void>;
   /** Request-level provider options contributed by the caller. They are
    *  merged by provider namespace with the cache options assembled here. */
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
@@ -456,6 +469,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // what bounds it lives entirely inside this file and the budget governor —
       // see UNBOUNDED_STEPS.
       stopWhen: opts.stopWhen ?? UNBOUNDED_STEPS,
+      // A tool call the SDK cannot parse is rewritten where a rewrite is settled
+      // (case-only name drift, fenced or double-encoded arguments) and left to
+      // the model's own retry otherwise — no inference behind the spend ledger.
+      // Every backend's loop, so a malformed call reads the same on each.
+      experimental_repairToolCall: repairToolCall(),
       abortSignal: opts.signal,
       // The SDK's default onError is `console.error(error)`, which dumped the
       // raw provider payload to the terminal alongside our own rendering of it.
@@ -527,6 +545,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     result.finishReason.then(undefined, ignoreDeferred);
     result.rawFinishReason.then(undefined, ignoreDeferred);
     result.totalUsage.then(undefined, ignoreDeferred);
+    // Started before this reader's own loop, so the transport's tee is taken
+    // before any chunk flows; awaited in the tail so the turn cannot settle
+    // ahead of the last relayed chunk.
+    const observed = opts.observeStream?.(result.toUIMessageStream({ onError: (error) => describeProviderError({ cause: error }) }));
 
     try {
       // Drained to the SDK's own `abort` part rather than broken out of on
@@ -631,6 +653,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // partial turn is yielded as `done`, then throws INTERRUPTED_TURN.
       if (!opts.signal?.aborted) throw err;
       interrupted = true;
+    } finally {
+      // The second reader drains the same tee to its end (or its error) before
+      // the turn is over: an answer settled while a chunk was still in flight
+      // to the client would be persisted short of what the client saw.
+      await observed;
     }
 
     /** The streamed failure as a classified KinuError: the provider the request

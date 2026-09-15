@@ -1,5 +1,6 @@
 /**
- * The ChatSession extraction changes no durable row.
+ * The ChatSession extraction changes no durable row — and, since the loop
+ * learned to continue an interrupted turn, the one arm it changes is stated.
  *
  * `fixtures/chat-session-parity.json` is the record `chat-session-parity.ts`'s
  * scripted conversation left on the tree BEFORE the turn loop moved into core
@@ -35,6 +36,36 @@ describe('ChatSession parity — the extraction changes no durable row', () => {
     expect(now.beforeRestart).toEqual(recorded.beforeRestart);
     expect(now.end).toEqual(recorded.end);
     expect(now.events).toEqual(recorded.events);
+    expect(now.restartedCalls).toEqual(recorded.restartedCalls);
+  });
+
+  test('AN INTERRUPTED TURN CONTINUES: the restart re-opens the dead turn where it stopped', async () => {
+    // The turn the dead process was inside — "four", cut at a tool call the
+    // model had issued and the tool had answered — is not run again from its
+    // words. The restarted process re-opens it under the same opening row and
+    // re-enters what it had produced, so:
+    const now = await runParityScenario();
+    const rows = v.parse(v.array(v.object({ id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string() })), now.end.actorMessages);
+    const four = rows.filter((row) => row.role === 'user' && row.content === 'four');
+    // …the opening row exists once, not once per process that ran it;
+    expect(four).toHaveLength(1);
+    // …the steer acknowledged before the death lands under that same row and
+    //    the answer under the steer — one chain, one answer;
+    const steer = rows.find((row) => row.content === 'four-steer');
+    expect(steer?.parentId).toBe(four[0]?.id);
+    expect(rows.find((row) => row.role === 'assistant' && row.parentId === steer?.id)?.content).toBe('answer four again');
+    // …and the continuation's model call carries the dead process's tool call
+    //    with the result the ledger holds, then the steer, and asks for
+    //    exactly the remaining call: the tool is not run again and the
+    //    process makes one call for the re-opened turn and one for "five".
+    const calls = v.parse(v.array(v.array(v.looseObject({ role: v.string(), parts: v.optional(v.array(v.looseObject({ type: v.string() }))) }))), now.restartedCalls);
+    expect(calls).toHaveLength(2);
+    const continuation = calls[0] ?? [];
+    const fourAt = continuation.findIndex((message) => message.role === 'user' && message.parts?.some((part) => v.is(v.object({ text: v.literal('four') }), part)));
+    expect(fourAt).toBeGreaterThan(-1);
+    expect(continuation[fourAt + 1]).toMatchObject({ role: 'assistant', parts: [{ type: 'tool-call', toolName: 'fact' }] });
+    expect(continuation[fourAt + 2]).toMatchObject({ role: 'tool', parts: [{ type: 'tool-result' }] });
+    expect(continuation.filter((message) => message.role === 'user' && message.parts?.some((part) => v.is(v.object({ text: v.literal('four') }), part)))).toHaveLength(1);
   });
 
   test('the record is not vacuous: every arm of the script left rows', () => {

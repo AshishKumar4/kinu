@@ -756,3 +756,53 @@ describe('RunEventRecorder.latestRunHeader', () => {
     expect(recorder.latestRunHeader()).toEqual({ status: 'completed', userMessage: null });
   });
 });
+
+describe('RunEventRecorder.openTurn — the continuation ledger', () => {
+  const turn = { turnId: 'turn-1', messageId: 'msg-1', kind: 'user' as const, text: 'go', pendingSendId: 'steer-a' };
+
+  test('a run sealed by run_end is not open', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
+    recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
+    expect(recorder.openTurn()).toBeNull();
+  });
+
+  test('a run without a turn identity is a side lane, not a turn to re-open', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
+    expect(recorder.openTurn()).toBeNull();
+  });
+
+  test('the open run answers its turn, the finished steps and the cut step\'s newest partial', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
+    recorder.emit('run-1', { type: 'step_partial', stepIndex: 1, text: 'thi', toolCalls: [] });
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'think' }] });
+    recorder.emit('run-1', { type: 'step_partial', stepIndex: 2, text: '', toolCalls: [{ toolCallId: 'c1', toolName: 'file', args: { path: 'a' } }] });
+    recorder.emit('run-1', { type: 'step_partial', stepIndex: 2, text: 'and', toolCalls: [{ toolCallId: 'c1', toolName: 'file', args: { path: 'a' }, result: 'ok' }] });
+
+    const open = recorder.openTurn();
+    expect(open?.runId).toBe('run-1');
+    expect(open?.turn).toEqual(turn);
+    expect(open?.steps).toEqual([{ role: 'assistant', content: 'think' }]);
+    expect(open?.partial).toMatchObject({ stepIndex: 2, text: 'and', toolCalls: [{ toolCallId: 'c1', result: 'ok' }] });
+  });
+
+  test('a partial the step then finished is superseded by the step row', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn });
+    recorder.emit('run-1', { type: 'step_partial', stepIndex: 1, text: 'par', toolCalls: [] });
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1, messages: [{ role: 'assistant', content: 'partial then done' }] });
+
+    const open = recorder.openTurn();
+    expect(open?.steps).toEqual([{ role: 'assistant', content: 'partial then done' }]);
+    expect(open?.partial).toBeNull();
+  });
+
+  test('the newest open run wins when a dead process left more than one', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'run_start', agentId: 'a', turn: { ...turn, turnId: 'older' } });
+    recorder.emit('run-2', { type: 'run_start', agentId: 'a', turn: { ...turn, turnId: 'newer' } });
+    expect(recorder.openTurn()?.turn.turnId).toBe('newer');
+  });
+});

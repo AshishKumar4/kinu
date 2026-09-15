@@ -6576,9 +6576,7 @@ export abstract class ActorAgent extends Think<Env> {
 
       if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
       this._lastTurnOpts = lastTurnOpts;
-      // A tool call the SDK cannot parse is rewritten where a rewrite is settled
-      // (case-only name drift, fenced or double-encoded arguments) and left to
-      // the model's own retry otherwise — no inference behind the spend ledger.
+      // The tool-call repair rides core's own loop; Think's needs it named here.
       cfg.repairToolCall = repairToolCall();
       // The turn's constants for the per-step context breakdown. Tool schemas
       // ride every request of the turn and are otherwise invisible to anyone

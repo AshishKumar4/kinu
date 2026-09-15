@@ -19,7 +19,7 @@ import type { TurnContextBudget } from '../context-budget';
 import type { TurnFileLedger } from '../tools/file-ledger';
 import type {
   CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord,
-  RunEventInput, TurnSteeringRecord,
+  OpenTurnIdentity, RunEventInput, TurnSteeringRecord,
 } from '../events/types';
 import type { TurnEscalationLedger } from '../execution/escalation';
 import type { CompletedTurn } from '../evolution/types';
@@ -248,6 +248,9 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   causedBy: string;
   userMessage: string;
   turnIndex: number;
+  /** The turn this run was opened for, so a later process can re-open the
+   *  same turn where this one stopped. Present on runs the turn loop opens. */
+  turn?: OpenTurnIdentity;
 }): void {
   try {
     recorder.emit(runId, {
@@ -255,6 +258,7 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
       agentId: opts.agentId,
       caused_by: opts.causedBy,
       userMessage: opts.userMessage.slice(0, 500),
+      ...(opts.turn !== undefined && { turn: opts.turn }),
     });
     recorder.emit(runId, { type: 'turn_start', turnIndex: opts.turnIndex });
   } catch (err) {
