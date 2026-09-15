@@ -21,7 +21,7 @@ import {
   listDeviceConsents, listDevices, listExperience, listMcpServers,
   type McpServerSummary,
 } from "@/lib/user-api";
-import { useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
+import { useAsyncResource, mapResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { PluginCard, type PluginStatus } from "@/components/plugins/PluginCard";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
@@ -49,15 +49,14 @@ function serverStatus(status: McpServerSummary['status']): PluginStatus {
 
 /** One section of the grid: its eyebrow, an optional action or note beside
  *  it, and its cards — or the read's own loader, failure, or empty line. */
-function PluginSection<T>({ title, resource, onRetry, what, action, note, empty, children }: {
+function PluginSection({ title, cards, onRetry, what, action, note, empty }: {
   title: string;
-  resource: AsyncResource<T>;
+  cards: AsyncResource<readonly ReactNode[]>;
   onRetry: () => void;
   what: string;
   action?: ReactNode;
   note?: string;
   empty: ReactNode;
-  children: (value: T) => ReactNode[];
 }) {
   return (
     <section aria-label={title} className="space-y-3">
@@ -66,15 +65,13 @@ function PluginSection<T>({ title, resource, onRetry, what, action, note, empty,
         {action}
       </div>
       {note && <p className="px-1 p-meta p-text-3">{note}</p>}
-      {resource.status === "loading" && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
-      {resource.status === "error" && <LoadFailure what={what} message={resource.message} onRetry={onRetry} />}
-      {resource.status === "ready" && (() => {
-        const cards = children(resource.value);
-
-        return cards.length === 0
+      {cards.status === "loading" && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
+      {cards.status === "error" && <LoadFailure what={what} message={cards.message} onRetry={onRetry} />}
+      {cards.status === "ready" && (
+        cards.value.length === 0
           ? <p className="px-1 p-row-text p-text-3">{empty}</p>
-          : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{cards}</div>;
-      })()}
+          : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{cards.value}</div>
+      )}
     </section>
   );
 }
@@ -99,23 +96,23 @@ export default function PluginsPage() {
           </div>
         </header>
 
-        <PluginSection title="MCP servers" resource={servers.resource} onRetry={servers.reload} what="your MCP servers"
+        <PluginSection title="MCP servers" onRetry={servers.reload} what="your MCP servers"
           action={<Button variant="ghost" size="sm" onClick={() => setManaging(true)}>Manage</Button>}
-          empty="No MCP server yet.">
-          {(rows) => rows.map((server) => (
+          empty="No MCP server yet."
+          cards={mapResource(servers.resource, (rows) => rows.map((server) => (
             <PluginCard key={server.id} icon={PlugsConnectedIcon} name={server.name} line={server.serverUrl}
               status={serverStatus(server.status)} />
-          ))}
-        </PluginSection>
+          )))}
+        />
 
-        <PluginSection title="Crafted tools" resource={crafts.resource} onRetry={crafts.reload} what="your crafted tools"
-          empty="No workspace has published a tool to your library yet.">
-          {(rows) => rows.map((entry) => (
+        <PluginSection title="Crafted tools" onRetry={crafts.reload} what="your crafted tools"
+          empty="No workspace has published a tool to your library yet."
+          cards={mapResource(crafts.resource, (rows) => rows.map((entry) => (
             <PluginCard key={entry.id} icon={WrenchIcon} name={entry.title}
               line={entry.payload.description ?? entry.evidence}
               status={{ label: `from ${entry.sourceWorkspace}`, tone: 'neutral' }} />
-          ))}
-        </PluginSection>
+          )))}
+        />
 
         <section aria-label="Skills" className="space-y-3">
           <div className="flex items-center justify-between gap-3 px-1">
@@ -130,9 +127,9 @@ export default function PluginsPage() {
           </div>
         </section>
 
-        <PluginSection title="Device grants" resource={consents.resource} onRetry={consents.reload} what="the device grants"
-          empty={<>No machine is linked yet. <Link to={`${APP_ROUTES.userSettings}#devices`} className="p-accent">Link one →</Link></>}>
-          {(rows) => rows.map((grant) => {
+        <PluginSection title="Device grants" onRetry={consents.reload} what="the device grants"
+          empty={<>No machine is linked yet. <Link to={`${APP_ROUTES.userSettings}#devices`} className="p-accent">Link one →</Link></>}
+          cards={mapResource(consents.resource, (rows) => rows.map((grant) => {
             const device = devices.resource.status === "ready"
               ? devices.resource.value.find((candidate) => candidate.id === grant.deviceId)
               : undefined;
@@ -144,8 +141,8 @@ export default function PluginsPage() {
                   ? { label: 'allowed', tone: 'success' }
                   : { label: grant.policy, tone: 'neutral' }} />
             );
-          })}
-        </PluginSection>
+          }))}
+        />
       </div>
       {managing && <AccountPanelModal panel="mcp" returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
     </div>
