@@ -136,7 +136,7 @@ describe('a candidate worse than the reference is measured, never refused', () =
     expect(worse.candOps).toBe(REFERENCE_CALLS * 2);
     expect(worse.candOps).toBeGreaterThan(worse.refOps);
     expect(worse.candOps).toBeLessThanOrEqual(limit);
-  }, 60_000);
+  });
 });
 
 describe('the call landing exactly on the oracle budget is the last one allowed', () => {
@@ -161,7 +161,7 @@ describe('the call landing exactly on the oracle budget is the last one allowed'
     expect(overBudget.correct).toBe(false);
     expect(overBudget.failure).toContain('oracle budget');
     expect(overBudget.candOps).toBe(limit + 1);
-  }, 60_000);
+  });
 });
 
 /**
@@ -234,7 +234,7 @@ describe('every quantity the instrument reports is a key an archive can bin', ()
       expect(archiveCellOf(key, asFound.measured).kind).toBe('cell');
       expect(archiveCellOf(key, candidate.measured).kind).toBe('cell');
     }
-  }, 60_000);
+  });
 });
 
 /**
@@ -275,7 +275,7 @@ describe('a measurement removes the modules it wrote', () => {
     const entries = await rt.storage.vfs.readdir('');
     expect(entries.filter((name) => name.startsWith('_candidate_') || name.startsWith('_measure_'))).toEqual([]);
     expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(candidate);
-  }, 60_000);
+  });
 
   test('a passing preflight leaves no probe module', async () => {
     const { rt } = createTestRuntime();
@@ -286,7 +286,7 @@ describe('a measurement removes the modules it wrote', () => {
     expect(await preflightRatioHarness(ctx)).toBeNull();
     const entries = await rt.storage.vfs.readdir('');
     expect(entries.filter((name) => name.startsWith('_measure_'))).toEqual([]);
-  }, 60_000);
+  });
 
   test('a measurement that cannot run still reports its own failure and leaves no stamped module', async () => {
     const { rt } = createTestRuntime();
@@ -310,5 +310,5 @@ describe('a measurement removes the modules it wrote', () => {
     const entries = await rt.storage.vfs.readdir('');
     expect(entries.filter((name) => name.startsWith('_candidate_') || name.startsWith('_measure_'))).toEqual([]);
     expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(candidate);
-  }, 60_000);
+  });
 });

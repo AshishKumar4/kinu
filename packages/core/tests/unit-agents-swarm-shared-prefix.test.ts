@@ -157,7 +157,7 @@ describe('compactShared wiring through runSwarmAction', () => {
 
     expect(prompts.length).toBeGreaterThan(0);
     expect(JSON.stringify(prompts[0])).toContain('ORIGIN-CONTEXT-MARKER');
-  }, 120_000);
+  });
 
   test('an inheriting parent past the threshold reaches its child compacted, not verbatim', async () => {
     const { rt, db } = createTestRuntime();
@@ -195,7 +195,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     expect(grandchild.some((m) => m.role === 'assistant' && JSON.stringify(m.content).includes(BULK.slice(0, 64)))).toBe(false);
     expect(JSON.stringify(prompts[0])).not.toContain(MARKER);
     expect(JSON.stringify(prompts[0])).not.toContain(BULK.slice(0, 64));
-  }, 120_000);
+  });
 
   test('siblings of one branch point share the one compacted prefix, byte-identical', async () => {
     const { rt, db } = createTestRuntime();
@@ -234,7 +234,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     for (const sibling of siblings) {
       expect([...sibling].some((m) => m.role === 'assistant' && JSON.stringify(m.content).includes(BULK.slice(0, 64)))).toBe(false);
     }
-  }, 120_000);
+  });
 
   // KINU-048's gate against this seam: the child's request is measured AS IT
   // IS SENT, so the barrier's compacted prefix — not the transcript it
@@ -264,5 +264,5 @@ describe('compactShared wiring through runSwarmAction', () => {
     // prefix, not the ~116k-token verbatim one — was admitted and answered.
     expect(sawMassInBarrier).toBe(1);
     expect(prompts.length).toBe(2);
-  }, 120_000);
+  });
 });
