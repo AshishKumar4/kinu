@@ -52,6 +52,7 @@
     "gate:policy-drift": "bun scripts/policy-drift.ts",
     "gate:silent-drop": "bun scripts/silent-drop.ts",
     "gate:skip-ratchet": "bun scripts/skip-ratchet.ts",
+    "gate:test-clocks": "bun scripts/test-clocks.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
     "gate:python-suites": "bun scripts/python-suites.ts",
     "sweep:mutation": "bun scripts/mutation-sweep.ts",

@@ -825,6 +825,28 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun run gate:test-clocks',
+    label: 'Wall-clock waits in tests',
+    tier: 'push',
+    // Measured 2026-09-15 on the 24-thread workstation: 1.4 s over 1,130 test
+    // files, one oxc parse each.
+    seconds: 1.5,
+    catches: 'a test that waits on a duration instead of an end condition — a timer call '
+      + '(`setTimeout`, `Bun.sleep`, `timers/promises`, `AbortSignal.timeout`), a comparison '
+      + 'against `Date.now()`/`performance.now()` or a binding made from one, a per-test '
+      + 'duration handed to `test`/`describe`/a hook or to `setDefaultTimeout`, and a `{ timeout }` '
+      + 'handed to a puppeteer wait or a `child_process` call. Five deploy runs on 2026-09-15 '
+      + 'went red on five such tests that pass alone and lose the race under the deploy wave; '
+      + 'the framework per-test clock is off everywhere (preload and every vitest config, '
+      + 'pinned by the self-test) and this row\'s own deadline is the one hang detector.',
+    blind: 'a clock value reaching a comparison through a parameter or a return value; a timer '
+      + 'wrapped by a module outside the test corpus and called by the wrapper\'s name; a '
+      + 'duration handed as a bare positional number to a helper the gate does not know; '
+      + '`setImmediate` and `queueMicrotask`, which yield a turn without a duration; a clock '
+      + 'read used as a value and never compared. All printed on the green path.',
+    inputs: { kind: 'derived' },
+  },
+  {
     run: 'bun scripts/secret-scan.ts',
     label: 'Secret scan',
     tier: 'push',
@@ -867,7 +889,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
