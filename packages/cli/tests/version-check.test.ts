@@ -3,11 +3,8 @@ import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
-import {
-  fetchServedVersion,
-  isSameBuild,
-} from '../src/version-check';
-import type { JsonObject, JsonValue } from '@kinu.run/core';
+import { fetchServedVersion } from '../src/version-check';
+import { isSameBuild, type JsonObject, type JsonValue } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -28,20 +25,22 @@ function configHome(config: JsonObject): string {
 // what the check returned and printed; the parent reads the throttle state
 // the check left behind.
 async function runStartup(home: string, opts: { isTTY: boolean; fetchExpr: string }): Promise<{
-  lines: string[]; outcome: string | null;
+  lines: string[]; outcome: string | null; spawned: number;
 }> {
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', `
       import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
       import { VERSION } from './packages/cli/src/display.ts';
       const lines = [];
+      let spawned = 0;
       const outcome = await runStartupUpdateCheck({
         log: (line) => lines.push(line),
         isTTY: ${opts.isTTY},
         now: ${NOW},
         fetchImpl: ${opts.fetchExpr},
+        spawnRefresh: () => { spawned += 1; },
       });
-      console.log(JSON.stringify({ lines, outcome }));
+      console.log(JSON.stringify({ lines, outcome, spawned }));
     `],
     cwd: repoRoot,
     env: { ...process.env, KINU_HOME: home },
@@ -60,6 +59,7 @@ async function runStartup(home: string, opts: { isTTY: boolean; fetchExpr: strin
   return v.parse(v.object({
     lines: v.array(v.string()),
     outcome: v.nullable(v.string()),
+    spawned: v.number(),
   }), JSON.parse(stdout.trim()));
 }
 
@@ -87,19 +87,21 @@ describe('build comparison', () => {
 });
 
 describe('startup notice through runStartupUpdateCheck', () => {
-  test('a newer build returns the exact notice line and logs it once', async () => {
+  test('a newer build starts the background refresh and logs the one line once', async () => {
     const home = configHome(signedIn);
-    const { lines, outcome } = await runStartup(home, { isTTY: true, fetchExpr: serveVersion(`'9.9.9+check'`) });
-    expect(outcome).toBe('A newer Kinu is available (9.9.9+check). Run: kinu update');
-    expect(lines).toEqual(['A newer Kinu is available (9.9.9+check). Run: kinu update']);
+    const { lines, outcome, spawned } = await runStartup(home, { isTTY: true, fetchExpr: serveVersion(`'9.9.9+check'`) });
+    expect(spawned).toBe(1);
+    expect(outcome).toBe('Installing Kinu 9.9.9+check in the background; it applies on the next launch.');
+    expect(lines).toEqual(['Installing Kinu 9.9.9+check in the background; it applies on the next launch.']);
     expect(homeConfig(home)).toMatchObject({ updateCheckedAt: NOW, updateLatestSeen: '9.9.9+check' });
   });
 
   test('the installed build stays silent after a spent round-trip', async () => {
     const home = configHome(signedIn);
-    const { lines, outcome } = await runStartup(home, { isTTY: true, fetchExpr: serveVersion(`VERSION`) });
+    const { lines, outcome, spawned } = await runStartup(home, { isTTY: true, fetchExpr: serveVersion(`VERSION`) });
     expect(outcome).toBeNull();
     expect(lines).toEqual([]);
+    expect(spawned).toBe(0);
     // The attempt is still recorded, so an up-to-date origin is not re-asked
     // on every invocation.
     expect(homeConfig(home)).toMatchObject({ updateCheckedAt: NOW });

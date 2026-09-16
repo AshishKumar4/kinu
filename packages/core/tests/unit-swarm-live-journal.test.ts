@@ -207,7 +207,7 @@ describe('a swarm journals out loud', () => {
       expect(last?.steps).toBeGreaterThan(0);
       expect(headStatusUnsettled(last?.status ?? 'running')).toBe(false);
     }
-  }, 60_000);
+  });
 
   test('with no listener the same run journals in silence rather than failing', async () => {
     const { nodes, reader } = await run();
@@ -221,5 +221,5 @@ describe('a swarm journals out loud', () => {
       expect(reader.countSteps(node.id).steps).toBeGreaterThan(0);
       expect(headStatusUnsettled(node.status)).toBe(false);
     }
-  }, 60_000);
+  });
 });

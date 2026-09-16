@@ -558,7 +558,7 @@ async function readRuntime(browser: Browser, origin: string, path: string): Prom
 
   try {
     await page.evaluateOnNewDocument(installProbe);
-    await page.goto(`${origin}${path}`, { waitUntil: 'networkidle0', timeout: 120_000 });
+    await page.goto(`${origin}${path}`, { waitUntil: 'networkidle0' });
 
     const measured = await page.evaluate(() => {
       const state = globalThis.__kinuReactProbe;
@@ -665,7 +665,7 @@ beforeAll(async () => {
   } finally {
     await browser.close();
   }
-}, 900_000);
+});
 
 afterAll(() => {
   for (const outDir of [PRODUCTION_OUT, DEVELOPMENT_OUT]) {
@@ -851,8 +851,8 @@ describe('the onboarding gate routes on the account the profile describes', () =
         const page = await browser.newPage();
 
         try {
-          await page.goto(`${established.origin}${WORKSPACE}`, { waitUntil: 'networkidle0', timeout: 120_000 });
-          await page.waitForSelector('button[aria-label="Work"]', { timeout: 30_000 });
+          await page.goto(`${established.origin}${WORKSPACE}`, { waitUntil: 'networkidle0' });
+          await page.waitForSelector('button[aria-label="Work"]');
           expect(new URL(page.url()).pathname).toBe(WORKSPACE);
         } finally {
           await page.close();
@@ -867,9 +867,9 @@ describe('the onboarding gate routes on the account the profile describes', () =
         const page = await browser.newPage();
 
         try {
-          await page.goto(`${fresh.origin}${WORKSPACE}`, { waitUntil: 'networkidle0', timeout: 120_000 });
-          await page.waitForFunction(() => location.pathname === '/welcome', { timeout: 30_000 });
-          await page.waitForSelector('[data-welcome-step]', { timeout: 30_000 });
+          await page.goto(`${fresh.origin}${WORKSPACE}`, { waitUntil: 'networkidle0' });
+          await page.waitForFunction(() => location.pathname === '/welcome');
+          await page.waitForSelector('[data-welcome-step]');
           expect(await page.$('button[aria-label="Work"]')).toBeNull();
         } finally {
           await page.close();
@@ -880,5 +880,5 @@ describe('the onboarding gate routes on the account the profile describes', () =
     } finally {
       await browser.close();
     }
-  }, 120_000);
+  });
 });

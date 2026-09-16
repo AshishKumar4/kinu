@@ -14,7 +14,7 @@
 import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
-import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
+import { BACKGROUND_POLICY, REAL_SCHEDULE, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
 import { nanoid } from '../utils/nanoid';
@@ -383,6 +383,7 @@ export class BackgroundJobRunner {
   ): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
+      schedule: REAL_SCHEDULE,
       onThreshold: async (k, promise) =>
         await this.onThreshold(k, input, mode, controller, promise, ownership),
     };
@@ -1015,6 +1016,14 @@ export class BackgroundJobRunner {
     return [...inFlight]
       .map((jobId) => this.deps.store.get(jobId))
       .filter((job): job is BackgroundJob => job !== null && job !== undefined);
+  }
+
+  /** The earliest instant a deferred resume is owed, or null when no job is
+   *  waiting — the same MIN `recoverDueResumes` reads, exposed so a wake
+   *  frame that has just finished can arm at the real instant instead of
+   *  pacing a pessimistic chain toward it. */
+  nextResumeAt(): number | null {
+    return this.deps.store.nextResumeAtInWorkspace();
   }
 
   /**

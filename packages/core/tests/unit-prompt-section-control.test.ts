@@ -281,7 +281,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     // The class reaches the scoring evidence, which is the whole reason the
     // writer stamps it.
     expect(reflectionPrompts.join('\n')).toContain('a capability it had and did not use');
-  }, 30_000);
+  });
 
   test('a note about a turn the ledger already graded is not counted twice', async () => {
     const rt = evolvableRuntime();
@@ -343,7 +343,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     expect(buildSystemPromptSync(rt, {
       sectionOverrides: activePromptSectionOverrides(rt.storage.sql, rt.actor),
     })).toContain(INCUMBENT);
-  }, 30_000);
+  });
 });
 
 /**
@@ -385,7 +385,7 @@ describe('the rotation an eviction cannot reset', () => {
     // could not hold.
     const second = await lanePass(control);
     expect(second.sectionId).toBe(PROMPT_SECTION_TARGETS[2].id);
-  }, 30_000);
+  });
 
   test('every section gets one before any gets a second', async () => {
     const rt = evolvableRuntime();
@@ -404,7 +404,7 @@ describe('the rotation an eviction cannot reset', () => {
     // than answering idle or a tenth thing.
     const roundTwo = await lanePass(control);
     expect(roundTwo.sectionId).toBe(seen[0]);
-  }, 30_000);
+  });
 
   test('a scaffold run is not a section pass, and never moves the rotation', async () => {
     const rt = evolvableRuntime();
@@ -412,7 +412,7 @@ describe('the rotation an eviction cannot reset', () => {
     const { control } = scriptedControl(rt, () => 0.9);
     const step = await lanePass(control);
     expect(step.sectionId).toBe(firstTwo[0]);
-  }, 30_000);
+  });
 });
 
 describe('advancePromptSectionLane — trials before a new proposal', () => {
@@ -427,7 +427,7 @@ describe('advancePromptSectionLane — trials before a new proposal', () => {
 
     const step = await laneTrials(control);
     expect(step.sectionId).toBe(TARGET_ID);
-  }, 30_000);
+  });
 
   test('with nothing pending, the lane runs the rotation\'s own next section', async () => {
     const rt = evolvableRuntime();
@@ -441,7 +441,7 @@ describe('advancePromptSectionLane — trials before a new proposal', () => {
     // itself with no cursor in between.
     const next = await lanePass(control);
     expect(next.sectionId).not.toBe(expected);
-  }, 30_000);
+  });
 });
 
 describe('the lane\'s trials — held-out trials decide it', () => {
@@ -478,7 +478,7 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     expect(prompt).toContain(CANDIDATE);
     expect(prompt).not.toContain(INCUMBENT);
     expect(getPendingPromptSection(rt.storage.sql, rt.actor, TARGET_ID)).toBeNull();
-  }, 30_000);
+  });
 
   test('a candidate that loses on held-out turns is rolled back, and the prompt never moved', async () => {
     const rt = evolvableRuntime();
@@ -511,5 +511,5 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     expect(buildSystemPromptSync(rt, {
       sectionOverrides: activePromptSectionOverrides(rt.storage.sql, rt.actor),
     })).toContain(INCUMBENT);
-  }, 30_000);
+  });
 });

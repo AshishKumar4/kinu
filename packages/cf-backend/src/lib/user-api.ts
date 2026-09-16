@@ -4,12 +4,13 @@
  * is synthesized server-side), so these fetches are bare.
  */
 import {
-  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, EXPERIENCE_KINDS,
+  DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES, EXPERIENCE_KINDS,
   type ExperienceKind,
   ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
   type DeviceTier,
+  type DeviceUpdateState,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -238,6 +239,11 @@ export interface UserDevice {
   revokedAt: number | null;
   /** The owner revoked this device while a command lacked confirmed termination. */
   unstoppedAt: number | null;
+  /** The build the daemon last reported, the build this deployment serves,
+   *  and the one word the row shows about the two. */
+  version: string | null;
+  servedVersion: string | null;
+  update: DeviceUpdateState;
   /** The Sandbox switch the owner set and what the daemon proved about the
    *  machine. The registry knows nothing per workspace, so the workspace's
    *  own home and roots are not here — they live on the runtime status. */
@@ -271,6 +277,10 @@ const UserDeviceSchema = v.object({
   lastIp: v.nullable(v.string()), lastAgent: v.nullable(v.string()), replacedAt: v.nullable(v.number()),
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
   sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
+  // A hub that reports no software state lists as a daemon that named none.
+  version: v.optional(v.nullable(v.string()), null),
+  servedVersion: v.optional(v.nullable(v.string()), null),
+  update: v.optional(v.picklist(DEVICE_UPDATE_STATES), 'unreported'),
 });
 
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });

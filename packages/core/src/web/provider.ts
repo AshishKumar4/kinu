@@ -86,7 +86,17 @@ export interface DefaultWebSearchProviderDeps {
    * refused.
    */
   timeoutMs?: number;
+  /** How `timeoutMs` is scheduled: `setTimeout` unless a test hands in a timer
+   *  it fires itself, so a body trickling past the budget is a call the test
+   *  makes rather than a real timer racing a real stream. */
+  schedule?: (fire: () => void, afterMs: number) => () => void;
 }
+
+export const REAL_WEB_SCHEDULE: NonNullable<DefaultWebSearchProviderDeps['schedule']> = (fire, afterMs) => {
+  const timer = setTimeout(fire, afterMs);
+
+  return () => { clearTimeout(timer); };
+};
 
 const DEFAULT_SEARCH_LIMIT = 5;
 
@@ -125,6 +135,7 @@ class WebFetchError extends Error {
  *  their own `fetch` + auth seam; no per-backend search/fetch logic exists. */
 export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDeps): WebSearchProvider {
   const budgetMs = deps.timeoutMs;
+  const schedule = deps.schedule ?? REAL_WEB_SCHEDULE;
   // workerd's fetch enforces its `this` binding: invoking the dependency as
   // a member of `deps` sets `this = deps` and throws "Illegal invocation".
   // Detach once so every call goes out with `this = undefined`, exactly like
@@ -141,7 +152,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     if (budgetMs === undefined) return run(caller);
     const ctrl = new AbortController();
     caller?.addEventListener('abort', () => ctrl.abort(caller.reason), { once: true });
-    const timer = setTimeout(() => ctrl.abort(), budgetMs);
+    const cancelBudget = schedule(() => { ctrl.abort(); }, budgetMs);
 
     const onAbort = new Promise<never>((_, reject) => {
       ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
@@ -158,7 +169,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
       throw error;
     } finally {
-      clearTimeout(timer);
+      cancelBudget();
     }
   };
 

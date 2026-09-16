@@ -254,7 +254,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     // A split that CAN support an out-of-sample selection carries no warning.
     expect(result.selectionWarning).toBeUndefined();
     expect(gepaRunCount(rt)).toBe(1);
-  }, 30_000);
+  });
 
   test('a runnable split with nothing held out runs, and says the winner is not evidence', async () => {
     const rt = await evolvableRuntime();
@@ -274,7 +274,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     expect(result.ok).toBe(true);
     expect(result.selectionWarning).toBe(describeSplitDegeneracy('no_held_out_negatives'));
     expect(result.selection?.heldOutNegatives).toBe(0);
-  }, 30_000);
+  });
 
   test('the split it consumes really is disjoint on the ledger it reads', () => {
     const { sql, execRaw } = createTestWorkspace();

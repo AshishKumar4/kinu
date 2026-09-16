@@ -584,7 +584,6 @@ describe('every task has a scoring range, measured on this substrate', () => {
       // Submitting the reference verbatim is the bottom of the scale, not a pass.
       expect(scored.score, `${task.id}: matching the reference must score 0`).toBe(0);
     },
-    120_000,
   );
 });
 
@@ -616,7 +615,6 @@ describe('the target is reachable — the best implementation the corpus ships h
         + `  score ${scored.score.toFixed(4)}`,
       );
     },
-    180_000,
   );
 });
 
@@ -660,7 +658,6 @@ describe('no task is saturated — the obvious algorithm lands strictly inside t
         + `${(scored.measured.candOps / scored.measured.targetOps).toFixed(2)}x the target)`,
       );
     },
-    180_000,
   );
 });
 
@@ -715,7 +712,7 @@ describe('the score is continuous, not a bit in disguise', () => {
       + ` < binary ${binary.score.toFixed(4)} (${String(binary.measured.candOps)})`
       + ` < Hwang-Lin ${best.score.toFixed(4)} (${String(best.measured.candOps)})`,
     );
-  }, 180_000);
+  });
 });
 
 describe('every task can score zero by a real failure', () => {
@@ -731,26 +728,26 @@ describe('every task can score zero by a real failure', () => {
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('no usable solution');
     expect(scored.detail).toContain('nope');
-  }, 120_000);
+  });
 
   test('a solution that does not parse scores 0 rather than taking the harness down', async () => {
     const scored = await scoreWith(task, 'export function solve( {{{ \n');
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('import failed');
-  }, 120_000);
+  });
 
   test('a module exporting no `solve` scores 0 and names what was missing', async () => {
     const scored = await scoreWith(task, 'export const notSolve = 1;\n');
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('exports no');
-  }, 120_000);
+  });
 
   test('a cheap WRONG answer scores 0 — correctness gates the ratio', async () => {
     const scored = await scoreWith(task, 'export function solve(input) { return input.tokens[0]; }\n');
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('wrong answer');
     expect(scored.measured.candOps).toBe(0);
-  }, 120_000);
+  });
 
   test('a runaway is stopped by its own oracle budget, not by a timeout', async () => {
     const scored = await scoreWith(task, `export function solve(input, oracle) {
@@ -764,7 +761,7 @@ describe('every task can score zero by a real failure', () => {
     // The budget is a multiple of the MEASURED reference, so the runaway is
     // bounded by the instance and not by a constant somebody has to maintain.
     expect(scored.measured.candOps).toBeGreaterThan(scored.measured.refOps);
-  }, 120_000);
+  });
 });
 
 describe('scoreRatio — the refusals that keep a bad number from being published', () => {
@@ -878,5 +875,5 @@ describe('the outcome row this tier publishes', () => {
     expect(measured, 'the outcome row carries no measured counts, so its ratio cannot be '
       + 're-derived from the record').toBeDefined();
     expect(measured?.refOps).toBeGreaterThan(measured?.targetOps ?? Number.POSITIVE_INFINITY);
-  }, 120_000);
+  });
 });

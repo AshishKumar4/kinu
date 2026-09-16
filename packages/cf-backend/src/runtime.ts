@@ -759,6 +759,7 @@ export function createCFRuntime(
     agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
+    now: () => Date.now(),
   };
 
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);

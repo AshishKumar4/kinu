@@ -4536,7 +4536,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // The halves are LINKED: the dispatch row names the job that carries the
     // outcome, so the ledger never leaves a spawn with no reachable result.
     const rawJobResult = jobResult(db, job.id);
-    expect(String(dispatch!.result)).toContain(job.id);
+    // The VALUE the tool returned, as the ledger records it: the job id is a
+    // field of that value, not a substring of a rendering of it.
+    expect(JSON.stringify(dispatch!.result)).toContain(job.id);
 
     // What it PRODUCED and what it COST, off the settled row: two branches
     // expanded, two candidates back, and the tokens they burned.

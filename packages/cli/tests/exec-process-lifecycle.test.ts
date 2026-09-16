@@ -221,7 +221,7 @@ describe("kinu exec — a one-shot run terminates", () => {
     } finally {
       await server.stop();
     }
-  }, 240_000);
+  });
 
   test("the tool result reaches the model instead of waiting on the server", async () => {
     // The same defect seen from the model's side: if the call only returns when
@@ -258,7 +258,7 @@ describe("kinu exec — a one-shot run terminates", () => {
     } finally {
       await server.stop();
     }
-  }, 240_000);
+  });
   test('a native command failure carries class and observed exit in exec JSON', async () => {
     const home = newHome();
     const server = modelThatRuns('printf diagnostic; exit 7');
@@ -274,5 +274,5 @@ describe("kinu exec — a one-shot run terminates", () => {
     } finally {
       await server.stop();
     }
-  }, 240_000);
+  });
 });

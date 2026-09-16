@@ -25,9 +25,9 @@
  * every assertion here reads from the same two frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { TimeoutError, type Browser, type Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 
-import { diagnosticsSettled, recordDiagnostics, withGallery } from './gallery-harness';
+import { diagnosticsSettled, recordDiagnostics, withGallery, type Gallery } from './gallery-harness';
 import { parseJsonValue, redactPayload } from '@kinu.run/core';
 
 /** One live-tail message, as the browser laid it out. */
@@ -269,38 +269,35 @@ async function pasteIntoTerminal(page: Page, text: string): Promise<void> {
 }
 
 /**
- * Wait for the terminal to have painted `text`, and tolerate exactly the
- * timeout — this file's idiom for a wait whose outcome IS the measurement. A
- * pane that drops a pasted line never paints its echo, and a collection that
- * threw here would report an unnamed failure in place of the rows the terminal
- * actually drew.
+ * Wait for the terminal to have painted `text`: the fixture shell's echo of
+ * the line it received, which is the one signal that the pane delivered the
+ * input. A pane that drops a pasted line never paints its echo, and there is
+ * no other event that says so — that wait ends with the browser at the
+ * gallery's teardown, or with the gate at the ladder's deadline, and either
+ * names this suite rather than a duration.
  */
 async function terminalSettled(page: Page, text: string): Promise<void> {
-  try {
-    await page.waitForFunction(
-      (painted: string) => (document.querySelector('.xterm-rows')?.textContent ?? '').includes(painted),
-      { timeout: 20_000 },
-      text,
-    );
-  } catch (cause) {
-    if (!(cause instanceof TimeoutError)) throw cause;
-  }
+  await page.waitForFunction(
+    (painted: string) => (document.querySelector('.xterm-rows')?.textContent ?? '').includes(painted),
+    {},
+    text,
+  );
 }
 
 async function run(): Promise<Observed> {
-  return withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-    const stream = await browser.newPage();
+  return withGallery(async ({ newPage, origin }) => {
+    const stream = await newPage();
     await stream.setViewport({ width: 1280, height: 1400 });
     await stream.goto(`${origin}/gallery.html?frame=streaming`, { waitUntil: 'networkidle0' });
     await stream.reload({ waitUntil: 'networkidle0' });
     await stream.waitForSelector('[data-gallery-stream] .p-streaming');
-    await stream.waitForSelector('[data-stream-id="st-tool"] [data-tool-state="running"]', { timeout: 20_000 });
+    await stream.waitForSelector('[data-stream-id="st-tool"] [data-tool-state="running"]');
     const tails = await readTails(stream);
     await stream.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
     const reducedMotionTails = await readTails(stream);
     await stream.close();
 
-    const chatPage = await browser.newPage();
+    const chatPage = await newPage();
     await chatPage.setViewport({ width: 1280, height: 1600 });
     await chatPage.goto(`${origin}/gallery.html?frame=chat`, { waitUntil: 'networkidle0' });
     await chatPage.reload({ waitUntil: 'networkidle0' });
@@ -320,7 +317,7 @@ async function run(): Promise<Observed> {
       await chatPage.click(toggle);
       await chatPage.waitForFunction(
         (selector: string) => document.querySelector(selector)?.getAttribute('aria-expanded') === 'true',
-        { timeout: 10_000 }, toggle,
+        {}, toggle,
       );
     }
 
@@ -336,7 +333,7 @@ async function run(): Promise<Observed> {
 
     await chatPage.close();
 
-    const tools = await browser.newPage();
+    const tools = await newPage();
     await tools.setViewport({ width: 1280, height: 1600 });
     // `theme` is the key the pre-paint script in gallery.html reads (hooks/
     // use-theme.ts MODE_KEY). Seeding any other name leaves the page in the
@@ -410,7 +407,7 @@ async function run(): Promise<Observed> {
     const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
     await tools.close();
 
-    const files = await browser.newPage();
+    const files = await newPage();
     await files.setViewport({ width: 1280, height: 1100 });
     await files.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
     // A first load can trip vite's dependency optimizer, which answers with a
@@ -430,11 +427,11 @@ async function run(): Promise<Observed> {
     );
 
     const rowSelector = (name: string) => `[data-files-entry][title="${name}"]`;
-    const waitForRow = (name: string) => files.waitForSelector(rowSelector(name), { timeout: 20_000 });
+    const waitForRow = (name: string) => files.waitForSelector(rowSelector(name));
 
     const waitForRowGone = (name: string) => files.waitForFunction(
       (sel: string) => document.querySelector(sel) === null,
-      { timeout: 20_000 }, rowSelector(name),
+      {}, rowSelector(name),
     );
 
     // The drive opens at the plane's root: the workspace tree beside the
@@ -455,7 +452,6 @@ async function run(): Promise<Observed> {
     await waitForRow('quarterly-report.txt');
     await files.waitForFunction(
       () => document.querySelectorAll('[data-files-crumb]').length === 4,
-      { timeout: 20_000 },
     );
     const filesInMount = { crumbs: await crumbs(), entries: await rowNames() };
 
@@ -480,9 +476,9 @@ async function run(): Promise<Observed> {
     await files.click(rowSelector('user'));
     await waitForRow('notes.md');
     await files.click('[data-files-tree-node="/home"] button');
-    await files.waitForSelector('[data-files-tree-node="/home/user"]', { timeout: 20_000 });
+    await files.waitForSelector('[data-files-tree-node="/home/user"]');
     await files.click('[data-files-tree-node="/home/user"] button');
-    await files.waitForSelector('[data-files-tree-file]', { timeout: 20_000 });
+    await files.waitForSelector('[data-files-tree-file]');
 
     const treeFileNames = await files.$$eval(
       '[data-files-tree-file]', (els) => els.map((el) => el.getAttribute('title') ?? ''),
@@ -491,7 +487,7 @@ async function run(): Promise<Observed> {
     // Markdown opens RENDERED through the app's one markdown renderer, and the
     // Source toggle shows the bytes it was rendered from.
     await files.click(rowSelector('notes.md'));
-    await files.waitForSelector('[data-files-preview-body] h1', { timeout: 20_000 });
+    await files.waitForSelector('[data-files-preview-body] h1');
 
     const filesMarkdownRendered = await files.$eval('[data-files-preview-body]', (el) => ({
       heading: el.querySelector('h1')?.textContent ?? '',
@@ -499,14 +495,14 @@ async function run(): Promise<Observed> {
     }));
 
     await files.click('[data-files-render-toggle]');
-    await files.waitForSelector('[data-files-preview-body] pre', { timeout: 20_000 });
+    await files.waitForSelector('[data-files-preview-body] pre');
     const filesPreviewText = await files.$eval('[data-files-preview-body] pre', (el) => el.textContent ?? '');
 
     // A whole file can be edited in place; a truncated read cannot, because
     // writing that prefix back would delete the rest of the file.
-    await files.waitForSelector('[data-files-edit]', { timeout: 20_000 });
+    await files.waitForSelector('[data-files-edit]');
     await files.click('[data-files-edit]');
-    await files.waitForSelector('[data-files-editor]', { timeout: 20_000 });
+    await files.waitForSelector('[data-files-editor]');
 
     const filesEditorSeedsFromTheFile = await files.$eval(
       '[data-files-editor]', (el) => el instanceof HTMLTextAreaElement ? el.value : '',
@@ -515,7 +511,6 @@ async function run(): Promise<Observed> {
     await files.click('[aria-label="Close preview"]');
     await files.waitForFunction(
       () => document.querySelector('[data-files-preview]') === null,
-      { timeout: 20_000 },
     );
 
     // Rename rides the real RPC against the frame's stateful fixture.
@@ -543,21 +538,21 @@ async function run(): Promise<Observed> {
     await files.close();
 
     // A disconnected device is a stated absence, not a missing row.
-    const offline = await browser.newPage();
+    const offline = await newPage();
     await offline.setViewport({ width: 1280, height: 1100 });
     await offline.goto(`${origin}/gallery.html?frame=files&offline=device`, { waitUntil: 'networkidle0' });
     await offline.reload({ waitUntil: 'networkidle0' });
-    await offline.waitForSelector('[data-files-offline-mount]', { timeout: 20_000 });
+    await offline.waitForSelector('[data-files-offline-mount]');
     const filesOfflineRow = await offline.$eval('[data-files-offline-mount]', (el) => el.textContent ?? '');
     await offline.close();
 
     // The Environment tab, reworked: user cards, no capability doctrine, and
     // a Files action that lands the drive.
-    const env = await browser.newPage();
+    const env = await newPage();
     await env.setViewport({ width: 1280, height: 1100 });
     await env.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
     await env.reload({ waitUntil: 'networkidle0' });
-    await env.waitForSelector('[data-env-card]', { timeout: 20_000 });
+    await env.waitForSelector('[data-env-card]');
 
     const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
       name: card.querySelector('.font-medium')?.textContent ?? '',
@@ -572,12 +567,7 @@ async function run(): Promise<Observed> {
     // The line terminal, as the browser lays it out. Two commands: one typed,
     // one pasted with a newline in it. What is read back is the rendered rows,
     // because the whole defect class is which row a character lands on.
-    //
-    // The settle is TOLERANT of its own timeout, in this file's own idiom: a
-    // pane that drops the pasted line never paints `ran: three`, and a
-    // collection that threw there would report an unnamed failure instead of
-    // the rows the terminal actually drew.
-    await env.waitForSelector('.xterm-rows', { timeout: 20_000 });
+    await env.waitForSelector('.xterm-rows');
     await env.click('.xterm-screen');
     await env.keyboard.type('one');
     await env.keyboard.press('Enter');
@@ -590,26 +580,19 @@ async function run(): Promise<Observed> {
       (rows) => rows.map((line) => (line.textContent ?? '').replace(/\u00a0/gu, ' ').trimEnd()).filter((line) => line !== ''),
     );
 
+    // The jump is a synchronous surface switch (`openFiles` navigates focus
+    // and the Files surface is a static import), committed before the click
+    // resolves, so the drive's presence is the boolean under test, read once.
     await env.click('[data-env-card="workspace"] [data-env-files]');
-    // Tolerate exactly the timeout (the boolean under test); anything else is
-    // a broken instrument, not a "did not land" — plan-review-ux.test.ts idiom.
-    let envFilesJumpLandsOnDrive: boolean;
-
-    try {
-      await env.waitForSelector('[data-files-surface]', { timeout: 20_000 });
-      envFilesJumpLandsOnDrive = true;
-    } catch (cause) {
-      if (!(cause instanceof TimeoutError)) throw cause;
-      envFilesJumpLandsOnDrive = false;
-    }
+    const envFilesJumpLandsOnDrive = await env.$('[data-files-surface]') !== null;
 
     await env.close();
 
-    const explore = await browser.newPage();
+    const explore = await newPage();
     await explore.setViewport({ width: 1280, height: 1100 });
     await explore.goto(`${origin}/gallery.html?frame=forkrunning`, { waitUntil: 'networkidle0' });
     await explore.reload({ waitUntil: 'networkidle0' });
-    await explore.waitForSelector(`[data-run-node="${RATE_LIMITED_NODE}"]`, { timeout: 20_000 });
+    await explore.waitForSelector(`[data-run-node="${RATE_LIMITED_NODE}"]`);
     const runNodes = await readRunNodes(explore);
     await explore.close();
 
@@ -640,7 +623,7 @@ const NO_PARTS = 'st-empty';
 
 let observed: Observed;
 
-beforeAll(async () => { observed = await run(); }, 240_000);
+beforeAll(async () => { observed = await run(); });
 
 describe('the streaming turn, as a browser lays it out', () => {
   test('it measures something — six live tails, not an empty denominator', () => {
@@ -929,14 +912,13 @@ describe('a node the provider rate-limited, as the run list reads it', () => {
  */
 describe('the gallery shell photographs a healthy neighbour', () => {
   test('the real shell shares identity, width, and one settings action', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1568, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('aside');
       await page.waitForFunction(
         () => !(document.querySelector('aside')?.textContent ?? '').includes('loading...'),
-        { timeout: 8000 },
       );
 
       const shell = await page.evaluate(() => ({
@@ -955,11 +937,11 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       expect(shell.headerSettings).toBe(0);
       expect(shell.rosterSettings).toBeGreaterThan(0);
     });
-  }, 120_000);
+  });
 
   test('mobile gives Chat and Workspace the full viewport in turn', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 390, height: 844 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-composer-root]');
@@ -986,7 +968,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       expect(workspacePanels).toEqual([0, 390]);
       expect(overflow).toBe(0);
     });
-  }, 120_000);
+  });
 });
 
 /**
@@ -1013,9 +995,9 @@ describe('an additional agent, as an ordinary conversation', () => {
   }
 
   async function openRig(
-    browser: Browser, origin: string, viewport: { width: number; height: number }, query = '',
+    newPage: Gallery['newPage'], origin: string, viewport: { width: number; height: number }, query = '',
   ): Promise<RigDriver> {
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setViewport(viewport);
     await page.goto(`${origin}/gallery.html?frame=agentchats${query}`, { waitUntil: 'networkidle0' });
     await page.reload({ waitUntil: 'networkidle0' });
@@ -1048,8 +1030,8 @@ describe('an additional agent, as an ordinary conversation', () => {
   }
 
   test('create is one click; the title, mode, draft, and scroll stay with their conversation', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const rig = await openRig(browser, origin, { width: 1280, height: 900 });
+    await withGallery(async ({ newPage, origin }) => {
+      const rig = await openRig(newPage, origin, { width: 1280, height: 900 });
       const { page } = rig;
 
       // The inherited mission is internal, and the roster's role string is
@@ -1064,7 +1046,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.click('[aria-label="New agent"]');
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ), { timeout: 10_000 });
+      ));
       const afterCreate = await rig.bodyText();
       expect(afterCreate).not.toContain('Add a subordinate');
       expect(afterCreate).not.toContain('Role');
@@ -1092,7 +1074,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '')
           .includes('Fix the coupon flow properly')
-      ), { timeout: 10_000 });
+      ));
 
       const sentLogAfterFirst = await page.$eval(
         '[data-sent-log]',
@@ -1129,7 +1111,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Coupon fixer')
-      ), { timeout: 10_000 });
+      ));
 
       // The reader's position belongs to the conversation: leave an existing
       // transcript at its top, visit another tab, come back to the same spot
@@ -1170,11 +1152,11 @@ describe('an additional agent, as an ordinary conversation', () => {
       expect(await rig.bodyText()).not.toContain(SEED_ROLE);
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('mobile: one-click create and per-conversation drafts at 375px, with no overflow', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const rig = await openRig(browser, origin, { width: 375, height: 812 });
+    await withGallery(async ({ newPage, origin }) => {
+      const rig = await openRig(newPage, origin, { width: 375, height: 812 });
       const { page } = rig;
       await page.click('[aria-label="New agent"]');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/agent-1"]');
@@ -1195,7 +1177,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       expect(overflow).toBe(0);
       await page.close();
     });
-  }, 240_000);
+  });
 
   /** The chain `?createFails=1` makes the first create reject with. Spelled
    *  here as well so a chain the gallery stopped chaining fails the equality
@@ -1207,8 +1189,8 @@ describe('an additional agent, as an ordinary conversation', () => {
     // must not become an unhandled rejection with no context. The parent's
     // banner is WorkspacePage's; the bare rig has no parent, so the record is
     // the whole observable outcome here.
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const rig = await openRig(browser, origin, { width: 1280, height: 900 }, '&createFails=1');
+    await withGallery(async ({ newPage, origin }) => {
+      const rig = await openRig(newPage, origin, { width: 1280, height: 900 }, '&createFails=1');
       const { page } = rig;
       const diagnostics = recordDiagnostics(page);
       const unhandled: string[] = [];
@@ -1227,18 +1209,18 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.click('[aria-label="New agent"]');
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ), { timeout: 10_000 });
+      ));
       // Exactly one record for exactly one failure — the create that landed
       // added nothing, and nothing was ever unhandled.
       expect(diagnostics).toHaveLength(1);
       expect(unhandled).toEqual([]);
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('the real WorkspacePage shows a refused create and the next click still lands', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       const diagnostics = recordDiagnostics(page);
       await page.goto(`${origin}/gallery.html?frame=workspacepage&createFails=1`, { waitUntil: 'networkidle0' });
@@ -1248,7 +1230,7 @@ describe('an additional agent, as an ordinary conversation', () => {
       // The page's own catch turns the refusal into its banner, whole chain
       // shown, with a way out.
       await page.click('[aria-label="New agent"]');
-      await page.waitForSelector('[role="alert"]', { timeout: 15_000 });
+      await page.waitForSelector('[role="alert"]');
       const banner = await page.$eval('[role="alert"]', (node) => node.textContent ?? '');
       // 9593645b0: one spelling, "Could not create an agent".
       expect(banner).toContain('Could not create an agent');
@@ -1264,16 +1246,16 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.click('[aria-label="New agent"]');
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ), { timeout: 15_000 });
+      ));
       // 9593645b0: the banner's spelling, if it wrongly returned.
       expect(await page.evaluate(() => document.body.innerText)).not.toContain('Could not create an agent');
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('the real WorkspacePage creates, opens, and renames an agent through its own wiring', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -1285,15 +1267,15 @@ describe('an additional agent, as an ordinary conversation', () => {
       // 108c6c414: the untitled conversation is "Untitled agent".
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Untitled agent')
-      ), { timeout: 15_000 });
+      ));
       const body = await page.evaluate(() => document.body.innerText);
       expect(body).not.toContain('Add a subordinate');
       expect(body).not.toContain('Mission');
 
       // The facet conversation carries the full composer contract — the same
       // Auto/Plan segment the main column has.
-      await page.waitForSelector('[aria-label="Turn mode"]', { timeout: 15_000 });
-      await page.waitForSelector('[title="Rename agent"]', { timeout: 15_000 });
+      await page.waitForSelector('[aria-label="Turn mode"]');
+      await page.waitForSelector('[title="Rename agent"]');
 
       // Rename lands on the parent roster the tabs read.
       await page.click('[title="Rename agent"]');
@@ -1302,10 +1284,10 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.keyboard.press('Enter');
       await page.waitForFunction(() => (
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '').includes('Payments triage')
-      ), { timeout: 15_000 });
+      ));
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1318,8 +1300,8 @@ describe('an additional agent, as an ordinary conversation', () => {
  */
 describe('an empty transcript waits for the history store to speak', () => {
   test('held → skeleton; failed → Retry; status:end → authoritative empty', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 560, height: 800 });
       await page.goto(`${origin}/gallery.html?frame=historyauthority`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-testid="conversation-skeleton"]');
@@ -1341,14 +1323,13 @@ describe('an empty transcript waits for the history store to speak', () => {
       await page.click('aria/Retry');
       await page.waitForFunction(
         () => document.querySelector('[data-history-authority]')?.textContent?.includes('Send the first message to start.') === true,
-        { timeout: 10_000 },
       );
       const final = await page.$eval('[data-history-probe]', (probe) => probe.textContent ?? '');
       expect(final).toContain('"exhausted":true');
       expect(await page.$('[data-testid="conversation-skeleton"]')).toBeNull();
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1359,8 +1340,8 @@ describe('an empty transcript waits for the history store to speak', () => {
  */
 describe('chat send admission at the actual WorkspacePage boundary', () => {
   test('two same-task Send clicks enter the transport once', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -1378,12 +1359,11 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
       });
       await page.waitForFunction(
         () => document.documentElement.dataset.galleryChatSends === '1',
-        { timeout: 10_000 },
       );
       expect(await page.evaluate(() => document.documentElement.dataset.galleryChatSends)).toBe('1');
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1394,12 +1374,11 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
  */
 describe('terminal workspace denial at the actual WorkspacePage boundary', () => {
   test('1008 names denial, preserves SDK reason, and never promises reconnect', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.goto(`${origin}/gallery.html?frame=workspacepage&terminal=denied`, { waitUntil: 'networkidle0' });
       await page.waitForFunction(
         () => document.body.textContent?.includes('Access to this workspace was denied') === true,
-        { timeout: 10_000 },
       );
       const text = await page.evaluate(() => document.body.innerText);
       expect(text).toContain('Access to this workspace was denied');
@@ -1409,7 +1388,7 @@ describe('terminal workspace denial at the actual WorkspacePage boundary', () =>
       expect(text).not.toContain('Reconnecting...');
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1420,8 +1399,8 @@ describe('terminal workspace denial at the actual WorkspacePage boundary', () =>
  */
 describe('file preview request generation at the actual FilesSurface boundary', () => {
   test('a stale preview response cannot reclaim a refreshed file', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=files&wide=1&deferpreview=1`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
@@ -1437,7 +1416,6 @@ describe('file preview request generation at the actual FilesSurface boundary', 
       await page.click('[aria-label="Refresh"]');
       await page.waitForFunction(
         () => document.querySelector('[data-files-preview-body]')?.textContent?.includes('Fresh after refresh') === true,
-        { timeout: 10_000 },
       );
       await page.click('[data-files-fixture-release]');
       // The held first reply was old checkout content. Once it settles it must
@@ -1447,7 +1425,7 @@ describe('file preview request generation at the actual FilesSurface boundary', 
       expect(preview).not.toContain('Checkout coupon regression');
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1458,8 +1436,8 @@ describe('file preview request generation at the actual FilesSurface boundary', 
  */
 describe('history and roster request generations at actual hook boundaries', () => {
   test('a held history page released after Clear cannot reseed the walk', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.goto(`${origin}/gallery.html?frame=historyauthority`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-testid="conversation-skeleton"]');
       await page.click('[data-history-reset]');
@@ -1468,23 +1446,26 @@ describe('history and roster request generations at actual hook boundaries', () 
         const raw = document.querySelector('[data-history-probe]')?.textContent ?? '';
 
         return raw.includes('"loading":false') && raw.includes('"error":null') && raw.includes('"exhausted":false');
-      }, { timeout: 10_000 });
+      });
       expect(await page.$('[data-testid="conversation-skeleton"]')).not.toBeNull();
       expect(await page.$('aria/Retry')).toBeNull();
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a held roster list released after local rename cannot undo the rename', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.goto(`${origin}/gallery.html?frame=rosterauthority`, { waitUntil: 'networkidle0' });
       await page.click('[data-roster-local-rename]');
       // POSITIVE FIRST: the local transition really landed.
       await page.waitForFunction(
         () => document.querySelector('[data-roster-probe]')?.textContent === 'checkout-fixes:Renamed locally',
-        { timeout: 10_000 },
       );
+      // POSITIVE SECOND: the mount read is still held, so there is a reply to
+      // release. A roster whose read already ended has nothing to retire and
+      // the assertion below would prove nothing.
+      expect(await page.$eval('[data-roster-probe]', (el) => el.getAttribute('data-roster-pending'))).toBe('true');
       await page.click('[data-roster-release]');
 
       // The old server row spells "Checkout coupon bug", and the local edit
@@ -1492,34 +1473,20 @@ describe('history and roster request generations at actual hook boundaries', () 
       // NOTHING. That is a claim about something NOT happening, and the proof
       // cannot be another `waitForFunction` on the rename: that condition is
       // already true, returns at once, and passed whatever the roster did
-      // next. It cannot be a task-queue drain either — the publish rides
-      // `startTransition`, which React is free to defer past any number of
-      // turns, so a short drain reports "not yet" as "never".
-      //
-      // So the window is explicit and the observation is the timeout: watch
-      // FOR THE CLOBBER, bounded, and require that it never arrives. Under a
-      // roster that failed to retire the read, the stale spelling appears well
-      // inside this window and the case fails naming it. Only the window
-      // running out means "never"; a crashed page or a detached frame is a
-      // different failure and must not read as a pass.
-      let clobbered = true;
+      // next. The end condition is the read's own: the provider's `pending`
+      // stays true until the released reply has been consumed and either
+      // published or retired, and React commits any publish before the flag
+      // it rides on drops. Once the flag reads false, whatever the roster was
+      // going to do it has done, and the probe text is the verdict.
+      await page.waitForFunction(
+        () => document.querySelector<HTMLElement>('[data-roster-probe]')?.dataset.rosterPending === 'false',
+      );
 
-      try {
-        await page.waitForFunction(
-          () => document.querySelector('[data-roster-probe]')?.textContent?.includes('Checkout coupon bug') === true,
-          { timeout: 5_000 },
-        );
-      } catch (cause) {
-        if (!(cause instanceof TimeoutError)) throw cause;
-        clobbered = false;
-      }
-
-      expect(clobbered).toBe(false);
       expect(await page.$eval('[data-roster-probe]', (el) => el.textContent ?? ''))
         .toBe('checkout-fixes:Renamed locally');
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1538,8 +1505,8 @@ describe('history and roster request generations at actual hook boundaries', () 
  */
 describe('independent settings and quality reads publish independently', () => {
   test('one account card fails and retries while ready and held siblings remain visible', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate`, { waitUntil: 'networkidle0' });
 
@@ -1571,7 +1538,6 @@ describe('independent settings and quality reads publish independently', () => {
       await page.click('[data-settings-resource="your ChatGPT connection"] button');
       await page.waitForSelector(
         '[data-settings-resource="your ChatGPT connection"][data-resource-state="ready"]',
-        { timeout: 10_000 },
       );
       expect(await page.$eval(
         '[data-settings-resource="your AI gateways"]',
@@ -1581,7 +1547,6 @@ describe('independent settings and quality reads publish independently', () => {
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:settings-release')));
       await page.waitForSelector(
         '[data-settings-resource="your AI gateways"][data-resource-state="ready"]',
-        { timeout: 10_000 },
       );
 
       // Back on Account, the profile is still ready: the section switch was a
@@ -1590,11 +1555,11 @@ describe('independent settings and quality reads publish independently', () => {
       await page.waitForSelector('[data-settings-resource="your profile"][data-resource-state="ready"]');
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a failed replay branch retries while alignment remains held, then both render', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 900, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=qualitybranches`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-quality-branch="replay"] button');
@@ -1604,26 +1569,24 @@ describe('independent settings and quality reads publish independently', () => {
       await page.click('[data-quality-branch="replay"] button');
       await page.waitForFunction(
         () => document.querySelector('[data-quality-branch="replay"]')?.textContent?.includes('Latest score') === true,
-        { timeout: 10_000 },
       );
       expect(await page.$('[data-quality-branch="alignment"] [role="status"]')).not.toBeNull();
 
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:quality-release')));
       await page.waitForFunction(
         () => document.querySelector('[data-quality-branch="alignment"]')?.textContent?.includes('K_align') === true,
-        { timeout: 10_000 },
       );
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 describe('the supervise view, live', () => {
   const headingTexts = (page: Page) => page.$$eval('h2', (els) => els.map((el) => el.textContent));
 
   test('a change landing after the page opened earns the Evolution section on the next revalidation', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=supervisefresh`, { waitUntil: 'networkidle0' });
 
@@ -1631,7 +1594,6 @@ describe('the supervise view, live', () => {
       // empty changes-only digest mounts no Evolution heading at all.
       await page.waitForFunction(
         () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Run history'),
-        { timeout: 20_000 },
       );
       expect(await headingTexts(page)).toEqual(['Automations', 'Run history']);
 
@@ -1640,7 +1602,6 @@ describe('the supervise view, live', () => {
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:supervise-evolve')));
       await page.waitForFunction(
         () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Evolution'),
-        { timeout: 20_000 },
       );
       expect(await page.$eval('body', (body) => body.textContent ?? ''))
         .toContain('I improved how I work');
@@ -1651,7 +1612,6 @@ describe('the supervise view, live', () => {
       await page.evaluate(() => window.dispatchEvent(new Event('gallery:supervise-evolution-fail')));
       await page.waitForFunction(
         () => document.body.textContent?.includes('Could not load the evolution digest') === true,
-        { timeout: 20_000 },
       );
       expect(await page.$eval('body', (body) => body.textContent ?? ''))
         .toContain('I improved how I work');
@@ -1674,15 +1634,14 @@ describe('the supervise view, live', () => {
 
       await page.waitForFunction(
         () => document.body.textContent?.includes('Could not load the evolution digest') === false,
-        { timeout: 20_000 },
       );
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a failed background-jobs read reports itself and its retry republishes the rows', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=supervisefresh`, { waitUntil: 'networkidle0' });
 
@@ -1690,7 +1649,6 @@ describe('the supervise view, live', () => {
       // silence and never as an empty jobs list.
       await page.waitForFunction(
         () => document.body.textContent?.includes('Could not load the background jobs') === true,
-        { timeout: 20_000 },
       );
 
       // Heal and click the failure's own Retry in one turn of the page, so the
@@ -1710,13 +1668,12 @@ describe('the supervise view, live', () => {
 
       await page.waitForFunction(
         () => document.body.textContent?.includes('Pick a migration-backfill approach') === true,
-        { timeout: 20_000 },
       );
       expect(await page.$eval('body', (body) => body.textContent ?? ''))
         .not.toContain('Could not load the background jobs');
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1732,14 +1689,14 @@ describe('the supervise view, live', () => {
  */
 describe('a revoked device whose command may still run', () => {
   test('shows the count immediately, survives reload without reconnect controls, and disappears only after acknowledgement', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1000, height: 1200 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=devices`, { waitUntil: 'networkidle0' });
       // The rail renders once the account reads settle, which lands after the
       // network goes quiet — the reads resolve through the page fixture, not
       // the wire — so the deep-link section is waited for, never read on arrival.
-      await page.waitForSelector('[data-settings-section="devices"]', { timeout: 10_000 });
+      await page.waitForSelector('[data-settings-section="devices"]');
       expect(await page.$eval(
         '[data-settings-section="devices"]',
         (entry) => entry.getAttribute('aria-current'),
@@ -1750,7 +1707,7 @@ describe('a revoked device whose command may still run', () => {
         dialogAccepted = dialog.accept();
       });
       await page.click('[title="Revoke device"]');
-      await page.waitForSelector('[data-device-incident="dev-1"]', { timeout: 10_000 });
+      await page.waitForSelector('[data-device-incident="dev-1"]');
       await dialogAccepted;
 
       const immediate = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
@@ -1762,7 +1719,7 @@ describe('a revoked device whose command may still run', () => {
       expect(await page.$('[data-device-incident="dev-1"] [title="Revoke device"]')).toBeNull();
 
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-device-incident="dev-1"]', { timeout: 10_000 });
+      await page.waitForSelector('[data-device-incident="dev-1"]');
       const persisted = await page.$eval('[data-device-incident="dev-1"]', (row) => row.textContent ?? '');
       // 33056d3d8: same rewrite as the immediate arm.
       expect(persisted).toContain('Kinu could not confirm that every command stopped after revocation.');
@@ -1771,11 +1728,10 @@ describe('a revoked device whose command may still run', () => {
       await page.click('[data-device-incident="dev-1"] button');
       await page.waitForFunction(
         () => document.querySelector('[data-device-incident="dev-1"]') === null,
-        { timeout: 10_000 },
       );
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /**
@@ -1795,8 +1751,8 @@ describe('a revoked device whose command may still run', () => {
  */
 describe('linking a machine happens on the surface that asked for it', () => {
   test('the Environment card opens the panel in place, and the arriving machine closes it', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=1`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
@@ -1825,7 +1781,6 @@ describe('linking a machine happens on the surface that asked for it', () => {
       // the surface the owner was working on.
       await page.waitForFunction(
         () => document.querySelector('[role="dialog"]') === null,
-        { timeout: 30_000 },
       );
       expect(await page.$('[data-env-card="workspace"]')).not.toBeNull();
       // One registration got us here. The fixture counts its own POSTs, so a
@@ -1836,14 +1791,14 @@ describe('linking a machine happens on the surface that asked for it', () => {
       )).toBe('1');
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a machine that never dials in leaves the panel open and waiting', async () => {
     // The non-vacuity arm for the close above: same flow, same clicks, and a
     // roster whose row stays `connected: false`. A panel that closed on any
     // roster tick would pass the first test and fail this one.
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=environment&offline=device&connect=stall`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-env-card="device"] [data-env-connect]');
@@ -1860,18 +1815,18 @@ describe('linking a machine happens on the surface that asked for it', () => {
 
       await page.waitForFunction(
         (base: number) => Number(document.documentElement.dataset.galleryRosterReads ?? '0') >= base + 3,
-        { timeout: 60_000 },
+        {},
         readsAtHandover,
       );
       expect(await page.$('[role="dialog"] [data-connect-waiting]')).not.toBeNull();
       expect(await page.$('[data-connect-command]')).not.toBeNull();
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('the drive opens the same panel from its offline row', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1100, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=files&offline=device&connect=1`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-connect]');
@@ -1881,7 +1836,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
       expect(await page.$('[data-files-offline-mount]')).not.toBeNull();
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 interface ContinuityProbe {
@@ -1909,8 +1864,8 @@ async function continuityProbe(page: Page): Promise<ContinuityProbe> {
  */
 describe('composer and message continuity at browser boundaries', () => {
   test('IME commit Enter and keyCode 229 never submit; the next Enter does; Shift+Enter remains a newline', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 760, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
       const textarea = await page.waitForSelector('[data-composer-root] textarea');
@@ -1942,23 +1897,21 @@ describe('composer and message continuity at browser boundaries', () => {
       await page.keyboard.type('two lines');
       await page.waitForFunction(
         () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-draft') === 'two lines',
-        { timeout: 5_000 },
       );
       await page.keyboard.down('Shift');
       await page.keyboard.press('Enter');
       await page.keyboard.up('Shift');
       await page.waitForFunction(
         () => document.querySelector('[data-continuity-probe]')?.getAttribute('data-draft')?.includes('\n') === true,
-        { timeout: 5_000 },
       );
       expect((await continuityProbe(page)).sends).toBe(0);
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('mixed clipboard strings survive beside deduplicated files; file-only is prevented', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 760, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
       const textarea = await page.waitForSelector('[data-composer-root] textarea');
@@ -2034,11 +1987,11 @@ describe('composer and message continuity at browser boundaries', () => {
       expect((await continuityProbe(page)).files).toBe('notes.txt:3|notes.txt:3');
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('long user and steer tokens stay inside bubbles at desktop and mobile widths', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
 
       for (const viewport of [{ width: 1280, height: 1000 }, { width: 360, height: 800 }]) {
@@ -2070,11 +2023,11 @@ describe('composer and message continuity at browser boundaries', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a failed Markdown image becomes a diagnostic with its raw link; a loaded image remains an image', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 760, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-image-failure] [data-markdown-image-error]');
@@ -2097,7 +2050,7 @@ describe('composer and message continuity at browser boundaries', () => {
       expect(await page.$('[data-image-success] [data-markdown-image-error]')).toBeNull();
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 /** The same live-token shape the gallery fixture assembles, spelled the same
@@ -2138,8 +2091,8 @@ const ASSEMBLED = `cfut_${'a'.repeat(48)}`;
  */
 describe('the tool preview redacts through the one canonical policy', () => {
   test('structured input and output are a fixed point of redactPayload', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 1600 });
       await page.goto(`${origin}/gallery.html?frame=toolrun&secrets=1`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-tool-state]');
@@ -2152,7 +2105,7 @@ describe('the tool preview redacts through the one canonical policy', () => {
         if (collapsed.length === 0) break;
 
         for (const toggle of collapsed) await toggle.click();
-        await page.waitForFunction(() => document.querySelectorAll('pre').length > 0, { timeout: 8000 });
+        await page.waitForFunction(() => document.querySelectorAll('pre').length > 0);
       }
 
       const rendered = await page.evaluate(() => ({
@@ -2204,12 +2157,12 @@ describe('the tool preview redacts through the one canonical policy', () => {
       expect(rendered.body).toContain('curl -s https://api.stripe.example/v1/charges');
       expect(rendered.body, 'a secret-shaped value reached a pixel').not.toContain(ASSEMBLED);
     });
-  }, 240_000);
+  });
 });
 
 test('file navigation does not pair a new breadcrumb with the old directory', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-files-entry][title="sandbox"]');
 
@@ -2240,11 +2193,11 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
 
     expect(mismatches).toEqual([]);
   });
-}, 240_000);
+});
 
 test('code retains syntax colors through streaming and sidebar ages share a right edge', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await page.setViewport({ width: 1100, height: 1000 });
     await page.evaluateOnNewDocument(() => {
       let clipboard = '';
@@ -2362,7 +2315,7 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
       await page.close();
     }
   });
-}, 120_000);
+});
 
 /**
  * The rail reads one size on every page. The workbench's compact type scale
@@ -2371,9 +2324,9 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
  * moved off `html` onto the workspace's own content root.
  */
 test('sidebar rows keep one height and font size on home and workspace routes', async () => {
-  await withGallery(async ({ browser, origin }) => {
+  await withGallery(async ({ newPage, origin }) => {
     const rowsFor = async (frame: string) => {
-      const page = await browser.newPage();
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 860 });
       await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('nav[aria-label="Primary"] a');
@@ -2432,7 +2385,7 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
     expect(shell.account?.font).toBe(home.account?.font);
     expect(Math.abs((shell.account?.height ?? 0) - (home.account?.height ?? 0))).toBeLessThan(1);
   });
-}, 240_000);
+});
 
 /**
  * One rule between the rail and the content, one rule above the account row,
@@ -2440,8 +2393,8 @@ test('sidebar rows keep one height and font size on home and workspace routes', 
  * underline. Measured on the real workspace frame at 1440 wide, dark.
  */
 test('rail gap is zero with one border, the footer keeps one rule, both strips share one height', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await page.setViewport({ width: 1440, height: 1000 });
     await page.evaluateOnNewDocument(() => localStorage.setItem('theme', 'dark'));
     await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
@@ -2482,11 +2435,11 @@ test('rail gap is zero with one border, the footer keeps one rule, both strips s
     expect(Math.abs(measured.activeY - measured.stripY)).toBeLessThan(1);
     await page.close();
   });
-}, 240_000);
+});
 
 test('workspace tabs keep scrolling horizontal and suppress the scrollbar', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await page.setViewport({ width: 390, height: 844 });
     await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[aria-label="Work"]');
@@ -2507,7 +2460,7 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
     expect(strip.scrollLeft).toBeGreaterThan(0);
     await page.close();
   });
-}, 240_000);
+});
 
 /**
  * Model tiers are an open vocabulary (#7, #9, #11). The owner adds a tier by
@@ -2518,8 +2471,8 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
  */
 describe('model tiers are the owner\'s to add, and each offers its model\'s own levels', () => {
   test('an added tier renders, takes its model\'s levels, and is offered to roles', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1000, height: 1400 });
       await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[aria-label="New tier id"]');
@@ -2575,13 +2528,13 @@ describe('model tiers are the owner\'s to add, and each offers its model\'s own 
       expect(await page.$('[aria-label="review reasoning effort"]')).toBeNull();
       await page.close();
     });
-  }, 120_000);
+  });
 });
 
 describe('the workbench type scale, as the browser computes it', () => {
   test('the workbench reads at the owner-approved compact scale', async () => {
-    const sizes = await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    const sizes = await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 1600 });
       await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('.prose-chat');
@@ -2603,7 +2556,7 @@ describe('the workbench type scale, as the browser computes it', () => {
     // regression reads here.
     expect(sizes.prose).toBe('14.496px');
     expect(sizes.toolLabel).toBe('13px');
-  }, 120_000);
+  });
 });
 
 /**
@@ -2615,8 +2568,8 @@ describe('the workbench type scale, as the browser computes it', () => {
  */
 describe('the workspace inspector at the actual WorkspacePage boundary', () => {
   test('collapsed until something arrives, then resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // The first visit mounts the column collapsed — worth-showing state is a
       // resource read, so the collapse lasts only until the snapshot lands,
@@ -2652,7 +2605,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
 
       const inspectorWidth = () => page.$$eval('[data-panel]', (panels) => Math.round(panels[1]?.getBoundingClientRect().width ?? -1));
 
@@ -2672,23 +2625,22 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
             && record.some((sample) => sample.inserted || sample.expand)
             && record.some((sample) => sample.width >= 0 && sample.width <= 2);
         },
-        { timeout: 20_000 },
       );
 
       // The passive arrival is the something worth seeing: the column opens
       // on the workspace's behalf AND raises the chip where the reader is —
       // Work stays current, only the explicit click navigates.
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
+      await page.waitForSelector('[data-preview-ready]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      }, { timeout: 10_000 });
+      });
       expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
 
       await page.click('[data-preview-ready]');
-      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]', { timeout: 10_000 });
+      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]');
       expect(await page.$('[data-preview-ready]')).toBeNull();
 
       // A keyboard resize is an explicit size: it survives a reload. One
@@ -2702,37 +2654,37 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         const width = Math.round(panels[1]?.getBoundingClientRect().width ?? -1);
 
         return width >= 270 && width <= 290;
-      }, { timeout: 10_000 });
+      });
       const resized = await inspectorWidth();
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
       await page.waitForFunction((expected: number) => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.abs(Math.round(panels[1]?.getBoundingClientRect().width ?? -1) - expected) <= 3;
-      }, { timeout: 10_000 }, resized);
+      }, {}, resized);
 
       // Collapse hides the column behind a visible handle; that stands a reload.
       await page.click('[data-inspector-collapse]');
-      await page.waitForSelector('[data-inspector-expand]', { timeout: 10_000 });
+      await page.waitForSelector('[data-inspector-expand]');
       expect(await inspectorWidth()).toBeLessThanOrEqual(2);
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
+      await page.waitForSelector('[data-inspector-expand]');
       expect(await inspectorWidth()).toBeLessThanOrEqual(2);
       await page.click('[data-inspector-expand]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      }, { timeout: 10_000 });
+      });
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('an oversize saved width constrains on screen but survives in storage with no explicit choice', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // The account holds a 2000px preference (kept from a wider display);
       // this workspace carries no open/close choice of its own.
@@ -2742,7 +2694,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
 
       // The signal opens the column on the workspace's behalf; the group
       // cannot fit 2000px beside the chat minimum, so it commits what fits.
@@ -2755,7 +2707,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
           const first = width();
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(first > 200 && width() === first)));
         });
-      }, { timeout: 10_000 });
+      });
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -2771,11 +2723,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a reset to the already-committed width leaves no mark: the next drag persists', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
@@ -2784,12 +2736,12 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
-      }, { timeout: 10_000 });
+      });
 
       // resetToDefault at the committed 340 issues a no-op write: the
       // library emits nothing, and nothing marks the next emission as
@@ -2801,7 +2753,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // A real drag follows: pointerdown marks the input, the release
       // commit persists the width the user's hand chose. The inspector is
       // the trailing panel — dragging the separator right narrows it.
-      const separator = await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      const separator = await page.waitForSelector('[data-separator]');
       const box = await separator!.boundingBox();
       const x = box!.x + box!.width / 2;
       const y = box!.y + box!.height / 2;
@@ -2814,7 +2766,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // dispatch: the width lands at 280 and the store holds it.
       await page.waitForFunction(() => Math.round(
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-      ) === 280, { timeout: 10_000 });
+      ) === 280);
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -2826,11 +2778,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a viewport narrowing that squeezes the inspector persists nothing and latches no choice', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // The stored 2000px cannot fit beside the chat floor: every committed
       // layout here is the ResizeObserver's constraint, never a gesture.
@@ -2841,12 +2793,12 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      }, { timeout: 10_000 });
+      });
 
       const before = await page.evaluate(() => Math.round(
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
@@ -2857,7 +2809,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.setViewport({ width: 1100, height: 900 });
       await page.waitForFunction((prev: number) => Math.round(
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-      ) < prev, { timeout: 10_000 }, before);
+      ) < prev, {}, before);
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -2872,11 +2824,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('two desktop↔mobile remounts leave the document and separator listener counts at baseline', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.evaluateOnNewDocument(() => {
         // Every listener the page registers is counted by target+type; the
@@ -2923,7 +2875,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-separator]', { timeout: 20_000 });
+      await page.waitForSelector('[data-separator]');
 
       const readTally = () => {
         const w: Window & { __liveListeners?: Map<string, number> } = window;
@@ -2939,9 +2891,9 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // on mobile, present on desktop.
       for (let i = 0; i < 2; i++) {
         await page.setViewport({ width: 600, height: 900 });
-        await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+        await page.waitForFunction(() => document.querySelector('[data-separator]') === null);
         await page.setViewport({ width: 1440, height: 900 });
-        await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+        await page.waitForSelector('[data-separator]');
       }
 
       const after = await page.evaluate(readTally);
@@ -2950,11 +2902,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a press retired by a remount cannot mark the next tree\'s commits', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // A stored width with no choice of its own: the signal opens the
       // column on the workspace's behalf without writing a choice.
@@ -2964,13 +2916,13 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-separator]', { timeout: 20_000 });
+      await page.waitForSelector('[data-separator]');
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      }, { timeout: 10_000 });
+      });
 
       // Press without release: the input mark is set and no clear is
       // scheduled — only the separator's own detach can retire it. The
@@ -2985,50 +2937,42 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // The swap unmounts the separator; the restore mounts a new tree whose
       // first emission is its own announcement, not a gesture.
       await page.setViewport({ width: 600, height: 900 });
-      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null);
       await page.setViewport({ width: 1440, height: 900 });
-      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      await page.waitForSelector('[data-separator]');
 
       // The narrower group re-commits the held pixel width at a new share —
       // twice. The restore's announcement already consumed this tree's first
       // emission (the mode swap resets the measured flag after it), so the
       // first tweak only re-arms; the second is the one that classifies.
-      // A retired press is input to no tree, so no choice key can appear:
-      // the storage wait resolves only on the defect — a stale mark
-      // claiming the second tweak — and its timeout is the pass. Geometry
-      // cannot synchronize this read (panels reflow through plain CSS ahead
-      // of the commit pipeline), so the test polls the handler's own effect
-      // instead; the bound (3s against a sub-frame pipeline) is validated
-      // by the red direction on the unfixed hook.
-      const chatBefore = await page.evaluate(() => Math.round(
-        document.querySelectorAll('[data-panel]')[0]?.getBoundingClientRect().width ?? -1,
-      ));
+      // A retired press is input to no tree, so no choice key can appear.
+      // That is a claim about a write that must never come, and geometry
+      // cannot synchronize the read (panels reflow through plain CSS ahead
+      // of the commit pipeline), so the end condition is the pipeline's own:
+      // the panel counts the layout commits the hook has classified, and the
+      // storage is read once the second tweak's commit has been counted —
+      // after which the hook has either persisted or adopted, and nothing
+      // more is scheduled.
+      const layoutCommits = async (): Promise<number> => page.$eval(
+        '[data-inspector-commits]', (panel) => Number(panel.getAttribute('data-inspector-commits')),
+      );
 
+      const committedPast = async (previous: number): Promise<void> => {
+        await page.waitForFunction((prev: number) => Number(
+          document.querySelector('[data-inspector-commits]')?.getAttribute('data-inspector-commits'),
+        ) > prev, {}, previous);
+      };
+
+      const commitsBefore = await layoutCommits();
       await page.setViewport({ width: 1400, height: 900 });
-      await page.waitForFunction((prev: number) => Math.round(
-        document.querySelectorAll('[data-panel]')[0]?.getBoundingClientRect().width ?? -1,
-      ) !== prev, { timeout: 10_000 }, chatBefore);
-      await page.waitForFunction(() => {
-        const widths = () => Math.round(
-          document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-        );
-
-        const first = widths();
-
-        return new Promise<boolean>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
-        });
-      }, { timeout: 10_000 });
+      await committedPast(commitsBefore);
+      const commitsAfterFirst = await layoutCommits();
       await page.setViewport({ width: 1350, height: 900 });
+      await committedPast(commitsAfterFirst);
 
       const openKey = 'kinu.inspector.open.ashish@example.com.checkout-fixes';
 
-      try {
-        await page.waitForFunction((key: string) => localStorage.getItem(key) !== null, { timeout: 3000 }, openKey);
-        expect.unreachable('a retired press claimed the post-remount commit');
-      } catch (error) {
-        expect(error).toBeInstanceOf(TimeoutError);
-      }
+      expect(await page.evaluate((key: string) => localStorage.getItem(key), openKey)).toBeNull();
 
       const state = await page.evaluate(() => ({ ...localStorage }));
 
@@ -3036,11 +2980,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('the first divider drag after a remount persists its width and choice', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
@@ -3049,20 +2993,20 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 340;
-      }, { timeout: 10_000 });
+      });
 
       // A full remount: the restored tree's announcement is its own, so the
       // drag below is the first commit anyone could mistake — it must read
       // as the user's and persist, with no warmup commit in between.
       await page.setViewport({ width: 600, height: 900 });
-      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null);
       await page.setViewport({ width: 1440, height: 900 });
-      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      await page.waitForSelector('[data-separator]');
 
       // Quiesce the fresh tree so the coordinates below are live. The
       // inspector is the trailing panel — dragging the separator right
@@ -3077,8 +3021,8 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         return new Promise<boolean>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
         });
-      }, { timeout: 10_000 });
-      const separator = await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      });
+      const separator = await page.waitForSelector('[data-separator]');
       const box = await separator!.boundingBox();
       const x = box!.x + box!.width / 2;
       const y = box!.y + box!.height / 2;
@@ -3093,7 +3037,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // release commit is still to come.
       await page.waitForFunction(() => Math.round(
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-      ) !== 340, { timeout: 5000 });
+      ) !== 340);
       await page.mouse.up();
 
       // Settle, then assert: whatever the drag commit classified, every
@@ -3109,7 +3053,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         return new Promise<boolean>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
         });
-      }, { timeout: 10_000 });
+      });
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -3122,11 +3066,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('the first keyboard resize after a remount persists its width and choice', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.evaluateOnNewDocument(() => {
         localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
@@ -3135,17 +3079,17 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 400;
-      }, { timeout: 10_000 });
+      });
 
       await page.setViewport({ width: 600, height: 900 });
-      await page.waitForFunction(() => document.querySelector('[data-separator]') === null, { timeout: 10_000 });
+      await page.waitForFunction(() => document.querySelector('[data-separator]') === null);
       await page.setViewport({ width: 1440, height: 900 });
-      await page.waitForSelector('[data-separator]', { timeout: 10_000 });
+      await page.waitForSelector('[data-separator]');
 
       // Quiesce the fresh tree, then focus the separator that is actually
       // mounted and press: the library reads only key and currentTarget,
@@ -3164,7 +3108,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         return new Promise<boolean>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
         });
-      }, { timeout: 10_000 });
+      });
       await page.evaluate(() => {
         document.querySelector<HTMLElement>('[data-separator]')?.focus();
       });
@@ -3174,7 +3118,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       // never hears is a dead tree and fails loudly here.
       await page.waitForFunction(() => Math.round(
         document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1,
-      ) < 340, { timeout: 5000 });
+      ) < 340);
 
       // Settle, then assert: whatever the keypress commit classified, every
       // commit it schedules (including a policy write-back) has landed.
@@ -3188,7 +3132,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         return new Promise<boolean>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(widths() === first)));
         });
-      }, { timeout: 10_000 });
+      });
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -3206,17 +3150,17 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('an anonymous session reads and writes nothing — the signal still opens the column', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // `anon=1` answers the profile read null, so the hook never resolves an
       // account key and every persist path is a no-op — not "no account yet":
       // there is no account, and the seed row proves nothing wrote one.
       await page.goto(`${origin}/gallery.html?frame=workspacepage&anon=1`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
 
       // The signal opens the policy-collapsed column on the workspace's
       // behalf — with no account it still opens, it just cannot persist.
@@ -3225,12 +3169,12 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
-      }, { timeout: 30_000 });
+      });
 
       // The collapse control is still the user's own act; with no account it
       // claims the close for the session and writes nothing anywhere.
       await page.click('[data-inspector-collapse]');
-      await page.waitForSelector('[data-inspector-expand]', { timeout: 10_000 });
+      await page.waitForSelector('[data-inspector-expand]');
 
       const stored = await page.evaluate(() => ({ ...localStorage }));
 
@@ -3238,11 +3182,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a stored collapse is the user\'s: the arriving signal does not reopen it', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // The workspace's own stored '0' outranks the first-visit signal — the
       // port lands, the column stays behind its expand handle.
@@ -3252,10 +3196,10 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '0');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
+      await page.waitForSelector('[data-inspector-expand]');
 
       await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
+      await page.waitForSelector('[data-preview-ready]');
       // Settle past the window the signal would have opened in: the panel
       // stays at its collapsed size and the choice is still '0'.
       await page.waitForFunction(() => {
@@ -3265,7 +3209,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
           const first = width();
           requestAnimationFrame(() => requestAnimationFrame(() => resolve(first <= 2 && width() === first)));
         });
-      }, { timeout: 10_000 });
+      });
 
       const stored = await page.evaluate(() => ({ ...localStorage }));
 
@@ -3273,11 +3217,11 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 
   test('a collapse issued while a reset is in flight still claims its target', async () => {
-    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       // Open at 300: the reset's claim and the collapse's claim are both the
       // user's own acts — whichever report lands first, the close is '0' and
@@ -3288,12 +3232,12 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         localStorage.setItem('kinu.inspector.open.ashish@example.com.checkout-fixes', '1');
       });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForSelector('[aria-label="Work"]');
       await page.waitForFunction(() => {
         const panels = [...document.querySelectorAll('[data-panel]')];
 
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) === 300;
-      }, { timeout: 10_000 });
+      });
 
       // One task, two control acts: the dblclick's resetToDefault claims 340
       // and issues the write; the collapse clicks before its report settles
@@ -3307,7 +3251,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         document.querySelector<HTMLElement>('[data-inspector-collapse]')?.click();
       });
 
-      await page.waitForSelector('[data-inspector-expand]', { timeout: 10_000 });
+      await page.waitForSelector('[data-inspector-expand]');
 
       const state = await page.evaluate(() => ({
         width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
@@ -3323,7 +3267,7 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       await page.close();
     });
-  }, 240_000);
+  });
 });
 
 interface CreateProbe {
@@ -3337,12 +3281,12 @@ declare global {
 
 describe('the home creation form, as a browser submits it', () => {
   test('one gesture in flight means one create request, and a refused create frees a retry', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 1100 });
       await page.evaluateOnNewDocument(() => { localStorage.setItem('theme', 'dark'); });
       await page.goto(`${origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('#workspace-mission', { timeout: 20_000 });
+      await page.waitForSelector('#workspace-mission');
 
       // The gallery's fetch IS the HTTP boundary for this page — the stub
       // returns a 404 for the create POST, so the probe wraps it to hold the
@@ -3391,7 +3335,7 @@ describe('the home creation form, as a browser submits it', () => {
           && btn instanceof HTMLButtonElement && btn.disabled
           && ta instanceof HTMLTextAreaElement && ta.disabled
           && btn.querySelector('svg') !== null;
-      }, { timeout: 10_000 });
+      });
 
       // A second gesture while the first is held: pointer submit AND the
       // keyboard path. Neither may queue another create.
@@ -3417,13 +3361,12 @@ describe('the home creation form, as a browser submits it', () => {
         return document.querySelector('.p-notice-danger') !== null
           && btn instanceof HTMLButtonElement && !btn.disabled
           && ta instanceof HTMLTextAreaElement && !ta.disabled;
-      }, { timeout: 10_000 });
+      });
 
       // The deliberate retry fires exactly one more request.
       await page.click('button[type="submit"]');
       await page.waitForFunction(
-        () => window.__createProbe.posts === 2 && window.__createProbe.release !== null,
-        { timeout: 10_000 });
+        () => window.__createProbe.posts === 2 && window.__createProbe.release !== null);
       await page.evaluate(() => { window.__createProbe.release?.(); });
 
       // The retry's 200 resolves through the real create path: the entry the
@@ -3434,10 +3377,9 @@ describe('the home creation form, as a browser submits it', () => {
       // product state the create had to produce.
       await page.waitForFunction(
         () => document.querySelector('.p-notice-danger') === null
-          && document.body.innerText.includes('Probe created'),
-        { timeout: 10_000 });
+          && document.body.innerText.includes('Probe created'));
       expect(await page.evaluate(() => window.__createProbe.posts)).toBe(2);
       await page.close();
     });
-  }, 60_000);
+  });
 });

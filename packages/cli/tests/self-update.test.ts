@@ -1,0 +1,294 @@
+/**
+ * The CLI's background refresh, driven through its two public entry points:
+ * `refreshCliTree` (what `kinu update` and its detached child run) against a
+ * stub origin serving real tarballs, and `runStartupUpdateCheck` with the
+ * refresh spawn held so the gates in front of it are visible.
+ *
+ * The origin is the only thing faked. The archives are real tar.gz files
+ * built here, `tar` really unpacks them, and the staged `cli.js` really runs
+ * under this Bun to answer `--version` — a staged tree that reports the wrong
+ * build is a real launch that printed the wrong thing.
+ *
+ * Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
+ */
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import type { Server } from 'bun';
+import { afterEach, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
+import { scratchDir } from '@kinu.run/test-utils';
+import type { JsonObject } from '@kinu.run/core';
+
+const repoRoot = resolve(__dirname, '../../..');
+
+const NOW = 2_000_000_000_000;
+
+const SERVED = '9.9.9+served';
+
+const stubs: Server<unknown>[] = [];
+
+afterEach(async () => {
+  await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
+});
+
+const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz`;
+
+const RUNTIME_ARTIFACT = '/downloads/kinu-runtime-cpython.tar.gz';
+
+/** A real tar.gz of `kinu/<files>`, built with the same tar that unpacks it. */
+function tarball(files: Record<string, string>): Uint8Array {
+  const work = scratchDir('self-update-archive');
+  mkdirSync(join(work, 'kinu', 'node_modules'), { recursive: true });
+
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(join(work, 'kinu', name, '..'), { recursive: true });
+    writeFileSync(join(work, 'kinu', name), content);
+  }
+
+  const archived = Bun.spawnSync({ cmd: ['tar', '-czf', join(work, 'a.tar.gz'), '-C', work, 'kinu'] });
+
+  if (archived.exitCode !== 0) throw new Error(`tar failed: ${new TextDecoder().decode(archived.stderr)}`);
+
+  return new Uint8Array(readFileSync(join(work, 'a.tar.gz')));
+}
+
+/** A `cli.js` that answers --version with `stamp`. */
+function cliSource(stamp: string): string {
+  return `console.log(process.argv[2] === '--version' ? ${JSON.stringify(stamp)} : 'ran');\n`;
+}
+
+interface StubOrigin {
+  origin: string;
+  hits: string[];
+}
+
+/** The served side: the version JSON, both artifacts and their checksums.
+ *  `corrupt` publishes a checksum that is not the artifact's. */
+function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?: boolean }): StubOrigin {
+  const hits: string[] = [];
+
+  const files = { [PLATFORM_ARTIFACT]: opts.platform, [RUNTIME_ARTIFACT]: opts.runtime };
+
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const { pathname } = new URL(req.url);
+      hits.push(pathname);
+
+      if (pathname === '/downloads/kinu-version.json') return Response.json({ version: SERVED, sha: 'abc', builtAt: 'now' });
+      const artifact = Object.entries(files).find(([name]) => name === pathname.replace(/\.sha256$/, ''))?.[1];
+
+      if (!artifact) return new Response('not found', { status: 404 });
+
+      if (!pathname.endsWith('.sha256')) return new Response(Buffer.from(artifact));
+      const digest = createHash('sha256').update(opts.corrupt ? new Uint8Array([1, 2, 3]) : artifact).digest('hex');
+
+      return new Response(`${digest}  ${pathname.slice('/downloads/'.length, -'.sha256'.length)}\n`);
+    },
+  });
+
+  stubs.push(server);
+
+  return { origin: `http://localhost:${server.port}`, hits };
+}
+
+/** A home with a `cli/current` whose cli.js reports `stamp`. */
+function installedHome(stamp: string, config: JsonObject = {}): string {
+  const home = scratchDir('self-update-home');
+  mkdirSync(join(home, 'cli', 'current'), { recursive: true });
+  writeFileSync(join(home, 'cli', 'current', 'cli.js'), cliSource(stamp));
+  writeFileSync(join(home, 'cli', 'current', 'package.json'), `${JSON.stringify({ version: stamp })}\n`);
+  writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+
+  return home;
+}
+
+async function runChild(home: string, script: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn({
+    cmd: [process.execPath, '-e', script],
+    cwd: repoRoot,
+    env: { ...process.env, KINU_HOME: home },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
+  ]);
+
+  return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode };
+}
+
+/** `refreshCliTree` in a child owning `home`; the failure message when it threw. */
+async function refresh(home: string, origin: string, served = SERVED): Promise<string | null> {
+  const run = await runChild(home, `
+    import { refreshCliTree } from './packages/cli/src/self-update.ts';
+    try {
+      await refreshCliTree(${JSON.stringify(origin)}, ${JSON.stringify(served)});
+      console.log('ok');
+    } catch (error) {
+      console.log('failed: ' + (error instanceof Error ? error.message : String(error)));
+    }
+  `);
+
+  if (run.exitCode !== 0) throw new Error(`child failed (${run.exitCode}): ${run.stderr}`);
+
+  return run.stdout === 'ok' ? null : run.stdout;
+}
+
+const currentCli = (home: string) => readFileSync(join(home, 'cli', 'current', 'cli.js'), 'utf-8');
+
+const cliEntries = (home: string) => readdirSync(join(home, 'cli')).sort();
+
+describe('refreshCliTree stages, verifies and swaps', () => {
+  const runtime = tarball({ 'node_modules/@nimbus-sh/runtime-cpython/manifest.json': '{}' });
+
+  test('a good build lands with the rename pair: current is the new tree, prev the old one', async () => {
+    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const home = installedHome('1.0.0+old');
+    const before = currentCli(home);
+
+    expect(await refresh(home, stub.origin)).toBeNull();
+    expect(currentCli(home)).toBe(cliSource(SERVED));
+    // Both archives unpacked over one tree: the runtime's files sit beside cli.js.
+    expect(existsSync(join(home, 'cli', 'current', 'node_modules', '@nimbus-sh', 'runtime-cpython', 'manifest.json'))).toBe(true);
+    expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
+    // Nothing staged is left behind: current, prev, and no next-* or download dir.
+    expect(cliEntries(home)).toEqual(['current', 'prev']);
+    // Every download was verified against its published checksum.
+    expect(stub.hits).toEqual([
+      PLATFORM_ARTIFACT, `${PLATFORM_ARTIFACT}.sha256`, RUNTIME_ARTIFACT, `${RUNTIME_ARTIFACT}.sha256`,
+    ]);
+  });
+
+  test('a corrupt tarball (checksum mismatch) leaves current byte-identical and nothing staged', async () => {
+    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime, corrupt: true });
+    const home = installedHome('1.0.0+old');
+    const before = currentCli(home);
+
+    expect(await refresh(home, stub.origin)).toContain(`checksum mismatch for ${PLATFORM_ARTIFACT}`);
+    expect(currentCli(home)).toBe(before);
+    expect(cliEntries(home)).toEqual(['current']);
+  });
+
+  test('a staged build whose --version is not the served stamp is refused; current untouched', async () => {
+    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource('9.9.9+other') }), runtime });
+    const home = installedHome('1.0.0+old');
+    const before = currentCli(home);
+
+    expect(await refresh(home, stub.origin)).toContain('reports 9.9.9+other, not the served 9.9.9+served');
+    expect(currentCli(home)).toBe(before);
+    expect(cliEntries(home)).toEqual(['current']);
+  });
+
+  test('an archive without cli.js is refused before anything moves', async () => {
+    const stub = startOrigin({ platform: tarball({ 'README': 'no cli here' }), runtime });
+    const home = installedHome('1.0.0+old');
+    const before = currentCli(home);
+
+    expect(await refresh(home, stub.origin)).toContain('carries no cli.js');
+    expect(currentCli(home)).toBe(before);
+    expect(cliEntries(home)).toEqual(['current']);
+  });
+
+  test('a tree staged earlier for the served stamp is adopted without a download', async () => {
+    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime });
+    const home = installedHome('1.0.0+old');
+    const staged = join(home, 'cli', 'next-9.9.9-served');
+    mkdirSync(staged, { recursive: true });
+    writeFileSync(join(staged, 'cli.js'), cliSource(SERVED));
+
+    expect(await refresh(home, stub.origin)).toBeNull();
+    expect(currentCli(home)).toBe(cliSource(SERVED));
+    expect(stub.hits).toEqual([]);
+    expect(cliEntries(home)).toEqual(['current', 'prev']);
+  });
+});
+
+/** `runStartupUpdateCheck` in a child, with the refresh spawn replaced by a
+ *  counter: the check's gates decide whether a refresh STARTS, and that is
+ *  the observable here. */
+async function startupCheck(home: string, opts: { isTTY: boolean; origin: string }) {
+  const run = await runChild(home, `
+    import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
+    const lines = [];
+    let spawned = 0;
+    const outcome = await runStartupUpdateCheck({
+      log: (line) => lines.push(line),
+      isTTY: ${opts.isTTY},
+      now: ${NOW},
+      spawnRefresh: () => { spawned += 1; },
+    });
+    console.log(JSON.stringify({ lines, outcome, spawned }));
+  `);
+
+  if (run.exitCode !== 0) throw new Error(`child failed (${run.exitCode}): ${run.stderr}`);
+
+  return v.parse(v.object({ lines: v.array(v.string()), outcome: v.nullable(v.string()), spawned: v.number() }), JSON.parse(run.stdout));
+}
+
+describe('the startup check starts a refresh only when every gate opens', () => {
+  const runtime = tarball({ 'node_modules/.keep': '' });
+
+  const newerOrigin = () => startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime });
+
+  test('a newer served build on a TTY starts one refresh and prints the one line', async () => {
+    const stub = newerOrigin();
+    const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: 0 });
+
+    const { lines, outcome, spawned } = await startupCheck(home, { isTTY: true, origin: stub.origin });
+    expect(spawned).toBe(1);
+    expect(outcome).toBe(`Installing Kinu ${SERVED} in the background; it applies on the next launch.`);
+    expect(lines).toEqual([`Installing Kinu ${SERVED} in the background; it applies on the next launch.`]);
+    // The check probes the version only; the refresh child does the downloads.
+    expect(stub.hits).toEqual(['/downloads/kinu-version.json']);
+  });
+
+  test('non-TTY: no probe, no refresh', async () => {
+    const stub = newerOrigin();
+    const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: 0 });
+
+    expect(await startupCheck(home, { isTTY: false, origin: stub.origin })).toEqual({ lines: [], outcome: null, spawned: 0 });
+    expect(stub.hits).toEqual([]);
+  });
+
+  test('updateCheck: false: no probe, no refresh', async () => {
+    const stub = newerOrigin();
+    const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: 0, updateCheck: false });
+
+    expect(await startupCheck(home, { isTTY: true, origin: stub.origin })).toEqual({ lines: [], outcome: null, spawned: 0 });
+    expect(stub.hits).toEqual([]);
+  });
+
+  test('inside the 24h throttle window: no probe, no refresh', async () => {
+    const stub = newerOrigin();
+    const home = installedHome('1.0.0+old', { origin: stub.origin, accessToken: 'ptc_test', updateCheckedAt: NOW - 60_000 });
+
+    expect(await startupCheck(home, { isTTY: true, origin: stub.origin })).toEqual({ lines: [], outcome: null, spawned: 0 });
+    expect(stub.hits).toEqual([]);
+  });
+
+  test('the installed build being the served one: a probe, and no refresh', async () => {
+    const home = installedHome('1.0.0+old', { origin: 'https://example.test', accessToken: 'ptc_test', updateCheckedAt: 0 });
+
+    // The served stamp is this very build's VERSION, read from the same place
+    // display.ts reads it.
+    const run = await runChild(home, `
+      import { runStartupUpdateCheck } from './packages/cli/src/version-check.ts';
+      import { VERSION } from './packages/cli/src/display.ts';
+      let spawned = 0;
+      const outcome = await runStartupUpdateCheck({
+        log: () => {},
+        isTTY: true,
+        now: ${NOW},
+        fetchImpl: async () => Response.json({ version: VERSION }),
+        spawnRefresh: () => { spawned += 1; },
+      });
+      console.log(JSON.stringify({ outcome, spawned }));
+    `);
+
+    expect(run.exitCode).toBe(0);
+    expect(JSON.parse(run.stdout)).toEqual({ outcome: null, spawned: 0 });
+  });
+});

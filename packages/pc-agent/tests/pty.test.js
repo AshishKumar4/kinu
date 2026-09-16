@@ -22,10 +22,6 @@ const { createSessions, MAX_AXIS, TERMINAL_NAME, parseSessionName } = require('.
  *  fast machine spends milliseconds here. */
 const SETTLE_MS = 15_000;
 
-/** The budget one test gets. Driving a shell is several round trips through a
- *  real terminal, and bun's own default is 5 s for a whole test. */
-const TEST_MS = 60_000;
-
 const opened = [];
 
 afterEach(() => {
@@ -126,7 +122,7 @@ describe('a device terminal is a real one', () => {
 
     expect(withoutTerminal.exitCode).toBe(1);
     expect(withoutTerminal.stderr.toString()).toContain('failed tty get');
-  }, TEST_MS);
+  });
 
   test('the terminal is the shell\'s controlling terminal, so it has job control', async () => {
     const h = harness();
@@ -152,7 +148,7 @@ describe('a device terminal is a real one', () => {
     // The negative direction, so this test cannot pass on a terminal that has
     // no controlling terminal: such a shell says so on the way up.
     expect(h.output()).not.toContain('no job control in this shell');
-  }, TEST_MS);
+  });
 
   test('a resize reaches the program on the terminal', async () => {
     const h = harness();
@@ -166,7 +162,7 @@ describe('a device terminal is a real one', () => {
     expect(resized).toEqual({ cols: 133, rows: 44 });
     h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
     await until(() => /\b44 133\b/.test(h.output()), 'the shell reported the new window');
-  }, TEST_MS);
+  });
 
   test('a resize signals the running program, not only the next command', async () => {
     const h = harness();
@@ -186,7 +182,7 @@ describe('a device terminal is a real one', () => {
     await until(() => h.output().includes('waiting'), 'the program started waiting');
     h.sessions.resize('pane-winch', 120, 40);
     await until(() => /\b40 120\b/.test(h.output()), 'the program was told the window changed');
-  }, TEST_MS);
+  });
 
   test('the program exits and the session reports its status once', async () => {
     const h = harness();
@@ -199,7 +195,7 @@ describe('a device terminal is a real one', () => {
     expect(exits[0]).toEqual({ type: 'PTY_EXIT', session: 'pane-exit', exitCode: 7 });
     expect(h.sessions.has('pane-exit')).toBe(false);
     expect(h.sessions.size()).toBe(0);
-  }, TEST_MS);
+  });
 
   test('closing a terminal hangs up the shell and everything it started', async () => {
     const h = harness();
@@ -228,7 +224,7 @@ describe('a device terminal is a real one', () => {
 
     await until(() => gone(pid), 'the shell is gone');
     await until(() => gone(descendant), 'the background job is gone');
-  }, TEST_MS);
+  });
 });
 
 describe('the session registry answers for what it holds', () => {
@@ -310,7 +306,7 @@ describe('the session registry answers for what it holds', () => {
     expect(discarded).toBeDefined();
     expect(discarded[1]).toBe('pane-loud');
     expect(discarded[2]).toBeGreaterThan(0);
-  }, TEST_MS);
+  });
 
   test('closing every terminal is what a dropped socket does', async () => {
     const h = harness();
@@ -319,7 +315,7 @@ describe('the session registry answers for what it holds', () => {
     expect(h.sessions.size()).toBe(2);
     expect(h.sessions.closeAll().sort()).toEqual(['pane-1', 'pane-2']);
     await until(() => h.sessions.size() === 0, 'both terminals ended');
-  }, TEST_MS);
+  });
 });
 
 describe('the terminal is asked for the way that gives it signals', () => {

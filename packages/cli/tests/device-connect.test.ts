@@ -9,6 +9,7 @@
 // Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
@@ -29,6 +30,8 @@ import * as v from 'valibot';
 import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
+import UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
+import { daemonArchive, startUpdateHub, until, type UpdateHub } from './helpers/update-hub';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -38,7 +41,7 @@ const repoRoot = resolve(__dirname, '../../..');
  *  the defect this suite exists to catch — the pty module shipped nowhere
  *  for one release while the daemon required it, and every clean install
  *  died on its first require. */
-const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE } as const;
+const DAEMON_SIBLINGS = { 'sandbox.js': SANDBOX_SOURCE, 'pty.js': PTY_SOURCE, 'update.js': UPDATE_SOURCE } as const;
 
 /** Mirrors the installer's private reader of the daemon's `require('./x')`
  *  lines; drift between the two fails these tests, which is the point. */
@@ -58,12 +61,15 @@ const deviceDaemonPids: number[] = [];
 
 const stubs: Server<unknown>[] = [];
 
+const updateHubs: UpdateHub[] = [];
+
 afterEach(async () => {
   for (const pid of deviceDaemonPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
 
   for (const proc of sleepers.splice(0)) proc.kill();
 
   await Promise.all(stubs.splice(0).map((server) => server.stop(true)));
+  await Promise.all(updateHubs.splice(0).map((hub) => hub.close()));
 });
 
 interface StubCloud {
@@ -314,8 +320,10 @@ describe('device-connect prompt policy', () => {
     expect(stub.hits.list).toBe(1);
   });
 
-  test('a connected device suppresses the offer without re-fetching', async () => {
-    const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
+  test('THIS machine connected suppresses the offer without re-fetching', async () => {
+    // The hub stamps the device row's hostname from the daemon's HELLO, so a
+    // row carrying this machine's hostname IS this machine.
+    const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: hostname() })] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
     const out = await runScript(home, `
@@ -324,6 +332,23 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual([false, false]);
+    expect(stub.hits.list).toBe(1);
+  });
+
+  test("another machine's connected device still leaves this PC to offer", async () => {
+    // The card asks about THIS PC. A person whose other laptop is linked has
+    // as much to link here as one with nothing connected, and suppressing on
+    // any connected row is how the offer vanished for every session on a
+    // machine whose account already had a daemon somewhere else.
+    const stub = startStubCloud({ devices: () => [connectedDevice(true, { hostname: 'some-other-box' })] });
+    const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
+
+    const out = await runScript(home, `
+      import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
+      console.log(JSON.stringify([await shouldOfferDeviceConnect(), await shouldOfferDeviceConnect()]));
+    `);
+
+    expect(JSON.parse(out.trim())).toEqual([true, false]);
     expect(stub.hits.list).toBe(1);
   });
 
@@ -982,6 +1007,40 @@ describe('device daemon single-instance lock', () => {
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(owner.proc.pid);
     expect(owner.proc.killed).toBe(false);
   }, 30_000);
+
+  test('a self-update hands the machine to exactly one successor; a third daemon still exits', async () => {
+    // A hub serving a newer build than the installed stamp: the daemon's own
+    // update lands the archive's files and starts its successor, which takes
+    // the pidfile over; the hub replaces the old socket and the old daemon
+    // exits. Two daemons run only for that handover, and only one of them
+    // ever holds the pidfile.
+    const newDaemon = `${DAEMON_SOURCE}\n// build 2.0.0+new\n`;
+    const hub = startUpdateHub({ served: '2.0.0+new', archive: daemonArchive({ ...DAEMON_SIBLINGS, 'pc-agent.js': newDaemon }, '2.0.0+new') });
+    updateHubs.push(hub);
+    const home = installedMachine(hub.origin);
+    writeFileSync(join(home, 'pc-agent.version'), '1.0.0+old\n', { mode: 0o600 });
+
+    const old = startDaemon(home);
+    await old.waitFor('Connected');
+    const oldPid = await waitForDaemonPid(home);
+    await until(() => hub.sockets[1], 'the successor to connect', old.output);
+    expect(await old.proc.exited).toBe(0);
+
+    const successorPid = await waitForDaemonPid(home);
+    expect(successorPid).not.toBe(oldPid);
+    deviceDaemonPids.push(successorPid);
+    expect(await waitForPidExit(oldPid)).toBe(true);
+    // One live daemon on this home, and it is the one the pidfile names.
+    expect(liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
+    expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(newDaemon);
+
+    // The lock holds for the successor exactly as it held for its predecessor.
+    const third = startDaemon(home);
+    expect(await Promise.race([third.proc.exited, Bun.sleep(5_000).then(() => 'still running' as const)])).toBe(3);
+    await Promise.race([third.drained, Bun.sleep(100)]);
+    expect(third.output()).toContain('already running');
+    expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(successorPid);
+  }, 45_000);
 });
 
 describe('classic cloud chat connect prompt', () => {
@@ -1108,6 +1167,59 @@ describe('classic cloud chat connect prompt', () => {
 });
 
 describe('kinu connect waits on the daemon and says less', () => {
+  /** A command under a PTY, read through the wait the suite shares. */
+  function spawnPtyCommand(command: string) {
+    const proc = Bun.spawn({
+      cmd: ['script', '-qefc', command, '/dev/null'],
+      cwd: newProjectDir(),
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    });
+
+    let output = '';
+    let eof = false;
+
+    // The waits bind what the terminal SHOWS, not what it carried: a colour-
+    // capable TERM (which `script` reports) makes chalk wrap the ✓ and the
+    // label in escape bytes, and those bytes land between the tokens an
+    // `includes` binds. Strip at the seam so the words stay true under any
+    // TERM, the same contract evolve-progress reads its captures under.
+    const drained = (async () => {
+      for await (const chunk of proc.stdout) output += Bun.stripANSI(new TextDecoder().decode(chunk));
+      eof = true;
+    })();
+
+    return {
+      proc,
+      output: () => output,
+      drained,
+      // The wait resolves on the awaited text or rejects only when the child
+      // has exited AND the reader has drained the PTY to EOF — no further
+      // data can arrive. Exit alone is not the end: PTY output can land
+      // after exit, so a fast connect that prints its line and exits still
+      // resolves. There is no deadline: the product waits on the daemon and
+      // not on a clock, and a harness that fires before the text arrives
+      // would be asserting the clock the product refuses to carry.
+      async waitFor(text: string): Promise<void> {
+        while (true) {
+          if (output.includes(text)) return;
+
+          if (eof) {
+            throw new Error(`pty reached EOF while waiting for ${JSON.stringify(text)} in:\n${output}`);
+          }
+
+          await Bun.sleep(25);
+        }
+      },
+      async send(line: string): Promise<void> {
+        await proc.stdin.write(`${line}\n`);
+        await proc.stdin.flush();
+      },
+    };
+  }
+
   /** The real `kinu connect`, under a PTY so its /dev/tty prompts are reachable. */
   function spawnConnectInPty(home: string, label?: string) {
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
@@ -1122,41 +1234,9 @@ describe('kinu connect waits on the daemon and says less', () => {
       ...(label === undefined ? [] : ['--label', quote(label)]),
     ].join(' ');
 
-    const proc = Bun.spawn({
-      cmd: ['script', '-qefc', command, '/dev/null'],
-      cwd: newProjectDir(),
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: process.env,
-    });
-
-    let output = '';
-
-    const drained = (async () => {
-      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
-    })();
-
-    return {
-      proc,
-      output: () => output,
-      drained,
-      // A separate process writes to a PTY; there is no event to await, so the
-      // wait polls the buffer the reader fills.
-      async waitFor(text: string, timeoutMs = 15_000): Promise<void> {
-        const deadline = Date.now() + timeoutMs;
-
-        while (!output.includes(text)) {
-          if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
-          await Bun.sleep(25);
-        }
-      },
-      async send(line: string): Promise<void> {
-        await proc.stdin.write(`${line}\n`);
-        await proc.stdin.flush();
-      },
-    };
+    return spawnPtyCommand(command);
   }
+
 
   test('the hub row reading connected ends the wait with the row label', async () => {
     // The hub answers the row's own label, not the typed name: the stub
@@ -1286,6 +1366,20 @@ describe('kinu connect waits on the daemon and says less', () => {
     expect(name).toBe(host);
     expect(name.length).toBeGreaterThan(0);
   });
+
+  test('a stub that prints the awaited text and exits immediately resolves', async () => {
+    // The race the deploy red showed: the text lands in the buffer the SAME
+    // moment the child exits. The wait must read the buffer before it reads
+    // the EOF flag, or a fast exit loses what it printed on its way out.
+
+    const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+    const print = `${quote(process.execPath)} -e ${quote('console.log("✓ Connected as hub-names-it")')}`;
+    const fast = spawnPtyCommand(print);
+
+    await fast.waitFor('✓ Connected as hub-names-it');
+    await fast.proc.exited;
+    await fast.drained;
+  }, 30_000);
 });
 
 describe('/connect slash command', () => {

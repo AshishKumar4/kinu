@@ -143,7 +143,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     expect(row.dropped).toEqual([]);
 
     await session.end();
-  }, 20_000);
+  });
 
   test('a tool that keeps raising stops being callable before the turn is over', async () => {
     const create =
@@ -180,7 +180,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     expect(row.dropped).toEqual(['brokenIt']);
 
     await session.end();
-  }, 20_000);
+  });
 
   test('with auto-evolution off the tool still works and nothing is scored', async () => {
     const { session } = episode([]);
@@ -223,5 +223,5 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
 
     await off.session.end();
     off.db.close();
-  }, 20_000);
+  });
 });

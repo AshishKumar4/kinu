@@ -270,7 +270,7 @@ async function drive(
   page: Page, origin: string, workspace: string, command: string, empty: Omit<ButtonRun, 'approved' | 'why'>,
 ): Promise<ButtonRun> {
   await page.goto(`${origin}/workspace/${encodeURIComponent(workspace)}`, {
-    waitUntil: 'domcontentloaded', timeout: PAINT_MS,
+    waitUntil: 'domcontentloaded',
   });
   // The tab exists offscreen while the inspector opens. The locator waits
   // for stable click geometry; CSS visibility alone does not establish it.
@@ -283,7 +283,7 @@ async function drive(
   let button: Awaited<ReturnType<Page['waitForSelector']>> = null;
 
   try {
-    const panel = await page.waitForFunction(parkedCommandPanel, { timeout: PAINT_MS }, command);
+    const panel = await page.waitForFunction(parkedCommandPanel, {}, command);
     const element = panel.asElement();
 
     if (element !== null) {
@@ -324,7 +324,6 @@ async function drive(
   try {
     await page.waitForFunction(
       () => document.querySelectorAll('input[type="checkbox"]:disabled').length === 0,
-      { timeout: PAINT_MS },
     );
   } catch (cause) {
     // Same rule: a card that never settles is COUNTED as it stands, because the

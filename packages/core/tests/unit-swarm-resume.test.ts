@@ -1076,7 +1076,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     expect(notified).toEqual(['completed']);
     expect(treeOf(sql)).toHaveLength(tree.length);
     expect(ledger.list(10).filter((row) => row.engine === 'swarm')).toHaveLength(1);
-  }, 300_000);
+  });
 });
 
 /**
@@ -1237,7 +1237,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     // The five re-runs are the only model work this attempt did: no sixth node
     // started, so nothing was paid for twice.
     expect(second.script.starts()).toBe(FLAT_SEARCH.branches);
-  }, 300_000);
+  });
 });
 
 /**
@@ -1347,7 +1347,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // given up to keep the run alive.
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running ?? 0)
       .not.toBe(FROZEN_NODES);
-  }, 300_000);
+  });
 
   test('a run the re-drive REFUSED is retired, and the agent is told', async () => {
     // The other side of the same gate: no durable job exists, so nothing can ever
@@ -1386,7 +1386,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       WHERE actor_id = ${rt.actor.actorId}
         AND error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
     expect(journal.listLive()).toEqual({ items: [], total: 0 });
-  }, 300_000);
+  });
 
   test('a run a LATER activation refuses is still retired, not left interrupted forever', async () => {
     // THE HOLE THIS CLOSES. Gating retirement on THIS activation having marked
@@ -1448,7 +1448,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // said nothing, so the agent gets one card for one transition.
     expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent))
       .toEqual([FORK_INTERRUPTED_SIGNAL]);
-  }, 300_000);
+  });
 });
 
 describe('the start-of-life sweep reaches registry-only jobs', () => {
@@ -1520,7 +1520,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     // The read model is what the exploration surface renders; through it, a run
     // whose every node stopped is never `running` again.
     expect(readForkRun(sql, rt.actor, rootId)?.status).not.toBe('running');
-  }, 300_000);
+  });
 
   test('a claimed run keeps its ledger row for the re-entry to settle', async () => {
     const { rt, activation } = await workspace();
@@ -1550,7 +1550,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     // Still the re-drive's row to close or converge; closing it here would
     // fail a search that is about to continue.
     expect(ledger.get(rootId)?.status).toBe('running');
-  }, 300_000);
+  });
 
   test('a search-only root is offered to the resume gate before closure', async () => {
     const { rt } = await workspace();
@@ -1592,7 +1592,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     });
 
     expect(ledger.get('root-thought-only')?.status).toBe('failed');
-  }, 300_000);
+  });
 
   test('a gate that throws closes nothing', async () => {
     const { rt } = await workspace();
@@ -1614,7 +1614,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     // An unanswered gate is not a refusal. The row survives until an activation
     // whose gate answers decides its fate.
     expect(ledger.get('root-ungated')?.status).toBe('running');
-  }, 300_000);
+  });
 });
 
 /**
@@ -1648,7 +1648,7 @@ describe('a named swarm is called by its name', () => {
       SELECT action FROM search_nodes WHERE id = ${rootId}`[0]?.action).toBe('token duel');
     // And every surface that reads a run summary gets the same word.
     expect(readForkRun(sql, rt.actor, rootId)?.name).toBe('token duel');
-  }, 300_000);
+  });
 
   test('a composition with no name falls back to its provenance label', async () => {
     const { rt, activation } = await workspace();
@@ -1661,7 +1661,7 @@ describe('a named swarm is called by its name', () => {
     );
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(readForkRun(sql, rt.actor, rootId)?.name).toBe('resume-proof');
-  }, 300_000);
+  });
 });
 
 /** The search this workspace holds, read off the tree rather than off a variable the

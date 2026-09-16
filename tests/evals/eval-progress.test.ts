@@ -109,5 +109,5 @@ describe('the eval runners do not terminate cases on elapsed wall time', () => {
     setTimeout(resolve, 5_100);
     await promise;
     expect(performance.now() - started).toBeGreaterThan(5_000);
-  }, 0);
+  });
 });

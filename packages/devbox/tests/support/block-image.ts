@@ -5,7 +5,7 @@ import { join } from 'node:path';
 /** Build the same native probe and lower the deployed image contains. */
 export function buildBlockImage(image: string): void {
   const result = spawnSync('docker', ['build', '-t', image, join(import.meta.dir, '../../block-lower')],
-    { encoding: 'utf8', timeout: 300_000 });
+    { encoding: 'utf8' });
 
   if (result.status !== 0) throw new Error(result.stdout + result.stderr);
 }

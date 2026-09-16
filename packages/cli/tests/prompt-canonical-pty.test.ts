@@ -148,7 +148,6 @@ function runInPty(
 
   const run = spawnSync(python!, [harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath], {
     encoding: "utf8",
-    timeout: 40_000,
   });
 
   expect(run.status).toBe(0);
@@ -179,7 +178,7 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.exited).toBe(true);
     expect(result.exitcode).toBe(0);
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
-  }, 45_000);
+  });
 
   test("Ctrl+C interrupts a pending confirm and leaves the terminal sane", () => {
     const result = runInPty("ctrlc", CONFIRM_DRIVER, { isig: true });
@@ -188,7 +187,7 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.signaled).toBe(true);
     expect(result.termsig).toBe(2); // SIGINT
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
-  }, 45_000);
+  });
 
   test("askSecret hides input but keeps Ctrl+C live, and restores echo", () => {
     const result = runInPty("s3cr3t", SECRET_DRIVER, { icanon: true, echo: false, isig: true });
@@ -197,7 +196,7 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.output).toContain('SECRET="s3cr3t"');
     expect(result.exitcode).toBe(0);
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
-  }, 45_000);
+  });
 
   test("Ctrl+C during askSecret kills the CLI and restores echo via the sh trap", () => {
     const result = runInPty("ctrlc", SECRET_DRIVER, { echo: false });
@@ -206,5 +205,5 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
     expect(result.signaled).toBe(true);
     expect(result.termsig).toBe(2);
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });
-  }, 45_000);
+  });
 });

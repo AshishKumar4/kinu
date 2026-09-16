@@ -305,22 +305,22 @@ describe('Live Smoke — one real turn per backend', () => {
     try {
       const page = await browser.newPage();
       await page.setViewport({ width: 1_440, height: 900, deviceScaleFactor: 1 });
-      await page.goto(origin, { waitUntil: 'networkidle0', timeout: 90_000 });
+      await page.goto(origin, { waitUntil: 'networkidle0' });
       const mission = 'textarea#workspace-mission';
-      await page.waitForSelector(mission, { timeout: 90_000 });
+      await page.waitForSelector(mission);
       await page.type(
         mission,
         'Audit checkout retries and keep the focused tests green.',
       );
       await clickButton(page, 'Create workspace');
-      await page.waitForFunction(() => location.pathname.startsWith('/workspace/'), { timeout: 90_000 });
+      await page.waitForFunction(() => location.pathname.startsWith('/workspace/'));
       const name = new URL(page.url()).pathname.split('/').filter(Boolean).at(-1) ?? '';
       expect(name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
       // The typed mission contains "checkout", so this proves the slug is generated rather than mission-derived.
       expect(name).not.toContain('checkout');
       createdCloudAgents.push(name);
 
-      await page.waitForFunction(() => (document.body.textContent ?? '').includes('Live'), { timeout: 90_000 });
+      await page.waitForFunction(() => (document.body.textContent ?? '').includes('Live'));
       await clickAriaPrefix(page, 'Rename workspace');
       const rename = 'input[aria-label^="Rename"]';
       await page.waitForSelector(rename);
@@ -340,7 +340,7 @@ describe('Live Smoke — one real turn per backend', () => {
         const text = document.body.textContent ?? '';
 
         return (text.match(/Staging UI Smoke/g)?.length ?? 0) >= 2;
-      }, { timeout: 90_000 });
+      });
 
       const composer = 'textarea[placeholder="Send a message..."]';
       await page.waitForSelector(composer);
@@ -358,7 +358,7 @@ describe('Live Smoke — one real turn per backend', () => {
           .every((button) => button.getAttribute('aria-label') !== 'Stop this turn');
 
         return stopped && text.includes('Wrote web-ui-smoke.txt') && text.includes(String(marker));
-      }, { timeout: 300_000 }, WEB_SMOKE_MARKER);
+      }, {}, WEB_SMOKE_MARKER);
       // Exactly one tool call means two model steps: request the write, then
       // consume its result and answer.
       expect(await page.$$eval(
@@ -380,7 +380,6 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.waitForFunction(
         () => [...document.querySelectorAll('button')]
           .some((button) => button.textContent?.trim().startsWith('web-ui-smoke.txt') === true),
-        { timeout: 90_000 },
       );
       await page.evaluate(() => {
         const file = [...document.querySelectorAll('button')]
@@ -394,7 +393,7 @@ describe('Live Smoke — one real turn per backend', () => {
           .find((button) => button.getAttribute('aria-label') === 'Back to files');
 
         return back?.parentElement?.parentElement?.textContent?.includes(String(marker)) === true;
-      }, { timeout: 60_000 }, WEB_SMOKE_MARKER);
+      }, {}, WEB_SMOKE_MARKER);
       await page.evaluate(() => {
         const sandbox = [...document.querySelectorAll('button')]
           .find((button) => button.textContent?.includes('sandbox.*') === true);
@@ -403,7 +402,6 @@ describe('Live Smoke — one real turn per backend', () => {
       });
       await page.waitForFunction(
         () => (document.body.textContent ?? '').includes('Sandbox can'),
-        { timeout: 90_000 },
       );
       await clickButton(page, 'Terminal');
       await page.waitForSelector('.xterm-helper-textarea');
@@ -412,14 +410,11 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.keyboard.press('Enter');
       await page.waitForFunction(
         () => document.querySelector('.xterm-rows')?.textContent?.includes('SANDBOX_SMOKE_OK') === true,
-        { timeout: 180_000 },
       );
 
       await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
-      await page.reload({ waitUntil: 'networkidle0', timeout: 90_000 });
-      await page.waitForFunction(() => !(document.body.textContent ?? '').includes('Connecting...'), {
-        timeout: 90_000,
-      });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForFunction(() => !(document.body.textContent ?? '').includes('Connecting...'));
       await clickButton(page, 'Workspace');
 
       const mobile = await page.evaluate(() => {

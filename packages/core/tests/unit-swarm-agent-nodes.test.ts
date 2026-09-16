@@ -355,7 +355,7 @@ let depthOneRun: Awaited<ReturnType<typeof run>>;
 beforeAll(async () => {
   depthTwoRun = await run({ depth: 2, branches: 2, proposeAtDepth1: true });
   depthOneRun = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
-}, 180_000);
+});
 
 describe('a depth-2 swarm of tool-using agents, end to end', () => {
   test('every node runs a tool loop, the tree reaches depth 2, and the objective is met', () => {
@@ -406,7 +406,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(result.best?.score).toBe(1);
     expect(result.report.baseline).toBeGreaterThan(N - 1);
     expect(result.publication.state.kind).toBe('open');
-  }, 180_000);
+  });
 
   test('every node has a transcript that can be read back, with its tool calls in it', () => {
     const { nodes, result, journal, logger } = depthTwoRun;
@@ -479,7 +479,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
       expect(line.fields.isolation).toBe('shared-origin-plane');
       expect(line.fields.reported).toBe('self');
     }
-  }, 180_000);
+  });
 
   test('an inheriting child inherits its parents conversation and a fresh child does not', () => {
     // The two shapes *Inherited context* names, observed where they DIFFER. Every node's
@@ -506,7 +506,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.inheritedTurns).toHaveLength(4);
     expect(script.inheritedTurns.filter((turns) => turns > 0)).toHaveLength(1);
     expect(script.inheritedTurns.filter((turns) => turns === 0)).toHaveLength(3);
-  }, 180_000);
+  });
 
   test('the run states what it spent: model calls, per-node steps, and wall clock', () => {
     // Not a threshold — a DISCLOSURE. A search that cannot say what it cost cannot be
@@ -528,7 +528,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(result.report.tokens).toBeGreaterThan(0);
     expect(result.report.durationMs).toBeGreaterThan(0);
     expect(result.report.durationMs).toBeLessThanOrEqual(wallClockMs);
-  }, 180_000);
+  });
 
   test('a refused proposal reaches the node as its next instruction, and it still finishes', () => {
     // depth 1 with a tree advance: `propose_branch` is absent at build time, because a
@@ -541,7 +541,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.calls).not.toContain(PROPOSE_BRANCH_TOOL);
     expect(result.report.expansions).toBe(2);
     expect(result.best?.score).toBe(1);
-  }, 180_000);
+  });
 });
 
 /**
@@ -593,7 +593,7 @@ describe('the run a reader gets back', () => {
     expect(entry.params?.search?.judgeSamplesRealised).toBeNull();
     // And the permalink read says the same thing about the same run.
     expect(readExplorationRun(rt.storage.sql, rt.actor, entry.run.id)).toEqual(entry);
-  }, 180_000);
+  });
 
   test('the ledger row says the run settled, with what it actually spent', () => {
     const { rt, result } = depthOneRun;
@@ -614,7 +614,7 @@ describe('the run a reader gets back', () => {
     // swarm row that IS still running either. That direction needs a row nothing settled,
     // so it is proven against the store in unit-mcts-resume.test.ts rather than asserted
     // vacuously here.
-  }, 180_000);
+  });
 });
 
 /**
@@ -746,7 +746,7 @@ describe('the mission ledger a search charges', () => {
     // bill breaks: the report sums the node reports, the ledger sums the debits, and
     // they are the same calls counted by two independent accumulators.
     expect(out.report.tokens).toBe(served);
-  }, 180_000);
+  });
 
   test('an exhausted label stops the search mid-flight, before the level it cannot pay for', async () => {
     // THE CAP, AND WHY MID-RUN MATTERS. A lump charged after a run cannot decline
@@ -779,5 +779,5 @@ describe('the mission ledger a search charges', () => {
     // ledger holds the calls the provider reported and stops there, one call per node.
     expect(mission?.spent.tokens).toBe(script.count() * CALL_TOKENS);
     expect(mission?.spent.tokens).toBe(cap);
-  }, 180_000);
+  });
 });

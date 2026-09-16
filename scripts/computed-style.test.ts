@@ -1,5 +1,4 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser } from 'puppeteer';
 
 import { type PageAudit, auditPage } from './computed-style';
 import { withGallery } from './gallery-harness';
@@ -45,7 +44,7 @@ interface ThemeAudit {
  * seven scenarios want the same page.
  */
 async function run(): Promise<Scenarios> {
-  return withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+  return withGallery(async ({ newPage, origin }) => {
     /**
      * PINS `prefers-color-scheme` before navigating, and that is not a detail:
      * `gallery.html:7-22` resolves the initial `data-mode` from exactly this
@@ -58,7 +57,7 @@ async function run(): Promise<Scenarios> {
      * without changing a line here.
      */
     const openShell = async (prefers: 'dark' | 'light') => {
-      const page = await browser.newPage();
+      const page = await newPage();
       await page.setViewport({ width: 1280, height: 1100 });
       await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: prefers }]);
       // Every page in this file shares one browser context, so one page's
@@ -158,7 +157,7 @@ async function run(): Promise<Scenarios> {
 
 describe('computed-style gate', () => {
   let scenarios: Scenarios;
-  beforeAll(async () => { scenarios = await run(); }, 180_000);
+  beforeAll(async () => { scenarios = await run(); });
 
   test('it measures something — a clean verdict over an empty denominator is not a pass', () => {
     // `tool-construction` reports `0/0, score null` inside a headline that

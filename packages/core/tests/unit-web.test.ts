@@ -391,30 +391,77 @@ describe('web provider — fetch', () => {
   });
 
   test('a trickling body past the timeout rejects as timed out', async () => {
-    // Real timers: the behavior under test IS the wall clock (a body that
-    // trickles past timeoutMs must reject), so fake timers cannot drive it.
-    const makeStream = () => new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        controller.enqueue(new TextEncoder().encode('hello '));
-        const { promise, resolve } = Promise.withResolvers<void>();
-        setTimeout(resolve, 300);
-        await promise;
-        controller.enqueue(new TextEncoder().encode('world'));
-        controller.close();
-      },
-    });
+    // The budget's timer is the provider's own, handed in (D19): the body
+    // sends one chunk and then never another, and the test fires the budget
+    // once that chunk has been pulled. Nothing here races a real timer.
+    let expire: (() => void) | undefined;
+
+    const schedule = (fire: () => void): (() => void) => {
+      expire = fire;
+
+      return () => { expire = undefined; };
+    };
+
+    const trickle = () => {
+      const pulled = Promise.withResolvers<void>();
+
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          controller.enqueue(new TextEncoder().encode('hello '));
+          pulled.resolve();
+          // The second chunk never comes; only the budget ends this read.
+          await new Promise<void>(() => undefined);
+        },
+      });
+
+      return { stream, pulled: pulled.promise };
+    };
+
+    let fetched = Promise.withResolvers<ReturnType<typeof trickle>>();
 
     const slowFetch = Object.assign(
-      async () => new Response(makeStream(), { headers: { 'content-type': 'text/plain' } }),
+      async () => {
+        const body = trickle();
+        fetched.resolve(body);
+
+        return new Response(body.stream, { headers: { 'content-type': 'text/plain' } });
+      },
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch;
 
-    const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40 });
-    await expect(provider.fetch('https://example.com/slow')).rejects.toMatchObject({
-      name: 'WebFetchError',
-      retriable: true,
-    });
-    await expect(provider.fetch('https://example.com/slow')).rejects.toThrow(/timed out after 40ms/);
+    const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40, schedule });
+
+    // The rejection is caught at a lexical boundary before the budget fires
+    // (bun's `.rejects` spins until the promise settles, so it cannot be
+    // attached first); the fire waits for the first chunk to have been
+    // pulled, which is the state "trickling" names.
+    const Refusal = v.object({ name: v.string(), retriable: v.boolean(), message: v.string() });
+
+    const pastBudget = async (): Promise<v.InferOutput<typeof Refusal>> => {
+      fetched = Promise.withResolvers();
+
+      const outcome = (async (): Promise<v.InferOutput<typeof Refusal> | undefined> => {
+        try {
+          await provider.fetch('https://example.com/slow');
+
+          return undefined;
+        } catch (cause) {
+          return v.parse(Refusal, cause);
+        }
+      })();
+
+      const body = await fetched.promise;
+      await body.pulled;
+      expire?.();
+      const refused = await outcome;
+
+      if (refused === undefined) throw new Error('the fetch past its budget resolved');
+
+      return refused;
+    };
+
+    expect(await pastBudget()).toMatchObject({ name: 'WebFetchError', retriable: true });
+    expect((await pastBudget()).message).toMatch(/timed out after 40ms/);
   });
 
   test('with no caller budget a fetch carries no abort signal, so no clock can end it', async () => {

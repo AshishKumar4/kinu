@@ -31,7 +31,7 @@ mkdirSync(LIVE_SHOTS, { recursive: true });
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
-  const page = await gallery.browser.newPage();
+  const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
   await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'networkidle0' });
@@ -84,12 +84,11 @@ describe('slate sharing surfaces', () => {
             // a searched-out segment says "Nothing matches", not its own line.
             await shared.click('[data-segment="received"]');
             await shared.waitForFunction(
-              () => document.querySelectorAll('[data-share-grid] > li').length === 2, { timeout: 10_000 },
+              () => document.querySelectorAll('[data-share-grid] > li').length === 2,
             );
             await shared.type('[aria-label="Search shared"]', 'lighthouse');
             await shared.waitForFunction(
               () => document.body.innerText.includes('Nothing matches'),
-              { timeout: 10_000 },
             );
             await shared.$eval('[aria-label="Search shared"]', (input) => {
               // React owns the value: only the native setter plus an input
@@ -99,7 +98,7 @@ describe('slate sharing surfaces', () => {
             });
             await shared.click('[data-segment="all"]');
             await shared.waitForFunction(
-              () => document.querySelectorAll('[data-share-grid] > li').length === 7, { timeout: 10_000 },
+              () => document.querySelectorAll('[data-share-grid] > li').length === 7,
             );
             await shared.evaluate(() => {
               const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Fork');
@@ -107,7 +106,7 @@ describe('slate sharing surfaces', () => {
               if (button === undefined) throw new Error('no fork button');
               button.click();
             });
-            await shared.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            await shared.waitForSelector('[role="dialog"]');
             const dialog = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             expect(dialog).toContain('New workspace');
             expect(dialog).toContain('checkout-fixes');
@@ -212,5 +211,5 @@ describe('slate sharing surfaces', () => {
       expect(shots.length).toBe(40);
       process.stdout.write(`slate-sharing-ux: ${String(shots.length)} screenshots under ${SHOTS} and ${LIVE_SHOTS}\n`);
     });
-  }, 240_000);
+  });
 });

@@ -23,7 +23,7 @@ describe('a served port from the hosted workspace', () => {
     const ran = await subject.outlast(33);
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toContain('outlasted');
-  }, 90_000);
+  });
 
   it('answers a loopback fetch with served bytes or a classified refusal, never a bare 1003', async () => {
     const subject = open('loopback');

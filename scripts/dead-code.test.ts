@@ -313,5 +313,5 @@ describe('measured against knip', () => {
     // globs stop at `scripts/*.ts!`, so it cannot see that import.
     expect(onlyKnip).toEqual(['package.json#vitest-evals']);
     expect(onlyCensus).toEqual([]);
-  }, 60_000);
+  });
 });

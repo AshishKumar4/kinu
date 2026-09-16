@@ -682,7 +682,9 @@ export function mockAgentsSdk(): void {
         if (!this.ctx) throw new Error('harness Agent: destroy needs a ctx');
         await this.ctx.storage.deleteAlarm();
         await this.ctx.storage.deleteAll();
-        setTimeout(() => this.ctx?.abort('destroyed'), 0);
+        // Deferred past the returning call, as the SDK defers it: a turn of
+        // the loop, not a duration.
+        setImmediate(() => this.ctx?.abort('destroyed'));
       }
 
       async _cf_destroyDescendantFacet(path: readonly { className: string; name: string }[]): Promise<void> {

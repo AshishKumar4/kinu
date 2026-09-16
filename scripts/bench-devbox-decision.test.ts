@@ -595,7 +595,7 @@ describe('the tree-size restore rows', () => {
     const restores = decodeComplexityRows(arm.complexity).filter((row) => row.kind === 'restore');
     expect(restores.map((row) => row.treeBytes)).toEqual([65_536, 4_259_840]);
     expect(restores.map((row) => row.wakeOps?.total)).toEqual([3, 3]);
-  }, 20_000);
+  });
 });
 
 /**

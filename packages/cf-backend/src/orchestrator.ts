@@ -20,7 +20,7 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadController, SubordinateRosterStore,
+  createReportCodemodeProvider, HeadController, REAL_HEAD_CLOCK, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
@@ -1073,7 +1073,7 @@ export class OrchestratorAgent extends ActorAgent {
       throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
     }
 
-    const controller = new HeadController(runtimeForSplit, journal);
+    const controller = new HeadController(runtimeForSplit, journal, REAL_HEAD_CLOCK);
 
     const controllerInput: Parameters<HeadController['run']>[0] = {
       parentHeadId: parent.id,
@@ -1242,7 +1242,7 @@ export class OrchestratorAgent extends ActorAgent {
    * takes the transcript join in {@link owedDeliveryWork}, under the wake,
    * because every dispatch is external mail and an activation launches none.
    */
-  protected owedWorkExists(): boolean {
+  protected override owedWorkExists(): boolean {
     return this.eventLog.hasOpenDrainLease()
       || this.terminal.nextRetryAt() !== null || this.terminal.hasIncomplete()
       || this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms()
@@ -1260,6 +1260,17 @@ export class OrchestratorAgent extends ActorAgent {
       // And the root's own loop: a turn the last process died inside, or a
       // send it acknowledged and never drained.
       || this.chatLoopOwesWork();
+  }
+
+  /** The soonest instant a TIMED ledger owes a wake — the terminal retry and
+   *  the job runner's deferred resumes — or null when nothing timed waits.
+   *  Untimed owed work is excluded on purpose: an unfinished pass arms at the
+   *  lap pace, and a finished one with nothing timed releases its row, so the
+   *  only read this needs is the minimum the two timed stores already keep. */
+  protected override nextOwedAt(): number | null {
+    const at = Math.min(this.terminal.nextRetryAt() ?? Infinity, this.jobRunner.nextResumeAt() ?? Infinity);
+
+    return Number.isFinite(at) ? at : null;
   }
   /**
    * Whether ANY actor in this workspace holds an admitted delegation nothing
@@ -1647,8 +1658,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  is the only retention this object has: the output gate then holds the
    *  response until the schedule row commits, and a failure reaches the caller
    *  instead of a console line. */
-  private armTimer(atMs: number): Promise<void> {
-    return this.armWakeRow(KINU_TIMER_CALLBACK, atMs);
+  private async armTimer(atMs: number): Promise<void> {
+    await this.armWakeRow(KINU_TIMER_CALLBACK, atMs);
   }
 
   /**
@@ -3402,6 +3413,10 @@ export class OrchestratorAgent extends ActorAgent {
         },
         search: this.mctsSearchStore,
         runEvents: this.eventRecorder,
+        // The loop this wake resumed first: a turn it re-opened continues
+        // under the run the dead activation left, which this sweep must not
+        // seal as wreckage.
+        liveRuns: () => this.chatLoop.drivenRuns(),
         resume: jobRedriveResumeGate({
           recoverOrphans: () => this.jobRunner.recoverOrphans(),
           inputOf: (jobId) => this.jobs.getInput(jobId),

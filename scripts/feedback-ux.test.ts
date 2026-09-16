@@ -19,7 +19,7 @@
  * reuses the capture in memory — is the shipped code path.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { TimeoutError, type HTTPRequest, type Page } from 'puppeteer';
+import type { HTTPRequest, Page } from 'puppeteer';
 import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from './gallery-harness';
 
 const FEEDBACK = '/api/feedback';
@@ -262,12 +262,10 @@ async function captureSettled(page: Page): Promise<void> {
   await page.waitForSelector('[data-feedback-note]');
   await page.waitForFunction(
     () => document.querySelector('[data-feedback-shot="ready"], [data-feedback-shot="failed"]') !== null,
-    { timeout: 90_000 },
   );
   await page.waitForFunction(
     () => document.querySelector('[data-feedback-shot="failed"]') !== null
       || document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
-    { timeout: 90_000 },
   );
 }
 
@@ -320,7 +318,6 @@ async function openDialogInPlace(page: Page, selector = '[data-feedback-open]'):
 async function sending(page: Page): Promise<void> {
   await page.waitForFunction(
     () => document.querySelector('[data-feedback-cancel]')?.getAttribute('data-feedback-cancel') === 'stop',
-    { timeout: 30_000 },
   );
 }
 
@@ -329,7 +326,7 @@ async function sending(page: Page): Promise<void> {
 async function posted(page: Page, count: number): Promise<void> {
   await page.waitForFunction(
     (wanted: number) => (window.__feedbackSent ?? []).length >= wanted,
-    { timeout: 30_000 }, count,
+    {}, count,
   );
 }
 
@@ -340,17 +337,6 @@ async function cancelHook(page: Page): Promise<string> {
 
 async function textOf(page: Page, selector: string): Promise<string> {
   return page.$eval(selector, (node) => node.textContent ?? '');
-}
-
-/** A bounded wait whose EXPIRY is a reading rather than an error: the assertion
- *  that follows reports what was observed, where a raised timeout would only
- *  report when. */
-async function tolerateTimeout(waiting: Promise<unknown>): Promise<void> {
-  try {
-    await waiting;
-  } catch (thrown) {
-    if (!(thrown instanceof TimeoutError)) throw thrown;
-  }
 }
 
 /**
@@ -734,9 +720,9 @@ interface Observed {
 }
 
 async function run(): Promise<Observed> {
-  return withGallery(async ({ browser, origin }) => {
+  return withGallery(async ({ newPage, origin }) => {
     // ── desktop: capture, redaction, send ────────────────────────────────
-    const page = await browser.newPage();
+    const page = await newPage();
     await page.setViewport({ width: 1280, height: 900 });
     await serveFeedback(page);
     await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
@@ -752,13 +738,13 @@ async function run(): Promise<Observed> {
 
     await page.type('[data-feedback-note]', 'the key field renders behind the label');
     await page.click('[data-feedback-send]');
-    await page.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await page.waitForSelector('[data-feedback-sent]');
     const toast = await page.$eval('[data-feedback-sent]', (node) => node.textContent ?? '');
     const sent = await submissions(page);
     await page.close();
 
     // ── annotation ───────────────────────────────────────────────────────
-    const draw = await browser.newPage();
+    const draw = await newPage();
     await draw.setViewport({ width: 1280, height: 900 });
     await serveFeedback(draw);
     await draw.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
@@ -797,7 +783,7 @@ async function run(): Promise<Observed> {
       await draw.waitForFunction(
         (want: number) => document.querySelector('[data-feedback-canvas]')
           ?.getAttribute('data-feedback-painted') === String(want),
-        { timeout: 30_000 }, count,
+        {}, count,
       );
     };
 
@@ -815,12 +801,12 @@ async function run(): Promise<Observed> {
     await painted(1);
     await draw.type('[data-feedback-note]', 'covering the middle paragraph');
     await draw.click('[data-feedback-send]');
-    await draw.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await draw.waitForSelector('[data-feedback-sent]');
     const sentAnnotated = (await submissions(draw)).at(-1)?.annotated ?? '';
     await draw.close();
 
     // ── note only ────────────────────────────────────────────────────────
-    const bare = await browser.newPage();
+    const bare = await newPage();
     await bare.setViewport({ width: 1280, height: 900 });
     await serveFeedback(bare);
     await bare.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
@@ -830,27 +816,27 @@ async function run(): Promise<Observed> {
     const shotSectionPresent = await bare.$('[data-feedback-shot]') !== null;
     await bare.type('[data-feedback-note]', 'no screenshot for this one');
     await bare.click('[data-feedback-send]');
-    await bare.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await bare.waitForSelector('[data-feedback-sent]');
     const bareSent = await submissions(bare);
     await bare.close();
 
     // ── oversized, with real incompressible bytes ────────────────────────
-    const big = await browser.newPage();
+    const big = await newPage();
     await big.setViewport({ width: 1280, height: 900 });
     await serveFeedback(big);
     await big.goto(`${origin}/gallery.html?frame=feedback&noise=1`, { waitUntil: 'networkidle0' });
     await openDialog(big);
-    await big.waitForSelector('[data-feedback-shot="failed"]', { timeout: 120_000 });
+    await big.waitForSelector('[data-feedback-shot="failed"]');
     const message = await big.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
     await big.type('[data-feedback-note]', 'the page is too big to photograph');
     const sendableWithoutShot = await big.$eval('[data-feedback-send]', (node) => !node.hasAttribute('disabled'));
     await big.click('[data-feedback-send]');
-    await big.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await big.waitForSelector('[data-feedback-sent]');
     const bigSent = await submissions(big);
     await big.close();
 
     // ── a failed send keeps the capture, and retry sends it ──────────────
-    const flaky = await browser.newPage();
+    const flaky = await newPage();
     await flaky.setViewport({ width: 1280, height: 900 });
     await serveFeedback(flaky, { attempts: ['refuse'] });
     const flakyDiagnostics = recordDiagnostics(flaky);
@@ -859,19 +845,19 @@ async function run(): Promise<Observed> {
     await flaky.waitForSelector('[data-feedback-canvas]');
     await flaky.type('[data-feedback-note]', 'first attempt will not reach the server');
     await flaky.click('[data-feedback-send]');
-    await flaky.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+    await flaky.waitForSelector('[data-feedback-error]');
     const errorText = await flaky.$eval('[data-feedback-error]', (node) => node.textContent ?? '');
     const buttonLabel = await flaky.$eval('[data-feedback-send]', (node) => node.textContent ?? '');
     const canvasSurvived = await flaky.$('[data-feedback-canvas]') !== null;
     await flaky.click('[data-feedback-send]');
-    await flaky.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await flaky.waitForSelector('[data-feedback-sent]');
     const retryToast = await flaky.$eval('[data-feedback-sent]', (node) => node.textContent ?? '');
     const flakySent = await submissions(flaky);
     await diagnosticsSettled(flakyDiagnostics, 1);
     await flaky.close();
 
     // ── a capture that fails: told, recorded, retakable ──────────────────
-    const broken = await browser.newPage();
+    const broken = await newPage();
     await broken.setViewport({ width: 1280, height: 900 });
     await serveFeedback(broken);
     const captureDiagnostics = recordDiagnostics(broken);
@@ -896,13 +882,12 @@ async function run(): Promise<Observed> {
     await broken.click('[data-feedback-include-shot]');
     await broken.waitForFunction(
       () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
-      { timeout: 90_000 },
     );
     const captureRetook = await broken.$('[data-feedback-shot="ready"]') !== null;
     await broken.close();
 
     // ── a preview decode that fails: told, recorded, retakable ───────────
-    const undecodable = await browser.newPage();
+    const undecodable = await newPage();
     await undecodable.setViewport({ width: 1280, height: 900 });
     await serveFeedback(undecodable);
     const decodeDiagnostics = recordDiagnostics(undecodable);
@@ -917,7 +902,7 @@ async function run(): Promise<Observed> {
       });
     }, DECODE_SABOTAGE.outer, DECODE_SABOTAGE.inner);
     await openDialog(undecodable);
-    await undecodable.waitForSelector('[data-feedback-shot="failed"]', { timeout: 90_000 });
+    await undecodable.waitForSelector('[data-feedback-shot="failed"]');
     const decodeMessage = await undecodable.$eval('[data-feedback-shot="failed"]', (node) => node.textContent ?? '');
     await diagnosticsSettled(decodeDiagnostics, 1);
     await undecodable.evaluate(() => window.__restoreDecode?.());
@@ -926,13 +911,12 @@ async function run(): Promise<Observed> {
     await undecodable.click('[data-feedback-include-shot]');
     await undecodable.waitForFunction(
       () => document.querySelector('[data-feedback-canvas][data-feedback-painted]') !== null,
-      { timeout: 90_000 },
     );
     const decodeRetook = await undecodable.$('[data-feedback-shot="ready"]') !== null;
     await undecodable.close();
 
     // ── mobile ───────────────────────────────────────────────────────────
-    const phone = await browser.newPage();
+    const phone = await newPage();
     await phone.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
     await serveFeedback(phone);
     await phone.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
@@ -958,7 +942,7 @@ async function run(): Promise<Observed> {
     // The frame above proves the two mechanisms on markup written for the
     // purpose. These two stages prove the product: the components a person has
     // open when they press Feedback, driven through the same capture.
-    const cardsPage = await browser.newPage();
+    const cardsPage = await newPage();
     await cardsPage.setViewport({ width: 1280, height: 1000 });
     await serveFeedback(cardsPage);
     await recordSerialized(cardsPage);
@@ -975,7 +959,7 @@ async function run(): Promise<Observed> {
     const cards = await probeSurface(cardsPage, [LEAK_HMAC, LEAK_BEARER, LEAK_MCP]);
     await cardsPage.close();
 
-    const dialogPage = await browser.newPage();
+    const dialogPage = await newPage();
     await dialogPage.setViewport({ width: 1280, height: 1000 });
     await serveFeedback(dialogPage);
     await recordSerialized(dialogPage);
@@ -998,7 +982,7 @@ async function run(): Promise<Observed> {
     // capture; this one proves the SUBMISSION: the route and the workspace a
     // report carries are read off a route the router resolved, and no bare
     // component mount can produce either.
-    const routedPage = await browser.newPage();
+    const routedPage = await newPage();
     await routedPage.setViewport({ width: 1280, height: 900 });
     await serveFeedback(routedPage);
     await routedPage.goto(`${origin}/gallery.html?frame=feedbackrouted`, { waitUntil: 'networkidle0' });
@@ -1007,7 +991,6 @@ async function run(): Promise<Observed> {
     // Feedback does not exist until that row is clicked.
     await routedPage.waitForFunction(
       () => [...document.querySelectorAll('aside button')].some((row) => (row.textContent ?? '').includes('@')),
-      { timeout: 30_000 },
     );
     await routedPage.evaluate(() => {
       const row = [...document.querySelectorAll<HTMLElement>('aside button')]
@@ -1016,7 +999,7 @@ async function run(): Promise<Observed> {
       if (row === undefined) throw new Error('no account row in the rail');
       row.click();
     });
-    await routedPage.waitForSelector('aside [data-feedback-open]', { timeout: 30_000 });
+    await routedPage.waitForSelector('aside [data-feedback-open]');
     const openedFromRail = await routedPage.$('aside [data-feedback-open]') !== null;
 
     // Two bands down and two cells across. The offsets are read BACK, so a
@@ -1036,7 +1019,7 @@ async function run(): Promise<Observed> {
     const panes = await readScrollPanes(routedPage);
     await routedPage.type('[data-feedback-note]', 'the panes were scrolled when this was taken');
     await routedPage.click('[data-feedback-send]');
-    await routedPage.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await routedPage.waitForSelector('[data-feedback-sent]');
     const routedSent = await submissions(routedPage);
     await routedPage.close();
 
@@ -1045,7 +1028,7 @@ async function run(): Promise<Observed> {
     // a proxy swallows, and the only honest way to reach the state where the
     // dialog stayed busy for as long as the request did. Three attempts, and the
     // middle one answers: stop, retry, then stop and leave.
-    const stalledPage = await browser.newPage();
+    const stalledPage = await newPage();
     await stalledPage.setViewport({ width: 1280, height: 900 });
     await serveFeedback(stalledPage, { attempts: ['hold', 'answer', 'hold'] });
     const stalledDiagnostics = recordDiagnostics(stalledPage);
@@ -1075,7 +1058,7 @@ async function run(): Promise<Observed> {
     };
 
     await stalledPage.click('[data-feedback-cancel]');
-    await stalledPage.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+    await stalledPage.waitForSelector('[data-feedback-error]');
 
     const afterStop = {
       errorText: await textOf(stalledPage, '[data-feedback-error]'),
@@ -1085,13 +1068,13 @@ async function run(): Promise<Observed> {
     };
 
     await stalledPage.click('[data-feedback-send]');
-    await stalledPage.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
+    await stalledPage.waitForSelector('[data-feedback-sent]');
     const stalledToast = await textOf(stalledPage, '[data-feedback-sent]');
     // And a stopped report can be left behind: sent one closed, a second stalls,
     // stops, and Escape — refused above — now dismisses it.
     await stalledPage.click('[data-feedback-done]');
     await stalledPage.waitForFunction(
-      () => document.querySelector('[data-feedback-note]') === null, { timeout: 30_000 },
+      () => document.querySelector('[data-feedback-note]') === null,
     );
     await openDialog(stalledPage);
     await stalledPage.type('[data-feedback-note]', 'and this one hangs too');
@@ -1099,21 +1082,22 @@ async function run(): Promise<Observed> {
     await sending(stalledPage);
     await posted(stalledPage, 3);
     await stalledPage.click('[data-feedback-cancel]');
-    await stalledPage.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+    await stalledPage.waitForSelector('[data-feedback-error]');
+    // Escape's handler is synchronous, and the dismissal it commits is read
+    // after the same two frames the refused Escape above was given, so the
+    // two readings are of the same kind: a dialog still present here is one
+    // that refused, not one that had not caught up.
     await stalledPage.keyboard.press('Escape');
-    await tolerateTimeout(stalledPage.waitForFunction(
-      () => document.querySelector('[data-feedback-note]') === null, { timeout: 10_000 },
-    ));
+    await stalledPage.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
+    }));
     const closedAfterStop = await stalledPage.$('[data-feedback-note]') === null;
-    // Every POST this page made, and how each ENDED. Awaited briefly rather than
-    // read on the spot: a rejection lands a microtask after the click that
-    // caused it, and a dialog that had only stopped listening would leave one
-    // `pending` — which is what the assertion then reports, where a raised
-    // timeout would have said nothing about it.
-    await tolerateTimeout(stalledPage.waitForFunction(
-      () => (window.__feedbackSent ?? []).every((one) => one.outcome !== 'pending'),
-      { timeout: 10_000 },
-    ));
+    // Every POST this page made, and how each ENDED. Read on the spot: the
+    // recorder above writes a request's outcome before the rejection reaches
+    // the dialog, and each stop was waited on through the error the dialog
+    // rendered from that rejection — so a dialog that had only stopped
+    // listening, without ending its request, leaves a `pending` here, which
+    // is what the assertion then reports.
     const outcomes = (await submissions(stalledPage)).map((one) => one.outcome);
     await stalledPage.close();
 
@@ -1123,7 +1107,7 @@ async function run(): Promise<Observed> {
     // page: the rasteriser counts `documentElement` among its scroll containers,
     // and left to itself it takes the reader's own offset off the top of the
     // image and leaves the same blank at the bottom.
-    const downPage = await browser.newPage();
+    const downPage = await newPage();
     await downPage.setViewport({ width: 1280, height: 800 });
     await serveFeedback(downPage);
     await downPage.goto(`${origin}/gallery.html?frame=feedbacksecrets`, { waitUntil: 'networkidle0' });
@@ -1178,7 +1162,7 @@ async function run(): Promise<Observed> {
 
 let observed: Observed;
 
-beforeAll(async () => { observed = await run(); }, 600_000);
+beforeAll(async () => { observed = await run(); });
 
 describe('the screenshot never carries a secret', () => {
   test('a password field is a solid block, without being marked for redaction', () => {
@@ -1530,8 +1514,8 @@ describe('a send the network never answers', () => {
 });
 
 test('a capture completed after screenshot opt-out cannot attach to the report', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     await serveFeedback(page);
     await page.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
