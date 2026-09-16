@@ -61,3 +61,20 @@ Plugins bind through Kinu's own `McpToolSurfaceCache` descriptors and `codemodeF
 - `bun run check`, the tool and codemode suites, the slate binding suites, `gate:agents-fields`, the prompt budget gate, and the layer gate re-locked with the reason.
 - A rendered `eval` description measured in bytes on the harness actor, before and after, recorded here.
 - The trajectory tier green on the deployed build with the new names.
+
+## References in content
+
+A path is what a command takes; a reference is what a person reads. One grammar, `root://path`, over the mount table in core (`vfs/references.ts`): the root names a plane and the path is that plane's own absolute path.
+
+| Root | Plane | Mount table |
+|---|---|---|
+| `vfs` | the agent's workspace filesystem | `/` |
+| `sandbox` | the bound container | `/sandbox` |
+| `<device segment>` | one machine, by the segment it is mounted under | `/pc/<segment>` |
+| `local` | the machine the CLI runs on, as the CLI's alias of its own workspace | `/` in the CLI only |
+
+`vfs://home/user/report.txt` is `/home/user/report.txt` in the workspace; `studio://home/dev/a.txt` is `/pc/studio/home/dev/a.txt` in the mounted plane and `/home/dev/a.txt` on the machine. The parse/format pair is total over the live mount table: a reference whose root names no live plane parses to nothing, and a mounted path always formats to the reference of the plane that serves it. `local` is reserved: a machine named `local` (or `vfs`, or `sandbox`) is mounted under its id, never its name, so the alias never shadows a device.
+
+Where a reference is read: the web UI and the TUI recognise a reference whose root is in the live mount table and open the Files surface there; a reference to a device that is registered but offline opens as offline, with the machine's last-seen time, never as an empty directory. Tool results that name files render them as references. The prompt says it in one sentence: paths in commands, references in anything a person reads.
+
+Unmeasured: how often a model writes a reference where a path was wanted. The trajectory tier on the deployed build reads it before anything relies on it.

@@ -285,6 +285,8 @@ export type * from './types/primitives';
 
 export { REAL_CLOCK, waitOn, every, type Clock } from './types/clock';
 
+export { referenceRoots, formatReference, type ReferenceRoot } from './vfs/references';
+
 export type * from './types/agent-runtime';
 
 export type * from './types/backend-host';
@@ -1305,7 +1307,7 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 export { ensureDir } from './utils/vfs-helpers';
 
 export {
-  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider,
   type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,

@@ -41,6 +41,11 @@ export const EXECUTOR_MOUNTS = {
 	sandbox: '/sandbox',
 } as const satisfies Record<string, string>;
 
+/** The reference roots every backend reserves (`vfs/references.ts`): never a
+ *  machine's mount segment, so `local` — the CLI's alias of its own workspace
+ *  — and the two fixed planes can never be shadowed by a device's name. */
+export const RESERVED_REFERENCE_ROOTS: readonly string[] = ['vfs', 'sandbox', 'local'];
+
 /** The same table read the other way: mount point → the executor serving it.
  *  Here rather than at each reader, because three readers had each inverted it
  *  themselves — one keyed by mount point, one by bare entry name — and a fourth

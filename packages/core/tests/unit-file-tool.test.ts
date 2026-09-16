@@ -385,7 +385,7 @@ describe('file tool', () => {
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
     });
 
-    expect(edited).toEqual({ ok: true, path: 'a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
+    expect(edited).toEqual({ ok: true, path: 'a.ts', reference: 'vfs://a.ts', applied: [{ line: 1, removed_lines: 1, added_lines: 1 }] });
     expect(vfs.files.get('a.ts')).toBe('const x = 2;\n');
   });
 
@@ -532,7 +532,7 @@ describe('file tool', () => {
     const vfs = memoryVfs();
     const { call } = toolFor(vfs);
     expect(await call({ action: 'write', path: 'new.txt', content: 'hi' }))
-      .toEqual({ ok: true, path: 'new.txt', bytes: 2, action: 'created' });
+      .toEqual({ ok: true, path: 'new.txt', reference: 'vfs://new.txt', bytes: 2, action: 'created' });
     expect(vfs.files.get('new.txt')).toBe('hi');
   });
 

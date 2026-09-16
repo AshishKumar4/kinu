@@ -1462,7 +1462,11 @@ describe('buildSystemPromptSync', () => {
       //   `run`→`shell` rename made this section two chars longer in
       //   aggregate; no text changed but the name, so the ceiling tracks
       //   the rename, not a new sentence.
-      'Execution environments': 3414,
+      // 2026-09-16 → 3555, exact measured: one new sentence, the reference
+      //   grammar (docs/CODEMODE-SURFACE.md, "References in content") —
+      //   paths in commands, `root://path` in anything a person reads —
+      //   beside the mount sentence rewritten to `/pc/<name>` the same day.
+      'Execution environments': 3555,
       'Persistence': 700,
       // 2026-08: −1 line. `eval runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
