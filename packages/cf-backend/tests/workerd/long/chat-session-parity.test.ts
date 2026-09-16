@@ -21,11 +21,11 @@ import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { parityNormalizer, type ParityNormalizer } from '@kinu.run/test-utils/parity-normalizer';
-import recorded from '../fixtures/chat-session-parity.json';
+import recorded from '../../fixtures/chat-session-parity.json';
 import {
   ParityCompletedSchema, ParityPreparedSchema,
   type ParityFrame, type ParityRows,
-} from './two-turn-shapes';
+} from '../two-turn-shapes';
 
 const parse = (column: string): JsonValue => v.parse(JsonValueSchema, JSON.parse(column));
 

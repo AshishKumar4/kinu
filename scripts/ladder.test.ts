@@ -224,6 +224,15 @@ describe('the ladder measures something', () => {
     // The workerd layer resolves from its own command text, so it is
     // monotonicity- and reachability-checked like every bun suite.
     expect(claims('bun run test:workerd', tracked).length).toBeGreaterThan(0);
+
+    // The three rows partition the script's set: no workerd file is in two
+    // rows or in none.
+    const rows = ['bun run test:workerd:cf', 'bun run test:workerd:cf-long', 'bun run test:workerd:devbox']
+      .map((run) => claims(run, tracked));
+
+    expect(rows.every((files) => files.length > 0)).toBe(true);
+    expect(rows.flat().sort()).toEqual(claims('bun run test:workerd', tracked).sort());
+    expect(new Set(rows.flat()).size).toBe(rows.flat().length);
     // `--cwd` silently loads a different bunfig, so it claims nothing on
     // purpose — a gate spelled that way fails as an orphan instead of passing.
     expect(claims('bun test --cwd packages/core', tracked)).toEqual([]);
@@ -566,7 +575,7 @@ describe('every test file is claimed by some runner', () => {
     expect(workerd.every((path) => bunWouldSkip(path))).toBe(true);
 
     const bunClaimed = gatesFor('ci')
-      .filter((gate) => gate.run !== 'bun run test:workerd')
+      .filter((gate) => !gate.run.startsWith('bun run test:workerd'))
       .flatMap((gate) => claims(gate.run, tracked));
 
     expect(bunClaimed.filter((path) => workerd.includes(path))).toEqual([]);

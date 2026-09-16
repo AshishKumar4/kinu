@@ -1681,19 +1681,23 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun run test:workerd',
+    run: 'bun run test:workerd:cf',
     label: 'Durable Object semantics under workerd',
     tier: 'ci',
-    // Measured 2026-09-15 on the 24-thread workstation: 439 s (load 1.8) and
-    // 399 s (load 9.6) solo, 36 files serial by design (`fileParallelism:
-    // false`, wall-time gates), 139 to 159 s of it module import. Replaces
-    // 12.7 s, which named five surfaces and 18 tests; the tier has 144. The
-    // same day the probe's outbound started answering `models.dev/api.json`
-    // from a fixture: refused, it surfaced as HTTP 500 and every provider fell
-    // back on each listing sweep — 51 fallbacks per run — and the gate ran 160
-    // to 398 s with them and 399 to 439 s without, so the fallbacks were a
-    // network dependency, not the wall. The wall is the serial import cost.
-    seconds: 420,
+    // Measured 2026-09-16 on the 24-thread workstation beside `bun test
+    // --timeout=0 --parallel=4 packages/cf-backend/` run back to back (load
+    // 1.5 to 4.4): the whole cf-backend workerd tier, 36 files serial by design
+    // (`fileParallelism: false`, wall-time gates), took 485 s — 130 s of it
+    // module import, 228 s tests — and the deploy wave saw it past the 480 s
+    // gate deadline. The deadline is the one hang detector and stays; the tier
+    // is split by directory instead: the seven suites whose tests take half
+    // the tier's test time (background-wake 81 s, preview-port excepted for
+    // balance, chat-session-parity, do-retention, do-spend-aggregate,
+    // files-eio, step-cap, stream-lifecycle) live under `tests/workerd/long/`
+    // and run as the row below; this row is the other 29 files. Measured as
+    // split, the same day under the same load: 335 s (29 files, 120 tests,
+    // load 0.9 to 2.2).
+    seconds: 335,
     catches: 'Durable Object semantics no bun test can express, executed inside real '
       + 'workerd (1.20260811.1 — the pool\'s own nested copy, not the 1.20260601.1 the '
       + 'top-level miniflare serves `bun scripts/tracing-gate.ts` from) via '
@@ -1728,6 +1732,34 @@ export const LADDER: readonly Gate[] = [
       + 'ran for two months is still only a regex\'s problem. And '
       + '`abortAllDurableObjects` is a hard reset, NOT a hibernation wake — it drops the '
       + 'sockets with the isolate, so what survives a real eviction is still unmeasured.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun run test:workerd:cf-long',
+    label: 'Durable Object semantics under workerd, the long suites',
+    tier: 'ci',
+    // The `tests/workerd/long/` half of the row above: seven suites, 17 tests.
+    // Measured as split 2026-09-16 under the same load: 169 s (load 1.3 to
+    // 2.2). Same runner, same config, same `include`; the split is by path
+    // filter so no file can be in both halves or in neither — `bun run
+    // test:workerd` still runs all three workerd rows in sequence for a hand
+    // run, and ladder.test.ts holds the three rows to a partition of it.
+    seconds: 169,
+    catches: 'the same defect classes as the row above, on the suites that hold a Durable '
+      + 'Object across a real wake, a retention sweep, a spend aggregate over 20,000 rows, '
+      + 'an EIO on files, a step cap and a stream lifecycle — the long-running half.',
+    blind: 'the same as the row above.',
+    inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun run test:workerd:devbox',
+    label: 'Devbox admission under workerd',
+    tier: 'ci',
+    // Measured 2026-09-16 under the same load: 3 s, two files, seven tests.
+    seconds: 3,
+    catches: 'the devbox bench worker\'s admission and selected-arm guards as workerd runs '
+      + 'them (`packages/devbox/tests/workerd`), which no bun test can express.',
+    blind: 'everything above the platform, as the cf-backend row states.',
     inputs: AMBIENT_BY_NAME,
   },
   {
@@ -2385,11 +2417,19 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   if (words[0] === 'vitest' && words[1] === 'run') {
     const rootAt = words.indexOf('--root');
     const base = rootAt === -1 ? undefined : words[rootAt + 1];
-    const targets = words.slice(2).filter((word, index) => !word.startsWith('-') && index + 2 !== rootAt + 1);
+    // `--exclude <dir>` carves a subdirectory out of a target, which is how the
+    // cf-backend workerd tier is split into two rows by path: a file is in
+    // exactly one of them because the same prefix is excluded here and
+    // targeted there.
+    const excludedAt = words.flatMap((word, index) => (word === '--exclude' ? [index + 1] : []));
+    const excluded = excludedAt.flatMap((index) => (words[index] === undefined ? [] : [words[index]]));
+    const optionValues = new Set([rootAt + 1, ...excludedAt]);
+    const targets = words.slice(2).filter((word, index) => !word.startsWith('-') && !optionValues.has(index + 2));
 
     if (base === undefined || targets.length === 0) return [];
 
-    return tracked.filter((path) => targets.some((target) => path.startsWith(`${base}/${target}`)));
+    return tracked.filter((path) => targets.some((target) => path.startsWith(`${base}/${target}`))
+      && !excluded.some((prefix) => path.startsWith(`${base}/${prefix}`)));
   }
 
   if (words[0] !== 'bun' || words[1] !== 'test') return [];

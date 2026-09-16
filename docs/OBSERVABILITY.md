@@ -237,7 +237,7 @@ What the window cost, measured. The CLI 2,000-row window returned 2,001 of
 2,600-step local workspace reported 4,080,000 tokens and $4.20. Truth was
 5,304,000 and $5.46, leaving 20.8% of tokens and 23% of dollars behind a
 caveat. SQL costs 62 ms versus 55 ms for two windowed reads, on 31 MiB and
-20,000 rows. `tests/workerd/do-spend-aggregate.test.ts` proves `WITH` and
+20,000 rows. `tests/workerd/long/do-spend-aggregate.test.ts` proves `WITH` and
 `json_extract` on Durable Object SQLite. `bun:sqlite` does not support that proof.
 
 `offTurnShare` is tokens no agent turn spent. The panel and
