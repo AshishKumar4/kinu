@@ -76,6 +76,7 @@ const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
     type: v.literal('done'),
     text: v.string(),
     responseMessages: ModelMessagesSchema,
+    answer: v.optional(v.string()),
   }),
 ]);
 
@@ -105,6 +106,8 @@ async function* scaffoldTurn(
 
   const toolNames = new Map<string, string>();
   let text = '';
+  /** The delegated turn's answer as its own done carried it. */
+  let answer: string | undefined;
   let nativeText = '';
   const responses: ModelMessage[] = [];
 
@@ -136,6 +139,7 @@ async function* scaffoldTurn(
           // client watched and stay the fallback for a turn that answered
           // nothing.
           if (inner.text.trim()) text = inner.text;
+          answer = inner.answer;
         } else {
           if (inner.type === 'text-delta') text += inner.delta;
           yield inner;
@@ -156,6 +160,7 @@ async function* scaffoldTurn(
           responses.push(...inner.responseMessages);
 
           if (inner.text.trim()) text = inner.text;
+          answer = inner.answer;
           break;
         }
 
@@ -208,9 +213,14 @@ async function* scaffoldTurn(
     }
   }
 
+  // A scaffold's own prose IS its answer; a delegated turn's answer is what
+  // that turn's done carried, absent when its steps held no prose.
+  const settled = nativeText.trim() ? text : answer;
+
   yield {
     type: 'done',
     text,
+    ...(settled !== undefined && settled.trim() !== '' && { answer: settled }),
     responseMessages: nativeText.trim()
       ? [...responses, { role: 'assistant', content: nativeText }]
       : responses,

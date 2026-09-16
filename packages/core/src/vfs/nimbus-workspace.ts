@@ -422,11 +422,16 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           // the bump only after its put resolved, so anything else is a bump
           // that did not persist, and the open is refused whatever the
           // previous value was.
-          const before = v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
+          // Fabric adopts once per isolate: a boot retried in the same
+          // isolate (the first open failed after the adopt) keeps the
+          // generation it already holds, and that is the expected value.
+          const adopted = generation(opts.generation);
+          const before = adopted !== 0 ? null : v.parse(v.optional(v.number()), await opts.generation.storage.get(GENERATION_KEY)) ?? 0;
           await adoptGeneration(opts.generation);
           const generationNow = generation(opts.generation);
+          const expected = before === null ? adopted : before + 1;
 
-          if (generationNow !== before + 1) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
+          if (generationNow !== expected) throw new KinuError('unavailable', 'the workspace generation counter could not be persisted');
 
           processes.setPidBase(generationNow * PID_GEN_STRIDE);
 

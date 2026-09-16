@@ -92,6 +92,10 @@ export interface ActorExecutionInput {
 
 export interface ActorExecutionResult {
   readonly text: string;
+  /** The turn's answer as the runner selected it (the final step's text),
+   *  or null when the steps carried none and `text` is what streamed or a
+   *  synthesis of the tool results. */
+  readonly answer: string | null;
   /** How many steps the turn finished in this process. A continuation reads
    *  it to tell whether the answer is the cut step it resumed (one step) or a
    *  later step whose narration the cut text belongs to. */
@@ -489,6 +493,7 @@ export class ActorSession {
     extensions.register(this.orchestrator.turnExtension);
     const pending: Array<Extract<ChatEvent, { type: 'tool-call' }>> = [];
     let text = '';
+    let answer: string | null = null;
     let steps = 0;
     let completed = false;
     let program: ActorTurnProgram | null = null;
@@ -597,6 +602,8 @@ export class ActorSession {
             // turn that produced no `done` at all — an interrupt throws past
             // this arm, and the cut text is what the operator saw.
             if (event.text.trim()) text = event.text;
+
+            if (event.answer !== undefined && event.answer.trim()) answer = event.answer;
             completed = true;
             break;
         }
@@ -625,7 +632,7 @@ export class ActorSession {
     }
 
     return {
-      text, steps, failure, program, claim: active.claim,
+      text, answer, steps, failure, program, claim: active.claim,
       admittedMessages: active.claim === null ? [] : this.options.claims.admittedFor(active.claim).messages,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };

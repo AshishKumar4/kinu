@@ -446,14 +446,19 @@ describe('the CLI installs as a prebuilt artifact', () => {
     expect(launcher).not.toContain('--frozen-lockfile');
     expect(launcher).not.toContain('node_modules');
     // Both downloads land in one staging tree beside the install, that tree
-    // answers --version, and two renames swap it in: an interrupted update or
-    // a build that cannot launch leaves the installed CLI as it was.
+    // answers --version, and the swap keeps prev until the proven tree is in
+    // place: an interrupted update or a build that cannot launch leaves the
+    // installed CLI as it was, and a kill mid-swap leaves a tree the launch
+    // recovers from (unit-cli-launcher-swap drives those states).
     expect(launcher).toContain('mv "$tmp/extract/kinu" "$next"');
     expect(launcher).toContain('"$KINU_BUN" run "$next/cli.js" --version');
     expect(launcher).toContain('mv "$CLI_DIR" "$CLI_ROOT/prev"');
-    expect(launcher).toContain('mv "$next" "$CLI_DIR"');
-    // The installed tree is removed only by the launch check restoring prev.
-    expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(1);
+    expect(launcher).toContain('adopt_tree "$next"');
+    expect(launcher).toContain('mv "$proven" "$CLI_DIR"');
+    // The installed tree is removed only to make way for a tree already
+    // proven — the launch check restoring prev, and the recovery of a missing
+    // current from a proven next-* or from prev.
+    expect(launcher.split('rm -rf "$CLI_DIR"').length - 1).toBe(3);
   });
 
   test('every platform the launcher can name has a published artifact', async () => {

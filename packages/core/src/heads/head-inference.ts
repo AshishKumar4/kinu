@@ -965,8 +965,11 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         // The turn's answer as the runner selected it (chat.ts
         // answerFromSteps), whatever program ran the turn: a head that kept
         // the last non-empty step it saw reported only the continuation's
-        // tail of an output-limit-joined answer.
-        if (outcome.text.trim()) lastText = outcome.text;
+        // tail of an output-limit-joined answer. The ANSWER, not `text`: a
+        // turn that ended on tool calls with no prose has a stand-in text
+        // the runner synthesized, and this report synthesizes its own from
+        // what the head recorded.
+        if (outcome.answer !== null) lastText = outcome.answer;
 
         if (!turnFailed && !outcome.interrupted && session.orchestrator.improvementLanesOpen('completed', input.mode)) {
           const turn = snapshotCompletedTurn(session.orchestrator.acc, {
