@@ -4,6 +4,7 @@ import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+import { FACET_IMAGE_DIR } from '@nimbus-sh/fabric/process-fabric.js';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
@@ -153,6 +154,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     this.process = await this.resident.start(bindChain
       ? { ...boot, bindings: { __storage: storageStub, PEER: exports.SlateChainProbe({}) } }
       : { ...boot, bindings: { __storage: storageStub } });
+  }
+
+  /** The kernel-owned facet images on disk right now, by digest name. */
+  async facetImages(): Promise<string[]> {
+    const kernel = this.vfs.as(CRED_KERNEL);
+
+    return kernel.exists(`/${FACET_IMAGE_DIR}`) ? kernel.readdir(`/${FACET_IMAGE_DIR}`).map((entry) => entry.name).sort() : [];
   }
 
   async seedPrivateSource(): Promise<void> {

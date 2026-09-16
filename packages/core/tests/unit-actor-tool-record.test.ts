@@ -72,3 +72,64 @@ test('a successful tool call records the value it returned, and a text tool reco
     testSql.close();
   }
 });
+
+test('a narrated multi-step turn answers with its final step, whatever it streamed', async () => {
+  const { rt, testSql } = createTestRuntime();
+  const seats = hostedSeatsOver({ rt, db: testSql.db });
+  const { actor } = await seats.seat('answer-prover', 'subordinate');
+
+  const tools = {
+    run: tool({ description: 'Run a command', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'ran' }),
+  };
+
+  const catalog = { roles: { runner: { description: 'Run', instructions: 'Run.',
+    tier: 'default', preset: 'ideate', allowedTools: ['run'] } }, tiers: { default: { model: 'test-model' } } } satisfies ProfileCatalog;
+
+  const inputs = { envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
+    provider: { revision: 'answer-test', availableModels: ['test-model'] } } satisfies Parameters<typeof actor.session.bindProfile>[2];
+
+  const profile = resolveTurnProfile({ ...inputs, roleId: 'runner', workMode: 'build', availableTools: Object.keys(tools), activeSkills: [] });
+  let calls = 0;
+
+  // Narration before each tool call, then the answer the prompt asked for:
+  // "reply with only PASS or FAIL" is answered by the last step alone.
+  const model = scriptedTurnModel({ doGenerate: (): ScriptedTurnResult => {
+    const step = calls++;
+
+    const content: ScriptedTurnResult['content'] = step < 2
+      ? [{ type: 'text', text: step === 0 ? 'Copying the files into the sandbox:' : 'Running the test in the sandbox:' },
+        { type: 'tool-call', toolName: 'run', toolCallId: `call-${String(step)}`, input: '{}' }]
+      : [{ type: 'text', text: 'FAIL' }];
+
+    return { content, finishReason: { unified: step < 2 ? 'tool-calls' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [] };
+  } });
+
+  try {
+    const lease = actor.session.beginTurn({ runId: 'run-answer', turnId: 'turn-answer' }, 'build', 0);
+    actor.session.bindProfile(lease, profile, inputs);
+    actor.session.appendInput(lease, { role: 'user', content: 'Run the test and reply with only PASS or FAIL.' });
+
+    try {
+      const streamed: string[] = [];
+
+      const result = await actor.session.execute(lease, {
+        task: 'Run the test and reply with only PASS or FAIL.', loopVersion: await actor.runtime.identity.scaffold.version(),
+        chat: { model, system: 'Answer.', tools }, extensions: [],
+        dynamic: () => ({ factsBlock: '' }),
+      }, (event) => { if (event.type === 'text-delta') streamed.push(event.delta); });
+
+      // The narration reached whoever was watching, one step at a time; the
+      // answer the turn is recorded under is the final step's alone.
+      expect(streamed).toEqual(['Copying the files into the sandbox:', 'Running the test in the sandbox:', 'FAIL']);
+      expect(result.text).toBe('FAIL');
+      expect(result.failure).toBeNull();
+    } finally {
+      actor.session.finishTurn(lease);
+    }
+  } finally {
+    seats.host.releaseAll();
+    testSql.close();
+  }
+});

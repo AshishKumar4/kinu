@@ -1881,7 +1881,7 @@ export {
 export { createDurableMctsSession } from './orchestrator/mcts-session';
 
 export {
-  skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
+  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
@@ -2354,6 +2354,11 @@ export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
   fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
+
+export {
+  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema,
+  signRelease, verifyRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
+} from './http/release-signing';
 
 export {
   DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,

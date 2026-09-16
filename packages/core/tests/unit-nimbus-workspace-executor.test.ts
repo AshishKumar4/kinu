@@ -9,6 +9,8 @@ import {
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
 import { DefaultExecutionRouter } from '../src/execution/router';
+import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
+import type { SQLQueryBindings } from 'bun:sqlite';
 import { CommandResultSchema } from '../src/execution/exec-result';
 
 function fakeBox() {
@@ -454,6 +456,39 @@ describe('the workspace generation is fabric\u2019s counter over one row', () =>
     expect(firstPid).toBeGreaterThan(1_000_000);
     expect(secondPid).toBeGreaterThan(firstPid + 1_000_000 - 1);
     expect([...database.query('SELECT value FROM kinu_workspace_generation WHERE id = 1').values()]).toEqual([[2]]);
+    database.close();
+  });
+
+  test('a bump that did not persist refuses the open, on a boot that is not the first', async () => {
+    // Fabric's adopt swallows a failed put and stays on the previous value, so
+    // a guard that refused only a zero generation let a second boot run on
+    // the previous incarnation's floor — the pid repeat the counter exists to
+    // prevent. The read-back after the adopt is the whole guard.
+    const database = new Database(':memory:');
+    const first = createWorkspaceBundle(database);
+    await first.session();
+
+    const sql = {
+      exec<Binding>(query: string, ...bindings: Binding[]) {
+        if (/INSERT INTO kinu_workspace_generation/.test(query)) throw new Error('storage write failed');
+        const statement = database.prepare<{ value: number }, SQLQueryBindings[]>(query);
+        const bound = bindings.map((binding) => v.parse(v.union([v.string(), v.number(), v.null()]), binding));
+
+        if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
+        statement.run(...bound);
+
+        return [];
+      },
+    };
+
+    const second = createWorkspace({
+      sql,
+      transactions: { storage: { transactionSync: <T,>(cb: () => T): T => database.transaction(cb)() } },
+      generation: workspaceGenerationStorage(sql),
+    });
+
+    await expect(second.session()).rejects.toThrow('could not be persisted');
+    expect([...database.query('SELECT value FROM kinu_workspace_generation WHERE id = 1').values()]).toEqual([[1]]);
     database.close();
   });
 });

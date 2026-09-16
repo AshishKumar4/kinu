@@ -380,6 +380,11 @@ export interface UserSteerDeps {
   readonly onDrain?: (steers: readonly UserSteer[], atStep: number) => void | Promise<void>;
   /** The live turn's durable id, for the rerun key. Null when unknown. */
   readonly turnId?: () => string | null;
+  /** The skill bodies the landed words activate that the turn does not
+   *  already carry, rendered, or null. Spliced after the steer as that step's
+   *  own reference, never as a durable row (`orchestrator/turn-surface.ts`
+   *  `steerSkillsBlock`). */
+  readonly skills?: (text: string) => Promise<string | null>;
 }
 
 // ── Delivery ───────────────────────────────────────────────────────
@@ -453,9 +458,6 @@ export class Inbox implements AgentInbox {
     private steers: UserSteerDeps = {},
   ) {}
 
-  /** Whether a message sent now rides a turn that already exists — running,
-   *  or admitted by this inbox and not yet open. The same read {@link send}
-   *  makes, for a backend that must decide before it hands a message over. */
   /** The event deliveries the running turn has answered so far — every
    *  absorbed signal's reply turn. Read at the commit, before `settle` decides
    *  what re-delivers, because the roster that owes those replies is frozen
@@ -475,6 +477,9 @@ export class Inbox implements AgentInbox {
     return this.absorbed.map((signal) => signal.kind);
   }
 
+  /** Whether a message sent now rides a turn that already exists — running,
+   *  or admitted by this inbox and not yet open. The same read {@link send}
+   *  makes, for a backend that must decide before it hands a message over. */
   get busy(): boolean {
     return this.starting !== null || this.host.turnInFlight();
   }
@@ -588,6 +593,9 @@ export class Inbox implements AgentInbox {
     }
 
     const bodies = [...events, ...steering].map(stepBody);
+    const activated = users.length > 0 ? await this.steers.skills?.(users.map((user) => user.text).join('\n\n')) : null;
+
+    if (activated !== null && activated !== undefined) bodies.unshift(activated);
 
     if (bodies.length > 0) {
       entries.push({ message: { role: 'user', content: bodies.join('\n\n') }, durable: false });

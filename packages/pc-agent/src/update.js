@@ -27,6 +27,22 @@ const { spawn, spawnSync } = require('node:child_process');
  *  and by this module at update. The daemon ships no embedded version. */
 const VERSION_STAMP = 'pc-agent.version';
 
+/**
+ * The public half of the release signing key, pinned into this daemon at
+ * build; held equal to core's `RELEASE_SIGNING_PUBLIC_KEY` by
+ * `unit-release-signing.test.ts`. An UPDATE frame is a hub's words; the
+ * signature over its checksums is Kinu's, and only a release that verifies
+ * against this key is downloaded at all (SECURITY-devices C1: an unsigned
+ * frame gave a hostile hub persistent code execution on every machine).
+ */
+const RELEASE_SIGNING_PUBLIC_KEY = '232098b9f5cc9b300b903bb9f3347ecb2b62115b2711438ab7fab12d30bfbaef';
+
+/** A machine's OWN operator may pin another key through the environment —
+ *  the test harness signs with a key of its own. A hub cannot reach this. */
+const RELEASE_SIGNING_PUBLIC_KEY_ENV = 'KINU_RELEASE_SIGNING_PUBLIC_KEY';
+
+const RELEASE_MESSAGE_PREFIX = 'kinu-release-v1';
+
 /** Present from the moment a successor is started until a daemon connects:
  *  a stale pidfile beside it means the successor died before the hub saw it,
  *  and the CLI restarts from `.prev`. */
@@ -107,8 +123,50 @@ function parseUpdateFrame(msg) {
   const sha256 = stringOrNull(msg.sha256);
 
   if (sha256 === null || !/^[0-9a-f]{64}$/i.test(sha256)) return { error: 'no sha256' };
+  const rawChecksums = Object(msg.checksums) === msg.checksums ? msg.checksums : null;
+  const signature = stringOrNull(msg.signature);
 
-  return { version, tarball, checksum, sha256: sha256.toLowerCase() };
+  if (rawChecksums === null || signature === null || !/^[A-Za-z0-9+/]+=*$/.test(signature)) return { error: 'no signature' };
+  /** @type {Record<string, string>} */
+  const checksums = {};
+
+  for (const [artifact, raw] of Object.entries(rawChecksums)) {
+    const digest = stringOrNull(raw);
+
+    if (!artifact.startsWith('/') || digest === null || !/^[0-9a-f]{64}$/i.test(digest)) return { error: 'malformed checksums' };
+    checksums[artifact] = digest.toLowerCase();
+  }
+
+  if (checksums[tarball] !== sha256.toLowerCase()) return { error: 'the checksum named is not the signed one' };
+
+  return { version, tarball, checksum, sha256: sha256.toLowerCase(), checksums, signature };
+}
+
+/** The canonical bytes a release signature covers — the same text
+ *  `core/src/http/release-signing.ts` builds: prefix, version, then every
+ *  artifact with its checksum, sorted by path, one per line. */
+function releaseMessage(version, checksums) {
+  const lines = Object.entries(checksums)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([artifact, digest]) => `${artifact} ${digest.toLowerCase()}`);
+
+  return new TextEncoder().encode([RELEASE_MESSAGE_PREFIX, version, ...lines, ''].join('\n'));
+}
+
+/** Whether the frame's signature verifies against the pinned key. A key
+ *  that is not 32 bytes of hex, or a signature that is not 64 bytes, is
+ *  refused before WebCrypto is asked; WebCrypto's own refusal of the
+ *  material it is handed is a failure of THIS machine's pin and propagates
+ *  to the caller's `device.update_failed` line with its cause. */
+async function releaseSignatureHolds(frame, publicKeyHex = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] || RELEASE_SIGNING_PUBLIC_KEY) {
+  if (!/^[0-9a-f]{64}$/i.test(publicKeyHex)) return false;
+  const publicKey = Uint8Array.from(publicKeyHex.match(/../g), (pair) => Number.parseInt(pair, 16));
+  const signature = Uint8Array.from(Buffer.from(frame.signature, 'base64'));
+
+  if (signature.byteLength !== 64) return false;
+  const key = await crypto.webcrypto.subtle.importKey('raw', publicKey, { name: 'Ed25519' }, false, ['verify']);
+
+  return crypto.webcrypto.subtle.verify('Ed25519', key, signature, releaseMessage(frame.version, frame.checksums));
 }
 
 async function fetchBytes(fetchFn, url) {
@@ -261,7 +319,7 @@ function describeFailure(err) {
  */
 function createUpdater(opts) {
   const {
-    layout, origin, log, fetchFn = fetch, spawnFn = spawn,
+    layout, origin, log, fetchFn = fetch, spawnFn = spawn, reclaim,
   } = opts;
 
   let pending = false;
@@ -280,10 +338,24 @@ function createUpdater(opts) {
     pending = true;
     child.once('exit', (code) => {
       // The successor is gone before the hub replaced this daemon's socket:
-      // this daemon is still the owner, and the landed files stay for the next
-      // UPDATE. A code of 3 is the successor finding the machine claimed,
-      // which is the one exit this daemon caused.
+      // this daemon is still the daemon, and it owns the outcome. The
+      // successor took the pidfile in its claim, so the file names a dead
+      // process now — re-taken here, or the next `kinu desktop` start finds a
+      // stale claim and starts a second daemon beside this one. The landed
+      // files go back to `.prev`, the build this process runs, so the stamp
+      // beside it and the HELLO agree; the marker goes with them. The next
+      // UPDATE for the same version lands and tries again.
       log(`device.update_successor_exited pid=${child.pid} code=${code}`);
+
+      try {
+        rollBack(layout);
+        clearPendingMarker(layout.deviceHome);
+        reclaim?.();
+        log(`device.update_rolled_back version=${version}`);
+      } catch (err) {
+        log('device.update_rollback_failed', describeFailure(err));
+      }
+
       pending = false;
     });
     child.unref();
@@ -359,9 +431,21 @@ function createUpdater(opts) {
         log('device.update_failed', describeFailure(error));
       }
 
+      // The signature is checked BEFORE anything is downloaded, let alone
+      // written: a hub's frame names bytes, and only Kinu's signature over
+      // their checksums makes them Kinu's.
       inProgress = true;
-      log(`device.update_started version=${frame.version}`);
-      apply(frame).catch(reportUpdateFailure).finally(() => { inProgress = false; });
+      releaseSignatureHolds(frame).then((holds) => {
+        if (!holds) {
+          log(`device.update_ignored reason=bad_signature version=${frame.version}`);
+
+          return;
+        }
+
+        log(`device.update_started version=${frame.version}`);
+
+        return apply(frame);
+      }).catch(reportUpdateFailure).finally(() => { inProgress = false; });
 
       return true;
     },
@@ -369,6 +453,7 @@ function createUpdater(opts) {
 }
 
 module.exports = {
+  RELEASE_SIGNING_PUBLIC_KEY,
   VERSION_STAMP,
   UPDATE_PENDING_MARKER,
   PREDECESSOR_ENV,

@@ -73,6 +73,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
   runEventWakeFor(workspace: string, marker: string): Promise<void>;
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; factsCompressed: number }>;
+  twinSends(): Promise<{ http: HttpCall[]; transcript: Array<{ id: string; role: string }>; steers: PendingSteer[]; runEnds: Array<{ runId: string; reason: string }> }>;
+  evalAbort(): Promise<{ receipt: string | null; alive: boolean }>;
   firstChatAfterGenesis(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; inbox: { busy: boolean }; landed: string | null; transcript: Array<{ id: string; role: string }>; failures: Array<{ event: string; code: string; cause: string }> }>;
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
@@ -82,6 +84,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
   start(source?: string, bindChain?: boolean, cred?: VfsCred, browser?: string, project?: Record<string, JsonValue>, app?: { port: number } | null): Promise<void>;
   stop(): Promise<void>;
+  facetImages(): Promise<string[]>;
   call(method: string, args?: JsonValue[], chain?: string[]): Promise<{ ok: true; value: string } | { ok: false; error: string }>;
   socket(method: string, args?: JsonValue[]): Promise<{ ok?: boolean; value?: string; error?: string }>;
   route(path?: string, chain?: string[]): Promise<{ status: number; body: string; contentType: string | null }>;

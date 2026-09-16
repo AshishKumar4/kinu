@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { createProviderRegistry } from '@kinu.run/core';
-import { hostedSubordinateHarness, thinkTurns, orchestratorHarness } from './helpers/actor-harness';
+import { hostedSubordinateHarness, chatSessionTurns, orchestratorHarness } from './helpers/actor-harness';
 
 function modelCallingFile() {
   return scriptedTurnModel({ doGenerate: options => {
@@ -43,7 +43,7 @@ test('Think orchestrator sends typed native error feedback in the NEXT provider 
   const model = modelCallingFile();
   agent.modelFactory = () => model;
   await agent.onStart();
-  await thinkTurns(agent).run('Try the file operation.');
+  await chatSessionTurns(agent).run('Try the file operation.');
   assertNativeFeedback(model);
 });
 
@@ -91,7 +91,7 @@ test('parallel hosted native calls retain their SDK identities after reverse com
   agent.modelFactory = () => model;
 
   try {
-    await thinkTurns(agent).run('Read the file twice in parallel.');
+    await chatSessionTurns(agent).run('Read the file twice in parallel.');
     const run = (await agent.listRuns()).items[0];
 
     if (run === undefined) throw new Error('the chat did not retain a run');

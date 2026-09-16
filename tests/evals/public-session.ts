@@ -882,6 +882,34 @@ export async function openPublicSession(input: PublicSessionInput): Promise<Kinu
   return session;
 }
 
+/** The messages of one SSE body, as `{ event, data }`: a blank line ends a
+ *  message, a `:` line is a comment (the route's heartbeat). */
+async function* sseMessages(body: ReadableStream<Uint8Array>): AsyncGenerator<{ event: string; data: string }> {
+  const decoder = new TextDecoder();
+  let buffered = '';
+
+  for await (const chunk of body) {
+    buffered += decoder.decode(chunk, { stream: true });
+
+    for (;;) {
+      const end = buffered.indexOf('\n\n');
+
+      if (end < 0) break;
+      const raw = buffered.slice(0, end);
+      buffered = buffered.slice(end + 2);
+      let event = 'message';
+      const data: string[] = [];
+
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+      }
+
+      if (data.length > 0) yield { event, data: data.join('\n') };
+    }
+  }
+}
+
 export function webHeaders(identity: PublicWebIdentity): Record<string, string> {
   return identity.kind === 'secret' ? { 'x-kinu-dev-identity': identity.secret } : {};
 }
@@ -922,6 +950,10 @@ export class KinuPublicSession {
     readonly resolve: (turn: PublicTurn) => void;
     readonly reject: (error: Error) => void;
   }>();
+
+  /** Callers waiting on one response chunk of a request: settled by the
+   *  first frame body the predicate accepts, then dropped. */
+  private readonly chunkWatchers = new Map<string, Array<{ readonly accept: (body: string) => boolean; readonly resolve: () => void }>>();
   /** Done-frame arrival instants for sends the DO answered `mid-turn` — the
    *  landing instant the absorbing run is named at, in the run events' own
    *  clock domain. Outlives the `turns` entry, which is deleted at settle. */
@@ -1256,6 +1288,83 @@ export class KinuPublicSession {
     return v.parse(v.object({ ports: v.array(v.object({ port: v.number(), url: v.string() })) }), answer).ports;
   }
 
+  /** Resolve when a response chunk of `requestId` satisfies `accept` — a
+   *  wait on the socket's own output, for a row that must act while a turn
+   *  is inside its work (its first tool result has streamed). */
+  awaitChunk(requestId: string, accept: (body: string) => boolean): Promise<void> {
+    const settled = Promise.withResolvers<void>();
+    const watchers = this.chunkWatchers.get(requestId) ?? [];
+    watchers.push({ accept, resolve: settled.resolve });
+    this.chunkWatchers.set(requestId, watchers);
+
+    return settled.promise;
+  }
+
+  /**
+   * Follow one run's ledger over the SSE route, from `since` (exclusive), as
+   * a wait on the stream: each event as the route sends it, re-opened with
+   * `Last-Event-ID` whenever the route closes the stream short of `run_end`
+   * — its own five-minute wall, or the object it reads ending its activation
+   * under it, which the route reports as an `error` message and closes. Ends
+   * at `run_end`.
+   */
+  async *followRun(runId: string, since: number): AsyncGenerator<RunEvent> {
+    let cursor = since;
+
+    for (;;) {
+      const response = await fetch(
+        `${this.input.origin}/api/workspaces/${encodeURIComponent(this.workspace)}/runs/${encodeURIComponent(runId)}/stream`,
+        { headers: { ...webHeaders(this.input.identity), 'Last-Event-ID': String(cursor) } },
+      );
+
+      if (!response.ok || response.body === null) throw new Error(`follow run ${runId}: HTTP ${String(response.status)}`);
+
+      for await (const message of sseMessages(response.body)) {
+        if (message.event === 'error') break;
+        const event = v.parse(RunEventSchema, JSON.parse(message.data));
+
+        if (event.eventIndex <= cursor) continue;
+        cursor = event.eventIndex;
+        yield event;
+
+        if (event.type === 'run_end') return;
+      }
+    }
+  }
+
+  /**
+   * Close the socket and nothing else: the product keeps running the turn
+   * with no client connected, which is the state the `background-wake` row
+   * measures. A turn submitted before this is abandoned here — its promise
+   * never settles and the row reads the ledger instead — so nothing rejects
+   * into a case that stopped listening on purpose. The ledger and history
+   * reads are HTTP and need no socket; `connect()` opens a new one.
+   */
+  disconnect(): void {
+    this.turns.clear();
+    this.midTurnLandings.clear();
+    this.socket?.close();
+    this.socket = null;
+  }
+
+  /**
+   * EVAL-ONLY: end the workspace object's activation on the deployed build,
+   * through the route only the eval-service identity may call
+   * (`cf-backend/src/eval/abort-route.ts`). The next request over the same
+   * storage is a fresh activation; what it re-drives is what the ledger shows.
+   */
+  async abortActivation(): Promise<void> {
+    await infraBoundary(`POST ${this.input.origin}/api/workspaces/${this.workspace}/eval/abort`, async () => {
+      const response = await fetch(
+        `${this.input.origin}/api/workspaces/${encodeURIComponent(this.workspace)}/eval/abort`,
+        { method: 'POST', headers: webHeaders(this.input.identity) },
+      );
+
+      const body = await readJson(response, `abort the activation of ${this.workspace}`);
+      v.parse(v.object({ aborted: v.literal(true) }), body);
+    });
+  }
+
   /** The durable transcript the web pane is seeded from. */
   /** The one read the web app makes on open, `getWorkspaceSnapshot`, reduced to
    *  what a first-run case asserts: that it answered, that it counts the turns
@@ -1543,6 +1652,22 @@ export class KinuPublicSession {
 
     if (frame.frame.done === true && frame.frame.landed === 'mid-turn') {
       this.midTurnLandings.set(frame.frame.id, new Date().toISOString());
+    }
+
+    const body = frame.frame.body;
+
+    if (body !== undefined) {
+      const watchers = this.chunkWatchers.get(frame.frame.id) ?? [];
+
+      const remaining = watchers.filter((watcher) => {
+        if (!watcher.accept(body)) return true;
+        watcher.resolve();
+
+        return false;
+      });
+
+      if (remaining.length > 0) this.chunkWatchers.set(frame.frame.id, remaining);
+      else this.chunkWatchers.delete(frame.frame.id);
     }
 
     turn.recorder.apply(frame.frame);
