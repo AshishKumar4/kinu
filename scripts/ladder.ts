@@ -38,6 +38,7 @@ import { resolve } from 'node:path';
 import { arch, cpus, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
+import { DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
 import { CACHE_BLIND_SPOTS, defaultStoreDirectory, planGate, recordGreen, storeAt, toolVersions } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { deriveClosure, repoAt } from './ladder-closure';
@@ -978,7 +979,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts',
+    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -2370,6 +2371,12 @@ export function bunWouldSkip(path: string): boolean {
 export function claims(command: string, tracked: readonly string[]): string[] {
   const words = command.split(/\s+/).filter((word) => word.length > 0);
 
+  // The deadline wrapper runs the command that follows it and claims nothing
+  // of its own, so the claim is the wrapped command's.
+  if (words[0] === 'bun' && words[1] === 'scripts/ladder.ts' && words[2] === '--run') {
+    return claims(words.slice(3).join(' '), tracked);
+  }
+
   if (words[0] === 'bun' && words[1] === 'run') {
     const body = packageScripts()[words[2] ?? ''];
 
@@ -2482,6 +2489,18 @@ export function claims(command: string, tracked: readonly string[]): string[] {
  * construction rather than two spellings that happen to agree. A glob matching
  * no tracked test file is a fault and says so, never an empty pass.
  */
+/** The deadline a package script runs under: its ladder row's when a row runs
+ *  `bun run <script>`, and the shared default otherwise. */
+export interface ScriptDeadline { readonly seconds: number; readonly label: string }
+
+export function scriptDeadline(script: string | undefined): ScriptDeadline {
+  const row = script === undefined ? undefined : LADDER.find((gate) => gate.run === `bun run ${script}`);
+
+  if (row !== undefined) return { seconds: row.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: row.label };
+
+  return { seconds: GATE_DEADLINE_SECONDS, label: script ?? 'command' };
+}
+
 export function runnableArgv(run: string, tracked: readonly string[]): string[] {
   const words = run.split(' ');
 
@@ -2712,6 +2731,24 @@ if (import.meta.main) {
   if (process.argv.includes('--plan')) {
     console.log(printPlan(deployPlan()));
     process.exit(0);
+  }
+
+  // `--run <argv…>`: run a package script's command under its own row's
+  // deadline. `bun run` sets `npm_lifecycle_event` to the script's name, so
+  // the script needs no argument to find its row; a script no row runs gets
+  // the shared default. The hand run and the ladder row are one figure.
+  const runAt = process.argv.indexOf('--run');
+
+  if (runAt !== -1) {
+    const argv = process.argv.slice(runAt + 1);
+
+    if (argv.length === 0) {
+      console.error('usage: bun scripts/ladder.ts --run <command…>');
+      process.exit(2);
+    }
+
+    const outcome = await runUnderDeadline({ argv, ...scriptDeadline(process.env.npm_lifecycle_event) });
+    process.exit(outcome.exitCode);
   }
 
   if (process.argv.includes('--matrix')) {
@@ -2959,11 +2996,17 @@ if (import.meta.main) {
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }
 
-    const at = performance.now();
-    const proc = Bun.spawnSync(runnableArgv(gate.run, tracked), { cwd: root, stdout: 'inherit', stderr: 'inherit' });
-    const seconds = (performance.now() - at) / 1000;
+    // Under the row's own deadline: the one hang detector this tier has,
+    // now that no test carries a clock. A row that hangs is killed and named
+    // here instead of holding the hook — and `git push` — open forever.
+    const outcome = await runUnderDeadline({
+      argv: runnableArgv(gate.run, tracked), cwd: root,
+      seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
+    });
 
-    if (proc.exitCode === 0) {
+    const { seconds } = outcome;
+
+    if (outcome.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
 
       if (plan?.kind === 'miss') {
@@ -2980,7 +3023,9 @@ if (import.meta.main) {
     console.error(finding({
       at: gate.run,
       invariant: gate.catches,
-      found: 'the command exited non-zero; its own output is immediately above',
+      found: outcome.exitCode === DEADLINE_EXIT_CODE
+        ? `the run hung and was killed at the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s deadline; its own output is immediately above`
+        : 'the command exited non-zero; its own output is immediately above',
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
