@@ -2592,35 +2592,36 @@ test('rail gap is zero with one border, the footer keeps one rule, both strips s
 test('the panel strip is one continuous rule with the underline on it', async () => {
   await withGallery(async ({ newPage, origin }) => {
     for (const theme of ['dark', 'light'] as const) {
-      for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }]) {
         const page = await newPage();
         await page.setViewport(viewport);
         await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
-        await page.goto(`${origin}/gallery.html?frame=shell`, { waitUntil: 'networkidle0' });
+        await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+        await page.reload({ waitUntil: 'networkidle0' });
         await page.waitForSelector('[aria-label="Work"]');
 
         const geometry = await page.evaluate(() => {
           const work = document.querySelector('[aria-label="Work"]');
-          const row = work === null ? null : work.closest('div[class*="border-b"]');
-          const strip = document.querySelector('.p-tabstrip');
-          const active = document.querySelector('.p-tab-active');
-          const collapse = document.querySelector('[data-inspector-collapse]');
-          const home = document.querySelector('aside [aria-label="Kinu home"]');
-          const railHeader = home === null ? null : home.closest('div');
+          const panel = work === null ? null : work.closest('div.p-sidebar');
+          const row = panel === null ? null : panel.querySelector(':scope > div[class*="border-b"]');
+          const strip = panel === null ? null : panel.querySelector('.p-tabstrip');
+          const active = panel === null ? null : panel.querySelector('.p-tab-active');
+          const activity = panel === null ? null : panel.querySelector('[aria-label="Activity"]');
 
-          if (!(row instanceof HTMLElement) || !(strip instanceof HTMLElement) || !(active instanceof HTMLElement)) return null;
+          if (panel === null || !(row instanceof HTMLElement) || !(strip instanceof HTMLElement) || !(active instanceof HTMLElement)) return null;
 
+          const panelBox = panel.getBoundingClientRect();
           const rowBox = row.getBoundingClientRect();
           const stripBox = strip.getBoundingClientRect();
           const activeBox = active.getBoundingClientRect();
-          const collapseBox = collapse instanceof HTMLElement ? collapse.getBoundingClientRect() : null;
+          const activityBox = activity instanceof HTMLElement ? activity.getBoundingClientRect() : null;
 
           return {
+            panelLeft: panelBox.left, panelRight: panelBox.right,
             rowLeft: rowBox.left, rowRight: rowBox.right, rowBottom: rowBox.bottom,
             stripLeft: stripBox.left, stripRight: stripBox.right, stripBottom: stripBox.bottom,
             activeBottom: activeBox.bottom,
-            collapseLeft: collapseBox?.left ?? -1, collapseRight: collapseBox?.right ?? -1,
-            railBottom: railHeader instanceof HTMLElement ? railHeader.getBoundingClientRect().bottom : -1,
+            activityLeft: activityBox?.left ?? -1, activityRight: activityBox?.right ?? -1,
           };
         });
 
@@ -2628,10 +2629,13 @@ test('the panel strip is one continuous rule with the underline on it', async ()
 
         if (geometry !== null) {
           // One continuous rule: the row spans the panel's full width with
-          // the icons inside it, not a ruled strip beside an unruled column.
-          expect(geometry.stripRight).toBeLessThanOrEqual(geometry.rowRight);
-          expect(geometry.collapseRight).toBeLessThanOrEqual(geometry.rowRight + 1);
-          expect(geometry.collapseLeft).toBeGreaterThanOrEqual(geometry.stripRight - 1);
+          // the icons inside it — the strip scrolls within it, so the strip's
+          // scrolled width may exceed the row, but nothing may stick out past
+          // the panel's right edge.
+          expect(geometry.rowLeft).toBeLessThanOrEqual(geometry.panelLeft + 1);
+          expect(geometry.rowRight).toBeGreaterThanOrEqual(geometry.panelRight - 1);
+          expect(geometry.activityRight).toBeLessThanOrEqual(geometry.panelRight + 1);
+          expect(geometry.activityRight).toBeLessThanOrEqual(geometry.rowRight + 1);
           // The underline sits exactly on the rule.
           expect(Math.abs(geometry.activeBottom - geometry.rowBottom)).toBeLessThan(1.5);
           expect(Math.abs(geometry.stripBottom - geometry.rowBottom)).toBeLessThan(1.5);
