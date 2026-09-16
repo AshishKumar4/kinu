@@ -1161,8 +1161,13 @@ describe('kinu connect waits on the daemon and says less', () => {
     let output = '';
     let eof = false;
 
+    // The waits bind what the terminal SHOWS, not what it carried: a colour-
+    // capable TERM (which `script` reports) makes chalk wrap the ✓ and the
+    // label in escape bytes, and those bytes land between the tokens an
+    // `includes` binds. Strip at the seam so the words stay true under any
+    // TERM, the same contract evolve-progress reads its captures under.
     const drained = (async () => {
-      for await (const chunk of proc.stdout) output += new TextDecoder().decode(chunk);
+      for await (const chunk of proc.stdout) output += Bun.stripANSI(new TextDecoder().decode(chunk));
       eof = true;
     })();
 
