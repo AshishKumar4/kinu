@@ -21,7 +21,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
-import type { ProbeTally } from './spend-probe';
+import type { ProbeTally } from '../spend-probe';
 
 const open = (name: string) => env.SPEND_PROBE.get(env.SPEND_PROBE.idFromName(name));
 
