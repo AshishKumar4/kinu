@@ -62,51 +62,43 @@ describe(SUITE, () => {
           + 'words they printed, one per line, and nothing else.',
         );
 
-        // Not awaited: the client leaves. The ledger is what the row reads.
-        void submission;
+        // The turn is inside its work: its first tool result has streamed to
+        // this socket (a wait on the socket's own output). The run row is
+        // durable before any tool result, so one read names it.
+        await session.awaitChunk(submission.requestId, (body) => body.includes('"tool-output-available"'));
+        const ledger = await session.runEvents();
+        const runId = ledger.find((event) => event.type === 'run_start' && event.userMessage?.includes(STEPS[0]) === true)?.runId;
+        let cursor = ledger.filter((event) => event.runId === runId).reduce((max, event) => Math.max(max, event.eventIndex), 0);
 
-        const openRunId = async (): Promise<string | undefined> => (await session.runEvents())
-          .find((event) => event.type === 'run_start' && event.userMessage?.includes(STEPS[0]) === true)?.runId;
-
-        const closed = (events: readonly RunEvent[], runId: string): boolean =>
-          events.some((event) => event.type === 'run_end' && event.runId === runId);
-
-        // The turn is inside its work: its run is open and its first command ran.
-        let runId: string | undefined;
-
-        while (!budget.aborted) {
-          const events = await session.runEvents();
-          runId = await openRunId();
-
-          if (runId !== undefined && commandsRun(events).length >= 1) break;
-          await new Promise<void>((resolve) => setTimeout(resolve, 500));
-        }
-
+        // The client leaves; the turn's own promise is abandoned on purpose
+        // (`disconnect` documents why) and the ledger is what the row reads.
         session.disconnect();
         const aborts: string[] = [];
+        let ended = runId === undefined;
 
         // Two ended activations, each while the run is still open, with no
-        // client connected in between: the wake is the only driver left.
+        // client connected in between: the wake is the only driver left. The
+        // wait after each is on the run's own stream — the next event the same
+        // run records is the continuation under way.
         for (const nth of ['first', 'second']) {
-          if (budget.aborted || runId === undefined) break;
-
-          const before = (await session.runEvents()).filter((event) => event.runId === runId).length;
-
-          if (closed(await session.runEvents(), runId)) break;
+          if (budget.aborted || runId === undefined || ended) break;
           await session.abortActivation();
           aborts.push(nth);
 
-          // The continuation is under way: the same run grew after the abort.
-          while (!budget.aborted) {
-            const events = await session.runEvents();
-
-            if (closed(events, runId) || events.filter((event) => event.runId === runId).length > before) break;
-            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          for await (const event of session.followRun(runId, cursor)) {
+            cursor = event.eventIndex;
+            ended = event.type === 'run_end';
+            break;
           }
         }
 
-        while (!budget.aborted && runId !== undefined && !closed(await session.runEvents(), runId)) {
-          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+        if (runId !== undefined && !ended && !budget.aborted) {
+          for await (const event of session.followRun(runId, cursor)) {
+            cursor = event.eventIndex;
+            ended = event.type === 'run_end';
+
+            if (ended || budget.aborted) break;
+          }
         }
 
         const events = await session.runEvents();
@@ -126,7 +118,7 @@ describe(SUITE, () => {
             what: 'one-run-closed',
             reached: runId !== undefined && starts.length === 1 && ends.length === 1 && ends[0]?.runId === runId,
             detail: `runs opened for the ask: ${String(starts.length)}; closed: ${String(ends.length)}; `
-              + `the first activation's run ${String(runId)} ${runId !== undefined && closed(events, runId) ? 'closed' : 'is still open'}`,
+              + `the first activation's run ${String(runId)} ${ended ? 'closed' : 'is still open'}`,
           },
           {
             what: 'no-tool-ran-twice',
