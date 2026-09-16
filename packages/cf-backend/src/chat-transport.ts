@@ -110,8 +110,15 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
 }
 
 export class ChatWireTransport implements ChatTransport {
-  private readonly resumable: ResumableStream;
-  private readonly handshake: ResumeHandshake;
+  /** The SDK's chunk store and the resume handshake over it, built on FIRST
+   *  USE rather than in the constructor: the store declares its table as it
+   *  is built, and this transport is reached through a getter on the actor
+   *  that the SDK's own callable enumeration (`getCallableMethods`) evaluates
+   *  against a bare prototype with no storage behind it. A transport that
+   *  touched storage to exist would turn that enumeration into an SQL error
+   *  and take the whole RPC surface with it. */
+  private _resumable: ResumableStream | null = null;
+  private _handshake: ResumeHandshake | null = null;
   private readonly pendingResume = new Set<string>();
   private readonly continuation = new ContinuationState<Connection>();
   /** The request each admitted user turn answers under, by its opening row's id. */
@@ -122,9 +129,14 @@ export class ChatWireTransport implements ChatTransport {
    *  reads the live accumulator; this holds the other order. */
   private readonly answers = new Map<string, UIMessage>();
 
-  constructor(private readonly wire: ChatWire) {
-    this.resumable = new ResumableStream(wire.sql);
-    this.handshake = new ResumeHandshake({
+  constructor(private readonly wire: ChatWire) {}
+
+  private get resumable(): ResumableStream {
+    return this._resumable ??= new ResumableStream(this.wire.sql);
+  }
+
+  private get handshake(): ResumeHandshake {
+    return this._handshake ??= new ResumeHandshake({
       responseMessageType: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
       resumableStream: this.resumable,
       continuation: this.continuation,
@@ -133,7 +145,7 @@ export class ChatWireTransport implements ChatTransport {
       // An orphaned stream is the loop's to continue from its ledger, never a
       // row this transport reconstructs from chunks.
       persistOrphanedStream: () => Promise.resolve(),
-      isConnectionPresent: (id) => wire.getConnection(id) !== undefined,
+      isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
     });
   }
 
