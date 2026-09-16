@@ -373,7 +373,7 @@ describe('estimation and transcripts', () => {
     ]);
 
     const line = kinuCodec.transcriptLine(turns[0].items[0]);
-    expect(line).toContain('[tool:run] callId=c1');
+    expect(line).toContain('[tool:shell] callId=c1');
     expect(line).toContain('make test');
     expect(line).toContain('all 42 tests passed');
   });
