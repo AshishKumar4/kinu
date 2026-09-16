@@ -16,7 +16,7 @@
  *                       A confined surface hands in `prebuiltCodemodeTool`.
  *                       Absent → returns a 'NOT CONFIGURED' error. Core
  *                       itself does NO codegen.
- *   2. run            — shell via executionRouter; `runtime` param explicitly
+ *   2. shell          — one command via executionRouter; `runtime` param explicitly
  *                       chooses workspace / sandbox / device, with
  *                       workspace (rt.shell) as the conservative default.
  *   3. file           — the ONE file plane: read / edit / write over the same
@@ -450,7 +450,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     vfs: rt.storage.vfs, budget, producer: 'eval',
   });
 
-  // ── 2. run ───────────────────────────────────────────────────────────────
+  // ── 2. shell ─────────────────────────────────────────────────────────────
   // Shell command tool. The `runtime` parameter dispatches through the
   // ExecutionRouter — workspace (default) hits the workspace's own Nimbus
   // shell, over the same bytes the `file` tool addresses; every other runtime
@@ -468,7 +468,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'string',
           enum: shellRuntimes,
           description:
-            '`runtime` accepts `workspace`, `sandbox`, or a device by the nickname the live prompt lists; the resolver that today reads runtime device plus the old device field resolves a nickname to the machine, refuses an unknown nickname naming the ones connected, and refuses an ambiguous omission the way the old field did.',
+            '`workspace` (default), `sandbox`, or one of the user\'s machines by the nickname the live system state lists. With several machines connected a nickname is required.',
         },
         why: {
           type: 'string',
