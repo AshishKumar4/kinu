@@ -2,8 +2,8 @@
 
 exports[`every registered section reaches a rendered prompt the Markdown extraction preserves every rendered byte of the surface matrix 1`] = `
 {
-  "cf-full-surface": "7b6c7ed8a5e5be682528bc30b911f7e006a9a20793264e38f84ff5a3be78ee2e",
-  "cli-local-full-surface": "b57e0310073c381e425055a39c4df3312850fa3d28a98dbeaf1d0fbd5275780a",
+  "cf-full-surface": "096682495ead0af9e94af64a0ca6760a909cebae0f27c24f4011b32bb91c07d4",
+  "cli-local-full-surface": "776d4649a1a7594c6ba14d499b9264353232eef6ab32a8a954ed4c5652a285a0",
   "code-execution": "bab85fc67402e5914e7cab9f948dc14310aa46daf8196e264aa1808327fb9233",
   "defaults": "9b082e7302fba77d63efd4729e3b988c358763e50c7671fa4e9d980e444b85e3",
   "delegation-hire-only": "4c3434a878402fcbb03295391891998375f623053b7633b30af31a5c309900b6",
@@ -12,9 +12,9 @@ exports[`every registered section reaches a rendered prompt the Markdown extract
   "delegation-swarm-with-codemode": "18020193653f1fa0ec447214336a7657d6d70b0f669879a7ee692bc533629ab8",
   "delegation-task-lifetime": "abf67aa37e8ecca0ea66ccad02737a9b6a5889283979ec76791a2d7ee625b231",
   "executors-cli-local-device": "efef1b4145eb53a5cc3b8da1bb563d9152c322696292d99b664974f720ad494f",
-  "executors-offline-device": "d222f6744a1201555bfcd8da2043abe5d06efff32fdc823e33f0b326dd637913",
-  "executors-preview-capable": "73a2cfe1180861d66b3d4d58d893149142e479a6f924a778dc49803c9e7dad68",
-  "executors-unnamed-namespace": "5a50d3e3dd9e19ef6d0b9814c96e8a76bbd13b712074ff069b365002749396fd",
+  "executors-offline-device": "45eadc2fa7b805e9961bf2df9c8501233a53cc57e0f5737ca54aac1cc0691008",
+  "executors-preview-capable": "dff645a0e1a97ccc0ea297c4e21bb1796135feac1724336294da6c50e676c83a",
+  "executors-unnamed-namespace": "712276e5c75255efff50403df41b8eebe03cfbc4245ca27507f4ddcb6ed1d489",
   "executors-workspace-only": "7d7dcd9beec1a8ab467971b2398d89f1dc2bef3de2e6d8dea583d1f36bec47e3",
   "external-tools": "900ae1e3d37d3f3656caa609aa90b8c422abd255605c738b1dd1d35ff6a02c6e",
   "family-gemini": "0e8f492642b7d5a65645f26631ac0bee5d9e034a624632b565dd356837623a88",
