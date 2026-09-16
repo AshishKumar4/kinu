@@ -254,6 +254,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       // own live context — so a fork's turn is durable, pinned and cancellable
       // exactly like the parent's.
       actor: seat.actor,
+      clock: REAL_CLOCK,
       runId: seat.runId,
       profile: seat.profile,
       dynamic: seat.dynamic,

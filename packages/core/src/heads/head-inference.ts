@@ -103,7 +103,7 @@ export class HeadCapture {
 }
 
 import { permitInPlan } from '../execution/work-mode';
-import { REAL_CLOCK, type Clock } from '../types/clock';
+import type { Clock } from '../types/clock';
 
 /** The two accumulator tools every head has — record_evidence / record_decision,
  *  pushing into the shared HeadCapture. Backend scratch tools are merged on top. */
@@ -533,10 +533,11 @@ export interface HeadInferenceDeps {
    * flag can never observe it.
    */
   signal?: AbortSignal;
-  /** The clock the report's wall time is measured on (D19): real unless a
-   *  test hands one it advances per step, so "how long the work took" is a
-   *  figure the test can make non-zero without pausing. */
-  clock?: Clock;
+  /** The clock the report's wall time is measured on (D19): the composition
+   *  root hands the real one; a test hands one it advances per step, so "how
+   *  long the work took" is a figure the test can make non-zero without
+   *  pausing. */
+  clock: Clock;
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
   /**
@@ -740,8 +741,7 @@ function classifyHeadOutcome(
  * treats a thrown run() as budget_exceeded and that is a different claim.
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  const { capture, mission } = deps;
-  const clock = deps.clock ?? REAL_CLOCK;
+  const { capture, mission, clock } = deps;
   const startedAt = clock.now();
 
   // The mission refusal that stopped this head, if one did. Held so the report
