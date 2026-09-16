@@ -1,5 +1,5 @@
 // BackgroundJobRunner — the backend-agnostic lifecycle for auto-detached >30s
-// tool calls (think-heads, long eval/run). Mints a job, keeps the
+// tool calls (think-heads, long eval/shell). Mints a job, keeps the
 // in-flight promise alive in a durable fiber, settles/fails it, and wakes the
 // agent with a synthesis signal — over the AgentRuntime fiber + the one
 // signal-delivery seam.
