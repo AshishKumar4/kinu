@@ -3413,6 +3413,10 @@ export class OrchestratorAgent extends ActorAgent {
         },
         search: this.mctsSearchStore,
         runEvents: this.eventRecorder,
+        // The loop this wake resumed first: a turn it re-opened continues
+        // under the run the dead activation left, which this sweep must not
+        // seal as wreckage.
+        liveRuns: () => this.chatLoop.drivenRuns(),
         resume: jobRedriveResumeGate({
           recoverOrphans: () => this.jobRunner.recoverOrphans(),
           inputOf: (jobId) => this.jobs.getInput(jobId),

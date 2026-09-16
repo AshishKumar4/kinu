@@ -292,6 +292,29 @@ describe('an operator-cancelled fork is not reported as running', () => {
       .toEqual(['run_start', 'run_end']);
   });
 
+  test('a run the turn loop re-opened is the loop\'s to close, however old its start', async () => {
+    const w = workspace();
+    initRunEventTables(makeExecRaw(w.db));
+    const sql = makeSql(w.db);
+    const recorder = new RunEventRecorder(sql, testActorHandle(sql));
+
+    // Two runs the dead activation left open. The loop re-opened one at this
+    // activation's construction and continues it under the same id; the other
+    // is wreckage. Both predate the activation, so age alone cannot tell them
+    // apart — the loop's own word is what does.
+    recorder.emit('run-continued', { type: 'run_start', agentId: 'a' });
+    recorder.emit('run-abandoned', { type: 'run_start', agentId: 'a' });
+
+    await reconcileInterruptedForks({
+      journal: w.journal, inbox: idleAgent().inbox, runEvents: recorder,
+      liveRuns: () => ['run-continued'],
+      now: Date.now() + 1,
+    });
+
+    expect(recorder.read('run-continued').map((event) => event.type)).toEqual(['run_start']);
+    expect(recorder.read('run-abandoned').map((event) => event.type)).toEqual(['run_start', 'run_end']);
+  });
+
   test('a second activation closes nothing again', async () => {
     const w = workspace();
     initRunEventTables(makeExecRaw(w.db));
