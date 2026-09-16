@@ -247,12 +247,12 @@ function sseResponse(chunks: readonly string[]): Response {
  * The background-wake conversation's model. One lane, keyed on the request
  * shape, so the whole scripted exchange runs on one pin:
  *
- *   - the opening request answers with a real `run` tool call — the command
+ *   - the opening request answers with a real `shell` tool call — the command
  *     that sleeps past the detach window and prints the marker;
  *   - the request carrying that call's result (the detach handle) answers
  *     `echo:detached`, which ends the turn — the settle then owes the title;
  *   - the WOKEN turn's request — its typed line is the runner's own wake
- *     message, naming the job — answers with an `execute_tools` call that reads
+ *     message, naming the job — answers with an `eval` call that reads
  *     the job's result through the one seam the wake message names;
  *   - the request carrying that result answers with the result's text, which
  *     is how the reply carries the job's output.
@@ -263,7 +263,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
   const toolResults = messages.filter((m) => m.role === 'tool').map((m) => textOf(m.content));
   // The runner's wake message is a user line among the runtime's own context
   // lines; the turn it opens is told apart by that line, wherever it sits.
-  const woken = users.map((line) => /Background run job (\S+) completed/.exec(line)).find((match) => match !== null) ?? null;
+  const woken = users.map((line) => /Background shell job (\S+) completed/.exec(line)).find((match) => match !== null) ?? null;
 
   const answer = (content: string): Response => sseResponse([
     sseChunk({ content }), sseChunk({ role: 'assistant' }, 'stop'), sseDone(),
@@ -280,7 +280,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
 
     if (read !== undefined) return answer(`echo:${read}`);
 
-    return call('call_wake_read_1', 'execute_tools', { code: `return await agent.jobResult(${JSON.stringify(woken[1])});` });
+    return call('call_wake_read_1', 'eval', { code: `return await agent.jobResult(${JSON.stringify(woken[1])});` });
   }
 
   if (toolResults.length > 0) {
@@ -291,7 +291,7 @@ async function wakeBody(body: OutboundBody): Promise<Response> {
     return answer('echo:detached');
   }
 
-  return call('call_wake_run_1', 'run', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
+  return call('call_wake_run_1', 'shell', { runtime: 'workspace', command: `sleep 45 && echo ${WAKE_MARKER}` });
 }
 
 async function echoBody(body: OutboundBody): Promise<Response> {

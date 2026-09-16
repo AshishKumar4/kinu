@@ -161,21 +161,21 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     });
   }
 
-  /** The `run` tool, for the wake proof: the command sleeps past the detach
+  /** The `shell` tool, for the wake proof: the command sleeps past the detach
    *  window and prints the marker — no container, the same wrap. Only the
    *  execute is the probe's; the schema, the wrap and the runner are the
    *  product's, which is what the detach and the settle are proven on. */
   protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
     this.installSettleHold();
     const tools = super.getRawToolsForWorkMode(mode, claimScope);
-    const run = tools.run;
+    const shell = tools.shell;
 
-    if (run === undefined) return tools;
+    if (shell === undefined) return tools;
 
     return {
       ...tools,
-      run: {
-        ...run,
+      shell: {
+        ...shell,
         execute: async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, WAKE_RUN_SLEEP_MS));
 
