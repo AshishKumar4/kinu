@@ -11,6 +11,9 @@ import {
 import { deviceFleetAsk, type DeviceFleetEntry, type DeviceStatus } from '../src/execution/device-status';
 import { answeredRefusal } from '../src/execution/exec-result';
 import { parseJsonValue } from '../src/utils/json';
+import { getExecutorFiles } from '../src/read-models/files';
+import { withMountTable, standardMounts } from '../src/vfs/mounts';
+import { setDiagnosticsSink } from '../src/obs/log';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { toolExecute } from '@kinu.run/test-utils';
@@ -57,6 +60,8 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
       if (method === 'listFiles') return [{ name: `entry-of-${opts?.deviceId}`, type: 'file' }];
 
       if (method === 'exists') return true;
+
+      if (method === 'statPath') return { size: 3, mtimeMs: 0, isDir: false };
 
       if (method === 'writeFile') return { success: true };
 
@@ -188,9 +193,11 @@ describe('the composite file plane', () => {
     expect(await plane.readFile('/ashish@studio/home/dev/notes.md', { encoding: 'utf8' })).toBe('bytes of dev-studio');
     expect(await plane.readdir('/ashish@studio/home/dev')).toEqual(['entry-of-dev-studio']);
     expect(await plane.readdir('/')).toEqual(['ashish@studio']);
-    // The provider's own homeDir still opens on the machine (a roster is not
-    // a working directory); the fleet root lives on the plane, not the home.
-    expect(await provider.homeDir()).toBe('/home/dev');
+    // The provider opens on the roster, and on ONE machine's own opening dir
+    // when asked by segment — never on a machine picked for the fleet.
+    expect(await provider.homeDir()).toBe('/');
+    expect(await provider.homeDir('ashish@studio')).toBe('/home/dev');
+    await expect(provider.homeDir('toaster')).rejects.toMatchObject({ code: 'ENXIO' });
     expect(t.sent.map((frame) => [frame.params[0], frame.deviceId])).toEqual([
       ['/home/dev/notes.md', 'dev-studio'], ['/home/dev', 'dev-studio'],
     ]);
@@ -251,6 +258,134 @@ describe('the composite file plane', () => {
     expect(deviceMountSegment(slashed, fleet)).toBe('dev-slashed');
     expect(deviceMountSegment(RIG, [STUDIO, RIG])).toBe('mrwhite@rig');
   });
+});
+
+describe('where the file browser lands on a mount', () => {
+  /** The browser's own path: `getExecutorFiles` over the workspace plane
+   *  carrying the standard mount table, with the REAL device provider behind
+   *  `/pc` — the composition the product runs, never a stubbed plane. Each
+   *  machine consents to its own directory, so a landing that picked the
+   *  wrong machine reads as the wrong home. */
+  function browser(fleet: readonly DeviceFleetEntry[], opts: { consented?: Record<string, string | null>; unconfined?: boolean } = {}) {
+    const t = fleetTransport(fleet);
+    const consented = opts.consented ?? { 'dev-studio': '/home/studio', 'dev-rig': '/home/rig' };
+
+    const provider = createDeviceTunnelExecutor(t, {
+      consentedRoot: async (id) => consented[id ?? ''] ?? null,
+      deviceHome: async (id) => consented[id ?? ''] ?? null,
+      unconfined: async () => opts.unconfined ?? false,
+    });
+
+    const router = new DefaultExecutionRouter();
+    router.register(provider);
+    const workspace = withMountTable(createTestRuntime().rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
+
+    const lookup = {
+      getProvider: (name: string) => name === 'workspace'
+        ? { files: workspace, homeDir: async () => '/home/user' }
+        : router.getProvider(name),
+    };
+
+    return { t, list: (path: string) => getExecutorFiles(lookup, 'workspace', path) };
+  }
+
+  test('bare /pc is the roster: it lists the machines and lands on itself', async () => {
+    const { t, list } = browser([STUDIO, RIG, SPARE]);
+    const out = await list('/pc');
+    expect(out.error).toBeUndefined();
+    expect(out.path).toBe('/pc');
+    expect(out.entries?.map((e) => e.name)).toEqual(['ashish@studio', 'mrwhite@rig']);
+    expect(t.sent).toEqual([]);
+  });
+
+  test('/pc/<name> lands in THAT machine\'s consented directory, whichever machine it is', async () => {
+    const { t, list } = browser([STUDIO, RIG]);
+    const rig = await list('/pc/mrwhite@rig');
+    expect(rig.error).toBeUndefined();
+    expect(rig.path).toBe('/pc/mrwhite@rig/home/rig');
+    const studio = await list('/pc/ashish@studio/');
+    expect(studio.path).toBe('/pc/ashish@studio/home/studio');
+    // Every frame the landing sent went to the machine the path named.
+    expect(t.sent.map((frame) => frame.deviceId)).toEqual(t.sent.map((frame) => frame.params[0] === '/home/rig' || String(frame.params[0]).startsWith('/home/rig/') ? 'dev-rig' : 'dev-studio'));
+    expect(new Set(t.sent.map((frame) => frame.deviceId))).toEqual(new Set(['dev-rig', 'dev-studio']));
+  });
+
+  test('one machine lands the same way: the roster at /pc, its home under /pc/<name>', async () => {
+    const { list } = browser([STUDIO]);
+    expect((await list('/pc')).entries?.map((e) => e.name)).toEqual(['ashish@studio']);
+    expect((await list('/pc/ashish@studio')).path).toBe('/pc/ashish@studio/home/studio');
+  });
+
+  test('the consent boundary still refuses what it refused before', async () => {
+    // Nothing widened: the landing moved, the boundary did not.
+    const out = await list0([STUDIO], '/pc/ashish@studio/etc');
+    expect(out.entries).toBeUndefined();
+    expect(out.error).toContain("outside the consented device directory '/home/studio'");
+  });
+
+  test('a path already inside the mount is passed through untouched', async () => {
+    const { list } = browser([STUDIO, RIG]);
+    const out = await list('/pc/mrwhite@rig/home/rig/src');
+    expect(out.path).toBe('/pc/mrwhite@rig/home/rig/src');
+    expect(out.entries?.map((e) => e.name)).toEqual(['entry-of-dev-rig']);
+  });
+
+  test('a machine consenting to its whole filesystem keeps the bare machine root', async () => {
+    const { list } = browser([STUDIO], { consented: { 'dev-studio': '/' }, unconfined: true });
+    const out = await list('/pc/ashish@studio');
+    expect(out.path).toBe('/pc/ashish@studio');
+    expect(out.entries?.map((e) => e.name)).toEqual(['entry-of-dev-studio']);
+  });
+
+  test('a machine that cannot say where it starts surfaces ITS refusal, and the asking is recorded', async () => {
+    // The two assertions on the error cannot tell "the fallback was taken"
+    // from "the resolution never ran": both read as the plane's own refusal.
+    // The diagnostic is the discriminator — it fires ONLY on the caught path.
+    const events: string[] = [];
+
+    const restore = setDiagnosticsSink({
+      event: (name) => { events.push(name); },
+      failure: (name) => { events.push(name); },
+    });
+
+    try {
+      const { list } = browser([STUDIO], { consented: { 'dev-studio': null } });
+      const out = await list('/pc/ashish@studio');
+      expect(out.error).toContain('reported no consented directory');
+      expect(events).toContain('files.mount_home_unavailable');
+    } finally {
+      restore();
+    }
+  });
+
+  test('a machine that CAN say where it starts absorbs nothing, and says nothing', async () => {
+    const events: string[] = [];
+
+    const restore = setDiagnosticsSink({
+      event: (name) => { events.push(name); },
+      failure: (name) => { events.push(name); },
+    });
+
+    try {
+      const { list } = browser([STUDIO]);
+      expect((await list('/pc/ashish@studio')).path).toBe('/pc/ashish@studio/home/studio');
+      expect(events).not.toContain('files.mount_home_unavailable');
+    } finally {
+      restore();
+    }
+  });
+
+  test('a name no live machine holds lands nowhere and lists the stated absence', async () => {
+    const { list } = browser([STUDIO, RIG]);
+    const out = await list('/pc/toaster');
+    expect(out.entries).toBeUndefined();
+    expect(out.error).toContain('no connected machine is named "toaster"');
+    expect(out.error).toContain('ashish@studio, mrwhite@rig');
+  });
+
+  function list0(fleet: readonly DeviceFleetEntry[], path: string) {
+    return browser(fleet).list(path);
+  }
 });
 
 describe('the shell tool names the machine', () => {

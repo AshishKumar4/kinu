@@ -159,8 +159,13 @@ export interface ExecutorProvider {
    * The alternative the file browser shipped with was a literal `'.'` reported
    * for every environment, which turned "go up one level" into path arithmetic
    * on a token no host could resolve.
+   *
+   * A plane composed of several machines (the device fleet, always mounted at
+   * `/pc/<name>`) opens on its roster with no argument, and on ONE machine's
+   * home when handed that machine's mount segment. Every other executor is
+   * one machine and ignores the segment.
    */
-  homeDir(): Promise<string>;
+  homeDir(segment?: string): Promise<string>;
 
   /** Declared capabilities — everything this environment can be shown to have. */
   readonly capabilities: ReadonlySet<ExecutorCapability>;
