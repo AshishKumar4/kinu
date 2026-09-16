@@ -1288,6 +1288,42 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.close();
     });
   });
+
+  test('a user-created chat deletes on click with no modal; an agent-created one keeps its confirmation', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const rig = await openRig(newPage, origin, { width: 1280, height: 900 });
+      const { page } = rig;
+
+      // The agent-created seed keeps a labelled dismiss control that opens the
+      // confirmation: the two flows are different controls, not one modal with
+      // two words in it.
+      expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
+      await page.click('[aria-label="Dismiss Auto scout"]');
+      await page.waitForSelector('[role="dialog"]');
+      // The confirmation states exactly what is kept and what is removed.
+      const dialog = await page.$eval('[role="dialog"]', (node) => node.textContent ?? '');
+      expect(dialog.includes('keeps the conversation')).toBe(true);
+      expect(dialog.includes('removes the tab')).toBe(true);
+      await page.evaluate(() => {
+        const dialog = document.querySelector('[role="dialog"]');
+
+        const cancel = dialog === null ? null : [...dialog.querySelectorAll('button')]
+          .find((button) => (button.textContent ?? '').includes('Cancel'));
+
+        if (!(cancel instanceof HTMLButtonElement)) throw new Error('Cancel absent in the dismiss dialog');
+      });
+      await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
+
+      // The user-created seed deletes on click: no modal, the tab is gone.
+      expect(await page.$('[aria-label="Delete Checkout scout"]')).not.toBeNull();
+      await page.click('[aria-label="Delete Checkout scout"]');
+      await page.waitForFunction(() => document.querySelector('[aria-label="Delete Checkout scout"]') === null);
+      expect(await page.evaluate(() => document.body.innerText)).not.toContain('Checkout scout');
+      // The agent-created row survived the other flow's click.
+      expect(await page.$('[aria-label="Dismiss Auto scout"]')).not.toBeNull();
+      await page.close();
+    });
+  });
 });
 
 /**

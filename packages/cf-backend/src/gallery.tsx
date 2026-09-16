@@ -1642,12 +1642,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
   }
 
   if (method === "dismissSubordinate") {
-    const [name] = v.parse(v.tuple([v.string()]), args);
+    const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
 
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
 
-    return rpcResult({ ok: true, name, historyKept: true }).json<T>();
+    return rpcResult({ ok: true, name, historyKept: keepHistory ?? true }).json<T>();
   }
 
   if (method === "getActorSnapshot") {
@@ -3802,6 +3802,9 @@ const AGENTCHATS_SEED: readonly GalleryRosterEntry[] = [
   // The role string is deliberately distinctive: the gate asserts it never
   // renders — an agent's being subordinate shows as hierarchy, not as a badge.
   { name: "scout", displayName: "Checkout scout", role: "Fixture-role QA lead", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 36e5, dismissedAt: null },
+  // An agent-created subordinate: keeps the confirmation path, beside the
+  // user-created seed above that deletes on click.
+  { name: "auto-scout", displayName: "Auto scout", role: "Fixture-role QA lead", createdBy: "orchestrator", status: "idle", currentTask: null, createdAt: NOW - 18e5, dismissedAt: null },
 ];
 
 const AGENTCHATS_ROWS = 40;

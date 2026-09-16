@@ -2393,8 +2393,10 @@ export function useKinu(target?: string | KinuActorAddress) {
 
       return entry;
     },
-    dismissSubordinate: async (name: string) => {
-      const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", [name]);
+    dismissSubordinate: async (name: string, keepHistory?: boolean) => {
+      const args = keepHistory === undefined ? [name] : [name, keepHistory];
+      const result = await rpc<{ ok: true; name: string; historyKept: boolean }>("dismissSubordinate", args);
+
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => current.filter((entry) => entry.name !== result.name));
       setSourceError("roster", null);

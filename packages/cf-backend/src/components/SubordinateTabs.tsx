@@ -37,7 +37,7 @@ interface SubordinateTabsProps {
    *  is not mounted. */
   onCreate(): Promise<void>;
   creating: boolean;
-  onDismiss(name: string): Promise<void>;
+  onDismiss(name: string, keepHistory?: boolean): Promise<void>;
   /** Controls for the conversation this strip has open, pinned to its right
    *  edge — the chat column has no other chrome row to hang them on. */
   trailing?: ReactNode;
@@ -63,6 +63,8 @@ export function SubordinateTabs({
   const [dismissTarget, setDismissTarget] = useState<SubordinateRosterEntry | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const mainPath = `/workspace/${workspace}`;
 
@@ -103,10 +105,31 @@ export function SubordinateTabs({
                 </Link>
                 <button
                   type="button"
-                  onClick={() => { setDismissError(null); setDismissTarget(subordinate); }}
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-1 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70"
-                  title={`Dismiss ${title}`}
-                  aria-label={`Dismiss ${title}`}
+                  disabled={deleting === subordinate.name}
+                  onClick={async () => {
+                    if (subordinate.createdBy === "user") {
+                      setDeleteError(null);
+                      setDeleting(subordinate.name);
+
+                      try {
+                        await onDismiss(subordinate.name, false);
+
+                        if (subordinate.name === activeName) await navigate(mainPath);
+                      } catch (cause) {
+                        setDeleteError(renderThrownChain({ cause }));
+                      } finally {
+                        setDeleting(null);
+                      }
+
+                      return;
+                    }
+
+                    setDismissError(null);
+                    setDismissTarget(subordinate);
+                  }}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-1 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70 disabled:opacity-40"
+                  title={subordinate.createdBy === "user" ? `Delete ${title}` : `Dismiss ${title}`}
+                  aria-label={subordinate.createdBy === "user" ? `Delete ${title}` : `Dismiss ${title}`}
                 >
                   <TrashIcon size={11} />
                 </button>
@@ -140,7 +163,7 @@ export function SubordinateTabs({
         )}
       </div>
 
-      {dismissTarget && (
+      {dismissTarget && dismissTarget.createdBy !== "user" && (
         <Modal
           title={`Dismiss ${agentTitle(dismissTarget.displayName)}?`}
           icon={<TrashIcon size={18} className="p-danger" />}
@@ -170,10 +193,13 @@ export function SubordinateTabs({
           </>}
         >
           <p className="text-xs leading-relaxed p-text-2">
-            Archiving removes the tab. The conversation and private state remain.
+            Dismissing removes the tab and keeps the conversation and private state. Deleting would remove them.
           </p>
           {dismissError && <div role="alert" className="rounded-md px-2.5 py-2 text-xs p-notice-danger">{dismissError}</div>}
         </Modal>
+      )}
+      {deleteError && (
+        <div role="alert" className="mx-2 mb-1 rounded-md px-2.5 py-2 text-xs p-notice-danger">{deleteError}</div>
       )}
     </>
   );
