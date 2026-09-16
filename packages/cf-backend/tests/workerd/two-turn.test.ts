@@ -316,6 +316,28 @@ describe('two real turns over the HTTP model seam', () => {
     expect(out.alive).toBe(true);
   });
 
+  it('the agent tab: a hired actor answers getActorSnapshot and listAgentTasks on its own path', async () => {
+    // The owner's report on build cba44dcb9: the "+" tab hung on
+    // "Disconnected · Untitled agent" and both mount reads timed out at 30 s,
+    // because the client addressed a facet hop this transport refuses. The
+    // object serves the actor itself under its own segment; these are the two
+    // reads the tab makes, answered over exactly that socket.
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('agent-tab-driver'));
+    const out = await root.hostedActorTab();
+
+    expect(out.name).not.toBe('');
+
+    // Parsed from the frames' own JSON text: the shape the tab reads is what
+    // this names, and a refusal frame would fail the parse by its words.
+    const snapshot = v.parse(v.object({
+      name: v.string(), role: v.string(), mission: v.string(), pendingSteers: v.array(v.unknown()),
+    }), JSON.parse(out.snapshot));
+
+    expect(snapshot).toEqual({ name: out.name, role: 'task', mission: '', pendingSteers: [] });
+    expect(v.parse(v.array(v.unknown()), JSON.parse(out.tasks))).toEqual([]);
+    expect(out.frames).toBeGreaterThanOrEqual(2);
+  });
+
   it('a fresh workspace\'s first chat reaches the model and the turn closes', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('first-chat-driver'));
 
