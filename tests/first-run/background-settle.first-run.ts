@@ -33,19 +33,22 @@ describe(SUITE, () => {
   // THE ROW MUST TERMINATE: the tier runs every row with testTimeout 0 (an
   // episode's completion decides, never elapsed wall time), so an episode the
   // product leaves open would hold the tier open with it. The wait loop below
-  // ends when the wake run closes; THIS BUDGET ends the test when the product
+  // ends when the wake run closes; the case's BUDGET ends it when the product
   // owes no more waiting — the 45 s sleep, one detach window, the settle, and
   // the retry the runner guarantees before a wake is re-queued. If the budget
-  // gives first, the verdict reads the ledger as found: a still-open wake is
-  // red, not unknown.
-  liveTest(`MEASURED: ${CASE}`, { timeout: 10 * 60_000 }, async () => {
+  // gives first, the harness retains the ledger as found and the verdict
+  // reads it: a still-open wake is red, not unknown. (The runner's own
+  // timeout, wider, retained nothing: build cba44dcb9 timed out at 600 s with
+  // an empty episode directory.)
+  liveTest(`MEASURED: ${CASE}`, { timeout: 12 * 60_000 }, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
 
     await runFirstRunCase(PLAN, {
       id: CASE,
       purpose: 'Run a slow command on the container, let it settle out of turn, and report what it printed.',
       modelCalls: 'expected',
-      async run({ session }) {
+      budgetMs: 10 * 60_000,
+      async run({ session, budget }) {
         const first = await session.prompt(
           `Use your run tool with runtime 'sandbox' to execute exactly: sleep 45 && echo ${MARKER}. `
           + 'The command sleeps before it prints — let it run to completion, do not kill it. '
@@ -76,7 +79,7 @@ describe(SUITE, () => {
         let settledWakeSeen = false;
         let quiet = 0;
 
-        for (;;) {
+        while (!budget.aborted) {
           const [jobs, events] = await Promise.all([session.backgroundJobs(), session.runEvents()]);
 
           const openRuns = new Set(

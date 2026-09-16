@@ -418,6 +418,10 @@ export interface FirstRunPlan<Session extends FirstRunSession> {
 export interface FirstRunRun<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
   readonly session: Session;
   readonly plan: Plan;
+  /** Aborted when the case's `budgetMs` is spent: a wait the product may
+   *  never end reads this and stops, so the verdict is read off the ledger
+   *  as found rather than lost to the runner's own timeout. */
+  readonly budget: AbortSignal;
 }
 
 export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSession, Plan = PublicSessionPlan> {
@@ -431,6 +435,10 @@ export interface FirstRunCaseSpec<Session extends FirstRunSession = KinuPublicSe
    *  vacuous tier this suite was rebuilt to remove; `none` records a measured
    *  zero and fails the case if the store disagrees. */
   readonly modelCalls: 'expected' | 'none';
+  /** The most wall time the case may take once its session is open. When it
+   *  is spent the evidence is retained as it stands and the case fails on
+   *  the budget, with `failure.json` saying so. */
+  readonly budgetMs?: number;
   /** The case, driven the way a user drives it. Returns the subgoals it
    *  checked; every one of them is asserted by {@link runFirstRunCase}. */
   run(input: FirstRunRun<Session, Plan>): Promise<readonly EvalSubgoal[]>;
@@ -483,9 +491,9 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose, genesis: spec.genesis });
 
       return opened;
-    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls }, async (session, collect) => {
+    }, { transcripts: TRANSCRIPTS, taskId: episode, modelCalls: spec.modelCalls, ...(spec.budgetMs !== undefined && { budgetMs: spec.budgetMs }) }, async (session, collect, budget) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
-    const subgoals = await spec.run({ session, plan });
+    const subgoals = await spec.run({ session, plan, budget });
 
     const { events, history } = await collect();
     observedModels.note(events);
