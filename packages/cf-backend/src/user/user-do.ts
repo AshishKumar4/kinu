@@ -2559,8 +2559,7 @@ export class UserDO extends Agent<Env> {
               consented_root = COALESCE(?, consented_root),
               device_home = COALESCE(?, device_home),
               agent_root = COALESCE(?, agent_root),
-              sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?,
-              version = ?, update_check = ?
+              sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?
         WHERE id = ?`,
       hello.os ?? null, hello.hostname ?? null, Date.now(),
       absolutePathOrNull(hello.root),
@@ -2570,12 +2569,23 @@ export class UserDO extends Agent<Env> {
       verdict.reason,
       verdict.detail,
       JSON.stringify(hello.sandbox?.gpu ?? []),
-      // Like the sandbox verdict, a fact about THIS daemon on THIS boot:
-      // silence overwrites, so a machine relinked with an older CLI reads as
-      // that CLI's daemon, not the last one's.
-      hello.version ?? null,
-      hello.updateCheck === undefined ? null : (hello.updateCheck ? 1 : 0),
       deviceId,
+    );
+
+    // Like the sandbox verdict, a fact about THIS daemon on THIS boot:
+    // silence overwrites, so a machine relinked with an older CLI reads as
+    // that CLI's daemon, not the last one's.
+    this.sqlx(
+      `INSERT INTO user_device_builds (device_id, version, update_check, reported_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(device_id) DO UPDATE SET
+           version = excluded.version,
+           update_check = excluded.update_check,
+           reported_at = excluded.reported_at`,
+      deviceId,
+      hello.version ?? null,
+      hello.updateCheck === false ? 0 : 1,
+      Date.now(),
     );
   }
 
@@ -3520,13 +3530,14 @@ export class UserDO extends Agent<Env> {
       last_ip: string | null; last_agent: string | null; replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null;
       tier: string | null; version: string | null; update_check: number | null;
-    }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
-               last_ip, last_agent, replaced_at, revoked_at, unstopped_at,
-               tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu,
-               version, update_check
-          FROM user_devices
-         WHERE revoked_at IS NULL OR unstopped_at IS NOT NULL
-         ORDER BY created_at DESC`)
+    }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
+               d.last_ip, d.last_agent, d.replaced_at, d.revoked_at, d.unstopped_at,
+               d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
+               b.version, b.update_check
+          FROM user_devices d
+          LEFT JOIN user_device_builds b ON b.device_id = d.id
+         WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL
+         ORDER BY d.created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
         connected: r.revoked_at === null && this._devices.isConnected(r.id),

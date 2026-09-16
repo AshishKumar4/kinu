@@ -9,6 +9,7 @@
  * keeps the `daemon_outdated` reading and gets nothing.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { DEVICE_UPDATE, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
 import { CAPABLE_HELLO } from './helpers/device-harness';
@@ -155,5 +156,84 @@ describe('the Devices read model carries the version and the served build', () =
     await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
     await harness.sendDeviceHello(CAPABLE_HELLO);
     expect((await devices(harness))[0]).toMatchObject({ version: null, update: 'unreported' });
+  });
+});
+
+describe('a UserDO opened over storage from before the self-update lane', () => {
+  // The shipped user_devices DDL — every column this table carried before the
+  // lane, and none of it. A `CREATE TABLE IF NOT EXISTS` inside `initUserTables`
+  // is a no-op on this storage, so the object under test runs against exactly
+  // the shape a pre-lane account holds in production.
+  const SHIPPED_USER_DEVICES = `
+    CREATE TABLE IF NOT EXISTS user_devices (
+      id              TEXT PRIMARY KEY,
+      token_hash      TEXT NOT NULL,
+      prev_token_hash TEXT,
+      label           TEXT NOT NULL,
+      os              TEXT,
+      hostname        TEXT,
+      created_at      INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      connected_at    INTEGER,
+      last_seen_at    INTEGER,
+      expires_at      INTEGER,
+      revoked_at      INTEGER,
+      last_ip         TEXT,
+      last_agent      TEXT,
+      replaced_at     INTEGER,
+      consented_root  TEXT,
+      device_home     TEXT,
+      sandbox_capability TEXT,
+      sandbox_reason  TEXT,
+      sandbox_detail  TEXT,
+      sandbox_gpu     TEXT,
+      agent_root      TEXT,
+      tier            TEXT NOT NULL DEFAULT 'sandboxed',
+      unstopped_at    INTEGER
+    )
+  `;
+
+  test('HELLO records and Devices reads on storage whose user_devices has no build columns', async () => {
+    const db = new Database(':memory:');
+    db.run(SHIPPED_USER_DEVICES);
+
+    const harness = createTestUserDO({ storage: db, servedBuild: { version: SERVED, checksums: { [LINUX_X64]: CHECKSUM } } });
+    open.push(harness);
+
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'studio');
+    harness.attachDevice(deviceId);
+
+    // The failing statement in production: recordDeviceHello named columns the
+    // old table never had. Here it writes its own table instead.
+    await harness.sendDeviceHello(hello({ version: '0.2.0+older', updateCheck: true }));
+
+    expect(harness.devicePushes).toEqual([{
+      type: DEVICE_UPDATE,
+      version: SERVED,
+      urls: { tarball: LINUX_X64, checksum: `${LINUX_X64}.sha256` },
+      sha256: CHECKSUM,
+      device: deviceId,
+    }]);
+
+    const [row] = await devices(harness);
+    expect(row).toMatchObject({ version: '0.2.0+older', servedVersion: SERVED, update: 'behind' });
+
+    db.close();
+  });
+
+  test('the read model on storage that never heard a HELLO still answers unreported', async () => {
+    const db = new Database(':memory:');
+    db.run(SHIPPED_USER_DEVICES);
+
+    const harness = createTestUserDO({ storage: db });
+    open.push(harness);
+
+    await harness.userDO.registerDevice(await testOwner(), 'studio');
+
+    const [row] = await devices(harness);
+    // No user_device_builds row exists yet — the LEFT JOIN absent row reads
+    // as the daemon that named nothing.
+    expect(row).toMatchObject({ version: null, update: 'unreported' });
+
+    db.close();
   });
 });
