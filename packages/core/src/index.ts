@@ -1535,7 +1535,6 @@ export {
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
   ORCHESTRATOR_AGENT_SLUG,
-  SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire';
 
 // The one record of what the Cloudflare platform does, and how we know. Every
@@ -2575,6 +2574,7 @@ export {
   extractTicketOrchestratorAgentName,
   isForeignAgentNamespacePath,
   hostedActorRoute,
+  hostedActorSocketPath,
 } from './http/agent-routing';
 
 export {
