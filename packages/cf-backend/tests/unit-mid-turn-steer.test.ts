@@ -183,6 +183,30 @@ describe('a message typed while the agent is working', () => {
     expect(landed[1]!.steerId).toBe(landed[0]!.steerId);
   });
 
+  test('a steer that names a skill the turn does not carry brings its body to the next step', async () => {
+    // Skills are resolved when the turn opens, from the opening message. A
+    // send spliced mid-turn that names one — "build me a slate" typed while
+    // the genesis turn runs — used to reach the model as bare words: the
+    // first-run slate row on build cba44dcb9 read the ask at step 1 with no
+    // slates body in the prompt, the model hunted skills/slates.md at five
+    // paths, and wrote a server class with no fetch method.
+    const h = steerHarness();
+    await h.startTurn();
+
+    expect(await h.agent.send('now build a slate that answers GET /ping')).toEqual({ landed: 'mid-turn' });
+
+    const carried = await stepMessages(h.agent, 0, HISTORY);
+    // The steer's words verbatim and durable, then the skill it activated as
+    // this step's reference — after it, not merged into it.
+    expect(carried[HISTORY.length]).toEqual({ role: 'user', content: 'now build a slate that answers GET /ping' });
+    const reference = carried[HISTORY.length + 1];
+    expect(reference?.role).toBe('user');
+    expect(JSON.stringify(reference?.content)).toContain('### slates');
+    expect(JSON.stringify(reference?.content)).toContain('fetch(request)');
+    // Only the steer is a durable row; the reference rides the step.
+    expect(h.appended().filter((row) => row.role === 'user')).toHaveLength(1);
+  });
+
   test('restores a reset-lost steer from SQL before the resumed turn reaches its next step', async () => {
     const h = steerHarness();
     await h.startTurn();

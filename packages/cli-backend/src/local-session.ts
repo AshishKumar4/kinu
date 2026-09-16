@@ -70,7 +70,7 @@ import { TierIdSchema,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
+  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
@@ -922,6 +922,14 @@ export class LocalAgentSession implements BackendHost {
         modelWindow: () => ({
           contextWindow: this.sessionContextWindow(),
           modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+        }),
+        steerSkills: (text) => steerSkillsBlock({
+          vfs: this.getSkillsVfs(),
+          config: this.config,
+          userText: text,
+          trust: this.instructionTrust,
+          limits: { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+          alreadyActive: new Set(this.turnActiveSkillNames),
         }),
       },
     });
@@ -2229,6 +2237,8 @@ export class LocalAgentSession implements BackendHost {
       roleSkills,
     );
 
+    this.turnActiveSkillNames = activeSkills?.active.map((skill) => skill.name) ?? [];
+
     const candidateBuiltins = this.filterToolsBySkills(activeSkills);
 
     const candidateBuiltinNames = Object.keys(candidateBuiltins).filter(
@@ -3275,6 +3285,10 @@ export class LocalAgentSession implements BackendHost {
 
     return this._webSearchProvider;
   }
+
+  /** The names the running turn's prompt already carries bodies for, so a
+   *  mid-turn steer adds only what is new. */
+  private turnActiveSkillNames: readonly string[] = [];
 
   private resolveTurnSkills(
     userText: string,

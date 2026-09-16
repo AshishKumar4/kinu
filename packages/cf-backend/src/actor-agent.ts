@@ -87,7 +87,7 @@ import {
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, unverifiedInstructionsMessage,
-  observeSystemPromptHash,
+  observeSystemPromptHash, steerSkillsBlock,
   type DynamicContext, type DynamicApproval, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost,
@@ -2570,6 +2570,14 @@ export abstract class ActorAgent extends Think<Env> {
           modelWindow: () => ({
             contextWindow: this.sessionContextWindow(),
             modelOutputLimit: this.modelCatalog.modelOutputLimit(),
+          }),
+          steerSkills: (text) => steerSkillsBlock({
+            vfs: this.getSkillsVfs(),
+            config: this.config,
+            userText: text,
+            trust: this.instructionTrust(),
+            limits: { contextWindow: this.sessionContextWindow(), modelOutputLimit: this.modelCatalog.modelOutputLimit() },
+            alreadyActive: new Set(this._turnActiveSkills?.active.map((skill) => skill.name) ?? []),
           }),
         },
       });

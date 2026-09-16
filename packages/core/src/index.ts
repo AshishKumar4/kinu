@@ -1881,7 +1881,7 @@ export {
 export { createDurableMctsSession } from './orchestrator/mcts-session';
 
 export {
-  skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
+  skillsVfsOver, resolveTurnSkills, steerSkillsBlock, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
