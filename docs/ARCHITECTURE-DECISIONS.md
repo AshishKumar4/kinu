@@ -189,7 +189,13 @@ Decided 2026-09-16, commit 21dd9f226. Measured on build cba44dcb9: the
 three narration lines with FAIL run onto the end. A continuation joins the
 cut step's text to the answer only when the resumed step IS the answer (no
 tool call issued, finished in one step); a cut inside a narration step
-leaves that text on the step, not in front of the answer.
+leaves that text on the step, not in front of the answer. Amended 2026-09-16:
+the owner's live turn wrote a sentence then made a tool call, and the reload
+rendered the tool card first with the sentence after it — the answer had been
+moved last regardless of where it streamed. The one text part now stays where
+the last streamed text part stood: a turn answered after its calls keeps it
+last, one that ended on its calls keeps its narration first; pinned by
+`unit-chat-transcript`.
 
 C2. A Stop is the operator's act, not a failure of the turn. The transport
 sends the model stream's `abort` chunk and closes the request; it sends no
