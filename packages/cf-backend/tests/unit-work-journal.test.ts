@@ -1,11 +1,15 @@
 /**
- * The Work surface's journal is ONE stream out of three ledgers.
+ * The Work surface's journal is ONE stream out of three ledgers, and plans
+ * appear on it exactly once.
  *
  * Tasks, Jobs and the Evolution Changelog share it, because a tab each puts
  * "what happened while I was away" four clicks away and lands the reader in two
  * rooms that are mostly air. The merge only buys anything if the three actually
  * interleave by time — three blocks stacked under one heading would be the
- * same four rooms with the walls painted over.
+ * same four rooms with the walls painted over. The live plan already has its
+ * home in `WorkPlans` above (B12), so the journal carries no second Plan chip:
+ * closed tasks ride `self` as settled history, and exactly one plan-bearing
+ * tab renders.
  */
 import { describe, test, expect } from 'bun:test';
 import type { AgentTaskTree, ChangelogEntry } from '@kinu.run/core';
@@ -44,12 +48,13 @@ describe('the work journal', () => {
 
   test('every row carries the chip that filters it, so the chips are views over one list', () => {
     const rows = buildJournal([job({ id: 'j' })], [task('t', 1)], [entry('c', 2)]);
-    expect(new Set(rows.map((r) => r.filter))).toEqual(new Set(['jobs', 'plan', 'self']));
+    expect(new Set(rows.map((r) => r.filter))).toEqual(new Set(['jobs', 'self']));
 
-    // …and each chip selects exactly its own rows out of that one list.
-    for (const chip of ['jobs', 'plan', 'self'] as const) {
-      expect(rows.filter((r) => r.filter === chip)).toHaveLength(1);
-    }
+    // …and each chip selects exactly its own rows out of that one list — the
+    // closed task rides `self` beside the changelog entry, never a second Plan.
+    expect(rows.filter((r) => r.filter === 'jobs')).toHaveLength(1);
+    expect(rows.filter((r) => r.filter === 'self')).toHaveLength(2);
+    expect(rows.map((r) => r.filter)).not.toContain('plan');
   });
 
   test('a job that never settled is placed by when it started, not dropped', () => {

@@ -45,13 +45,15 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 
 /** Which filter a journal row answers to. `All` is not a filter, it is no
- *  filter — the chips are filters over one list. */
-type JournalFilter = "all" | "jobs" | "plan" | "self";
+ *  filter — the chips are filters over one list. Plan history is not one of
+ *  them: `WorkPlans` above owns the plan read model (`inspectSubordinate`
+ *  over `plan_reviews`), so a second Plan here would be the duplicate B12
+ *  removed — the journal's closed tasks are the settled tail, not the home. */
+type JournalFilter = "all" | "jobs" | "self";
 
 const FILTERS: Array<{ id: JournalFilter; label: string }> = [
   { id: "all", label: "All" },
   { id: "jobs", label: "Jobs" },
-  { id: "plan", label: "Plan" },
   { id: "self", label: "Self-changes" },
 ];
 
@@ -508,7 +510,7 @@ function PendingRow(
 
 type JournalRow =
   | { key: string; at: number; filter: "jobs"; kind: "job"; job: BackgroundJob }
-  | { key: string; at: number; filter: "plan"; kind: "task"; task: AgentTaskTree }
+  | { key: string; at: number; filter: "self"; kind: "task"; task: AgentTaskTree }
   | { key: string; at: number; filter: "self"; kind: "self"; entry: ChangelogEntry };
 
 /**
@@ -516,7 +518,8 @@ type JournalRow =
  *
  * Exported for its test: the ordering IS the feature — three separate ledgers
  * have to read as one stream, or the merge has bought nothing but a longer
- * page.
+ * page. Closed tasks ride the `self` filter: they are settled history, and
+ * the live plan already has its home in `WorkPlans` above.
  */
 export function buildJournal(
   jobs: readonly BackgroundJob[],
@@ -528,7 +531,7 @@ export function buildJournal(
       key: `job:${job.id}`, at: job.settledAt ?? job.createdAt, filter: "jobs", kind: "job", job,
     })),
     ...tasks.map((task): JournalRow => ({
-      key: `task:${task.id}`, at: task.updatedAt, filter: "plan", kind: "task", task,
+      key: `task:${task.id}`, at: task.updatedAt, filter: "self", kind: "task", task,
     })),
     ...entries.map((entry): JournalRow => ({
       key: `self:${entry.id}`, at: entry.at, filter: "self", kind: "self", entry,
