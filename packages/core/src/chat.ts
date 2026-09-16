@@ -364,6 +364,7 @@ const operationRejected = (operation: ModelOperation) =>
 interface AnswerStep {
   readonly text?: string;
   readonly finishReason?: string;
+  readonly toolCalls?: ReadonlyArray<unknown>;
 }
 
 /**
@@ -382,7 +383,10 @@ interface AnswerStep {
  *
  * Two steps JOIN: a step the provider cut at its output limit and the
  * continuation that finishes it are one answer in two requests, so the walk
- * back over `length` finishes collects both. An INTERRUPTED turn has no answer
+ * back over `length` finishes collects both — over a cut step WITHOUT tool
+ * calls only: the SDK continues a `length` step whose tool calls completed,
+ * and that step is narration the tool results followed, not the head of the
+ * answer. An INTERRUPTED turn has no answer
  * here at all — the cut text is what the operator saw, and the last finished
  * step is not it — and neither does a turn whose steps hold no text; both are
  * null, and the caller keeps what it streamed.
@@ -394,7 +398,7 @@ function answerFromSteps(
   if (interrupted || steps.length === 0) return null;
   let from = steps.length - 1;
 
-  while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED) from -= 1;
+  while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED && (steps[from - 1]?.toolCalls?.length ?? 0) === 0) from -= 1;
   const answer = steps.slice(from).map((step) => step.text ?? '').join('');
 
   return answer.trim() ? answer : null;

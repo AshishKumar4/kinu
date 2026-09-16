@@ -166,6 +166,35 @@ open of the same database adopts the next generation": two opens over one
 revocation invariant is pinned by workerd `slate-durability` and the
 workspace-reset case of `unit-node-home-wiring`.
 
+## Chat loop
+
+C1. The stored assistant row holds the turn's ANSWER, selected once by the
+runner (`chat.ts` `answerFromSteps`: the final step's text, joined back over
+output-limit cuts; null for an interrupted turn, whose streamed text stands),
+and every consumer reads the `done` it is handed. Narration — the text a step
+emits before its tool calls — is on that step's own `step_finish` row and on
+whoever watched live; it is not in the row. So the live view and the reloaded
+view differ by design: live shows narration then answer, reload shows the
+answer. On cf the row keeps the streamed message's non-text parts in order
+and carries the answer as its one text part, placed last; a turn that ended
+on tool calls with no final text stores the streamed narration as that part.
+Decided 2026-09-16, commit 21dd9f226. Measured on build cba44dcb9: the
+`public-failure-recovery` episode's "reply with only PASS or FAIL" row held
+three narration lines with FAIL run onto the end. A continuation joins the
+cut step's text to the answer only when the resumed step IS the answer (no
+tool call issued, finished in one step); a cut inside a narration step
+leaves that text on the step, not in front of the answer.
+
+C2. A Stop is the operator's act, not a failure of the turn. The transport
+sends the model stream's `abort` chunk and closes the request; it sends no
+`error: true` frame for `INTERRUPTED_TURN` (the SDK's client surfaces that
+frame as the stream's error and the hook painted an error card on every
+Stop). A turn cut before it streamed anything — no token, no call — writes
+no assistant row; the operator's row stands alone, as it did before the
+Think switch, on both backends. Decided 2026-09-16, pinned by
+`unit-chat-transport` and `turn-answer-row`. Both changes were hidden by the
+parity re-record at a49c1edfa.
+
 ## Delegation
 
 D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),

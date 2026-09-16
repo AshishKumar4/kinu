@@ -72,7 +72,6 @@ import { TierIdSchema,
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
-  subordinateTurnContext, inheritedAsModelMessage,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   // The terminal transition — core owns the vocabulary, the roster, the state
@@ -2349,20 +2348,8 @@ export class LocalAgentSession implements BackendHost {
     const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
-    // Attachments ride as ModelMessage file parts (the same shape ai's
-    // convertToModelMessages emits for FileUIParts on the cloud path), so
-    // multimodal models receive them natively from streamText.
-    const fileParts = (item.files ?? []).map((f) => ({
-      type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename,
-    }));
-
-    this.actorSession.openTurnInput(lease, {
-      item,
-      message: fileParts.length > 0
-        ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
-        : { role: 'user', content: item.text },
-      birthContext: (drainTurnId) => subordinateTurnContext(this.eventLog, drainTurnId).map(inheritedAsModelMessage),
-    });
+    // The turn's input is already on the working history: the loop placed it
+    // there before handing the turn here.
 
     // Live state (facts, memory tail, executor status, running background work,
     // the open fork roster) rides the dynamic-context ledger — the shared step
