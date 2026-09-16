@@ -116,6 +116,14 @@ describe('UserDO schema bootstrap', () => {
       'agent_name', 'device_id', 'policy', 'last_method',
       'last_summary', 'updated_at',
     ]);
+    // The preset a server was added from lives one table over — `user_mcp_servers`
+    // is shipped storage, and a column added to it never reaches the accounts
+    // created before the lane.
+    expect(columns(db, 'user_mcp_servers')).toEqual([
+      'id', 'name', 'server_url', 'transport', 'headers', 'allowed_tools',
+      'created_at', 'updated_at',
+    ]);
+    expect(columns(db, 'user_mcp_server_presets')).toEqual(['server_id', 'preset_id']);
     // NOT NULL with a default.
     expect(columns(db, 'user_workspaces')).toContain('name_origin');
     db.close();
