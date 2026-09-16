@@ -512,6 +512,10 @@ describe('the living background', () => {
         });
 
         process.stdout.write(`mesh-live: card hold=${cardHold.toFixed(3)} cross=${crossHold.toFixed(3)}\n`);
+        // The hold ARMED under the card — the threshold the old wait
+        // guaranteed — so the ratio below compares two live holds, never
+        // two zeros.
+        expect(cardHold).toBeGreaterThan(0.25);
         expect(crossHold).toBeGreaterThanOrEqual(cardHold * 0.9);
         const held = await page.screenshot({ captureBeyondViewport: false });
         await Bun.write(join(MESH, 'home-light-pointer.png'), held);
