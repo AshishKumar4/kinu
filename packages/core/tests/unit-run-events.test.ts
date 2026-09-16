@@ -11,6 +11,7 @@ import {
   type RunEvent, type Usage,
 } from '../src/index';
 import { testActorHandle } from '@kinu.run/test-utils';
+import { isBackgroundHandle } from '../src/jobs/threshold';
 import { makeSql, makeExecRaw } from './helpers';
 
 function setup() {
@@ -88,6 +89,31 @@ describe('RunEventRecorder.emit', () => {
 
     expect(rows.length).toBe(1);
     expect(rows[0]?.payload).toBe(live);
+  });
+});
+
+describe('a tool result round-trips as the value the tool returned', () => {
+  test("a detach handle read back off the ledger is still a handle", () => {
+    const { recorder } = setup();
+
+    // What `run` hands back when a command outlives its window. The one
+    // reader that matters is a caller asking the LEDGER whether a call
+    // detached — `tests/first-run/background-settle` parses this row with
+    // `isBackgroundHandle` and waits on the job id it names — so a row that
+    // held a rendering of this object instead answered "no handle" and left
+    // that caller waiting for a wake it could not name.
+    const handle = { background: true, jobId: 'bgjob-probe', kind: 'run', message: 'Spawned; the settled result will wake you.' };
+    recorder.emit('run-1', {
+      type: 'tool_call_end', name: 'run', toolCallId: 'call-1',
+      args: { command: 'sleep 45 && echo ok' }, result: handle, outcome: { success: true },
+    });
+
+    const [row] = recorder.read('run-1');
+
+    if (row?.type !== 'tool_call_end') throw new Error('expected the tool_call_end row');
+
+    expect(isBackgroundHandle(row.result)).toBe(true);
+    expect(row.result).toEqual(handle);
   });
 });
 
