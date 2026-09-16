@@ -306,7 +306,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // id alone is not authority to settle a sibling's work, and `clearSettled`
     // is one actor's history. The AGGREGATES are not: `countRunningInWorkspace`,
     // `resumeOwedIdsInWorkspace`, `nextResumeAtInWorkspace` and
-    // `hasLiveJobsInWorkspace` answer questions about the machine, because
+    // `hasUntimedLiveJobsInWorkspace` answer questions about the machine, because
     // every detached job is a live process tree whichever agent launched it
     // (jobs/runner.ts). Narrowing the cap would multiply the machine ceiling by
     // the actor count; widening the roster would put a sibling's work in this

@@ -1025,14 +1025,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(onStart).toContain('sweepsTruncated || this.owedWorkExists()');
     expect(onStart).toContain('this.scheduleTerminalRetry(Date.now())');
 
-    // …and that predicate is EXISTENCE READS AND NOTHING ELSE — the init ruling
-    // covers spawned work too, so the lease join, the stale sweep and every
-    // dispatch belong to the wake's frame. Behaviour:
+    // …and that predicate's untimed half is EXISTENCE READS AND NOTHING ELSE —
+    // the init ruling covers spawned work too, so the lease join, the stale
+    // sweep and every dispatch belong to the wake's frame. Behaviour:
     // unit-durable-terminal-recovery.test.ts drives an activation over an owed
     // lease and asserts both halves — the classification answers true and the
     // lease is untouched until the tick runs.
     const classify = memberBody(
-      source, 'protected override owedWorkExists(): boolean', 'orchestrator.ts',
+      source, 'protected override owedUntimedWork(): boolean', 'orchestrator.ts',
     );
 
     expect(classify).toContain('hasOpenDrainLease()');

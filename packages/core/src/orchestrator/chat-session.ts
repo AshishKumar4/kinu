@@ -91,6 +91,7 @@ import {
   type CompactionTriggerState, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { olderHistoryNotice, type TranscriptStore } from './transcript-store';
+import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
@@ -418,10 +419,14 @@ export interface ChatSessionPorts {
    *  to its producer rather than running it. Null when nothing coordinates. */
   driverGate(): Refusal | null;
   /** Arm the durable wake that re-drives owed work when the isolate dies
-   *  inside this turn. Called at the turn's synchronous open — an isolate
-   *  killed mid-turn with nothing else owed would otherwise sleep until an
-   *  external event. Soonest-wins: free when a wake already rides. */
-  armTurnWake(): Promise<void>;
+   *  inside this turn, at the instant the loop names. Called at the turn's
+   *  synchronous open — an isolate killed mid-turn with nothing else owed
+   *  would otherwise sleep until an external event. Soonest-wins: free when
+   *  a wake already rides. A backend whose process IS the wake (the local
+   *  session) arms nothing here: a crashed turn there re-arms from the ledger
+   *  on the next start, and a timer inside the process it would have to
+   *  outlive is not a wake. */
+  armTurnWake(atMs: number): Promise<void>;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
   /** Why a programmatic PLAN turn cannot be admitted here, or null when it
@@ -1152,8 +1157,11 @@ export class ChatSession {
     // The turn's own wake, armed at its synchronous open: a kill inside the
     // turn leaves the run row and the wake that re-drives it, rather than the
     // row alone with nothing scheduled to notice it. Soonest-wins, so this is
-    // free when another wake already rides.
-    await this.ports.armTurnWake();
+    // free when another wake already rides. At the recovery CEILING, not the
+    // first lap: this row seeds the chain for a kill, and the tick it delivers
+    // keeps a row while the turn is still open — it is not a maintenance pass
+    // inside every turn longer than a second.
+    await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
