@@ -28,10 +28,22 @@ import { waitForAnswer, type StoppableWaitOptions } from '@kinu.run/core';
 import PC_AGENT_DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
+import PC_AGENT_UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
+import { VERSION } from './display';
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
 
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
+
+/** The build the installed daemon is, beside it. The daemon reports it in
+ *  HELLO and the hub pushes an update when it is not the served one; the
+ *  daemon's own updater rewrites it when it lands a newer build. */
+const VERSION_STAMP_PATH = join(AGENT_HOME, 'pc-agent.version');
+
+/** Written by the daemon from the moment it starts its successor until a
+ *  daemon connects. With a stale pidfile beside it, the successor died before
+ *  the hub saw it, and `.prev` is the build that last ran. */
+const UPDATE_PENDING_PATH = join(AGENT_HOME, 'pc-agent.update-pending');
 
 /**
  * Every module the daemon `require`s beside itself, by the name it requires.
@@ -47,6 +59,7 @@ const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
 const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string }[] = [
   { name: 'sandbox.js', source: PC_AGENT_SANDBOX_SOURCE },
   { name: 'pty.js', source: PC_AGENT_PTY_SOURCE },
+  { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
 ];
 
 /** The sibling names the daemon source requires — `require('./x.js')`. */
@@ -134,7 +147,7 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   const connected = await waitForDeviceConnected(auth, device.deviceId, launch, opts);
 
   if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
-  anyDeviceConnected = true;
+  thisDeviceConnected = true;
 
   // The ROW's label names the device: the hub is the authority on what this
   // machine is called, not the name typed at the prompt.
@@ -149,28 +162,89 @@ export interface DaemonStatus {
   daemonPid: number | null;
   /** Whether this CLI process has a live session daemon child. */
   sessionActive: boolean;
+  /** This read found a self-update whose successor died before connecting,
+   *  put the previous build back, and started it. */
+  restoredPreviousBuild: boolean;
 }
 
 export function daemonStatus(): DaemonStatus {
+  const restoredPreviousBuild = restartFromPreviousBuild();
+
   return {
     deviceConfigPresent: existsSync(DEVICE_CONFIG_PATH),
     logPresent: existsSync(DAEMON_LOG_PATH),
     daemonPid: runningDaemonPid(),
     sessionActive: sessionDaemon !== null && sessionDaemon.exitCode === null && !sessionDaemon.killed,
+    restoredPreviousBuild,
   };
+}
+
+/** The daemon files a self-update lands, in landing order: siblings, the
+ *  daemon, its stamp. Each keeps a `.prev` beside it. */
+function updatedDaemonFiles(): string[] {
+  return [...DAEMON_SIBLINGS.map((sibling) => join(AGENT_HOME, sibling.name)), SCRIPT_PATH, VERSION_STAMP_PATH];
+}
+
+/**
+ * The one failure a self-update cannot recover on its own: a successor that
+ * claimed the machine, then died before the hub marked it connected. Nothing
+ * restarts a daemon today, so this does — from `.prev`, the build that last
+ * ran, restored daemon-first so no moment leaves a newer daemon beside older
+ * siblings. Answers whether it did. A live pidfile, no marker, or no `.prev`
+ * means nothing to recover.
+ */
+function restartFromPreviousBuild(): boolean {
+  const recorded = recordedDaemonPid();
+
+  if (recorded === null || processAlive(recorded)) return false;
+
+  if (!existsSync(UPDATE_PENDING_PATH) || !existsSync(`${SCRIPT_PATH}.prev`)) return false;
+
+  try {
+    for (const file of [SCRIPT_PATH, ...updatedDaemonFiles().filter((file) => file !== SCRIPT_PATH)]) {
+      if (existsSync(`${file}.prev`)) renameSync(`${file}.prev`, file);
+    }
+
+    syncAgentDirectory();
+  } catch (cause) {
+    throw toKinuError({ doing: 'restoring the previous device daemon build', cause, otherwise: 'io' });
+  }
+
+  startInstalledDaemon(false);
+
+  return true;
 }
 
 // ── Connect prompt policy ────────────────────────────────────────
 
 let offerConsumed = false;
 
-let anyDeviceConnected: boolean | null = null;
+let thisDeviceConnected: boolean | null = null;
+
+/** Whether one device row is THIS machine: the hostname the hub stamped from
+ *  the daemon's HELLO against the one this process runs on. The device list
+ *  carries no local identity — `device.json` holds the account's token and
+ *  this machine's consented root, never a device id — so the hostname is what
+ *  there is to compare. */
+function isThisMachine(device: CloudDevice): boolean {
+  return device.hostname !== null && device.hostname.trim() === defaultDeviceName();
+}
 
 /**
  * Whether a chat surface should offer the connect prompt now: cloud auth
- * present, the prompt not permanently dismissed, and no device connected
- * (the device list answer is cached — never polled). A true answer consumes
- * the per-invocation latch, so the prompt is asked at most once per CLI run.
+ * present, the prompt not permanently dismissed, and THIS machine not already
+ * connected (the device list answer is cached — never polled). A true answer
+ * consumes the per-invocation latch, so the prompt is asked at most once per
+ * CLI run.
+ *
+ * THIS machine, not the account. The card asks "Let this agent use this PC?",
+ * and a person on a second laptop has as much to link as one with no machine
+ * connected at all — suppressing on any connected device meant the offer
+ * vanished for everyone whose OTHER machine was linked, and the one surface
+ * that measures the card (`tests/first-run/enter-sends`) reads it as the card
+ * never arriving. Measured 2026-09-16 on the eval account: three device
+ * daemons from earlier episodes were connected, so no session on this machine
+ * was offered the link.
  */
 export async function shouldOfferDeviceConnect(): Promise<boolean> {
   if (offerConsumed) return false;
@@ -180,10 +254,10 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
 
   if (!auth) return false;
 
-  if (anyDeviceConnected === null) {
+  if (thisDeviceConnected === null) {
     try {
       const devices = await listCloudDevices(auth.origin, auth.token);
-      anyDeviceConnected = devices.some((device) => device.connected);
+      thisDeviceConnected = devices.some((device) => device.connected && isThisMachine(device));
     } catch (error) {
       // Never nag when the answer is unknown — an unreachable cloud is not evidence that no device
       // is connected. A malformed origin is ours, not the network's: swallowing it would disable
@@ -194,7 +268,7 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
     }
   }
 
-  if (anyDeviceConnected) return false;
+  if (thisDeviceConnected) return false;
   offerConsumed = true;
 
   return true;
@@ -212,7 +286,7 @@ export async function deviceStatusLine(): Promise<string> {
   try {
     const auth = requireAuthConfig();
     const devices = await listCloudDevices(auth.origin, auth.token);
-    anyDeviceConnected = devices.some((device) => device.connected);
+    thisDeviceConnected = devices.some((device) => device.connected && isThisMachine(device));
     const connected = devices.filter((device) => device.connected);
 
     if (connected.length > 0) {
@@ -401,7 +475,21 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     ),
   }));
 
+  const stamp = `${VERSION}\n`;
+
+  const stampTemporary = stageInstallFile(
+    VERSION_STAMP_PATH,
+    stamp,
+    0o600,
+    (temporary) => {
+      if (readFileSync(temporary, 'utf-8') !== stamp) {
+        throw new KinuError('io', 'the staged device daemon version stamp does not match this release');
+      }
+    },
+  );
+
   let scriptPending: string | null = scriptTemporary;
+  let stampPending: string | null = stampTemporary;
   const siblingsPending = new Set(siblingTemporaries.map((entry) => entry.temporary));
   let configPending: string | null = null;
 
@@ -434,13 +522,21 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     renameSync(scriptTemporary, SCRIPT_PATH);
     scriptPending = null;
     enforceOwnerOnly(SCRIPT_PATH, 0o700);
+    // The stamp describes the daemon it sits beside, so it lands after it: a
+    // crash between the two leaves a new daemon under an old stamp, which the
+    // hub reads as behind and the daemon then re-lands as itself.
+    renameSync(stampTemporary, VERSION_STAMP_PATH);
+    stampPending = null;
+    enforceOwnerOnly(VERSION_STAMP_PATH, 0o600);
+    // A fresh install is not a pending update, whatever an earlier one left.
+    rmSync(UPDATE_PENDING_PATH, { force: true });
     renameSync(configTemporary, DEVICE_CONFIG_PATH);
     configPending = null;
     enforceOwnerOnly(DEVICE_CONFIG_PATH, 0o600);
     syncAgentDirectory();
   } catch (cause) {
     try {
-      for (const temporary of [scriptPending, ...siblingsPending, configPending]) {
+      for (const temporary of [scriptPending, stampPending, ...siblingsPending, configPending]) {
         if (temporary !== null) rmSync(temporary, { force: true });
       }
     } catch (cleanup) {

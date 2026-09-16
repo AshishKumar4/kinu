@@ -39,6 +39,7 @@
  * resumes it — is the one the shipped `interactive` policy runs.
  */
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { tool, jsonSchema, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
@@ -57,8 +58,6 @@ import { BUILTIN_TOOLS } from '../src/tools/registry';
 const DETACH_MS = 60;
 
 const SETTLE_MS = 200;
-
-const STALL_MS = 4_000;
 
 /** The one long-running tool a node has to hold for any of this to be reachable: a
  *  `prebuiltCodemodeTool` whose work outlives the detach threshold. `settle` is called
@@ -96,11 +95,12 @@ function slowExecuteTool() {
  * handle is already in hand and there is nothing to do but stop; a user message naming a
  * background job means the result has landed.
  */
-function detachThenReport(seen: string[][]): ReturnType<typeof scriptedTurnModel> {
+function detachThenReport(seen: string[][], onRequest?: (count: number) => void): ReturnType<typeof scriptedTurnModel> {
   return scriptedTurnModel({
     modelId: 'fake-detacher',
     doGenerate: ({ prompt }) => {
       seen.push(prompt.map((message) => JSON.stringify(message.content)));
+      onRequest?.(seen.length);
       const text = JSON.stringify(prompt);
       const woken = text.includes('Background eval job');
       const reported = text.includes('"received":true');
@@ -161,24 +161,16 @@ const PROSE_ONLY_MODEL = scriptedTurnModel({
 });
 
 /**
- * Await a FACT rather than a duration.
+ * Await the runner's OWN signal that a call detached, rather than a duration.
  *
  * The one genuinely real timer in this file is the detach threshold itself: it is a
  * `setTimeout` inside `withBackgroundThreshold`, so a fake clock stops it firing and the
  * arm would pass against a threshold that never crossed. What is NOT guessed at is when
- * it crossed — that is read off the job registry, which is the same row the model's
- * handle names. So the wait ends on the event, and the only real time paid is the
- * threshold's own sub-second value.
+ * it crossed — the runner logs `bg_job_started` the moment it mints the job row, and
+ * the fixture's logger resolves this on that event. The registry count read after it
+ * is the same row the model's handle names. The only real time paid is the threshold's
+ * own sub-second value, and nothing here races it.
  */
-async function until(fact: () => boolean, what: string): Promise<void> {
-  const deadline = Date.now() + STALL_MS;
-
-  while (!fact()) {
-    if (Date.now() > deadline) throw new Error(`waited ${String(STALL_MS)}ms and ${what} never happened`);
-    await new Promise((resolve) => { setTimeout(resolve, 5); });
-  }
-}
-
 interface Fixture {
   readonly input: NodeAgentInput;
   readonly deps: NodeAgentDeps;
@@ -186,6 +178,8 @@ interface Fixture {
   /** How many jobs the workspace registry shows in flight — the FACT that a tool call
    *  crossed the detach threshold and the turn was released. */
   readonly detached: () => number;
+  /** Resolves when the runner logs `bg_job_started`: the job row exists. */
+  readonly jobStarted: () => Promise<void>;
 }
 
 function fixture(over: {
@@ -216,6 +210,21 @@ function fixture(over: {
    *  instead of failing it, and a stall names no cause. */
   let nodeActorId: string | null = null;
 
+  // The recording logger, with one event of the runner's turned into a signal.
+  const recording = createRecordingLogger();
+  const started = Promise.withResolvers<void>();
+
+  const logger: typeof recording = {
+    ...recording,
+    event: (name, fields) => {
+      recording.event(name, fields);
+
+      const job = v.safeParse(v.object({ job: v.string() }), fields);
+
+      if (name === 'swarm.node_job' && job.success && job.output.job === 'bg_job_started') started.resolve();
+    },
+  };
+
   const deps: NodeAgentDeps = {
     hostNode: async (node) => {
       const seat = await seats.hostNode(node);
@@ -226,13 +235,15 @@ function fixture(over: {
     model: over.model, journal,
 
     maxWallClockMs: 60_000,
-    logger: createRecordingLogger(),
+    logger,
     backgroundPolicy: () => ({
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,
     }),
   };
 
   if (over.codemodeTool !== undefined) deps.codemodeTool = over.codemodeTool;
+
+  const jobStarted = (): Promise<void> => started.promise;
 
   const detached = (): number => {
     if (nodeActorId === null) return 0;
@@ -244,26 +255,30 @@ function fixture(over: {
     return rows[0]?.n ?? 0;
   };
 
-  return { input, deps, journal, detached };
+  return { input, deps, journal, detached, jobStarted };
 }
 
 describe('a node backgrounds work, ends its turn, and is woken to finish', () => {
   test('a turn that ends holding a live job is neither terminal nor abandoned, and the wake completes it', async () => {
     const slow = slowExecuteTool();
     const prompts: string[][] = [];
+    const secondRequest = Promise.withResolvers<void>();
 
-    const { input, deps, journal, detached } = fixture({
-      model: detachThenReport(prompts), codemodeTool: slow.entry,
+    const { input, deps, journal, detached, jobStarted } = fixture({
+      model: detachThenReport(prompts, (count) => { if (count === 2) secondRequest.resolve(); }),
+      codemodeTool: slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
 
-    // THE FIRST TURN ENDS WITHOUT THE JOB. Waited for by the FACT rather than by a
-    // sleep: the node's second request is the one the wake produced, so a second entry
-    // in `prompts` cannot appear until the first turn ended and the wake resumed it —
-    // and it cannot appear at all until the job settles, which nothing but the line
-    // below does.
-    await until(() => detached() > 0, 'the slow call detached');
+    // THE FIRST TURN ENDS WITHOUT THE JOB. Waited for by two FACTS rather than a
+    // sleep: the runner's own started event, and the model's second request — the
+    // step that read the handle back — which is the last thing the first turn does
+    // before it stops. A third request cannot appear until the job settles, which
+    // nothing but the line below does.
+    await jobStarted();
+    await secondRequest.promise;
+    expect(detached()).toBe(1);
     // ONE launch, and the first turn's two requests: the call, and the step that read the
     // handle back and chose to stop. The denominator matters — "the turn ended" is a
     // claim about a turn that really ran, not about a loop that never started — and so
@@ -322,12 +337,13 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
     const slow = slowExecuteTool();
     const prompts: string[][] = [];
 
-    const { input, deps, detached } = fixture({
+    const { input, deps, detached, jobStarted } = fixture({
       model: detachThenReport(prompts), codemodeTool: slow.entry,
     });
 
     const running = runNodeAgent(input, deps);
-    await until(() => detached() > 0, 'the slow call detached');
+    await jobStarted();
+    expect(detached()).toBe(1);
     slow.settle();
     const run = await running;
     expect(run.report.status).toBe('completed');

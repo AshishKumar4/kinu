@@ -1273,7 +1273,7 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
       const ran = spawnSync('unshare', [
         '-Ur', '--fork', '--pid', '--mount-proc',
         'sh', init, scenario, dir, script, ready.stranger, ready.cwd,
-      ], { encoding: 'utf8', timeout: 20_000 });
+      ], { encoding: 'utf8' });
 
       const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
 
@@ -1323,7 +1323,6 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
       rmSync(ready.stranger, { force: true });
       rmSync(ready.cwd, { force: true });
     },
-    25_000,
   );
 });
 

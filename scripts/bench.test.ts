@@ -595,8 +595,22 @@ describe('createAttemptSandbox', () => {
     write('tests/eval/keep.txt', 'the unsealed checks stay');
     write(join(ARTIFACT_DIRNAME, 'attempts.jsonl'), '{"taskId":"a-sealed-task"}\n');
     write('node_modules/ai/package.json', JSON.stringify({ name: 'ai', main: 'index.js' }));
+    // Every workspace-link shape the real tree has (measured 2026-09-15):
+    // hoisted scope links in the root node_modules under TWO scopes (the
+    // product scope and the vendored `@agent-core` one), each a relative link
+    // into `packages/`, and a per-package nested `node_modules` holding a
+    // third-party entry (cf-backend's `wrangler`), which is copied with the
+    // package rather than re-pointed.
+    write('packages/agent-core/package.json', JSON.stringify({ name: '@agent-core/core', main: 'dist/index.js' }));
+    write('packages/agent-core/dist/index.js', 'export const vendored = true;\n');
+    write('packages/cf-backend/package.json', JSON.stringify({ name: '@kinu.run/cf-backend', main: 'src/index.ts' }));
+    write('packages/cf-backend/src/index.ts', 'export const cf = true;\n');
+    write('packages/cf-backend/node_modules/wrangler/package.json', JSON.stringify({ name: 'wrangler', main: 'index.js' }));
     mkdirSync(join(root, 'node_modules', '@kinu.run'), { recursive: true });
+    mkdirSync(join(root, 'node_modules', '@agent-core'), { recursive: true });
     symlinkSync('../../packages/core', join(root, 'node_modules', '@kinu.run', 'core'));
+    symlinkSync('../../packages/cf-backend', join(root, 'node_modules', '@kinu.run', 'cf-backend'));
+    symlinkSync('../../packages/agent-core', join(root, 'node_modules', '@agent-core', 'core'));
     mkdirSync(join(root, '.git'));
     writeFileSync(join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
 
@@ -667,11 +681,14 @@ describe('createAttemptSandbox', () => {
   // guard uses — never a written-down scope. Spelling '@kinu.run/*' here is how
   // this test passed for months while `@agent-core/core` resolved into the donor
   // checkout: it certified two links out of ten and reported on the sandbox.
-  test('every workspace link resolves inside the copy, not back into the real repo', () => {
+  test('every workspace link resolves inside the copy, not back into the repository it copied', () => {
+    const repo = fixtureRepo();
     const runRoot = tempDir('bench-ws-');
-    const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', prepare });
-    const packages = workspacePackages(REPO_ROOT);
-    expect(packages.size).toBeGreaterThan(1);
+    const sandbox = createAttemptSandbox({ repoRoot: repo, runRoot, attemptId: 'a6', prepare });
+    // The same enumeration `tests/workspace-resolution.test.ts` judges the real
+    // tree by, over the fixture: three packages under two scopes.
+    const packages = workspacePackages(repo);
+    expect([...packages.keys()].sort()).toEqual(['@agent-core/core', '@kinu.run/cf-backend', '@kinu.run/core']);
 
     for (const [name, packageDir] of packages) {
       // Bun hoists workspace links to the ROOT node_modules, so a per-package
@@ -679,9 +696,12 @@ describe('createAttemptSandbox', () => {
       const resolved = realpathSync(join(sandbox.dir, 'node_modules', name));
       // The copy's OWN directory, by equality: `startsWith` alone would accept a
       // link into some other package of the same sandbox.
-      expect(resolved).toBe(join(realpathSync(sandbox.dir), relative(REPO_ROOT, packageDir)));
+      expect(resolved).toBe(join(realpathSync(sandbox.dir), relative(repo, packageDir)));
     }
 
+    // A package's nested node_modules travels with the package: it is inside
+    // the copy and holds the entry the package had.
+    expect(existsSync(join(sandbox.dir, 'packages', 'cf-backend', 'node_modules', 'wrangler', 'package.json'))).toBe(true);
     sandbox.dispose();
   });
 

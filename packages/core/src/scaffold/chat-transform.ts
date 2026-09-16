@@ -109,13 +109,11 @@ async function* scaffoldTurn(
   for (;;) {
     const next = await pump.next();
 
-    if (next.done) {
-      if (!next.value.ok && next.value.error) {
-        yield { type: 'error', message: next.value.error };
-      }
-
-      break;
-    }
+    // A failed run has already said so: every `ok: false` return in
+    // `runScaffold` emits its `error` event before returning, and that event
+    // passed through the `error` arm below. Nothing is owed here — a second
+    // event for the same failure was what the client used to get.
+    if (next.done) break;
 
     const ev = next.value;
 

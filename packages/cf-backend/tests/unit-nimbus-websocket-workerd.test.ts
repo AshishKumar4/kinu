@@ -19,5 +19,5 @@ describe('Nimbus capability WebSockets in workerd', () => {
     expect(stderr).toBe('');
     expect(exitCode).toBe(0);
     expect(stdout.trim()).toBe('Nimbus capability WebSocket workerd probe passed');
-  }, 30_000);
+  });
 });

@@ -263,7 +263,7 @@ beforeAll(() => {
   disk.tree(real.upper).plant(trees.upper);
   disk.tree(real.base).plant(trees.base);
   disk.tree(real.upper2);
-}, 300_000);
+});
 
 describe('the delta shell against bash', () => {
   let probe: DeltaProbeEntry[];

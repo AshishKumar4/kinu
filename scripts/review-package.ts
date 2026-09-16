@@ -34,12 +34,12 @@ const artifactPath = join(OUT, 'artifact.html');
 
 writeFileSync(artifactPath, artifactHtml);
 
-await withGallery(async ({ browser, origin }) => {
+await withGallery(async ({ newPage, origin }) => {
   for (const [label, width, height] of [
     ['1280', 1280, 900], ['1920', 1920, 1000], ['390', 390, 844],
   ] as const) {
     // His artifact.
-    const a = await browser.newPage();
+    const a = await newPage();
     await a.setViewport({ width, height, deviceScaleFactor: 1 });
     await a.goto(`file://${artifactPath}`, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 800));
@@ -50,7 +50,7 @@ await withGallery(async ({ browser, origin }) => {
     await a.close();
 
     // The port, as the worker serves it.
-    const p = await browser.newPage();
+    const p = await newPage();
     await p.setViewport({ width, height, deviceScaleFactor: 1 });
     await p.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
     await p.goto(`${origin}/gallery.html?frame=landing`, { waitUntil: 'networkidle0' });

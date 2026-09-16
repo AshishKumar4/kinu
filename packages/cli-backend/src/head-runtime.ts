@@ -27,7 +27,7 @@ import {
   type PublishHeadStream,
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type DynamicContext, type HostedActor, type ProfileAuthorityInputs, type WorkMode, type WriteObserver,
-  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, type HeadJournal,
+  HeadCapture, runHeadInference, buildHeadToolSet, HeadController, REAL_HEAD_CLOCK, type HeadJournal,
   createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM,
   localMissionScope,
@@ -284,7 +284,7 @@ async function runLocalSplit(
   input: HeadInput,
   deps: CLIHeadRuntimeDeps,
 ): Promise<HeadSplitResult> {
-  const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal());
+  const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_HEAD_CLOCK);
 
   const controllerInput: Parameters<HeadController['run']>[0] = {
     parentHeadId: input.id,

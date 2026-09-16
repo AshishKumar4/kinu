@@ -42,7 +42,7 @@ const IMAGE = `kinu-workspace-mount-contract:${String(process.pid)}`;
 
 function dockerUsable(): boolean {
   const version = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
-    encoding: 'utf8', timeout: 30_000,
+    encoding: 'utf8',
   });
 
   return version.status === 0;
@@ -62,7 +62,7 @@ function probe(kind: 'overlay' | 'direct-io'): MountVerdicts {
   const ran = spawnSync('docker', [
     'shell', '--rm', '--privileged', '--device', '/dev/fuse',
     '--entrypoint', '/probe/run.sh', IMAGE, kind,
-  ], { encoding: 'utf8', timeout: 180_000 });
+  ], { encoding: 'utf8' });
 
   if (ran.status !== 0) {
     throw new Error(`the ${kind} probe exited ${String(ran.status)}: ${ran.stderr || ran.stdout}`);
@@ -78,12 +78,12 @@ function probe(kind: 'overlay' | 'direct-io'): MountVerdicts {
 describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappings', () => {
   test('the fixture image builds both probes inside the shipped image', () => {
     const built = spawnSync('docker', ['build', '-t', IMAGE, FIXTURE_DIR], {
-      encoding: 'utf8', timeout: 900_000,
+      encoding: 'utf8',
     });
 
     expect(built.stderr + built.stdout).not.toContain('error:');
     expect(built.status).toBe(0);
-  }, 900_000);
+  });
 
   test('on the shipped fuse-overlayfs upper, a writable MAP_SHARED mmap and a WAL database both work', () => {
     const verdicts = probe('overlay');
@@ -92,7 +92,7 @@ describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappin
     // connection agreed through the shared-memory index AND the rows were still
     // there after both connections closed and the database was reopened.
     expect(verdicts).toEqual({ mmap: 'OK', wal: 'OK' });
-  }, 300_000);
+  });
 
   test('on a direct-io FUSE mount the same case fails its WAL with a mapping-caused IOERR', () => {
     const verdicts = probe('direct-io');
@@ -119,13 +119,13 @@ describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappin
     expect(
       verdicts.wal === 'SQLITE_IOERR_SHMMAP' || verdicts.wal === 'SQLITE_IOERR_DELETE',
     ).toBe(true);
-  }, 300_000);
+  });
 
   // The tag this process minted, released with it. The image LAYERS stay in the
   // cache — that is what keeps a re-run cheap — and only the name goes, so a
   // machine running this suite for weeks does not accumulate one tag per run.
   afterAll(() => {
-    const removed = spawnSync('docker', ['rmi', '-f', IMAGE], { encoding: 'utf8', timeout: 60_000 });
+    const removed = spawnSync('docker', ['rmi', '-f', IMAGE], { encoding: 'utf8' });
 
     if (removed.status !== 0) {
       throw new Error(`the fixture tag ${IMAGE} could not be released: ${removed.stderr.trim() || 'docker printed nothing'}`);

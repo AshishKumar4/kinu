@@ -20,7 +20,7 @@
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
 import type { JsonValue } from '../utils/json';
-import { DeviceTunnel, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
+import { DeviceTunnel, isDeviceUnknownMethodError, REAL_TUNNEL_TIMERS, type TunnelSocket } from './device-tunnel';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
 import { EXECUTOR_CAPABILITIES } from './types';
@@ -42,6 +42,12 @@ export const DEVICE_KEEPALIVE_PING = 'ping';
 export const DEVICE_KEEPALIVE_PONG = 'pong';
 
 const DEVICE_WS_TAG_PREFIX = 'device:';
+
+/** The close reason a replaced daemon socket receives. The daemon reads it
+ *  verbatim (`SOCKET_REPLACED_REASON` in packages/pc-agent): after starting
+ *  its successor, this close is the successor connecting and its cue to exit.
+ *  Shipped source keeps its own literal, as the keepalive words do. */
+const DEVICE_SOCKET_REPLACED_REASON = 'replaced by a new connection';
 
 /**
  * Deadline for the probe round-trip. Short on purpose: it runs on the path that
@@ -138,7 +144,7 @@ export class DeviceSocketHub {
     for (const old of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (old.readyState !== WS_OPEN) continue;
       diagnostics.event('device.socket_replaced', { device: deviceId });
-      old.close(1000, 'replaced by a new connection');
+      old.close(1000, DEVICE_SOCKET_REPLACED_REASON);
     }
 
     this.ctx.acceptWebSocket(server, [deviceTag(deviceId)]);
@@ -298,7 +304,7 @@ export class DeviceSocketHub {
     const ws = this.liveSocket(deviceId);
 
     if (!ws) return null;
-    const tunnel = new DeviceTunnel(ws);
+    const tunnel = new DeviceTunnel(ws, undefined, undefined, REAL_TUNNEL_TIMERS);
     this.tunnels.set(deviceId, { tunnel, ws });
 
     return tunnel;

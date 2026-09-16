@@ -1032,7 +1032,7 @@ describe('turn-pipeline correctness wiring', () => {
     // lease and asserts both halves — the classification answers true and the
     // lease is untouched until the tick runs.
     const classify = memberBody(
-      source, 'protected owedWorkExists(): boolean', 'orchestrator.ts',
+      source, 'protected override owedWorkExists(): boolean', 'orchestrator.ts',
     );
 
     expect(classify).toContain('hasOpenDrainLease()');

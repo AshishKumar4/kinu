@@ -1176,6 +1176,12 @@
     "created_at",
     "updated_at"
   ],
+  "user_device_builds@packages/core/src/state/user-schema.ts": [
+    "device_id",
+    "version",
+    "update_check",
+    "reported_at"
+  ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id",
     "token_hash",

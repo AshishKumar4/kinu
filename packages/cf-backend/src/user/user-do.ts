@@ -142,6 +142,8 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   DEVICE_TOKEN_ROTATION, DEVICE_TOKEN_ROTATION_ACK,
+  DEVICE_UPDATE, cliArtifactPath, deviceUpdateState, fetchDeployedAsset, readBuildStamp,
+  type DeviceUpdateFrame, type DeviceUpdateState,
   DEVICE_CANCEL_METHOD, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, parseDeviceCancelAnswer, nextDeviceRequestId,
   DEVICE_TIERS, SANDBOX_UNAVAILABLE,
   effectiveDeviceMode, parseDeviceTier, parseSandboxCapability, parseSandboxReason, sandboxReasonFix, sandboxCause,
@@ -334,6 +336,14 @@ const DeviceHelloSchema = v.object({
    *  composes `<agentRoot>/<workspace>/home` per exec, so the ROOT is what
    *  travels and the hub never guesses a path on someone else's machine. */
   agentRoot: v.optional(v.string()),
+  /** The build the daemon is (the stamp the CLI wrote beside it), the
+   *  machine's `os.arch()` naming which published artifact fits it, and
+   *  whether its owner lets the hub push a newer build. All absent on a
+   *  daemon older than this contract, which then gets no UPDATE and keeps
+   *  the `daemon_outdated` reading its missing sandbox field earns. */
+  version: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1))),
+  arch: v.optional(v.string()),
+  updateCheck: v.optional(v.boolean()),
 });
 
 /** The verdict columns of `user_devices`. An object type rather than an
@@ -2408,6 +2418,12 @@ export class UserDO extends Agent<Env> {
 
     if (hello.success) {
       this.recordDeviceHello(deviceId, hello.output);
+      const frame = await this.deviceUpdateFrame(hello.output);
+
+      if (frame !== null) {
+        diagnostics.event('device.update_pushed', { device: deviceId, from: hello.output.version ?? '', to: frame.version });
+        ws.send(JSON.stringify(frame));
+      }
 
       return;
     }
@@ -2555,6 +2571,59 @@ export class UserDO extends Agent<Env> {
       JSON.stringify(hello.sandbox?.gpu ?? []),
       deviceId,
     );
+
+    // Like the sandbox verdict, a fact about THIS daemon on THIS boot:
+    // silence overwrites, so a machine relinked with an older CLI reads as
+    // that CLI's daemon, not the last one's.
+    this.sqlx(
+      `INSERT INTO user_device_builds (device_id, version, update_check, reported_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(device_id) DO UPDATE SET
+           version = excluded.version,
+           update_check = excluded.update_check,
+           reported_at = excluded.reported_at`,
+      deviceId,
+      hello.version ?? null,
+      hello.updateCheck === false ? 0 : 1,
+      Date.now(),
+    );
+  }
+
+  /** The build the deployment serves, or null when it published no stamp (an
+   *  incomplete deploy) or this deployment names no public origin to read
+   *  assets under. Read per HELLO: the stamp changes with every deploy, and a
+   *  HELLO is exactly a moment nothing else is asking. */
+  private async servedBuild(): Promise<string | null> {
+    const origin = this.env.CLI_PUBLIC_ORIGIN;
+
+    if (!origin) return null;
+
+    return (await readBuildStamp(this.env, origin))?.version ?? null;
+  }
+
+  /**
+   * The UPDATE frame for a machine whose HELLO named another build than the
+   * served one, when its owner allows the push: the published artifact for
+   * its platform and that artifact's checksum, both as paths on the origin
+   * the daemon already trusts. Nothing for a daemon that named no build (it
+   * keeps the `daemon_outdated` path), no platform the deploy built for, an
+   * opted-out owner, or a deploy with no checksum to name.
+   */
+  private async deviceUpdateFrame(hello: v.InferOutput<typeof DeviceHelloSchema>): Promise<DeviceUpdateFrame | null> {
+    const served = await this.servedBuild();
+    const state = deviceUpdateState({ version: hello.version ?? null, updateCheck: hello.updateCheck !== false }, served);
+
+    if (state !== 'behind' || served === null) return null;
+    const tarball = cliArtifactPath(hello.os, hello.arch);
+
+    if (tarball === null) return null;
+    const origin = this.env.CLI_PUBLIC_ORIGIN ?? '';
+    const checksum = await fetchDeployedAsset(this.env, origin, `${tarball}.sha256`);
+    const sha256 = checksum === null ? '' : ((await checksum.text()).trim().split(/\s+/)[0] ?? '');
+
+    if (!/^[0-9a-f]{64}$/i.test(sha256)) return null;
+
+    return { type: DEVICE_UPDATE, version: served, urls: { tarball, checksum: `${tarball}.sha256` }, sha256: sha256.toLowerCase() };
   }
 
   override async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
@@ -3446,21 +3515,29 @@ export class UserDO extends Agent<Env> {
      *  roots here: those are per workspace, and this is the account's device
      *  registry, not one workspace's view of it. */
     sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
+    /** The build the daemon last reported, the build this deployment serves,
+     *  and the one word the row shows about the two. */
+    version: string | null;
+    servedVersion: string | null;
+    update: DeviceUpdateState;
   }>> {
     await this.requireTier(caller, 'device.manage');
+    const served = await this.servedBuild();
 
     return this.sqlx<SandboxColumns & {
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
       last_ip: string | null; last_agent: string | null; replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null;
-      tier: string | null;
-    }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at,
-               last_ip, last_agent, replaced_at, revoked_at, unstopped_at,
-               tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu
-          FROM user_devices
-         WHERE revoked_at IS NULL OR unstopped_at IS NOT NULL
-         ORDER BY created_at DESC`)
+      tier: string | null; version: string | null; update_check: number | null;
+    }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
+               d.last_ip, d.last_agent, d.replaced_at, d.revoked_at, d.unstopped_at,
+               d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
+               b.version, b.update_check
+          FROM user_devices d
+          LEFT JOIN user_device_builds b ON b.device_id = d.id
+         WHERE d.revoked_at IS NULL OR d.unstopped_at IS NOT NULL
+         ORDER BY d.created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
         connected: r.revoked_at === null && this._devices.isConnected(r.id),
@@ -3468,6 +3545,9 @@ export class UserDO extends Agent<Env> {
         lastIp: r.last_ip, lastAgent: r.last_agent, replacedAt: r.replaced_at,
         revokedAt: r.revoked_at, unstoppedAt: r.unstopped_at,
         sandbox: { tier: parseDeviceTier(r.tier), ...readSandboxColumns(r) },
+        version: r.version,
+        servedVersion: served,
+        update: deviceUpdateState({ version: r.version, updateCheck: r.update_check !== 0 }, served),
       }));
   }
 

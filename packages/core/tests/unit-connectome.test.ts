@@ -694,5 +694,5 @@ describe('the picture stays cheap', () => {
     const mesh = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
     mesh.setActivity({ working: true, decisions: 0 });
     expect(cheapestFrameRatio(mesh, 2, 50, 10)).toBeGreaterThan(12.5);
-  }, 20_000);
+  });
 });

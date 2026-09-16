@@ -1227,7 +1227,11 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     // a fixed id here follows the bgjob-unresumable test below.
     store.create({ id: 'bgjob-immortal', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     runner.detach('bgjob-immortal', 'agents', new Promise(() => { /* never */ }));
-    await new Promise((r) => setTimeout(r, 50));
+    // The detach's own bookkeeping has settled once the microtasks it queued
+    // have run; a compensating timer would be a structural addition this
+    // seam's source gate (no-elapsed-work-deadline) refuses, not a duration
+    // this test could wait out.
+    await Promise.resolve();
     expect(store.get('bgjob-immortal')?.status).toBe('running');
   });
 

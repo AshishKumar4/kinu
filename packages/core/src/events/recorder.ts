@@ -520,7 +520,7 @@ export class RunEventRecorder {
    *
    * That is a cost argument, not a capability one: {@link spendByProducer} depends
    * on SQLite's JSON functions being available on both SqlExecutors, deliberately,
-   * and `tests/workerd/do-spend-aggregate.test.ts` runs it on real Durable Object
+   * and `tests/workerd/long/do-spend-aggregate.test.ts` runs it on real Durable Object
    * SQLite so the claim is measured rather than assumed.
    */
   runForHeadSplit(rootId: string, window = 500): string | null {

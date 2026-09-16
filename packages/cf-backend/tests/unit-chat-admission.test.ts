@@ -16,7 +16,7 @@ import type { Connection } from 'agents';
 import * as v from 'valibot';
 import type { SessionMessage } from 'agents/experimental/memory/session';
 import type { LanguageModel } from 'ai';
-import { scriptedTurnModel } from '@kinu.run/test-utils';
+import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import { makeEnv, orchestratorHarness, reactivateOrchestratorHarness, thinkTurns } from './helpers/actor-harness';
 
@@ -34,14 +34,17 @@ function scriptedAnswer(text: string): LanguageModel {
 interface AdmissionSocket {
   readonly wire: Connection;
   readonly sent: string[];
+  /** Resolves once a frame `holds` accepts has been sent: the send is the signal. */
+  readonly frame: (holds: (sent: readonly string[]) => boolean) => Promise<void>;
 }
 
 function connection(agent: { broadcast: (message: string, exclude?: string[]) => void }): AdmissionSocket {
-  const sent: string[] = [];
+  const frames = new AwaitedList<string>();
+  const sent = frames.items;
   const partial: Partial<Connection> = {};
   Object.assign(partial, {
     id: 'admission-conn', tags: [],
-    send: (data: string) => { sent.push(data); },
+    send: (data: string) => { frames.push(data); },
     close: () => {},
   });
   // SAFETY: every member the frame gate touches is constructed above — the
@@ -61,12 +64,12 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   Object.defineProperty(agent, 'broadcast', {
     configurable: true,
     value: (message: string, exclude?: string[]) => {
-      if (exclude === undefined || !exclude.includes('admission-conn')) sent.push(message);
+      if (exclude === undefined || !exclude.includes('admission-conn')) frames.push(message);
       fanout(message, exclude);
     },
   });
 
-  return { wire, sent };
+  return { wire, sent, frame: (holds) => frames.until(holds) };
 }
 
 function chatRequest(id: string, text: string): string {
@@ -112,7 +115,7 @@ function userRows(agent: { harnessTranscript: { history(): SessionMessage[] } })
 describe('a chat request through the production gate', () => {
   test('an idle send leaves exactly one row, under the id the client rendered', async () => {
     const { agent, tableNames } = orchestratorHarness();
-    const { wire, sent } = connection(agent);
+    const { wire, sent, frame } = connection(agent);
     await agent.activateActor();
     const gate = agent.harnessChatGate();
 
@@ -122,10 +125,8 @@ describe('a chat request through the production gate', () => {
 
     // The gate returns when the loop ADMITTED the send; the turn runs on the
     // pump behind it, and the request closes at the turn's own turn-end — so
-    // the test waits for the client's own evidence, not a guessed tick.
-    for (let round = 0; round < 200 && doneFrames(sent).length === 0; round++) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
+    // the test waits for the client's own evidence: the done frame's send.
+    await frame((frames) => doneFrames(frames).length > 0);
 
     expect(userRows(agent)).toEqual(['input-req-idle']);
     expect(doneFrames(sent)).toEqual([{ id: 'req-idle' }]);
@@ -221,10 +222,9 @@ describe('a chat request through the production gate', () => {
     const gate = agent.harnessChatGate();
     const { wire } = connection(agent);
     await gate(wire, chatRequest('req-fleet', 'hello'));
-
-    for (let round = 0; round < 200 && agent.harnessFleetTurnRows().length === 0; round++) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 10));
-    }
+    // The turn's row is written from the pump behind the gate; its write is
+    // the signal.
+    await agent.harnessFleetRowWritten();
 
     // The turn's own row, and only one of it — the positive half of the
     // gate below, so a future change that drops ALL rows reds here rather
@@ -247,7 +247,14 @@ describe('a chat request through the production gate', () => {
       type: 'run_start', agentId: 'harness-actor', caused_by: 'chat',
       userMessage: 'the turn the last process died inside',
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 2));
+    // Written by an EARLIER activation means stamped before this one's cutoff,
+    // and both stamps are millisecond clocks: the row is backdated a minute
+    // so that ordering is a fact of the row rather than of how long the
+    // machine took between two lines.
+    dead.db.run(
+      'UPDATE run_events SET ts = ? WHERE run_id = ?',
+      [new Date(Date.now() - 60_000).toISOString(), 'run-dead-activation'],
+    );
 
     // The eviction, then the wake itself on the fresh activation: it builds
     // the loop (which subscribes the observer) and then seals what the dead

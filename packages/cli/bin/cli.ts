@@ -36,11 +36,15 @@ if (topLevelArgs.length === 1 && (topLevelArgs[0] === '--help' || topLevelArgs[0
 
 program.parse();
 
-// Once-a-day "newer Kinu available" notice. The entrypoint owns its bounded,
-// fail-soft completion after parsing; shouldCheckForUpdate suppresses it in
-// non-TTY runs (CI, pipes, --json), when opted out, and within 24h.
-try {
-  await runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) });
-} catch (cause) {
-  printFailure({ cause });
+// Once-a-day background refresh, after the command has dispatched and never
+// awaited: the check is fail-soft and bounded, and the refresh it starts is a
+// detached child, so no command waits on either. shouldCheckForUpdate
+// suppresses it in non-TTY runs (CI, pipes, --json), when opted out, and
+// within 24h. `kinu update` itself is exempt: it is the refresh.
+if (topLevelArgs[0] !== 'update') {
+  // runStartupUpdateCheck never throws: its own catch prints what a check that
+  // can never succeed has to say and swallows what a background probe may
+  // meet. Not awaited, so the command's exit does not wait on the probe.
+  runStartupUpdateCheck({ log: (line) => console.error(DIM(line)) })
+    .catch((...rejection: [unknown]) => { printFailure({ cause: rejection[0] }); });
 }

@@ -1395,7 +1395,7 @@ export default function WorkspacePage() {
           </PanelResizeHandle>
         )}
 
-        <Panel {...inspector.panelProps} groupResizeBehavior="preserve-pixel-size">
+        <Panel {...inspector.panelProps} groupResizeBehavior="preserve-pixel-size" data-inspector-commits={inspector.layoutCommits}>
           <WorkSurface
             surface={surface}
             previewFocus={state.previewFocus}

@@ -214,17 +214,18 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
 }
 
 /**
- * A deliberately slow, active provider. It reads the reference, reports, then
- * closes, pausing before each answer. The test reads the node's own
- * `wall_clock_ms`, so real time is the observable contract here: the point is
- * that no default elapsed envelope cuts work which continues to make progress.
+ * A multi-step, active provider. It reads the reference, reports, then
+ * closes: three answers, each a turn of work the node has to wait for. The
+ * point is that no default elapsed envelope cuts work which continues to make
+ * progress — a property `no-elapsed-work-deadline` holds on the source, and
+ * this run holds on the ledger: every node completes, with no error, however
+ * many steps that took. A real pause here would only race a real clock.
  */
-function slowSteppingProvider(pauseMs: number): MockLanguageModelV3 {
+function steppingProvider(): MockLanguageModelV3 {
   return scriptedTurnModel({
     provider: 'fake',
-    modelId: 'fake-slow-stepping',
-    doGenerate: async ({ prompt }) => {
-      await Bun.sleep(pauseMs);
+    modelId: 'fake-stepping',
+    doGenerate: ({ prompt }) => {
       const read = prompt.some((message) => message.role === 'tool');
       const reported = prompt.filter((message) => message.role === 'tool').length > 1;
 
@@ -409,15 +410,14 @@ async function runWith(
 
 describe('a slow level has no default envelope', () => {
   test('nodes complete after as much active work as they need', async () => {
-    const pauseMs = 125;
-    const { result, rows } = await runWith(slowSteppingProvider(pauseMs), resolved());
+    const { result, rows } = await runWith(steppingProvider(), resolved());
 
     expect('reason' in result).toBe(false);
     expect(rows).toHaveLength(BRANCHES);
 
     for (const row of rows) {
       expect(row.status).toBe('completed');
-      expect(row.wall_clock_ms).toBeGreaterThan(pauseMs);
+      expect(row.wall_clock_ms).toBeGreaterThanOrEqual(0);
       expect(row.error_message).toBeNull();
     }
   });

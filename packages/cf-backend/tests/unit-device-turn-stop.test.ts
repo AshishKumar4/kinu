@@ -195,7 +195,7 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
     machine.release();
     await running;
     await rail.close();
-  }, 20_000);
+  });
 
   test('a stop nothing confirmed is reported as failed rather than as a stopped command', async () => {
     // The machine cannot perform the kill — the kernel refused it, or the
@@ -251,5 +251,5 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
     held.resolve({ stdout: '', stderr: '', exitCode: 0 });
     await running;
     await rail.close();
-  }, 20_000);
+  });
 });

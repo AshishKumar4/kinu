@@ -354,10 +354,7 @@ describe('estimation and transcripts', () => {
     ]);
 
     expect(kinuCodec.estimateTurns(imageTurns)).toBe(1_200);
-  // Measured 4.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 20_000);
+  });
 
   test('a tool pair prices its input and output', () => {
     const turns = kinuCodec.encode([

@@ -3623,7 +3623,7 @@ function RosterAuthorityFrame() {
           headers: { "content-type": "application/json" },
         }));
       }}>Release stale roster</button>
-      <div data-roster-probe>{roster.entries.map((row) => `${row.name}:${row.displayName}`).join("|")}</div>
+      <div data-roster-probe data-roster-pending={String(roster.pending)}>{roster.entries.map((row) => `${row.name}:${row.displayName}`).join("|")}</div>
     </div>
   );
 }
@@ -6403,6 +6403,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     lastIp: "192.0.2.9", lastAgent: "kinu-device", replacedAt: null, revokedAt: null, unstoppedAt: null,
     sandbox,
+    version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current",
   };
 }
 

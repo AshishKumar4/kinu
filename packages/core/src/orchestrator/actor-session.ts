@@ -623,8 +623,11 @@ export class ActorSession {
 
     while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
     const call = index < 0 ? undefined : pending.splice(index, 1)[0];
+    // The VALUE the tool returned is what the ledger records; the rendered
+    // text is for readers that render. A tool that returned nothing records
+    // the text it rendered to, which is what such a tool's row has always read.
     this.orchestrator.acc.recordToolCall(event.success
-      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.result }
+      ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, failures: event.failures, output: event.output ?? event.result }
       : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason, failures: event.failures,
           execution: event.execution, error: event.error ?? event.result });
   }

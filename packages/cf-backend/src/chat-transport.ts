@@ -41,7 +41,7 @@ import {
   partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, isWorkMode,
   type ChatTransport, type PromptFile, type SendLanding, type SessionEvent, type SqlExecutor, type WorkMode,
 } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
 
 /** What the transport asks of the actor: the connection set, and the loop.
  *  A connection is the SDK's: its resume handshake takes the full type. */
@@ -110,8 +110,15 @@ function flushSignal(chunk: UIMessageChunk): PartialFlushSignal {
 }
 
 export class ChatWireTransport implements ChatTransport {
-  private readonly resumable: ResumableStream;
-  private readonly handshake: ResumeHandshake;
+  /** The SDK's chunk store and the resume handshake over it, built on FIRST
+   *  USE rather than in the constructor: the store declares its table as it
+   *  is built, and this transport is reached through a getter on the actor
+   *  that the SDK's own callable enumeration (`getCallableMethods`) evaluates
+   *  against a bare prototype with no storage behind it. A transport that
+   *  touched storage to exist would turn that enumeration into an SQL error
+   *  and take the whole RPC surface with it. */
+  private _resumable: ResumableStream | null = null;
+  private _handshake: ResumeHandshake | null = null;
   private readonly pendingResume = new Set<string>();
   private readonly continuation = new ContinuationState<Connection>();
   /** The request each admitted user turn answers under, by its opening row's id. */
@@ -122,9 +129,14 @@ export class ChatWireTransport implements ChatTransport {
    *  reads the live accumulator; this holds the other order. */
   private readonly answers = new Map<string, UIMessage>();
 
-  constructor(private readonly wire: ChatWire) {
-    this.resumable = new ResumableStream(wire.sql);
-    this.handshake = new ResumeHandshake({
+  constructor(private readonly wire: ChatWire) {}
+
+  private get resumable(): ResumableStream {
+    return this._resumable ??= new ResumableStream(this.wire.sql);
+  }
+
+  private get handshake(): ResumeHandshake {
+    return this._handshake ??= new ResumeHandshake({
       responseMessageType: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
       resumableStream: this.resumable,
       continuation: this.continuation,
@@ -133,7 +145,7 @@ export class ChatWireTransport implements ChatTransport {
       // An orphaned stream is the loop's to continue from its ledger, never a
       // row this transport reconstructs from chunks.
       persistOrphanedStream: () => Promise.resolve(),
-      isConnectionPresent: (id) => wire.getConnection(id) !== undefined,
+      isConnectionPresent: (id) => this.wire.getConnection(id) !== undefined,
     });
   }
 
@@ -274,12 +286,16 @@ export class ChatWireTransport implements ChatTransport {
       try {
         landed = await this.wire.send({ ...chatInput(message), id: message.id });
       } catch (cause) {
-        // The loop refused the message — nothing to say, another driver holds
-        // the conversation — and wrote nothing. The request is closed with the
-        // refusal: the hook's send rejects with it instead of waiting on a
-        // turn-end that will never come.
+        // The loop REFUSED the message — nothing to say, another driver holds
+        // the conversation, a plan turn this surface cannot review — and wrote
+        // nothing. A refusal is the loop's own classified error; anything
+        // else is a fault in the send itself and is not the client's to read
+        // as a refusal. The request is closed with the refusal: the hook's
+        // send rejects with it instead of waiting on a turn-end that will
+        // never come.
+        if (!(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
         this.requests.delete(message.id);
-        this.done(requestId, { error: renderThrownChain({ cause }) });
+        this.done(requestId, { error: refusalOf(cause).error });
 
         return;
       }

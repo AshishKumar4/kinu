@@ -130,5 +130,5 @@ describe('evolve progress rendering', () => {
     expect(out).toContain('cannot run rust');
     expect(out).toContain('runnable: javascript, python');
     expect(out).toContain('Converged');
-  }, 60_000);
+  });
 });

@@ -46,7 +46,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import {
   lastValue, useAsyncResource, type Revalidate,
 } from "@/hooks/use-async-resource";
-import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
+import { DEVICE_ROSTER_POLL_MS, DEVICE_UPDATE_COPY, useDeviceRoster } from "@/hooks/use-device-roster";
 import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevicePanel";
 import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
@@ -452,6 +452,17 @@ export function DeviceRow({
         )}
         {device.hostname && <span className="p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
         <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>
+        {/* The machine's software beside its link state: one word when the
+            daemon is behind the served build (the hub pushes the update and
+            the daemon restarts itself), when its owner turned that off, or
+            when the build is a source install the hub leaves alone. A current
+            or unreporting daemon says nothing here. */}
+        {(device.update === "behind" || device.update === "off" || device.update === "unstamped") && (
+          <span role="status" data-device-update={device.update} title={device.version === null ? undefined : `${device.version} installed; ${device.servedVersion ?? ""} served`}
+            className={`px-2 py-0.5 ${device.update === "behind" ? "p-badge-warning" : "p-badge-neutral"}`}>
+            {DEVICE_UPDATE_COPY[device.update]}
+          </span>
+        )}
         {/* The one action here that takes something away sits apart from the
             facts, past a hairline, in danger ink. */}
         <button onClick={onRevoke} title="Revoke device" className="ml-1 border-l p-border pl-3 p-text-3 hover:p-danger"><TrashIcon size={13} /></button>

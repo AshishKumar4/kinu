@@ -396,6 +396,11 @@ export interface ChatSessionPorts {
    *  item at dequeue and before a drain binds rows; a refusal settles the item
    *  to its producer rather than running it. Null when nothing coordinates. */
   driverGate(): Refusal | null;
+  /** Arm the durable wake that re-drives owed work when the isolate dies
+   *  inside this turn. Called at the turn's synchronous open — an isolate
+   *  killed mid-turn with nothing else owed would otherwise sleep until an
+   *  external event. Soonest-wins: free when a wake already rides. */
+  armTurnWake(): Promise<void>;
   /** The model window the transcript restore is budgeted against. */
   modelWindow(): ModelWindow;
   /** Why a programmatic PLAN turn cannot be admitted here, or null when it
@@ -450,6 +455,10 @@ export class ChatSession {
    *  written by `persist`, and the scope every effect claim this turn makes is
    *  keyed to. Null between turns. */
   private turnId: string | null = null;
+  /** The running programmatic turn's opening row, as its commit will write
+   *  it, for a steer that lands before the commit; null for a user turn,
+   *  whose row is durable from admission. */
+  private openingRow: { id: string; text: string; metadata?: JsonObject } | null = null;
   /** The id the in-flight turn's answer is persisted under — minted with the
    *  turn, streamed under, committed under. */
   private messageId = '';
@@ -501,6 +510,13 @@ export class ChatSession {
   get pumpPromise(): Promise<void> | null { return this.activePump; }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
+  /** The runs this loop is driving, for the wake reconcile that seals what a
+   *  dead activation left open: the turn running now, and the one
+   *  {@link restoreOpenTurn} re-opened but has not yet started — that run is
+   *  continued under its own id, so it is open on purpose. */
+  drivenRuns(): readonly string[] {
+    return [...new Set([this.runId, this.reopenedRunId].filter((runId): runId is string => runId !== null))];
+  }
   get currentTurnId(): string | null { return this.turnId; }
   /** No further programmatic turn is admitted, and a send this constructor
    *  restored does not pump. The owner's teardown calls this first. */
@@ -1064,6 +1080,10 @@ export class ChatSession {
     // never writes one of its own. A PROGRAMMATIC turn writes at commit
     // exactly as before: `announcementOnDisk` is its dedup — an admitted-but-
     // unfinished gate turn must read as not-yet-said so the retry re-queues it.
+    this.openingRow = item.kind === 'programmatic'
+      ? { id: this.turnId, text: item.text, ...(item.metadata !== undefined && { metadata: stampTurnAuthor(item.metadata) }) }
+      : null;
+
     if (item.kind === 'user') {
       this.transcript.appendUser({
         id: this.turnId, text: item.text,
@@ -1082,6 +1102,10 @@ export class ChatSession {
     // one names its trigger. A re-opened turn continues the run it was left
     // in; only a new turn opens a run.
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
+
+    // The re-opened run is this run now, named by `runId` for as long as it
+    // runs; nothing else is held open on its behalf.
+    if (this.reopenedRunId === this.runId) this.reopenedRunId = null;
 
     const lease = this.actorSession.beginTurn(
       { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,
@@ -1103,6 +1127,12 @@ export class ChatSession {
         ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
       },
     });
+
+    // The turn's own wake, armed at its synchronous open: a kill inside the
+    // turn leaves the run row and the wake that re-drives it, rather than the
+    // row alone with nothing scheduled to notice it. Soonest-wins, so this is
+    // free when another wake already rides.
+    await this.ports.armTurnWake();
 
     try {
       await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
@@ -1585,6 +1615,13 @@ export class ChatSession {
    *  `describeLandedSteers` already gave each row. */
   private commitLandedSteers(rows: readonly LandedSteerRow[]): void {
     this.transaction(() => {
+      // A steer chains under the turn's opening row, so that row must be on
+      // disk first. A user turn's is, from admission; a programmatic turn's is
+      // written at commit, so the first steer to land in one writes it here —
+      // idempotent on its id, the commit's write is then the same row.
+      const opening = this.openingRow;
+
+      if (opening !== null && this.actorSession.landedSteers.length === 0) this.transcript.appendUser(opening);
       let parentId = this.actorSession.landedSteers.at(-1)?.id ?? this.turnId;
 
       for (const row of rows) {
@@ -1626,6 +1663,8 @@ export class ChatSession {
   private reopened: string | null = null;
   /** The turn {@link restoreOpenTurn} re-opened, whose bound sends are its own. */
   private reopenedTurnId: string | null = null;
+  /** The run that turn continues under, held until the loop runs it. */
+  private reopenedRunId: string | null = null;
 
   private restoreOpenTurn(): void {
     const open = this.eventRecorder.openTurn();
@@ -1653,6 +1692,7 @@ export class ChatSession {
     if (turn.kind === 'programmatic') item.idempotencyKey = turn.turnId.slice(PROGRAMMATIC_MESSAGE_ID_PREFIX.length);
     this.reopened = turn.pendingSendId ?? null;
     this.reopenedTurnId = turn.turnId;
+    this.reopenedRunId = runId;
     this.queue.push(item);
 
     this.emit({

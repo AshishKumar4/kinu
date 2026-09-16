@@ -100,6 +100,12 @@ describe('UserDO schema bootstrap', () => {
       'consented_root', 'device_home', 'sandbox_capability', 'sandbox_reason', 'sandbox_detail', 'sandbox_gpu',
       'agent_root', 'tier', 'unstopped_at',
     ]);
+    // The build a daemon reported lives one table over — `user_devices` is
+    // shipped storage, and a column added to it never reaches the accounts
+    // created before the lane.
+    expect(columns(db, 'user_device_builds')).toEqual([
+      'device_id', 'version', 'update_check', 'reported_at',
+    ]);
     expect(columns(db, 'device_inflight_requests')).toEqual([
       'request_id', 'device_id', 'workspace', 'turn_id', 'background_job_id',
       'cancel_claim', 'cancel_outcome',

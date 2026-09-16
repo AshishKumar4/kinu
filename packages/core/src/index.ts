@@ -1748,7 +1748,7 @@ export {
   type ReportHeadDelta, type PublishHeadStream,
   reconcileInterruptedForks, forkInterruptedWake, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
-  HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
+  HeadController, REAL_HEAD_CLOCK, type HeadClock, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   type HeadJournalPort,
   MergeOutputSchema, DecisionSchema, type MergeOutput,
@@ -2354,6 +2354,11 @@ export {
   CLI_DIST_PATHS, CLI_RUNTIME_PATH, CLI_VERSION_PATH,
   fetchDeployedAsset, readBuildStamp, type AssetFetcher, type BuildStamp,
 } from './http/deployed-assets';
+
+export {
+  DEVICE_UPDATE, DEVICE_UPDATE_STATES, cliArtifactPath, deviceUpdateState, isSameBuild,
+  type DeviceUpdateFrame, type DeviceUpdateState,
+} from './http/device-update';
 
 export {
   COPY_SCRIPT, GITHUB_ICON, KINU_MARK, MARK_IDS, REPO_URL,

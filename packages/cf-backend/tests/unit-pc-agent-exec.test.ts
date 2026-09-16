@@ -162,14 +162,14 @@ describe('pc-agent exec RPC', () => {
     expect(reply.result?.stdout).toContain('started');
     expect(reply.result?.exitCode).toBe(0);
     expect(elapsed).toBeLessThan(3_000);
-  }, 40_000);
+  });
 
   test('output the command wrote is complete, not cut short by the early answer', async () => {
     const { reply } = await exec('seq 1 20000');
 
     expect(reply.result?.exitCode).toBe(0);
     expect(reply.result?.stdout.trimEnd().split('\n')).toHaveLength(20_000);
-  }, 40_000);
+  });
 
   test('answers exactly once', async () => {
     const sends: string[] = [];
@@ -178,7 +178,7 @@ describe('pc-agent exec RPC', () => {
     await settled(() => (sends.length === 1 ? true : undefined), 'the sole exec reply');
 
     expect(sends).toHaveLength(1);
-  }, 20_000);
+  });
 });
 
 /**
@@ -422,7 +422,7 @@ describe('pc-agent command cancellation', () => {
     acknowledge(ackId, runId, ws.socket);
     expect((await settled(() => ws.of(ackId)[0], 'the cancellation ACK')).result)
       .toEqual({ requestId: runId, acknowledged: true });
-  }, 30_000);
+  });
 
   test('normal result remains replayable until the cloud ACK cleans it up', async () => {
     const dir = scratchDir('pc-agent-normal-ack');
@@ -448,7 +448,7 @@ describe('pc-agent command cancellation', () => {
     const server = Number(readFileSync(pidFile, 'utf8').trim());
 
     if (alive(server)) process.kill(server, 'SIGKILL');
-  }, 30_000);
+  });
 
   test('completed, duplicate and unknown cancellation targets answer honestly', async () => {
     const ws = recorder();
@@ -468,7 +468,7 @@ describe('pc-agent command cancellation', () => {
 
     acknowledge(rpcId(224), runId, ws.socket);
     await settled(() => ws.of(rpcId(224))[0], 'the normal-result ACK');
-  }, 30_000);
+  });
 
   test('a cancellation frame from a version this daemon does not speak is refused', async () => {
     const dir = scratchDir('pc-agent-cancel-version');
@@ -492,7 +492,7 @@ describe('pc-agent command cancellation', () => {
     await settled(() => ws.of(runId)[0], 'the cancelled exec result');
     acknowledge(rpcId(233), runId, ws.socket);
     await settled(() => ws.of(rpcId(233))[0], 'the cancellation ACK');
-  }, 30_000);
+  });
 
   test('rejects noncanonical request IDs before selecting a control directory', () => {
     for (const id of ['.', '..', 'rpc-short-1', 'rpc-testepoch0-0', 'rpc-testepoch0-1/child']) {
@@ -525,7 +525,7 @@ describe('pc-agent command cancellation', () => {
     expect(mine).toBeDefined();
     expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
       .toEqual({ requestId: rpcId(260), cancelled: 'terminated' });
-  }, 30_000);
+  });
 
   test('a dropped socket terminates a command that still has no terminal result', async () => {
     const dir = scratchDir('pc-agent-disconnect');
@@ -557,7 +557,7 @@ describe('pc-agent command cancellation', () => {
     expect(mine).toBeDefined();
     expect(v.parse(ConfirmedCancellationSchema, await mine?.terminated))
       .toEqual({ requestId: rpcId(250), cancelled: 'terminated' });
-  }, 30_000);
+  });
 });
 
 describe('pc-agent durable supervisor', () => {
@@ -573,7 +573,7 @@ describe('pc-agent durable supervisor', () => {
     expect(statSync(join(requestDir, 'stdout')).size).toBeLessThan(525_000);
     acknowledge(rpcId(301), id, ws.socket);
     await settled(() => ws.of(rpcId(301))[0], 'the bounded output ACK');
-  }, 30_000);
+  });
 
   test('reconciles a surviving supervisor and cleans a cancelled replay after ACK', async () => {
     const id = rpcId(310);
@@ -588,7 +588,7 @@ describe('pc-agent durable supervisor', () => {
     await settled(() => ws.of(id)[0], 'reconciled exec result');
     await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
     expect(existsSync(requestDir)).toBe(false);
-  }, 30_000);
+  });
   test('reconciles a completed result and releases it only after its ACK', async () => {
     const id = rpcId(311);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, id);
@@ -601,7 +601,7 @@ describe('pc-agent durable supervisor', () => {
     expect(restarted.reconcile()).toContainEqual({ requestId: id, terminal: true });
     await expect(restarted.acknowledge(id)).resolves.toEqual({ requestId: id, acknowledged: true });
     expect(existsSync(requestDir)).toBe(false);
-  }, 30_000);
+  });
 
   test('refuses a stale supervisor pid identity without signaling that pid', async () => {
     const root = scratchDir('pc-agent-pid-reuse');
@@ -745,7 +745,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     });
     expect(await gone(descendant)).toBe(true);
     tunnel.dispose();
-  }, 30_000);
+  });
 
   /**
    * The same chain when the far end genuinely cannot kill the command.
@@ -788,7 +788,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
     tunnel.dispose();
     process.kill(-supervisor.group, 'SIGKILL');
     expect(await gone(descendant)).toBe(true);
-  }, 30_000);
+  });
 });
 
 /**
@@ -832,7 +832,7 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
     // One result frame for this command, before the cancellation and after it:
     // a settled request publishes nothing further.
     expect(ws.of(runId)).toHaveLength(1);
-  }, 30_000);
+  });
 });
 
 describe('pc-agent readRange RPC', () => {

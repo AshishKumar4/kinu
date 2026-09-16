@@ -246,10 +246,7 @@ describe("CLI behavior", () => {
     expect(stdout).toContain("OpenAI");
     expect(stdout).not.toContain("sk-secret");
     expect(stdout).not.toContain("codex-refresh-token");
-  // Measured 2.9 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test("no-arg CLI keeps a non-interactive help fallback", () => {
     const proc = runCli([]);
@@ -417,7 +414,7 @@ describe("kinu exec (headless)", () => {
     } finally {
       await server.stop();
     }
-  }, 120_000);
+  });
 
   test("exits nonzero when the model endpoint fails", async () => {
     const home = scratchDir("cli-exec-fail");
@@ -446,7 +443,7 @@ describe("kinu exec (headless)", () => {
       await good.stop();
       await bad.stop();
     }
-  }, 120_000);
+  });
 
   // --no-auto-evolve is the switch a paired benchmark arm needs: the same
   // workspace and the same turn, with the evolution machinery off.
@@ -473,7 +470,7 @@ describe("kinu exec (headless)", () => {
     } finally {
       await server.stop();
     }
-  }, 120_000);
+  });
 
   // Reaching this rejection proves the flag is threaded all the way into the
   // AgentClient factory rather than parsed and dropped.
@@ -537,7 +534,7 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
       stopLocalDaemon(home);
       await server.stop();
     }
-  }, 120_000);
+  });
 });
 
 // The mechanical loop-detection steers were measurable only from the
@@ -590,7 +587,7 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
     } finally {
       await server.stop();
     }
-  }, 120_000);
+  });
 });
 
 // What a turn cost is priced OUTSIDE this repo: bench/clbench/kinu/events.py
@@ -638,7 +635,7 @@ describe("kinu exec --json — the turn-end usage payload", () => {
     } finally {
       await server.stop();
     }
-  }, 120_000);
+  });
 });
 
 /** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks
@@ -846,7 +843,7 @@ describe("kinu create — an unusable model is named at creation", () => {
     } finally {
       await origin.stop();
     }
-  }, 120_000);
+  });
 
   test("stays quiet when the model resolves through a working provider", async () => {
     const home = scratchDir("cli-create-usable");
@@ -868,7 +865,7 @@ describe("kinu create — an unusable model is named at creation", () => {
     } finally {
       await server.stop();
     }
-  }, 120_000);
+  });
 });
 
 // A provider rejection reaches the terminal ONCE, in the provider's own words,
@@ -908,7 +905,7 @@ describe("kinu exec — provider failures are legible and actionable", () => {
       await good.stop();
       await bad.stop();
     }
-  }, 120_000);
+  });
 
   test("--json carries the guidance as a field, not just as terminal decoration", async () => {
     const home = scratchDir("cli-provider-err-json");
@@ -946,7 +943,7 @@ describe("kinu exec — provider failures are legible and actionable", () => {
       await good.stop();
       await bad.stop();
     }
-  }, 120_000);
+  });
 });
 
 // `kinu exec "prompt"` does not block on stdin until EOF when stdin is not a
@@ -972,7 +969,7 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     // The assertion is that it terminates at all, rather than waiting on an
     // EOF that never arrives.
     expect(Date.now() - started).toBeLessThan(10_000);
-  }, 20_000);
+  });
 
   test("a pipe that starts delivering within the grace is read to EOF — bytes are never dropped", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
@@ -995,5 +992,5 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     const stderr = await new Response(proc.stderr).text();
     // A delivering pipe is a real pipe: it must never be reported as ignored.
     expect(stderr).not.toContain("stdin was open but idle");
-  }, 20_000);
+  });
 });

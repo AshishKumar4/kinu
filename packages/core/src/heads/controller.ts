@@ -177,6 +177,9 @@ export class HeadController {
   constructor(
     private readonly runtime: HeadRuntime,
     private readonly journal: HeadJournalPort,
+    /** The wall-clock budget's clock. Real time in production; a test hands
+     *  one it advances, so "the budget ran out" is a step it takes. */
+    private readonly clock: HeadClock = REAL_HEAD_CLOCK,
   ) {}
 
   /**
@@ -342,7 +345,7 @@ export class HeadController {
       if ('run' in s) handles.push(s);
     }
 
-    const startedAt = Date.now();
+    const startedAt = this.clock.now();
 
     // Fire 'split' with the REAL head ids the controller just spawned.
     opts.onPhase?.({
@@ -366,10 +369,10 @@ export class HeadController {
 
         const remainingMs = parentBudget.maxWallClockMs === undefined
           ? undefined
-          : parentBudget.maxWallClockMs - (Date.now() - startedAt);
+          : parentBudget.maxWallClockMs - (this.clock.now() - startedAt);
 
         try {
-          const report = await raceWithTimeout(h, remainingMs);
+          const report = await raceWithTimeout(h, remainingMs, this.clock.after);
           await this.journal.recordReport(report);
 
           return report;
@@ -389,7 +392,7 @@ export class HeadController {
             // This head may well have burned tokens before the deadline cut it
             // off — the honest record is that we do not know how many.
             usage: {},
-            wallClockMs: Date.now() - startedAt,
+            wallClockMs: this.clock.now() - startedAt,
             errorMessage: renderThrownChain({ cause: err }),
           };
 
@@ -698,7 +701,24 @@ export class HeadController {
  *  `undefined` — the default — means the head runs until it is done, the same
  *  envelope the turn that forked it gets. Shared with the Steer-as-Branch
  *  single-head runner (steer-branch.ts). */
-export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefined): Promise<HeadReport> {
+/** The head budget's clock: what time it is, and a deadline that fires. */
+export interface HeadClock {
+  now(): number;
+  after(fire: () => void, ms: number): () => void;
+}
+
+export const REAL_HEAD_CLOCK: HeadClock = {
+  now: () => Date.now(),
+  after: (fire, ms) => {
+    const timer = setTimeout(fire, ms);
+
+    return () => { clearTimeout(timer); };
+  },
+};
+
+export async function raceWithTimeout(
+  h: SpawnedHead, timeoutMs: number | undefined, after: HeadClock['after'] = REAL_HEAD_CLOCK.after,
+): Promise<HeadReport> {
   if (timeoutMs === undefined) return h.run();
 
   if (timeoutMs <= 0) {
@@ -706,34 +726,32 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
     throw new Error('wall-clock budget already exhausted');
   }
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const expiry = Promise.withResolvers<never>();
 
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timeoutHandle = setTimeout(async () => {
-      // The deadline first owns the abort, then rejects the caller-visible race:
-      // this timer must not leave a live head after it has declared a timeout.
-      try {
-        await h.abort('wall-clock budget exhausted');
-      } catch (cause) {
-        // A head that survives its abort is a live facet nobody is waiting
-        // for; inside this timer callback there is no caller to throw to, so
-        // the failure is STATED here — the classified log the caller-facing
-        // zero-budget path above throws for the same reason.
-        diagnostics.failure(
-          'head.abort_failed',
-          toKinuError({ doing: 'abort a head whose wall-clock budget expired', cause, otherwise: 'timeout' }),
-          { headId: h.id },
-        );
-      }
+  const cancel = after(async () => {
+    // The deadline first owns the abort, then rejects the caller-visible race:
+    // this timer must not leave a live head after it has declared a timeout.
+    try {
+      await h.abort('wall-clock budget exhausted');
+    } catch (cause) {
+      // A head that survives its abort is a live facet nobody is waiting
+      // for; inside this timer callback there is no caller to throw to, so
+      // the failure is STATED here — the classified log the caller-facing
+      // zero-budget path above throws for the same reason.
+      diagnostics.failure(
+        'head.abort_failed',
+        toKinuError({ doing: 'abort a head whose wall-clock budget expired', cause, otherwise: 'timeout' }),
+        { headId: h.id },
+      );
+    }
 
-      reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
-    }, timeoutMs);
-  });
+    expiry.reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
+  }, timeoutMs);
 
   try {
-    return await Promise.race([h.run(), timeout]);
+    return await Promise.race([h.run(), expiry.promise]);
   } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
+    cancel();
   }
 }
 

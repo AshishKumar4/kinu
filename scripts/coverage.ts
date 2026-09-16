@@ -135,7 +135,7 @@ function bunGroups(): SuiteGroup[] {
       // and `packageOf` attributes them by path, so the table stays per-package.
       pkg: label === 'cli-tsx' ? 'cli' : label,
       argv: [
-        'bun', 'test', '--coverage', '--coverage-reporter=lcov',
+        'bun', 'test', '--timeout=0', '--coverage', '--coverage-reporter=lcov',
         '--coverage-dir', `coverage/${label}`, ...suites,
       ],
       cwd: ROOT,

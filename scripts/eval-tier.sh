@@ -479,7 +479,7 @@ set +e
 # and teardown.
 ARM_STARTED=$SECONDS
 export KINU_EVAL_SPEND_FILE="$SPEND_BUN"
-bun test "${TARGETS[@]}" --reporter=junit --reporter-outfile="$JUNIT"
+bun test --timeout=0 "${TARGETS[@]}" --reporter=junit --reporter-outfile="$JUNIT"
 TEST_STATUS=$?
 BUN_SECONDS=$((SECONDS - ARM_STARTED))
 

@@ -371,7 +371,7 @@ describe("deploy gate", () => {
       run.events.some((event) => event.startsWith("MUTATE ")),
       "a gate died unreported and the build ran anyway",
     ).toBe(false);
-  }, 30_000);
+  });
 
   // Every gate's output lands in one temp directory and every failure is reported
   // out of it, so a directory that cannot be created is a wave that cannot be
@@ -427,7 +427,7 @@ describe("deploy gate", () => {
     // gates in flight to be observable at all.
     expect(gates).toEqual([...REQUIRED_GATES]);
     expect(run.stdout).toContain("within a budget of 1 threads");
-  }, 30_000);
+  });
 
   test("the serial gates are the ends of the real run", () => {
     const run = runDeploy();
@@ -534,10 +534,7 @@ describe("deploy gate", () => {
     expect(normal.infraPhase).toBe("full");
     expect([...normal.events].sort()).toEqual([...bootstrap.events].sort());
     expect(normal.stdout).not.toContain("BOOTSTRAP");
-  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test("an ambient phase variable cannot relax a deploy nobody bootstrapped", () => {
     // The bypass this design refuses. The phase travels in the environment
@@ -556,10 +553,7 @@ describe("deploy gate", () => {
     });
 
     expect(asked.infraPhase).toBe("bootstrap");
-  // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test("an unknown option deploys nothing", () => {
     // Refused rather than ignored. A silently-dropped `--bootstrp` would fail the
@@ -597,7 +591,7 @@ describe("deploy gate", () => {
     expect(audited.events).toEqual(REQUIRED_GATES.slice(0, prePublish));
     expect(audited.stdout).toContain("every gate regardless of failures (--all)");
     expect(audited.events.some((event) => event.startsWith("MUTATE ")), "--all published on a red").toBe(false);
-  }, 60_000);
+  });
 
   test("gates-only runs every pre-publish gate and mutates nothing", () => {
     const run = runDeploy({ option: "--gates-only" });
@@ -1040,7 +1034,7 @@ describe("CLI distribution artifacts", () => {
 
   let distribution: ReturnType<typeof buildDist>;
 
-  beforeAll(() => { distribution = buildDist(); }, 300_000);
+  beforeAll(() => { distribution = buildDist(); });
 
   function members(archive: string): Set<string> {
     const decoder = new TextDecoder();
@@ -1065,7 +1059,7 @@ describe("CLI distribution artifacts", () => {
     const stamp = JSON.parse(readFileSync(join(directory, "kinu-version.json"), "utf8"));
     const base = JSON.parse(before.bytes).version;
     expect(stamp.version).toBe(`${base}+${stamp.sha}`);
-  }, 300_000);
+  });
 
   test("publishes one artifact per platform, plus the runtime they share", () => {
     const { directory } = distribution;
@@ -1075,6 +1069,12 @@ describe("CLI distribution artifacts", () => {
       expect(existsSync(artifact), `no artifact for ${platform}`).toBe(true);
       const entries = members(artifact);
       expect(entries.has("kinu/cli.js"), `${platform} artifact carries no cli.js`).toBe(true);
+
+      // The daemon and its stamp, for a daemon updating itself from this archive.
+      for (const name of ["pc-agent.js", "sandbox.js", "pty.js", "update.js", "pc-agent.version"]) {
+        expect(entries.has(`kinu/pc-agent/${name}`), `${platform} artifact carries no pc-agent/${name}`).toBe(true);
+      }
+
       // The native library is the whole reason this artifact is per platform.
       expect(
         [...entries].some((entry) => entry.startsWith(`kinu/node_modules/@opentui/core-${platform}/`)),
@@ -1101,7 +1101,7 @@ describe("CLI distribution artifacts", () => {
     const runtime = join(directory, CPYTHON);
     expect(existsSync(runtime)).toBe(true);
     expect(members(runtime).has("kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json")).toBe(true);
-  }, 300_000);
+  });
 
   test("every artifact carries a matching checksum and fits the asset limit", () => {
     const { directory } = distribution;
@@ -1115,7 +1115,7 @@ describe("CLI distribution artifacts", () => {
       expect(declared, `${name} has no published checksum`).toMatch(/^[0-9a-f]{64}$/);
       expect(createHash("sha256").update(bytes).digest("hex")).toBe(declared);
     }
-  }, 300_000);
+  });
 
   // The install this asserts is the one a stranger runs: unpack both archives
   // over one directory and launch. Nothing resolves a dependency here, so the
@@ -1162,6 +1162,15 @@ describe("CLI distribution artifacts", () => {
     // stamping sites is how `kinu update` learns to chase a version nothing has.
     expect(decoder.decode(version.stdout).trim()).toBe(stamp.version);
 
+    // The shipped daemon, run the way a daemon updating itself runs it: it
+    // loads its siblings from the archive and reports the same stamp.
+    const daemon = Bun.spawnSync([process.execPath, join(root, "pc-agent", "pc-agent.js"), "--selftest"], {
+      cwd: root, env: { ...freshHome(directory), KINU_HOME: join(root, "pc-agent") }, stdout: "pipe", stderr: "pipe",
+    });
+
+    expect(daemon.exitCode, launchFailure(daemon)).toBe(0);
+    expect(decoder.decode(daemon.stdout).trim()).toBe(stamp.version);
+
     // What install.sh itself greps for before calling the install good.
     const help = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--help"], {
       cwd: root, env: freshHome(directory), stdin: "ignore", stdout: "pipe", stderr: "pipe",
@@ -1169,5 +1178,5 @@ describe("CLI distribution artifacts", () => {
 
     expect(help.exitCode, launchFailure(help)).toBe(0);
     expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
-  }, 300_000);
+  });
 });

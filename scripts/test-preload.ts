@@ -1,13 +1,28 @@
 // `bun test`'s entry, named by `bunfig.toml`'s `preload`.
 //
-// Three lines on purpose: the throwaway KINU_HOME, the release and the
+// Short on purpose: the throwaway KINU_HOME, the release and the
 // SIGKILL backstop all live in `./test-scratch-home.ts`, which vitest's entry
 // imports too. All this file contributes is the `afterAll` that belongs to THIS
 // runner — `bun:test`'s, which throws if called under any other.
-import { afterAll } from 'bun:test';
+import { afterAll, setDefaultTimeout } from 'bun:test';
 
 import { buildSlateVendor } from '../packages/cf-backend/slate-vendor';
 import { release } from './test-scratch-home';
+
+// No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
+// 2026-09-15 it read red on a test that passes alone, under the deploy wave's
+// load. A test ends on its condition or on the process's own end; a hang is
+// killed by the deploy ladder at the gate's deadline, which names the gate.
+// `0` disables the default (measured on bun 1.4.0: a 5.6 s test passes under
+// this preload and fails without it). FIRST, before any hook: bun reads the
+// default when a hook is registered, so an `afterAll` above this line keeps
+// the 5 s clock (measured 2026-09-15: the release hook below timed out at
+// 5000 ms with this call after it). This call reaches the FIRST file of a run
+// only (measured the same day: the second of two files timed out at 5000 ms
+// under it), so every `bun test` invocation in this tree also carries
+// `--timeout=0`, and the ladder rows are pinned to it by `test-clocks.test.ts`.
+// `gate:test-clocks` refuses per-test durations in the corpus.
+setDefaultTimeout(0);
 
 afterAll(release);
 

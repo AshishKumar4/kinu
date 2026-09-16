@@ -113,7 +113,7 @@ describe('AgentEvalTarget — the local target is really wired', () => {
     // afterwards costs a paid episode.
     probe = await target.probe();
     await target.sendTurn('Write a note and read it back.');
-  }, 300_000);
+  });
 
   afterAll(async () => {
     await target?.teardown();

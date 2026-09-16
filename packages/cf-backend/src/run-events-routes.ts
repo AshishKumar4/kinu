@@ -48,6 +48,24 @@ function reportRouteFailure(input: { surface: string; cause: unknown }): Respons
 
 const SSE_POLL_MS = 500;
 
+/** The stream's clock: what time it is, and a pause between polls. Real in
+ *  production; a test hands one it drives, so a poll iteration is a call the
+ *  test makes rather than 500 ms it sleeps through. */
+export interface SsePacing {
+  now(): number;
+  wait(ms: number): Promise<void>;
+}
+
+export const REAL_SSE_PACING: SsePacing = {
+  now: () => Date.now(),
+  wait: (ms) => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, ms);
+
+    return promise;
+  },
+};
+
 /** How long one browser SSE subscription stays open before the client
  *  reconnects. Unrelated to core's `DEVICE_CONSENT_TIMEOUT_MS`, the same five
  *  minutes for a person answering a prompt. */
@@ -83,7 +101,7 @@ function parseTypesParam(s: string | null): RunEventType[] | undefined {
   return valid.length > 0 ? valid : undefined;
 }
 
-export async function handleRunEventsRequest(request: Request, env: Env): Promise<Response | null> {
+export async function handleRunEventsRequest(request: Request, env: Env, pacing: SsePacing): Promise<Response | null> {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -152,7 +170,7 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
     const lastEventId = request.headers.get('Last-Event-ID') ?? request.headers.get('last-event-id');
 
     return streamRunEvents(
-      env, agentName, runId, resumeIndexFromLastEventId(lastEventId), request.signal,
+      env, agentName, runId, resumeIndexFromLastEventId(lastEventId), request.signal, pacing,
     );
   }
 
@@ -166,6 +184,7 @@ function streamRunEvents(
   runId: string,
   sinceIndex: number,
   signal: AbortSignal,
+  pacing: SsePacing,
 ): Response {
   const encoder = new TextEncoder();
   // Stop polling the DO the moment the client goes away — via stream
@@ -175,13 +194,13 @@ function streamRunEvents(
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const startedAt = Date.now();
+      const startedAt = pacing.now();
       let cursor = sinceIndex;
-      let heartbeatAt = Date.now();
+      let heartbeatAt = pacing.now();
       signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
       const stub = await resolveAgent(env, agentName);
-      const resolvedAt = Date.now();
+      const resolvedAt = pacing.now();
 
       // First byte, measured once. What a reader of this stream actually waits
       // for is not the response headers — those return immediately, because the
@@ -194,7 +213,7 @@ function streamRunEvents(
         if (firstByteReported) return;
         firstByteReported = true;
         diagnostics.event('sse.run_events_first_byte', {
-          ms: Date.now() - startedAt,
+          ms: pacing.now() - startedAt,
           resolveMs: resolvedAt - startedAt,
           events,
           resumed: sinceIndex > 0,
@@ -212,7 +231,7 @@ function streamRunEvents(
 
         controller.enqueue(encoder.encode(lines.join('\n')));
         cursor = Math.max(cursor, ev.eventIndex);
-        heartbeatAt = Date.now();
+        heartbeatAt = pacing.now();
       };
 
       try {
@@ -240,8 +259,8 @@ function streamRunEvents(
         // Poll loop until run_end, client disconnect, or timeout. Cloudflare
         // Workers can hold a single SSE connection for up to several minutes;
         // the client's EventSource auto-reconnects with Last-Event-ID.
-        while (!closed && Date.now() - startedAt < SSE_TIMEOUT_MS) {
-          await new Promise((r) => setTimeout(r, SSE_POLL_MS));
+        while (!closed && pacing.now() - startedAt < SSE_TIMEOUT_MS) {
+          await pacing.wait(SSE_POLL_MS);
 
           if (closed) break;
           backlog = decodeRunEventWire(
@@ -253,9 +272,9 @@ function streamRunEvents(
 
           if (hasRunEnd) break;
 
-          if (Date.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
-            controller.enqueue(encoder.encode(`:heartbeat ${Date.now()}\n\n`));
-            heartbeatAt = Date.now();
+          if (pacing.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
+            controller.enqueue(encoder.encode(`:heartbeat ${pacing.now()}\n\n`));
+            heartbeatAt = pacing.now();
           }
         }
 

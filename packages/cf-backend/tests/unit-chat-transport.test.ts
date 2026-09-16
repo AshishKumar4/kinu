@@ -16,6 +16,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { createTestSql } from '@kinu.run/test-utils';
 import type { SendLanding, SessionEvent } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
 
@@ -24,8 +25,9 @@ const FrameSchema = v.looseObject({ type: v.string(), id: v.optional(v.string())
 /** The loop's side of the wire, as a fixture: a send lands where the harness
  *  says, and what the loop holds — the rows a turn wrote, the reservations a
  *  splice keeps — is what `admitted` answers from. A send the loop refuses
- *  rejects, as the real loop's does. */
-interface HarnessRefusal { readonly refuse: string; }
+ *  rejects with the loop's own classified error, as the real loop's does; a
+ *  send that FAULTS rejects with whatever broke underneath it. */
+interface HarnessRefusal { readonly refuse: string; readonly fault?: true; }
 
 function isRefusal(landing: SendLanding | HarnessRefusal): landing is HarnessRefusal {
   return v.is(v.object({ refuse: v.string() }), landing);
@@ -65,7 +67,7 @@ function harness(landing: SendLanding | HarnessRefusal = 'turn') {
     history: () => [...history],
     admitted: (id) => history.some((row) => row.id === id) || reserved.has(id),
     send: (input) => {
-      if (isRefusal(landing)) return Promise.reject(new Error(landing.refuse));
+      if (isRefusal(landing)) return Promise.reject(landing.fault === true ? new Error(landing.refuse) : new KinuError('bad_input', landing.refuse));
       sent.push(input);
 
       if (landing === 'mid-turn') reserved.add(input.id);
@@ -140,6 +142,16 @@ describe('ChatWireTransport', () => {
     expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: 'send requires the message text', done: true, error: true }]);
     expect(h.history).toEqual([]);
     expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
+  });
+
+  test('a send that faults underneath the loop is not a refusal: it propagates, and the request is not closed as one', async () => {
+    const h = harness({ refuse: 'the send ledger is unreadable', fault: true });
+    const conn = h.connection('c1');
+
+    await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
+    // Nothing told the tab its message was refused: a fault reads as a fault
+    // to whoever owns the socket, never as the loop's answer.
+    expect(h.responses()).toEqual([]);
   });
 
   test("a client's claim to another request's input is never accepted: the message is admitted under its own id", async () => {

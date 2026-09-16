@@ -991,12 +991,7 @@ describe('daemon process under Bun against a local hub', () => {
     } finally {
       await hub.close();
     }
-  // A finite sequence, with its own waits: every `untilHub` fails by name
-  // within its 10-15 s. The outer bound is their sum, not a detector — the
-  // sequence spawns three Bun processes and the daemon's 1 s reconnect
-  // backoff sits inside it, and it measured 11.9-12.0 s on a box at load
-  // 64 (three runs, 2026-09-02), where bun's default 5 s read red.
-  }, 60_000);
+  });
 
   /**
    * One connected daemon, torn down. Composed from the four helpers above so
@@ -1116,7 +1111,7 @@ describe('daemon process under Bun against a local hub', () => {
         fs.rmSync(bait, { force: true });
       }
     });
-  }, 60_000);
+  });
 
   // F3. Acknowledgement is what ends the hub's grace on the superseded token,
   // so a rotation this daemon could NOT store must not be acknowledged: the
@@ -1142,7 +1137,7 @@ describe('daemon process under Bun against a local hub', () => {
         fs.chmodSync(root, 0o700);
       }
     });
-  }, 60_000);
+  });
 
   // The owner's direction: one shell, bash, resolved on the machine's PATH.
   // `/bin/sh` is dash on Debian and Ubuntu, so a command the model wrote with
@@ -1165,7 +1160,7 @@ describe('daemon process under Bun against a local hub', () => {
       hub.socket().send(JSON.stringify({ id: 'rpc-bashack00-1', method: 'execAck', params: ['rpc-bashsyntax-1', 1] }));
       await reply('rpc-bashack00-1');
     });
-  }, 60_000);
+  });
 
   // The sandbox, through the socket: the hub DECIDES the tier and the daemon
   // enforces it, so this is the frame a hub with the switch on sends.
@@ -1207,7 +1202,7 @@ describe('daemon process under Bun against a local hub', () => {
       hub.socket().send(JSON.stringify({ id: 'rpc-sandboxack-1', method: 'execAck', params: ['rpc-sandboxrun-1', 1] }));
       await reply('rpc-sandboxack-1');
     });
-  }, 60_000);
+  });
 
   test('a sandboxed exec naming an agent home outside the daemon\'s own root is refused', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
@@ -1225,7 +1220,7 @@ describe('daemon process under Bun against a local hub', () => {
       expect(refused.result).toBeUndefined();
       expect(refused.error).toContain('agent home must sit under');
     });
-  }, 60_000);
+  });
 
   // F8. The daemon inherits the shell that ran `kinu connect`. Before this,
   // every command inherited that whole environment, so one `env` turned a
@@ -1271,7 +1266,7 @@ describe('daemon process under Bun against a local hub', () => {
       hub.socket().send(JSON.stringify({ id: 'rpc-envdmpack-1', method: 'execAck', params: ['rpc-envdump000-1', 1] }));
       await reply('rpc-envdmpack-1');
     });
-  }, 60_000);
+  });
 
   // The supervisor holds a terminal result until the cloud acknowledges it,
   // and the daemon is the FIFO's only writer. So a daemon that dies in that
@@ -1334,7 +1329,7 @@ describe('daemon process under Bun against a local hub', () => {
     }
   // Two daemon spawns, one exec, and the supervisor's 1 s orphan poll, each
   // with its own named wait inside.
-  }, 60_000);
+  });
 
   // A signal never reaches the socket's close handler, which is where the
   // terminals were hung up. When the daemon's pty master closes, the kernel
@@ -1397,5 +1392,5 @@ describe('daemon process under Bun against a local hub', () => {
     }
   // One daemon spawn, one terminal, and the shell's own prompt inside it,
   // each with its own named wait.
-  }, 60_000);
+  });
 });

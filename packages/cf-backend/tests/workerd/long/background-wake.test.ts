@@ -25,7 +25,7 @@
 import { env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { WAKE_MARKER as MARKER, WakeDriveResultSchema, type WakeHoldPlacement } from './two-turn-shapes';
+import { WAKE_MARKER as MARKER, WakeDriveResultSchema, type WakeHoldPlacement } from '../two-turn-shapes';
 
 describe('a background job settling while the interactive turn still owns the session wakes a turn that reaches the model', () => {
   const cases: ReadonlyArray<{ where: WakeHoldPlacement; window: string }> = [
