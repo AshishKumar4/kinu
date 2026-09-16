@@ -44,6 +44,15 @@ export interface CapturedHttpCall {
 
 const log: CapturedHttpCall[] = [];
 
+/** Readers parked on `/log/until?marker=`: released by the call that carries
+ *  the marker, the moment it is recorded — the wake proof's end condition,
+ *  never a poll against a clock. */
+const logWaiters: { readonly marker: string; readonly resolve: () => void }[] = [];
+
+function carriesMarker(call: CapturedHttpCall, marker: string): boolean {
+  return call.conversation.some((m) => m.content.includes(marker));
+}
+
 /** How many times the worker asked for the provider catalog. Read through
  *  `/log`, so a suite can assert the catalog was served rather than refused. */
 let catalogHits = 0;
@@ -204,6 +213,15 @@ function recordCall(url: URL, request: Request, body: OutboundBody): void {
       .filter((m) => m.role === 'tool')
       .map((m) => textOf(m.content)),
   });
+
+  const recorded = log[log.length - 1];
+
+  if (recorded === undefined) return;
+
+  for (const waiter of logWaiters.splice(0)) {
+    if (carriesMarker(recorded, waiter.marker)) waiter.resolve();
+    else logWaiters.push(waiter);
+  }
 }
 
 function sseChunk(delta: SseDelta, finishReason?: string): string {
@@ -606,8 +624,21 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
     return Response.json({ calls: [...log], catalogHits });
   }
 
+  if (url.pathname === '/log/until' && request.method === 'GET') {
+    const marker = url.searchParams.get('marker') ?? '';
+
+    if (!log.some((call) => carriesMarker(call, marker))) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      logWaiters.push({ marker, resolve });
+      await promise;
+    }
+
+    return Response.json({ ok: true });
+  }
+
   if (url.pathname === '/reset' && request.method === 'POST') {
     log.length = 0;
+    logWaiters.length = 0;
     catalogHits = 0;
 
     return Response.json({ ok: true });
