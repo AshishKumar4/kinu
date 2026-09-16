@@ -147,7 +147,7 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   const connected = await waitForDeviceConnected(auth, device.deviceId, launch, opts);
 
   if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
-  anyDeviceConnected = true;
+  thisDeviceConnected = true;
 
   // The ROW's label names the device: the hub is the authority on what this
   // machine is called, not the name typed at the prompt.
@@ -219,13 +219,32 @@ function restartFromPreviousBuild(): boolean {
 
 let offerConsumed = false;
 
-let anyDeviceConnected: boolean | null = null;
+let thisDeviceConnected: boolean | null = null;
+
+/** Whether one device row is THIS machine: the hostname the hub stamped from
+ *  the daemon's HELLO against the one this process runs on. The device list
+ *  carries no local identity — `device.json` holds the account's token and
+ *  this machine's consented root, never a device id — so the hostname is what
+ *  there is to compare. */
+function isThisMachine(device: CloudDevice): boolean {
+  return device.hostname !== null && device.hostname.trim() === defaultDeviceName();
+}
 
 /**
  * Whether a chat surface should offer the connect prompt now: cloud auth
- * present, the prompt not permanently dismissed, and no device connected
- * (the device list answer is cached — never polled). A true answer consumes
- * the per-invocation latch, so the prompt is asked at most once per CLI run.
+ * present, the prompt not permanently dismissed, and THIS machine not already
+ * connected (the device list answer is cached — never polled). A true answer
+ * consumes the per-invocation latch, so the prompt is asked at most once per
+ * CLI run.
+ *
+ * THIS machine, not the account. The card asks "Let this agent use this PC?",
+ * and a person on a second laptop has as much to link as one with no machine
+ * connected at all — suppressing on any connected device meant the offer
+ * vanished for everyone whose OTHER machine was linked, and the one surface
+ * that measures the card (`tests/first-run/enter-sends`) reads it as the card
+ * never arriving. Measured 2026-09-16 on the eval account: three device
+ * daemons from earlier episodes were connected, so no session on this machine
+ * was offered the link.
  */
 export async function shouldOfferDeviceConnect(): Promise<boolean> {
   if (offerConsumed) return false;
@@ -235,10 +254,10 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
 
   if (!auth) return false;
 
-  if (anyDeviceConnected === null) {
+  if (thisDeviceConnected === null) {
     try {
       const devices = await listCloudDevices(auth.origin, auth.token);
-      anyDeviceConnected = devices.some((device) => device.connected);
+      thisDeviceConnected = devices.some((device) => device.connected && isThisMachine(device));
     } catch (error) {
       // Never nag when the answer is unknown — an unreachable cloud is not evidence that no device
       // is connected. A malformed origin is ours, not the network's: swallowing it would disable
@@ -249,7 +268,7 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
     }
   }
 
-  if (anyDeviceConnected) return false;
+  if (thisDeviceConnected) return false;
   offerConsumed = true;
 
   return true;
@@ -267,7 +286,7 @@ export async function deviceStatusLine(): Promise<string> {
   try {
     const auth = requireAuthConfig();
     const devices = await listCloudDevices(auth.origin, auth.token);
-    anyDeviceConnected = devices.some((device) => device.connected);
+    thisDeviceConnected = devices.some((device) => device.connected && isThisMachine(device));
     const connected = devices.filter((device) => device.connected);
 
     if (connected.length > 0) {
