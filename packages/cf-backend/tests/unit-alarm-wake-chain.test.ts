@@ -409,11 +409,14 @@ describe('the workspace keeps exactly one wake row', () => {
     // and read under the id the agent's own recorder uses.
     const actorId = harnessActorId(db);
 
+    // A start row as the recorder writes one: the ledger reads its open
+    // runs through the event schema, and a row it cannot read is a fault.
     const start = (run: string, ts: number): void => {
+      const stamped = new Date(ts).toISOString();
       db.prepare(
         `INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
-         VALUES (?, ?, 1, 'run_start', ?, '{}')`,
-      ).run(actorId, run, new Date(ts).toISOString());
+         VALUES (?, ?, 1, 'run_start', ?, ?)`,
+      ).run(actorId, run, stamped, JSON.stringify({ type: 'run_start', agentId: 'a', eventIndex: 1, runId: run, timestamp: stamped }));
     };
 
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.

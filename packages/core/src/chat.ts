@@ -106,7 +106,13 @@ export type ChatEvent =
    *  (scaffold/chat-transform.ts) does: an evolved scaffold reports a failed
    *  sub-step or a failed run without losing the output already streamed. */
   | { type: 'error'; message: string }
-  | { type: 'done'; text: string; responseMessages: ModelMessage[] };
+  /** `text` is what a caller stores or shows: the turn's answer, else the
+   *  text it streamed, else a synthesis of its tool results — never empty
+   *  for a turn that did anything. `answer` is the first of those only: the
+   *  final step's text as {@link answerFromSteps} selects it, absent when the
+   *  turn's steps carried none, so a caller with a synthesis of its own (a
+   *  head's report) can tell an answer from a stand-in. */
+  | { type: 'done'; text: string; responseMessages: ModelMessage[]; answer?: string };
 
 export type ChatToolOutput = Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>;
 
@@ -1038,7 +1044,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
-  yield { type: 'done', text: allText, responseMessages };
+  yield { type: 'done', text: allText, responseMessages, ...(answer !== null && { answer }) };
 
   // The turn did not finish, and the caller's turn record must say so — but
   // only AFTER `done`, so the history above is durably kept. Being cut is not a
