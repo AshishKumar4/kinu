@@ -355,6 +355,58 @@ function settleModelOperation(
 const operationRejected = (operation: ModelOperation) =>
   <Failure>(cause: Failure): void => { operation.failed({ cause }); };
 
+/** What {@link answerFromSteps} reads off one step, and nothing more: a
+ *  provider's `StepResult` satisfies it structurally, which is what keeps this
+ *  rule readable without the SDK's twenty other step fields in view. */
+interface AnswerStep {
+  readonly text?: string;
+  readonly finishReason?: string;
+}
+
+/**
+ * THE TURN'S ANSWER: the text of its FINAL step, or null when the steps do not
+ * carry one and what the turn streamed stands.
+ *
+ * A multi-step turn narrates: each step may emit prose before its tool calls
+ * ("I'll look at the workspace first…"), and that prose is the step's,
+ * recorded on its own `step_finish` row and streamed to whoever was watching.
+ * The turn's answer is what it said when it stopped. Joining every step's text
+ * made the durable reply a wall of narration with the answer buried at its end
+ * and no boundary in front of it — measured 2026-09-16 on the deployed build:
+ * the stored reply for a ten-step slate turn was the nine narrations plus the
+ * answer, concatenated, so a reader asking for the answer's own first line
+ * found narration instead.
+ *
+ * Two steps JOIN: a step the provider cut at its output limit and the
+ * continuation that finishes it are one answer in two requests, so the walk
+ * back over `length` finishes collects both. An INTERRUPTED turn has no answer
+ * here at all — the cut text is what the operator saw, and the last finished
+ * step is not it — and neither does a turn whose steps hold no text; both are
+ * null, and the caller keeps what it streamed.
+ */
+function answerFromSteps(
+  steps: readonly AnswerStep[],
+  interrupted: boolean,
+): string | null {
+  if (interrupted || steps.length === 0) return null;
+  let from = steps.length - 1;
+
+  while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED) from -= 1;
+  const answer = steps.slice(from).map((step) => step.text ?? '').join('');
+
+  return answer.trim() ? answer : null;
+}
+
+/** What a settled tool call contributes to the durable ledger: the VALUE the
+ *  tool returned, projected to JSON, or nothing when it returned nothing —
+ *  then the rendered text stands in, which is what such a row has always
+ *  held. The argument is the SDK's own `output` off the settled part, whose
+ *  type is the tool's return value: anything JSON-shaped, which is why the
+ *  projection is the parse. */
+function toolOutput(raw: ChatToolOutput['output']): { output: JsonValue } | undefined {
+  return raw === undefined ? undefined : { output: projectJsonValue({ value: raw }) };
+}
+
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const extensions = opts.extensions;
 
@@ -719,8 +771,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             await extensions?.emitToolResult({ toolName: chunk.toolName, toolCallId: chunk.toolCallId, args: input, result: rendered, ...outcome });
             yield {
               type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered,
-              ...(raw !== undefined && { output: projectJsonValue({ value: raw }) }),
-              ...outcome,
+              ...toolOutput(raw), ...outcome,
             };
             break;
           }
@@ -902,30 +953,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     interrupted = continued.interrupted;
   }
 
-  // THE ANSWER IS THE FINAL STEP'S TEXT, not everything the turn said.
-  //
-  // A multi-step turn narrates: each step may emit prose before its tool
-  // calls ("I'll look at the workspace first…"), and that prose is the step's,
-  // recorded on its own `step_finish` row and streamed to whoever was
-  // watching. The turn's answer is what it said when it stopped. Joining every
-  // step's text made the durable reply a wall of narration with the answer
-  // buried at its end and no boundary in front of it — measured 2026-09-16 on
-  // the deployed build: the stored reply for a ten-step slate turn was the
-  // nine narrations plus the answer, concatenated, so a reader asking for the
-  // answer's own first line found narration instead.
-  //
-  // Two steps join: a step the provider cut at its output limit and the
-  // continuation above that finishes it are one answer in two requests. And an
-  // INTERRUPTED turn keeps what it streamed — the cut answer is what the
-  // operator saw, and the last finished step is not it.
-  if (!interrupted && steps.length > 0) {
-    let from = steps.length - 1;
+  const answer = answerFromSteps(steps, interrupted);
 
-    while (from > 0 && steps[from - 1]?.finishReason === OUTPUT_LIMIT_REACHED) from -= 1;
-    const answer = steps.slice(from).map((step) => step.text ?? '').join('');
-
-    if (answer.trim()) allText = answer;
-  }
+  if (answer !== null) allText = answer;
 
   // If the model produced no text (ended on a tool call), gather from steps
   if (!allText.trim()) {
