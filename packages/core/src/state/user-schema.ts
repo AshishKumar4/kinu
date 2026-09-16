@@ -206,7 +206,10 @@ export function initUserTables(sql: SqlExec): void {
   // sealed at rest by user/credential-envelope.ts exactly like a credential —
   // it holds the same class of secret.
   // `allowed_tools` is a JSON array of MCP tool names; null = expose all.
-  // `preset_id` names the `MCP_PRESETS` entry the row came from; null = custom.
+  // A row's preset lives one table over in `user_mcp_server_presets`: a column
+  // added to this table is sealed out of every account created before the
+  // lane — `CREATE TABLE IF NOT EXISTS` is a no-op on storage that already
+  // carries it, and the shipped table is what those accounts keep.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
       id            TEXT PRIMARY KEY,
@@ -215,7 +218,6 @@ export function initUserTables(sql: SqlExec): void {
       transport     TEXT NOT NULL,
       headers       TEXT,
       allowed_tools TEXT,
-      preset_id     TEXT,
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       updated_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
     )
@@ -259,6 +261,22 @@ export function initUserTables(sql: SqlExec): void {
   } else {
     diagnostics.event('user.mcp_name_index_skipped', { collidingNames });
   }
+
+  // Which preset a server row came from, as its own table — a column on
+  // `user_mcp_servers` would be sealed out of every account created before
+  // the lane (`CREATE TABLE IF NOT EXISTS` is a no-op on storage that already
+  // carries the table), which is exactly what broke `userMcp_list` and
+  // `userMcp_add` on the live build. An absent row is a custom server; the
+  // read model's LEFT JOIN answers `preset_id` either way.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_mcp_server_presets (
+      -- The server row this tag belongs to; cascade-declared so the tag is a
+      -- property of the server, not of the storage that outlives it.
+      server_id TEXT PRIMARY KEY REFERENCES user_mcp_servers(id) ON DELETE CASCADE,
+      -- The MCP_PRESETS entry the server was added from.
+      preset_id TEXT NOT NULL
+    )
+  `);
 
   // User-level connected devices (laptops/PCs). One row per device the user has
   // linked via `kinu connect`. The reverse-WS tunnel + the live socket live
