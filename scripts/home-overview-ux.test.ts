@@ -52,7 +52,7 @@ async function uniqueRequested(page: Page): Promise<string[]> {
 }
 
 /** Wait for the page's own request log to name `name` at least `count` times. */
-async function waitForRequests(page: Page, name: string, count: number, timeoutMs = 20_000): Promise<void> {
+async function waitForRequests(page: Page, name: string, count: number): Promise<void> {
   await page.waitForFunction(
     (wanted, needed) => {
       const asked = (document.documentElement.dataset.galleryOverviewRequests ?? '').split(' ')
@@ -60,7 +60,7 @@ async function waitForRequests(page: Page, name: string, count: number, timeoutM
 
       return asked.length >= needed;
     },
-    { timeout: timeoutMs },
+    {},
     name, count,
   );
 }
@@ -133,7 +133,7 @@ async function setOutcome(page: Page, name: string, outcome: Outcome): Promise<v
 }
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light' | null = 'dark'): Promise<Page> {
-  const page = await gallery.browser.newPage();
+  const page = await gallery.newPage();
 
   if (theme !== null) {
     await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
@@ -197,7 +197,7 @@ describe('the home workspace cards', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('a failed refresh keeps the last answer, marks it stale, and retries', async () => {
     await withGallery(async (gallery) => {
@@ -220,7 +220,6 @@ describe('the home workspace cards', () => {
         await page.waitForFunction(
           () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
             .some((row) => (row.textContent ?? '').includes('Last checked')),
-          { timeout: 20_000 },
         );
 
         list = await cards(page);
@@ -253,7 +252,6 @@ describe('the home workspace cards', () => {
         await page.waitForFunction(
           () => ![...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
             .some((row) => (row.textContent ?? '').includes('Last checked')),
-          { timeout: 20_000 },
         );
 
         list = await cards(page);
@@ -263,7 +261,7 @@ describe('the home workspace cards', () => {
         await page.close();
       }
     });
-  }, 90_000);
+  });
 
   test('only the displayed names are fetched, and the sixth row never mounts', async () => {
     await withGallery(async (gallery) => {
@@ -275,7 +273,6 @@ describe('the home workspace cards', () => {
         // hidden sixth name could hide is inside the second wave.
         await page.waitForFunction(
           () => (document.documentElement.dataset.galleryOverviewRequests ?? '').split(' ').length >= 10,
-          { timeout: 20_000 },
         );
 
         const asked = await uniqueRequested(page);
@@ -291,7 +288,7 @@ describe('the home workspace cards', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('a narrow viewport wraps the degraded card — updates, last-known, retry all visible', async () => {
     await withGallery(async (gallery) => {
@@ -307,7 +304,6 @@ describe('the home workspace cards', () => {
         await page.waitForFunction(
           () => [...document.querySelectorAll('section[aria-label="Recent workspaces"] a')]
             .some((row) => (row.textContent ?? '').includes('Last checked')),
-          { timeout: 20_000 },
         );
 
         const list = await cards(page);
@@ -329,7 +325,7 @@ describe('the home workspace cards', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('desktop and mobile photograph the states, dark and light', async () => {
     await withGallery(async (gallery) => {
@@ -343,7 +339,7 @@ describe('the home workspace cards', () => {
       ];
 
       for (const entry of cases) {
-        const page = await gallery.browser.newPage();
+        const page = await gallery.newPage();
         await page.setViewport({ width: entry.width, height: entry.height });
         await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), entry.theme);
         await page.goto(`${gallery.origin}/gallery.html?frame=home${entry.query}`, { waitUntil: 'networkidle0' });
@@ -366,7 +362,7 @@ describe('the home workspace cards', () => {
         }
       }
     });
-  }, 120_000);
+  });
 
   test('the evidence roster lists every fact as a chip, and idle is never a completion', async () => {
     await withGallery(async (gallery) => {
@@ -410,7 +406,7 @@ describe('the home workspace cards', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('the evidence roster photographs in dark and light, desktop and mobile', async () => {
     await withGallery(async (gallery) => {
@@ -422,7 +418,7 @@ describe('the home workspace cards', () => {
       ];
 
       for (const entry of cases) {
-        const page = await gallery.browser.newPage();
+        const page = await gallery.newPage();
         await page.setViewport({ width: entry.width, height: entry.height });
         await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), entry.theme);
         await page.goto(`${gallery.origin}/gallery.html?frame=home&roster=evidence`, { waitUntil: 'networkidle0' });
@@ -448,13 +444,13 @@ describe('the home workspace cards', () => {
         }
       }
     });
-  }, 120_000);
+  });
 });
 
 describe('the home page is the new-workspace form', () => {
   test('the create action carries the primary fill and the content centres on desktop', async () => {
     await withGallery(async (gallery) => {
-      const page = await gallery.browser.newPage();
+      const page = await gallery.newPage();
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${gallery.origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
 
@@ -491,11 +487,11 @@ describe('the home page is the new-workspace form', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 
   test('mobile keeps the top flow', async () => {
     await withGallery(async (gallery) => {
-      const page = await gallery.browser.newPage();
+      const page = await gallery.newPage();
       await page.setViewport({ width: 390, height: 844 });
       await page.goto(`${gallery.origin}/gallery.html?frame=home`, { waitUntil: 'networkidle0' });
 
@@ -513,5 +509,5 @@ describe('the home page is the new-workspace form', () => {
         await page.close();
       }
     });
-  }, 60_000);
+  });
 });

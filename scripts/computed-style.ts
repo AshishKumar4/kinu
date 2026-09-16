@@ -215,7 +215,7 @@ export interface Audit {
 }
 
 export async function audit(frames: readonly string[], themes: readonly Theme[] = THEMES): Promise<Audit> {
-  return withGallery(async ({ browser, origin }) => {
+  return withGallery(async ({ newPage, origin }) => {
     const found: Unresolved[] = [];
     const perTheme: { theme: string; checked: number }[] = [];
     let checked = 0;
@@ -225,7 +225,7 @@ export async function audit(frames: readonly string[], themes: readonly Theme[] 
       let themeChecked = 0;
 
       for (const frame of frames) {
-        const page = await browser.newPage();
+        const page = await newPage();
         await page.setViewport({ width: 1280, height: 1100 });
         // The mode rides `prefers-color-scheme`, which is what the pre-paint
         // script reads absent a stored choice. It is pinned before navigation

@@ -236,7 +236,7 @@ export interface SuiteRun {
 
 /** Run the owning suite in `cwd` and hand back its exit code and output. */
 function runSuite(suite: string, grep: string, cwd: string): SuiteRun {
-  const result = spawnSync('bun', ['test', suite, '--grep', grep], {
+  const result = spawnSync('bun', ['test', '--timeout=0', suite, '--grep', grep], {
     cwd,
     encoding: 'utf8',
     env: childEnv({ KINU_HOME: join(cwd, '.kinu-test-home') }),

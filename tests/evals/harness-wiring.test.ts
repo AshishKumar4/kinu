@@ -325,7 +325,7 @@ describe('crafted-tool discovery and execution use the production CLI adapter', 
     await expect(execute({ code: 'return await codemode.doubleIt(21);' })).rejects.toThrow();
     expect(await execute({ code: 'return await tools.increment(41);' }))
       .toEqual({ result: 42 });
-  }, 0);
+  });
 });
 
 /**
@@ -416,7 +416,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     // an unmeasured plane can never read as a conformant one.
     expect([...report.unmeasured].sort())
       .toEqual(['memory-action', 'producer', 'table']);
-  }, 0);
+  });
 
   test('every codemode namespace production wires is reachable from execute_tools', async () => {
     const { surface } = await openRuntimeProbe('parity-codemode-namespaces');
@@ -442,7 +442,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     );
 
     expect(saved.result).toContain('saved');
-  }, 0);
+  });
 
   test('the production prompt shows the model the delegation surface it is scored on', async () => {
     const { surface } = await openRuntimeProbe('parity-prompt-projection');
@@ -457,7 +457,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     // Every builtin on the surface is NAMED in the prompt's tool section, so the
     // two projections cannot disagree about what exists.
     for (const name of surface.builtinTools) expect(system).toContain(name);
-  }, 0);
+  });
 
   test('the request evidence reports the tool list the provider actually received', async () => {
     const { rt, surface } = await openRuntimeProbe('parity-request-evidence');
@@ -501,7 +501,7 @@ describe('the eval agent surface is set-equal to the production cli root', () =>
     // The runtime is unchanged by observation — the wrapper forwards and reads,
     // it does not answer.
     expect(rt.identity.name).toBe('parity-request-evidence');
-  }, 0);
+  });
 });
 
 describe('published run-event provenance', () => {
@@ -538,7 +538,7 @@ describe('published run-event provenance', () => {
     const serialized = JSON.stringify(output.provenance);
     expect(serialized).not.toContain(prompt);
     expect(serialized).not.toContain(secret);
-  }, 0);
+  });
 });
 
 describe('behaviour harness wiring — the three scorers that read zero live', () => {
@@ -558,7 +558,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
 
     // And the loop really closed rather than the row merely existing.
     expect(craft.detail).toContain('1/1');
-  }, 0);
+  });
 
   test('completion_honesty: a one-shot task turn arms the gate and the confirming turn closes', async () => {
     const scores = await run('wiring-gate', [
@@ -570,7 +570,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // only once the gate's own confirming turn closes — which happens after
     // `send` resolves, so it needs the pump settled.
     expect(honesty.eligible).toBeGreaterThan(0);
-  }, 0);
+  });
 
   test('spill_retrieval: bulk output the budget spilled reaches the scorer with a readable address', async () => {
     // Written and read back in the same turn, so the fixture carries its own
@@ -588,7 +588,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // ~150-char files could never score it.
     expect(spill.eligible).toBeGreaterThan(0);
     expect(spill.detail).toContain(`${String(spill.eligible)} readable spills`);
-  }, 0);
+  });
 
   test('output_cap: the arm reports whether the provider cut the answer, per episode', async () => {
     const scores = await run('wiring-cap', [
@@ -607,7 +607,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     expect(cap.eligible).toBe(1);
     expect(cap.rate).toBe(1);
     expect(cap.detail).toContain("finished 'stop'");
-  }, 0);
+  });
 
   test('output_cap: an answer the provider cut at its limit is reported as cut, not as a miss', async () => {
     // The provider ends every answer at its output limit — the turn's own and
@@ -623,7 +623,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     expect(cap.eligible).toBe(1);
     expect(cap.rate).toBe(0);
     expect(cap.detail).toContain('CUT AT THE OUTPUT LIMIT');
-  }, 0);
+  });
 
   test('the harness REFUSES a runtime with no executor surface, before spending anything', async () => {
     // The positive direction is covered by the three tests above: they all run,
@@ -647,7 +647,7 @@ describe('behaviour harness wiring — the three scorers that read zero live', (
     // And it is NOT filed as an inert agent — that bucket means the agent did
     // nothing, not that the harness was broken (behaviour.eval.ts:281).
     expect(new DegenerateRuntimeError('t', 'r')).not.toBeInstanceOf(DegenerateRunError);
-  }, 0);
+  });
 });
 
 /**
@@ -700,7 +700,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
       expect(row.outcome?.success).toBe(false);
       expect(JSON.stringify(row.result)).toContain('laptop');
     }
-  }, 0);
+  });
 
   test('the harness REFUSES a runtime carrying a host plane, before spending anything', async () => {
     const dbPath = join(dir, 'unsandboxed.db');
@@ -725,7 +725,7 @@ describe('episode isolation — no plane outside the episode sandbox', () => {
 
     // A misconfigured harness is not an inert agent (behaviour.eval.ts:347).
     expect(new UnsandboxedRuntimeError('t', 'laptop')).not.toBeInstanceOf(DegenerateRunError);
-  }, 0);
+  });
 });
 
 /**
@@ -784,7 +784,7 @@ describe('tool-failure attribution over a real turn', () => {
     expect(keys['run·unavailable']).toBe(1);
     expect(census.failures).toHaveLength(3);
     expect(census.failures.some((failure) => failure.tool === 'execute_tools')).toBe(false);
-  }, 60_000);
+  });
 
   test('every failure is attributed to its tool, action and reason, split three ways', async () => {
     // One episode covering all three classes, so the split is proven by
@@ -866,7 +866,7 @@ describe('tool-failure attribution over a real turn', () => {
     // `eligible` because it was built over every row.
     expect(census.failures.length).toBe(4);
     expect(rows.length).toBeGreaterThan(census.failures.length);
-  }, 60_000);
+  });
 });
 
 /**
@@ -923,7 +923,7 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
       targetOps: task.problem.targetOps,
       lowerBoundOps: task.problem.lowerBoundOps,
     });
-  }, 60_000);
+  });
 
   test('leaving the seeded stub in place scores 0 with the reason, not a missing row', async () => {
     const scores = await runCase(evalCase, [
@@ -935,7 +935,7 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // The stub the task seeds throws, so the zero names the agent's omission
     // rather than the harness's.
     expect(outcome.detail).toContain('not implemented');
-  }, 60_000);
+  });
 
   test('a case with no env carries NO task_outcome — an unverified pair, not a loss', async () => {
     const scores = await run('wiring-unverified', [
@@ -945,7 +945,7 @@ describe('hard-task wiring — env resolves to a seeded task and a scored outcom
     // The comparator drops such a pair BY NAME (`baseline-unverified`). Charging
     // it as a zero would turn a missing verifier into a fact about the agent.
     expect(scores.find((s) => s.name === 'task_outcome')).toBeUndefined();
-  }, 0);
+  });
 });
 
 /**
@@ -1000,7 +1000,7 @@ describe('episode spend — the meter is fed by the session, not by silence', ()
     // would move, and they must be quiet when it does not.
     expect(spent.callsWithoutUsage).toBe(0);
     expect(spent.episodesUnmeasured).toBe(0);
-  }, 0);
+  });
 
   test('an episode that spends and reports nothing is labelled, never a clean 0', () => {
     const callsBefore = liveModelSpend().calls;
@@ -1498,8 +1498,5 @@ describe('the spawned-CLI driver roots its child outside the repository', () => 
       'the child agent must be placed inside the scratch home it was given, because that '
       + 'directory becomes its host executor root',
     ).toStartWith(realpathSync(home));
-  // Measured 4.1 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 20_000);
+  });
 });

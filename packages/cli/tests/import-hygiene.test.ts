@@ -32,7 +32,6 @@ test("importing the setup/chat command graph leaves stdin untouched and opentui 
   const run = spawnSync(process.execPath, ["-e", PROBE], {
     cwd: resolve(__dirname, ".."),
     encoding: "utf8",
-    timeout: 30_000,
   });
 
   expect(run.status).toBe(0);
@@ -40,4 +39,4 @@ test("importing the setup/chat command graph leaves stdin untouched and opentui 
   expect(result.afterCommands.stdin).toEqual({ data: 0, readable: 0, keypress: 0, isRaw: false });
   expect(result.afterCommands.opentuiLoaded).toBe(false);
   expect(result.controlLoaded).toBe(true);
-}, 40_000);
+});

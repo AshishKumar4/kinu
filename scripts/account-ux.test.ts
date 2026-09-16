@@ -25,7 +25,7 @@ mkdirSync(SHOTS, { recursive: true });
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
-  const page = await gallery.browser.newPage();
+  const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
   await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'networkidle0' });
@@ -85,11 +85,10 @@ describe('account panels', () => {
           const providers = await freshPage(gallery, 'setupmodal&panel=providers', theme, viewport);
 
           try {
-            await providers.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            await providers.waitForSelector('[role="dialog"]');
             await settleAccountFixture(providers);
             await providers.waitForFunction(
               () => document.querySelector('[role="dialog"]')?.textContent?.includes('Connect ChatGPT'),
-              { timeout: 10_000 },
             );
 
             const text = await dialogText(providers);
@@ -104,10 +103,9 @@ describe('account panels', () => {
           const mcp = await freshPage(gallery, 'setupmodal&panel=mcp', theme, viewport);
 
           try {
-            await mcp.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            await mcp.waitForSelector('[role="dialog"]');
             await mcp.waitForFunction(
               () => document.querySelector('[role="dialog"]')?.textContent?.includes('auth needed'),
-              { timeout: 10_000 },
             );
 
             const text = await dialogText(mcp);
@@ -147,10 +145,9 @@ describe('account panels', () => {
           const cli = await freshPage(gallery, 'setupmodal&panel=cli', theme, viewport);
 
           try {
-            await cli.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            await cli.waitForSelector('[role="dialog"]');
             await cli.waitForFunction(
               () => document.querySelector('[role="dialog"]')?.textContent?.includes('kinu setup'),
-              { timeout: 10_000 },
             );
 
             expect(await dialogText(cli)).toContain('kinu setup');
@@ -162,7 +159,7 @@ describe('account panels', () => {
           const settings = await freshPage(gallery, 'usersettingsstate&section=providers', theme, viewport);
 
           try {
-            await settings.waitForSelector('[data-settings-section="providers"]', { timeout: 10_000 });
+            await settings.waitForSelector('[data-settings-section="providers"]');
             await settleAccountFixture(settings);
 
             const text = await settings.evaluate(() => document.body.innerText);
@@ -178,7 +175,7 @@ describe('account panels', () => {
       expect(shots.length).toBe(16);
       process.stdout.write(`account-ux: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
-  }, 240_000);
+  });
 
   test('the welcome wizard renders each step at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
@@ -193,7 +190,7 @@ describe('account panels', () => {
               // The slide is an inert track: every step's text is in the DOM,
               // so the honest read of "this step is showing" is the panel that
               // is neither hidden nor inert.
-              await page.waitForSelector('h1', { timeout: 10_000 });
+              await page.waitForSelector('h1');
 
               const body = await page.evaluate(() => document.body.innerText);
               expect(body).toContain("Let's set up your account");
@@ -221,7 +218,6 @@ describe('account panels', () => {
                 await page.waitForFunction(
                   () => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
                     .every((el) => getComputedStyle(el).opacity === '1'),
-                  { timeout: 10_000 },
                 );
 
                 expect(active).toContain('Work that runs without you');
@@ -241,7 +237,7 @@ describe('account panels', () => {
       expect(shots.length).toBe(12);
       process.stdout.write(`account-ux welcome: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
-  }, 240_000);
+  });
 
   test('the account section names the owner and arms the delete only on the typed email', async () => {
     await withGallery(async (gallery) => {
@@ -252,7 +248,7 @@ describe('account panels', () => {
           const page = await freshPage(gallery, 'usersettingsstate&section=account', theme, viewport);
 
           try {
-            await page.waitForSelector('[aria-label="Your name"]', { timeout: 10_000 });
+            await page.waitForSelector('[aria-label="Your name"]');
             const body = await page.evaluate(() => document.body.innerText);
             expect(body).toContain('owner@example.com');
             expect(body).toContain('Delete this account');
@@ -266,7 +262,7 @@ describe('account panels', () => {
               if (button === undefined) throw new Error('no delete button');
               button.click();
             });
-            await page.waitForSelector('[aria-label="Confirm your email"]', { timeout: 10_000 });
+            await page.waitForSelector('[aria-label="Confirm your email"]');
 
             const armed = (): Promise<boolean> => page.evaluate(() =>
               [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled));
@@ -278,7 +274,6 @@ describe('account panels', () => {
             await page.type('[aria-label="Confirm your email"]', 'Owner@Example.com');
             await page.waitForFunction(
               () => [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Delete everything') && !b.disabled),
-              { timeout: 10_000 },
             );
             expect(await armed()).toBe(true);
             shots.push(await shoot(page, `settings-account-armed-${viewport}-${theme}`));
@@ -291,7 +286,7 @@ describe('account panels', () => {
       expect(shots.length).toBe(8);
       process.stdout.write(`account-ux account: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
-  }, 240_000);
+  });
 
   test('the primary nav, the workspaces page, the plugins page and the shared page render at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
@@ -328,7 +323,7 @@ describe('account panels', () => {
             const page = await freshPage(gallery, view === 'tiled' ? 'workspaces&view=tiled' : 'workspaces', theme, viewport);
 
             try {
-              await page.waitForSelector('[aria-label="Search workspaces"]', { timeout: 10_000 });
+              await page.waitForSelector('[aria-label="Search workspaces"]');
               const body = await page.evaluate(() => document.body.innerText);
               expect(body).toContain('Workspaces');
 
@@ -343,7 +338,7 @@ describe('account panels', () => {
               // One state per card, no more: the chip count equals the row
               // count, and the headline words are the shared rule's.
               await page.waitForFunction(
-                () => document.querySelectorAll('[data-overview-chip]').length === 5, { timeout: 10_000 },
+                () => document.querySelectorAll('[data-overview-chip]').length === 5,
               );
               const body2 = await page.evaluate(() => document.body.innerText);
               expect(body2).toContain('Needs you · 2');
@@ -361,17 +356,17 @@ describe('account panels', () => {
               // 'Needs you' holds exactly the workspace whose decisions wait.
               await page.click('[data-segment="needs"]');
               await page.waitForFunction(
-                () => document.querySelectorAll('[data-workspaces-view] a').length === 1, { timeout: 10_000 },
+                () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
               );
               expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Checkout coupon bug');
               await page.click('[data-segment="all"]');
               await page.waitForFunction(
-                () => document.querySelectorAll('[data-workspaces-view] a').length === 5, { timeout: 10_000 },
+                () => document.querySelectorAll('[data-workspaces-view] a').length === 5,
               );
 
               await page.type('[aria-label="Search workspaces"]', 'perf');
               await page.waitForFunction(
-                () => document.querySelectorAll('[data-workspaces-view] a').length === 1, { timeout: 10_000 },
+                () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
               );
               expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Perf audit');
             } finally {
@@ -383,7 +378,7 @@ describe('account panels', () => {
 
           try {
             await plugins.waitForFunction(
-              () => document.querySelectorAll('[data-plugin]').length >= 6, { timeout: 10_000 },
+              () => document.querySelectorAll('[data-plugin]').length >= 6,
             );
             const body = await plugins.evaluate(() => document.body.innerText);
 
@@ -402,7 +397,7 @@ describe('account panels', () => {
               if (button === undefined) throw new Error('no manage button');
               button.click();
             });
-            await plugins.waitForSelector('[role="dialog"]', { timeout: 10_000 });
+            await plugins.waitForSelector('[role="dialog"]');
             expect(await dialogText(plugins)).toContain('Add custom server');
           } finally {
             await plugins.close();
@@ -441,7 +436,7 @@ describe('account panels', () => {
             ] as const) {
               await empty.click(`[data-segment="${segment}"]`);
               await empty.waitForFunction(
-                (expected) => document.body.innerText.includes(expected), { timeout: 10_000 }, line,
+                (expected) => document.body.innerText.includes(expected), {}, line,
               );
             }
           } finally {
@@ -453,5 +448,5 @@ describe('account panels', () => {
       expect(shots.length).toBe(18);
       process.stdout.write(`account-ux nav: ${String(shots.length)} screenshots under ${SHOTS}\n`);
     });
-  }, 300_000);
+  });
 });

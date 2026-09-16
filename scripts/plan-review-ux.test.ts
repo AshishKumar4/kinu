@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
-import { TimeoutError, type Browser, type Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 
-import { withGallery } from './gallery-harness';
+import { withGallery, type Gallery } from './gallery-harness';
 
 type Mode = 'dark' | 'light';
 
@@ -79,45 +79,15 @@ interface ObservedPlan {
   readonly settled: SettledPlan;
 }
 
-/**
- * Did `wait` settle before its own deadline?
- *
- * Some of what this suite measures is an affordance that can go MISSING — a
- * highlight that never paints, a scrim that dims and does not dismiss. Letting
- * the wait throw turns either into one unnamed aborted suite, so the deadline
- * becomes an observation the caller asserts on. Only a `TimeoutError` is
- * tolerated: anything else is an infrastructure fault, and a suite that
- * reported a lost affordance when the browser died would name the wrong defect.
- */
-async function settledWithin(wait: Promise<unknown>): Promise<boolean> {
-  try {
-    await wait;
-
-    return true;
-  } catch (cause) {
-    if (cause instanceof TimeoutError) return false;
-    throw cause;
-  }
-}
-
 async function openFrame(
-  browser: Browser,
+  newPage: Gallery['newPage'],
   origin: string,
   frame: string,
   mode: Mode,
   viewport: { width: number; height: number },
   params: Record<string, string> = {},
 ): Promise<Page> {
-  const page = await browser.newPage();
-  // Every implicit wait in this suite is on a SYNCHRONOUS React state change —
-  // a toggle opening the rail, a toggle closing it — so a timeout on one is
-  // machine contention and never a lost affordance: a broken handler fails at
-  // once and on every run. Puppeteer's 30s default was measured failing once
-  // in seven on a box running four other browser suites, so it is raised here
-  // rather than left to read as a product defect. The two waits that ARE
-  // findings keep their own shorter deadlines and report absence instead of
-  // throwing — see `settledWithin`.
-  page.setDefaultTimeout(60_000);
+  const page = await newPage();
   await page.setViewport(viewport);
   await page.evaluateOnNewDocument((nextMode: Mode) => localStorage.setItem('theme', nextMode), mode);
   const query = new URLSearchParams({ frame, ...params });
@@ -133,8 +103,8 @@ async function readActionStrip(page: Page, selector: string): Promise<ActionStri
   }));
 }
 
-async function observeDesktop(browser: Browser, origin: string, mode: Mode): Promise<DesktopPlan> {
-  const page = await openFrame(browser, origin, 'planreview', mode, { width: 1280, height: 900 });
+async function observeDesktop(newPage: Gallery['newPage'], origin: string, mode: Mode): Promise<DesktopPlan> {
+  const page = await openFrame(newPage, origin, 'planreview', mode, { width: 1280, height: 900 });
   await page.waitForSelector('[data-plan-review-root]');
   const strip = await readActionStrip(page, ACTION_STRIP);
 
@@ -190,8 +160,8 @@ async function observeDesktop(browser: Browser, origin: string, mode: Mode): Pro
   return { ...before, ...strip, ...opened };
 }
 
-async function observeMobile(browser: Browser, origin: string): Promise<MobilePlan> {
-  const page = await openFrame(browser, origin, 'planreview', 'dark', { width: 390, height: 844 });
+async function observeMobile(newPage: Gallery['newPage'], origin: string): Promise<MobilePlan> {
+  const page = await openFrame(newPage, origin, 'planreview', 'dark', { width: 390, height: 844 });
   await page.waitForSelector('[data-plan-review-root]');
   await page.$eval('[data-plan-document] pre', (code) => code.scrollIntoView({ block: 'center' }));
 
@@ -229,15 +199,14 @@ async function observeMobile(browser: Browser, origin: string): Promise<MobilePl
   return { ...before, ...rail };
 }
 
-async function observeWorkspace(browser: Browser, origin: string): Promise<WorkspacePlan> {
-  const page = await openFrame(browser, origin, 'workspacepage', 'dark', { width: 1280, height: 900 });
+async function observeWorkspace(newPage: Gallery['newPage'], origin: string): Promise<WorkspacePlan> {
+  const page = await openFrame(newPage, origin, 'workspacepage', 'dark', { width: 1280, height: 900 });
   await page.waitForSelector('[data-composer-root]');
   await page.waitForFunction(() => document.querySelectorAll('[data-panel]').length === 2);
   await page.click('[aria-label="Work"]');
   await page.waitForSelector('[data-plan-review-root]');
   await page.waitForFunction(
     () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('applyCoupon') === true,
-    { timeout: 20_000 },
   );
 
   const before = await page.evaluate(() => {
@@ -281,12 +250,14 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
   // rail — the header's annotations toggle. Whether it CLOSES the rail is the
   // assertion, so a rail that cannot be left is reported as a lost dismissal
   // rather than as a timed-out suite.
+  // The toggle's handler is a synchronous React state change, committed
+  // before the click resolves, so the rail's presence is read at once: a
+  // rail still open here is the lost dismissal, not a page still working.
   await page.click('[data-plan-annotations-toggle]');
 
-  const railDismissed = await settledWithin(page.waitForFunction(
+  const railDismissed = await page.evaluate(
     () => document.querySelector('[data-annotation-panel="true"]') === null,
-    { timeout: 15_000 },
-  ));
+  );
 
   await page.close();
 
@@ -294,27 +265,35 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
 }
 
 async function observePromotion(
-  browser: Browser,
+  newPage: Gallery['newPage'],
   origin: string,
   variant: string,
   settle?: string,
 ): Promise<PromotedPlan> {
-  const page = await openFrame(browser, origin, 'planreview', 'dark', { width: 1280, height: 900 }, { plan: variant });
+  const page = await openFrame(newPage, origin, 'planreview', 'dark', { width: 1280, height: 900 }, { plan: variant });
   const highlightWarnings: string[] = [];
+  const unpaintable = new AbortController();
   page.on('console', (message) => {
     // The vendored highlighter reports an anchor it could not paint as a bare
     // console.warn. A warning here means one viewer was handed an annotation
     // for a block it does not render — exactly what the split below prevents.
     if (message.type() === 'warn' && message.text().includes('Could not find text for annotation')) {
       highlightWarnings.push(message.text());
+      unpaintable.abort();
     }
   });
 
   if (settle !== undefined) {
-    // A missing highlight is the FINDING here, so its absence is tolerated and
-    // left to `titleHighlights` below, which names the contract that went
+    // The highlighter paints after mount, so the wait ends on either of ITS
+    // outcomes: the highlight in the DOM, or the warning above naming the
+    // anchor it could not paint. A missing highlight is the finding here and
+    // is left to `titleHighlights` below, which names the contract that went
     // missing rather than reporting a suite that timed out.
-    await settledWithin(page.waitForSelector(settle, { timeout: 20_000 }));
+    try {
+      await page.waitForSelector(settle, { signal: unpaintable.signal });
+    } catch (cause) {
+      if (!unpaintable.signal.aborted) throw cause;
+    }
   }
 
   const observed = await page.evaluate(() => {
@@ -341,8 +320,8 @@ async function observePromotion(
   return observed;
 }
 
-async function observeSettled(browser: Browser, origin: string): Promise<SettledPlan> {
-  const page = await openFrame(browser, origin, 'planreview', 'dark', { width: 1280, height: 900 }, { plan: 'read-only' });
+async function observeSettled(newPage: Gallery['newPage'], origin: string): Promise<SettledPlan> {
+  const page = await openFrame(newPage, origin, 'planreview', 'dark', { width: 1280, height: 900 }, { plan: 'read-only' });
   await page.waitForSelector('[data-plan-document] [data-block-id]');
   const status = await page.$eval('[data-plan-status]', (badge) => badge.textContent ?? '');
   const strip = await readActionStrip(page, ACTION_STRIP);
@@ -354,21 +333,26 @@ async function observeSettled(browser: Browser, origin: string): Promise<Settled
 let observed: ObservedPlan;
 
 beforeAll(async () => {
-  observed = await withGallery(async ({ browser, origin }) => ({
+  observed = await withGallery(async ({ newPage, origin }) => ({
     desktop: {
-      dark: await observeDesktop(browser, origin, 'dark'),
-      light: await observeDesktop(browser, origin, 'light'),
+      dark: await observeDesktop(newPage, origin, 'dark'),
+      light: await observeDesktop(newPage, origin, 'light'),
     },
-    mobile: await observeMobile(browser, origin),
-    workspace: await observeWorkspace(browser, origin),
-    lateHeading: await observePromotion(browser, origin, 'late-heading'),
+    mobile: await observeMobile(newPage, origin),
+    workspace: await observeWorkspace(newPage, origin),
+    lateHeading: await observePromotion(newPage, origin, 'late-heading'),
+    // The settle names the element the assertion reads — the promoted title
+    // in the header. The document's own h1 never carries this highlight (the
+    // split hands it to the header's viewer), and a wait on it timed out on
+    // every run while the assertion below passed on the header: a wait that
+    // could not end on its condition, hidden by the deadline it had.
     annotatedHeading: await observePromotion(
-      browser, origin, 'annotated-heading',
-      '[data-plan-document] h1[data-block-id] .annotation-highlight',
+      newPage, origin, 'annotated-heading',
+      '[data-plan-title] .annotation-highlight',
     ),
-    settled: await observeSettled(browser, origin),
+    settled: await observeSettled(newPage, origin),
   }));
-}, 300_000);
+});
 
 describe('the plan review document, as a browser lays it out', () => {
   test('both themes keep one document title, a readable measure, and a structured file tree', () => {

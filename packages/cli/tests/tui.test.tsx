@@ -443,10 +443,7 @@ describe('CLI TUI layout', () => {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
-  // Measured 2.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test('slash command hints render as a palette without numeric hotkeys', async () => {
     // The offered list, not the raw table: capability-gated commands are
@@ -1137,10 +1134,7 @@ describe('CLI TUI layout', () => {
     expect(tier).toMatchObject({ reasoningEffort: 'high' });
     expect(tier.model).toStartWith('openai/');
     expect(tier.model).not.toBe('openai/gpt-5.5');
-  // Measured 3.4 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 });
 
 async function renderOverlayFrame(showOverlay: boolean) {
@@ -1312,10 +1306,7 @@ const homeScreenPrelude = (width = 100, height = 40, fetchStub?: string) => `
     });
 
     expect(JSON.parse(compact.stdout)).toEqual({ readinessRow: true });
-  // Measured 2.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 15_000);
+  });
 
   test('a cloud workspace whose name a local one holds is named on screen, not silently dropped', () => {
     const project = realpathSync(scratchDir('home-project'));

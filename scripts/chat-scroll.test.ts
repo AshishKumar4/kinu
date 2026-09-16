@@ -31,11 +31,11 @@
  * are read once at module scope.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser, Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
-import { withGallery } from './gallery-harness';
+import { withGallery, type Gallery } from './gallery-harness';
 
 /**
  * The frame's hidden `[data-testid="probe"]` blob — the hooks' own state, which
@@ -109,21 +109,21 @@ async function probe(page: Page): Promise<Probe> {
  * the page, where the schema does not exist; `probe()` above is what pins the
  * shape, and every field these conditions name is one it parses.
  */
-async function untilProbe(page: Page, condition: string, timeout = 30_000): Promise<void> {
+async function untilProbe(page: Page, condition: string): Promise<void> {
   await page.waitForFunction(
     `(() => { const el = document.querySelector('${PROBE}');
        if (!el || !el.textContent) return false;
        const state = JSON.parse(el.textContent);
        return Boolean(${condition}); })()`,
-    { timeout, polling: 50 },
+    { polling: 50 },
   );
 }
 
 /** A gallery frame, loaded twice: a first load can trip vite's dependency
  *  optimizer, which answers with a full reload and destroys the execution
  *  context of anything waiting on the page. */
-async function openFrame(browser: Browser, origin: string, query: string): Promise<Page> {
-  const page = await browser.newPage();
+async function openFrame(newPage: Gallery['newPage'], origin: string, query: string): Promise<Page> {
+  const page = await newPage();
   await page.setViewport({ width: 720, height: 620 });
   await page.goto(`${origin}/gallery.html?frame=chathistory&${query}`, { waitUntil: 'networkidle0' });
   await page.reload({ waitUntil: 'networkidle0' });
@@ -339,13 +339,13 @@ interface Observed {
   readonly walked: Walked;
 }
 
-async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
+async function measureWalk(newPage: Gallery['newPage'], origin: string): Promise<Walk> {
   // Slow on purpose. The first page starts on the reader's gesture below —
   // the hook asks for a page only inside PREFETCH_THRESHOLD of the growing
   // edge — so the before-state exists only until the stub answers: at the
   // 400ms default it had already landed by the time the harness finished its
   // second load, and the measurement was of nothing.
-  const page = await openFrame(browser, origin, 'latency=3000&depth=5');
+  const page = await openFrame(newPage, origin, 'latency=3000&depth=5');
 
   const empty = {
     grewPx: 0, driftPx: 0, calls: 0, rows: 0,
@@ -388,8 +388,8 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
  * older than an anchor minted from a list the socket keeps extending — and the
  * merge rule is what stops one message being drawn twice.
  */
-async function measureRace(browser: Browser, origin: string): Promise<Race> {
-  const page = await openFrame(browser, origin, 'latency=1200&depth=4');
+async function measureRace(newPage: Gallery['newPage'], origin: string): Promise<Race> {
+  const page = await openFrame(newPage, origin, 'latency=1200&depth=4');
 
   try {
     // First page first, on the same edge gesture the walk scenario drives:
@@ -414,8 +414,8 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
   }
 }
 
-async function measureBroken(browser: Browser, origin: string): Promise<Broken> {
-  const page = await openFrame(browser, origin, 'latency=100&fail=1&depth=4');
+async function measureBroken(newPage: Gallery['newPage'], origin: string): Promise<Broken> {
+  const page = await openFrame(newPage, origin, 'latency=100&fail=1&depth=4');
 
   try {
     // The edge gesture asks for the page — and this stub fails the FIRST
@@ -441,8 +441,8 @@ async function measureBroken(browser: Browser, origin: string): Promise<Broken> 
   }
 }
 
-async function measureWalked(browser: Browser, origin: string): Promise<Walked> {
-  const page = await openFrame(browser, origin, 'latency=80&depth=1');
+async function measureWalked(newPage: Gallery['newPage'], origin: string): Promise<Walked> {
+  const page = await openFrame(newPage, origin, 'latency=80&depth=1');
 
   try {
     // depth=1 still needs the edge gesture to start the walk at all.
@@ -462,11 +462,11 @@ async function measureWalked(browser: Browser, origin: string): Promise<Walked> 
 }
 
 async function run(): Promise<Observed> {
-  return withGallery(async ({ browser, origin }) => ({
-    walk: await measureWalk(browser, origin),
-    race: await measureRace(browser, origin),
-    broken: await measureBroken(browser, origin),
-    walked: await measureWalked(browser, origin),
+  return withGallery(async ({ newPage, origin }) => ({
+    walk: await measureWalk(newPage, origin),
+    race: await measureRace(newPage, origin),
+    broken: await measureBroken(newPage, origin),
+    walked: await measureWalked(newPage, origin),
   }));
 }
 
@@ -479,7 +479,7 @@ let bootFailure: string | null = null;
 
 beforeAll(async () => {
   try { observed = await run(); } catch (cause) { bootFailure = renderThrownChain({ cause }); }
-}, 300_000);
+});
 
 afterAll(() => { if (bootFailure !== null) throw new Error(bootFailure); });
 

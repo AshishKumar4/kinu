@@ -21,6 +21,11 @@ interface WorkspaceRosterValue {
   readonly entries: readonly WorkspaceEntry[];
   readonly total: number;
   readonly error: string | null;
+  /** Whether a roster read is in flight: true from `refresh` until the read
+   *  has either published or been retired. The one signal a reader has that
+   *  a held reply has been consumed, so a fixture can prove a retired list
+   *  published nothing without watching a clock. */
+  readonly pending: boolean;
   readonly refresh: () => void;
   readonly upsert: (entry: WorkspaceEntry) => void;
   readonly rename: (name: string, displayName: string) => void;
@@ -38,7 +43,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
+  const [pending, startTransition] = useTransition();
   const knownNames = useRef(new Set<string>());
   /**
    * Which roster read may publish.
@@ -174,11 +179,12 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
     entries,
     total,
     error,
+    pending,
     refresh,
     upsert,
     rename,
     remove,
-  }), [entries, total, error, refresh, upsert, rename, remove]);
+  }), [entries, total, error, pending, refresh, upsert, rename, remove]);
 
   return <WorkspaceRosterContext.Provider value={value}>{children}</WorkspaceRosterContext.Provider>;
 }

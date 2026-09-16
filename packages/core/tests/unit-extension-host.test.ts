@@ -534,15 +534,10 @@ describe('ExtensionHost', () => {
   });
 
   test('a hook that never settles stops holding the turn once the turn is cancelled', async () => {
-    // The race is in the TEST too: without the host's own abort race, both
-    // awaits below would hang, and a hang reads as a slow suite rather than a
-    // failure. 200ms is far above a settled promise and far below any hook.
-    const settledOrHung = (p: Promise<ModelMessage[] | undefined>): Promise<'settled' | 'rejected' | 'hung'> =>
-      Promise.race([
-        p.then(() => 'settled' as const, () => 'rejected' as const),
-        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 200)),
-      ]);
-
+    // Without the host's own abort race, both awaits below would hang, and
+    // the hang is the failure: it is killed with the suite at the ladder's
+    // deadline, which names this gate. A clock beside the host's race would
+    // be a second race, and under load the second one loses first.
     const never = (): Promise<never> => new Promise(() => undefined);
 
     const host = new ExtensionHost()
@@ -556,12 +551,24 @@ describe('ExtensionHost', () => {
       sessionKey: 's', messages: [], system: 'sys', contextWindow: 1000, trigger: 'auto', abortSignal: controller.signal,
     });
 
+    // Each outcome is caught at its own lexical boundary BEFORE the abort, so
+    // neither rejection is ever unhandled while the other is being read.
+    const refused = (pending: Promise<ModelMessage[] | undefined>): Promise<KinuError> => (async () => {
+      try {
+        await pending;
+      } catch (cause) {
+        if (cause instanceof KinuError) return cause;
+        throw new Error('the cancelled hook rejected with something other than a KinuError', { cause });
+      }
+
+      throw new Error('the cancelled hook settled');
+    })();
+
+    const outcomes = [prepare, transform].map(refused);
     controller.abort(new Error('user stopped the turn'));
 
-    for (const pending of [prepare, transform]) {
-      expect(await settledOrHung(pending)).toBe('rejected');
-      await expect(pending).rejects.toBeInstanceOf(KinuError);
-      await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    for (const outcome of outcomes) {
+      expect((await outcome).code).toBe('cancelled');
     }
   });
 

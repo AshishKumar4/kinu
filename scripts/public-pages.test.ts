@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
-import type { Browser, Page } from 'puppeteer';
+import type { Page } from 'puppeteer';
 
-import { withGallery } from './gallery-harness';
+import { withGallery, type Gallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
 
 // The shared contract is dependency-free: this gate reads the handle shape
@@ -138,7 +138,7 @@ interface Facts {
   contrast: Contrast[];
 }
 
-let browser: Browser;
+let newPage: Gallery['newPage'];
 
 let origin: string;
 
@@ -185,7 +185,7 @@ async function openLanding(
   size: { width: number; height: number },
   reducedMotion = false,
 ): Promise<Page> {
-  const page = await browser.newPage();
+  const page = await newPage();
   await page.setViewport(size);
   await page.emulateMediaFeatures([
     { name: 'prefers-color-scheme', value: 'dark' },
@@ -199,7 +199,7 @@ async function openLanding(
   // itself, so the wait measures the DOM event, never the scheduler.
   await page.waitForFunction(
     () => document.querySelector('h1') !== null,
-    { polling: 'mutation', timeout: 15_000 },
+    { polling: 'mutation' },
   );
 
   return page;
@@ -210,7 +210,7 @@ async function openPublic(
   theme: Theme,
   size: { width: number; height: number },
 ): Promise<Page> {
-  const page = await browser.newPage();
+  const page = await newPage();
   await page.setViewport(size);
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme.mode }]);
   await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
@@ -238,19 +238,19 @@ async function opaqueCanvasPixels(page: Page): Promise<number> {
     }
 
     return opaque > 0 ? opaque : null;
-  }, { polling: 100, timeout: 5_000 });
+  }, { polling: 100 });
 
   return Number(await handle.jsonValue());
 }
 
 beforeAll(async () => {
   await withGallery(async (gallery) => {
-    browser = gallery.browser;
+    newPage = gallery.newPage;
     origin = gallery.origin;
 
     {
       const page = await openLanding(DESKTOP);
-      await page.waitForSelector('canvas[data-settled="true"]', { timeout: 10_000 });
+      await page.waitForSelector('canvas[data-settled="true"]');
       facts.prunedNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.pruned ?? 0));
       facts.hiddenNodes = await page.$eval('canvas', (canvas) => Number(canvas.dataset.hidden ?? 0));
       facts.heroGraphWidth = await page.$eval('[data-hero-graph]', (graph) => (
@@ -272,7 +272,7 @@ beforeAll(async () => {
       const settledTree = await page.$eval('canvas', (canvas) => canvas.toDataURL());
       await page.waitForFunction(
         (previous: string) => document.querySelector('canvas')?.toDataURL() !== previous,
-        { polling: 100, timeout: 8_000 },
+        { polling: 100 },
         settledTree,
       );
       facts.treeFlows = await page.$eval('canvas', (canvas, first) => (
@@ -280,7 +280,7 @@ beforeAll(async () => {
       ), settledTree);
       const headline = await page.$eval('h1', (element) => ({ height: element.getBoundingClientRect().height, label: element.getAttribute('aria-label') }));
       const phrase = await page.$eval('[data-typewriter]', (element) => element.textContent);
-      await page.waitForFunction((previous) => document.querySelector('[data-typewriter]')?.textContent !== previous, { timeout: 5_000 }, phrase);
+      await page.waitForFunction((previous) => document.querySelector('[data-typewriter]')?.textContent !== previous, {}, phrase);
       expect(await page.$eval('h1', (element) => ({ height: element.getBoundingClientRect().height, label: element.getAttribute('aria-label') }))).toEqual(headline);
       // The heading animates one phrase at a time, so its accessible name is
       // the only place a screen reader gets the whole rotation. The sizers
@@ -319,12 +319,12 @@ beforeAll(async () => {
       facts.cli = surfaces.cli;
       // The frames are the product's own components, loaded as their own
       // chunk; `networkidle0` has fetched it, this proves it mounted.
-      await page.waitForSelector('[data-landing-frame="checkout"] textarea', { timeout: 10_000 });
+      await page.waitForSelector('[data-landing-frame="checkout"] textarea');
       // The plan frame is the walkthrough movie, driven through its own
       // handle: at load it holds the story's start (an empty composer), and
       // each beat below seeks it before asserting that beat's DOM.
-      await page.waitForFunction(() => window.__kinuLandingMovie !== undefined, { timeout: 10_000 });
-      await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]', { timeout: 10_000 });
+      await page.waitForFunction(() => window.__kinuLandingMovie !== undefined);
+      await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]');
       await page.evaluate(() => {
         const root = document.querySelector('[data-landing-frame="checkout"]');
 
@@ -386,7 +386,7 @@ beforeAll(async () => {
         const area = document.querySelector('[data-landing-frame="plan"] textarea');
 
         return area instanceof HTMLTextAreaElement && area.value.length > 0;
-      }, { timeout: 10_000 });
+      });
 
       const typing = await page.$eval('[data-landing-frame="plan"] textarea', (area) => (
         area instanceof HTMLTextAreaElement ? area.value : ''
@@ -411,11 +411,11 @@ beforeAll(async () => {
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-tool-group]') !== null
         && document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true
-      ), { timeout: 10_000 });
+      ));
       // The plan pops up in the right-hand panel with Approve live: the movie
       // submits a clean plan, so Request changes stays disabled.
       await seek(cues.planReady + 200);
-      await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]', { timeout: 15_000 });
+      await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]');
 
       const decisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
         buttons.map((button) => ({ label: button.textContent?.trim() ?? '', disabled: button.disabled }))
@@ -425,7 +425,7 @@ beforeAll(async () => {
       await seek(cues.approve + 200);
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
-      ), { timeout: 15_000 });
+      ));
 
       const cursorShown = await page.$eval('[data-landing-frame="plan"] [data-movie-cursor]', (cursor) => (
         getComputedStyle(cursor).opacity !== '0'
@@ -433,7 +433,7 @@ beforeAll(async () => {
 
       // The build lands a slate, opened in its own tab: the settled state.
       await seek(cues.end);
-      await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]', { timeout: 15_000 });
+      await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]');
 
       const settled = await page.$eval('[data-landing-frame="plan"]', (frame) => (
         frame.getAttribute('data-movie-settled') === 'true'
@@ -446,7 +446,7 @@ beforeAll(async () => {
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-plan-status]') === null
         && document.querySelector('[data-landing-frame="plan"] [data-work-plans]') === null
-      ), { timeout: 15_000 });
+      ));
 
       const cleared = { status: null, plansList: false };
 
@@ -457,7 +457,6 @@ beforeAll(async () => {
       await seek(cues.planReady + 200);
       await page.waitForSelector(
         '[data-landing-frame="plan"] [data-plan-decisions] button:not([disabled])',
-        { timeout: 15_000 },
       );
       await page.evaluate(() => {
         const stage = document.querySelector('[data-landing-frame="plan"]');
@@ -469,7 +468,7 @@ beforeAll(async () => {
       });
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
-      ), { timeout: 15_000 });
+      ));
 
       facts.movie = {
         typing: typing.length > 0,
@@ -663,7 +662,7 @@ beforeAll(async () => {
       // below is wall-clock on purpose: only the platform clock can prove a
       // rAF-driven movie did not advance, and fake timers cannot reach the
       // browser's frame loop from this process.
-      await page.waitForSelector('[data-landing-frame="plan"][data-movie-settled="true"] [data-slate-dashboard]', { timeout: 15_000 });
+      await page.waitForSelector('[data-landing-frame="plan"][data-movie-settled="true"] [data-slate-dashboard]');
       const movieT0 = await page.evaluate(() => window.__kinuLandingMovie?.state());
       await new Promise((resolve) => setTimeout(resolve, 1200));
       const movieT1 = await page.evaluate(() => window.__kinuLandingMovie?.state());
@@ -768,7 +767,7 @@ beforeAll(async () => {
         // The backdrop swaps at the width where the copy's grid gains its
         // second column: a phone must never mount the tree (it runs through
         // the stacked paragraph) and a desktop must never mount the dust.
-        await page.waitForSelector('[data-hero-graph] canvas[data-renderer], [data-hero-dust] canvas[data-renderer]', { timeout: 10_000 });
+        await page.waitForSelector('[data-hero-graph] canvas[data-renderer], [data-hero-dust] canvas[data-renderer]');
         // Mounted is not drawn: the still counts as the backdrop, so the
         // canvas must hold painted pixels, whichever renderer owns it.
         await page.waitForFunction(() => {
@@ -785,7 +784,7 @@ beforeAll(async () => {
           }
 
           return false;
-        }, { polling: 100, timeout: 10_000 });
+        }, { polling: 100 });
         facts.heroBackdrop[label] = await page.evaluate(() => {
           const grid = document.querySelector('#top [class*="lg:grid-cols-"]');
 
@@ -858,7 +857,7 @@ beforeAll(async () => {
       }
     }
   });
-}, 180_000);
+});
 
 describe('the standalone landing runs', () => {
   test('the abstract tree cuts pruned branches before their descendants', () => {
@@ -922,8 +921,8 @@ describe('the standalone landing runs', () => {
     // the destroy is a genuine loss event for the mount. (If SwiftShader dies
     // on its own before the destroy lands, renderer() already reports canvas
     // — the swap is the assertion either way.)
-    await withGallery(async ({ browser: freshBrowser, origin: freshOrigin }: { browser: Browser; origin: string }) => {
-      const page = await freshBrowser.newPage();
+    await withGallery(async ({ newPage: freshPage, origin: freshOrigin }) => {
+      const page = await freshPage();
       await page.setViewport(DESKTOP);
       await page.evaluateOnNewDocument(() => {
         // SAFETY: this init script constructed `__kinuHeroDevice` on the
@@ -946,7 +945,7 @@ describe('the standalone landing runs', () => {
         }
       });
       await page.goto(`${freshOrigin}/landing.html`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('canvas[data-settled="true"]', { timeout: 15_000 });
+      await page.waitForSelector('canvas[data-settled="true"]');
 
       const landed = await page.evaluate(() => {
         // SAFETY: `__kinuSearchTree` is constructed on this window by
@@ -974,7 +973,7 @@ describe('the standalone landing runs', () => {
         const w = window as Window & { __kinuSearchTree?: SearchTreeHandle };
 
         return w.__kinuSearchTree?.renderer() === 'canvas';
-      }, { timeout: 15_000 });
+      });
 
       const after = await page.evaluate(() => {
         // SAFETY: `__kinuSearchTree` is constructed on this window by
@@ -1002,7 +1001,7 @@ describe('the standalone landing runs', () => {
 
       await page.close();
     }, ['--enable-unsafe-webgpu']);
-  }, 120_000);
+  });
 });
 
 describe('the landing demonstration leads with its result', () => {

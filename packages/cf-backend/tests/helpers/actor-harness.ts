@@ -53,7 +53,7 @@ import {
   type AgentSignal, type SendOutcome, type ReleaseBoard,
 } from '@kinu.run/core';
 import { joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
-import { fleetPlaneForTest, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
+import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { platformGatewayEnv } from './platform-gateway';
 import {
   TerminalEffectInterrupt,
@@ -584,6 +584,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  recorded. Empty in this harness unless a suite installs the plane. */
   harnessFleetTurnRows(): FleetPoint[] {
     return fleetPlaneForTest(this.env).agent.points.map((point) => ({ ...point }));
+  }
+  /** Resolves once the fleet dataset holds a row: the write is the signal. */
+  harnessFleetRowWritten(): Promise<void> {
+    return fleetPointWritten(this.env, (points) => points.length > 0);
   }
   /** Open the plane's write window, for suites that pin fleet rows. The
    *  observer itself is production's: the loop subscribes it when it is

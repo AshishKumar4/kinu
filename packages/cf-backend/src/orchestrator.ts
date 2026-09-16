@@ -20,7 +20,7 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
-  createReportCodemodeProvider, HeadController, SubordinateRosterStore,
+  createReportCodemodeProvider, HeadController, REAL_HEAD_CLOCK, SubordinateRosterStore,
   recoverActorTurns, EventLog, actorReferenceOf,
   activePromptSectionOverrides,
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
@@ -1073,7 +1073,7 @@ export class OrchestratorAgent extends ActorAgent {
       throw new KinuError('missing', 'This workspace has no owner, so a head cannot split further.');
     }
 
-    const controller = new HeadController(runtimeForSplit, journal);
+    const controller = new HeadController(runtimeForSplit, journal, REAL_HEAD_CLOCK);
 
     const controllerInput: Parameters<HeadController['run']>[0] = {
       parentHeadId: parent.id,

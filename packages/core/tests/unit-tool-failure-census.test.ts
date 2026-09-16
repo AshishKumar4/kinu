@@ -625,7 +625,7 @@ describe('each executor tool files its own failure in the right part', () => {
 
     expect(census.byKey).toEqual([['run·unavailable', 1]]);
     expect(parts(census)).toEqual(onlyPart('runtimeMissing'));
-  }, 10_000);
+  });
 
   test('sandbox: a classified not-ready refusal is asked once, never folded into the retry loop', async () => {
     // The caller-side answer the CF adapter mints for a devbox that is still

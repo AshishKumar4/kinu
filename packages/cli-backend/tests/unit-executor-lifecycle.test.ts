@@ -153,7 +153,7 @@ describe('the local executor settles on the command, not on its pipes', () => {
       [],
       { language: 'python' },
     )).toEqual({ result: '42' });
-  }, 20_000);
+  });
 
   test('spawn resolves its runtime by configured path, not the literal bun', async () => {
     const shim = runtimeShim();
@@ -171,7 +171,7 @@ describe('the local executor settles on the command, not on its pipes', () => {
     expect(await executeUnderPath('/usr/bin:/bin', '6 * 7')).toEqual({ result: 42 });
     // Nothing reached the shim on a path that does not contain it.
     expect(shim.invocations()).toBe(1);
-  }, 30_000);
+  });
 
   test('without bun, codemode callables run but module metadata is refused', async () => {
     expect(await executeUnderPath('/usr/bin:/bin', 'async () => (await Promise.resolve(42)) // result'))
