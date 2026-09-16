@@ -73,6 +73,7 @@
  * them is what went red.
  */
 
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, type Finding } from './gate-ratchet';
@@ -419,6 +420,106 @@ const DESCRIBED: Readonly<Record<ClockKind, Omit<Finding, 'at' | 'found'>>> = {
   },
 };
 
+/* ── The shrink-only lock ─────────────────────────────────────────────────
+ *
+ * The corpus carries the sites this gate found on the day it landed, and they
+ * cannot all be redesigned in the commit that adds the gate. So, as every
+ * paid-down class here is landed: the count per file and kind is recorded in a
+ * machine-written lock, the gate fails on any file the lock does not name and
+ * on any count above the locked one, and `--lock` refuses to write a total
+ * higher than the one already locked. The only legal direction is smaller.
+ * Keyed by path, so a moved file is re-keyed on the path half with its counts
+ * byte-identical. */
+
+export const LOCK = new URL('./test-clocks.lock.json', import.meta.url).pathname;
+
+const CountsSchema = v.record(v.string(), v.pipe(v.number(), v.integer(), v.minValue(1)));
+
+const LockSchema = v.object({
+  measuredAt: v.string(),
+  total: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  files: v.record(v.string(), CountsSchema),
+});
+
+export type ClockLock = v.InferOutput<typeof LockSchema>;
+
+/** The lock's shape for a set of sites: counts per file and kind, and the total. */
+export function tally(sites: readonly ClockSite[], measuredAt: string): ClockLock {
+  const files: Record<string, Record<string, number>> = {};
+
+  for (const site of sites) {
+    const counts = files[site.file] ?? {};
+    counts[site.kind] = (counts[site.kind] ?? 0) + 1;
+    files[site.file] = counts;
+  }
+
+  const sorted = Object.fromEntries(Object.keys(files).sort().map((file) => [file, files[file] ?? {}]));
+
+  return { measuredAt, total: sites.length, files: sorted };
+}
+
+export interface LockVerdict {
+  /** Files with sites the lock does not name at all. */
+  readonly unlocked: readonly string[];
+  /** `file [kind]: found > locked` for every count above the lock. */
+  readonly raised: readonly string[];
+  /** Locked entries that no longer reproduce in full: the lock needs rewriting. */
+  readonly stale: readonly string[];
+}
+
+/** The current sites held against the lock. */
+export function reconcileLock(current: ClockLock, locked: ClockLock): LockVerdict {
+  const unlocked: string[] = [];
+  const raised: string[] = [];
+  const stale: string[] = [];
+
+  for (const [file, counts] of Object.entries(current.files)) {
+    const held = locked.files[file];
+
+    if (held === undefined) {
+      unlocked.push(file);
+      continue;
+    }
+
+    for (const [kind, found] of Object.entries(counts)) {
+      const allowed = held[kind] ?? 0;
+
+      if (found > allowed) raised.push(`${file} [${kind}]: ${String(found)} > ${String(allowed)}`);
+      else if (found < allowed) stale.push(`${file} [${kind}]: ${String(found)} < ${String(allowed)}`);
+    }
+
+    for (const kind of Object.keys(held)) {
+      if (!(kind in counts)) stale.push(`${file} [${kind}]: 0 < ${String(held[kind])}`);
+    }
+  }
+
+  for (const file of Object.keys(locked.files)) {
+    if (!(file in current.files)) stale.push(`${file}: no longer holds a site`);
+  }
+
+  return { unlocked, raised, stale };
+}
+
+export function readLock(path = LOCK): ClockLock {
+  return v.parse(LockSchema, JSON.parse(readFileSync(path, 'utf8')));
+}
+
+/** Write the lock, refusing a total higher than the one already locked: the
+ *  lock records a pay-down, never a raise. A first lock has nothing to shrink
+ *  from and is written as found. */
+export function writeShrinkingLock(next: ClockLock, path = LOCK): void {
+  if (existsSync(path)) {
+    const previous = readLock(path);
+
+    if (next.total > previous.total) {
+      throw new Error(`test-clocks --lock: refusing to raise the lock from ${String(previous.total)} to `
+        + `${String(next.total)} site(s); the lock only shrinks. Redesign the new wait instead.`);
+    }
+  }
+
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+}
+
 async function main(): Promise<number> {
   const tests = readTests();
   const sites = auditCorpus(tests);
@@ -428,25 +529,52 @@ async function main(): Promise<number> {
     ['kinds searched', CLOCK_KINDS.length],
   ]);
 
-  if (sites.length > 0) {
-    console.error(`test-clocks: ${String(sites.length)} wall-clock wait(s) in the test corpus — ${measured}`);
+  const current = tally(sites, new Date().toISOString().slice(0, 10));
 
-    for (const site of sites) {
+  if (process.argv.includes('--lock')) {
+    writeShrinkingLock(current);
+    console.log(`test-clocks: locked ${String(current.total)} site(s) over ${String(Object.keys(current.files).length)} file(s) — ${measured}`);
+
+    return 0;
+  }
+
+  const locked = readLock();
+  const verdict = reconcileLock(current, locked);
+  const summary = `locked ${String(locked.total)} (${locked.measuredAt}), found ${String(current.total)} — ${measured}`;
+
+  if (verdict.unlocked.length === 0 && verdict.raised.length === 0 && verdict.stale.length === 0) {
+    console.log(`test-clocks: ok — ${summary}`);
+    console.log('  blind to: a clock value reaching a comparison through a parameter or a return value; '
+      + 'a timer wrapped outside the corpus and called by the wrapper\'s name; a duration handed as a '
+      + 'bare positional number to an unknown helper; setImmediate and queueMicrotask; a clock read '
+      + 'used as a value and never compared.');
+
+    return 0;
+  }
+
+  console.error(`test-clocks: ${summary}`);
+
+  const named = new Set([...verdict.unlocked, ...verdict.raised.map((line) => line.slice(0, line.indexOf(' [')))]);
+
+  if (verdict.unlocked.length > 0 || verdict.raised.length > 0) {
+    console.error(`  ${String(verdict.unlocked.length)} file(s) outside the lock, ${String(verdict.raised.length)} count(s) above it:`);
+
+    for (const line of verdict.raised) console.error(`    ${line}`);
+
+    for (const site of sites.filter((one) => named.has(one.file))) {
       console.error(finding({
         ...DESCRIBED[site.kind], at: `${site.file}:${String(site.line)}  [${site.kind}]`, found: site.text,
       }));
     }
-
-    return 1;
   }
 
-  console.log(`test-clocks: clean — ${measured}`);
-  console.log('  blind to: a clock value reaching a comparison through a parameter or a return value; '
-    + 'a timer wrapped outside the corpus and called by the wrapper\'s name; a duration handed as a '
-    + 'bare positional number to an unknown helper; setImmediate and queueMicrotask; a clock read '
-    + 'used as a value and never compared.');
+  if (verdict.stale.length > 0) {
+    console.error(`  ${String(verdict.stale.length)} locked count(s) no longer reproduce; run \`bun scripts/test-clocks.ts --lock\` to record the pay-down:`);
 
-  return 0;
+    for (const line of verdict.stale) console.error(`    ${line}`);
+  }
+
+  return 1;
 }
 
 if (import.meta.main) process.exit(await main());

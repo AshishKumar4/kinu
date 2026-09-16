@@ -15,7 +15,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { LADDER } from './ladder';
-import { auditCorpus, auditFile, CLOCK_KINDS, type ClockKind } from './test-clocks';
+import {
+  auditCorpus, auditFile, CLOCK_KINDS, readLock, reconcileLock, tally, writeShrinkingLock, type ClockKind, type ClockSite,
+} from './test-clocks';
+import { scratchDir } from '@kinu.run/test-utils';
 import { readTests } from './sources';
 
 const FIXTURES = join(import.meta.dir, 'fixtures', 'test-clocks');
@@ -91,6 +94,84 @@ describe('test-clocks gate', () => {
     expect(rows.length).toBeGreaterThan(10);
 
     for (const row of rows) expect(row.run, row.label).toContain('bun test --timeout=0 ');
+  });
+
+  describe('the shrink-only lock', () => {
+    const site = (file: string, kind: ClockKind, line = 1): ClockSite => ({ file, kind, line, text: kind });
+
+    const locked = tally([
+      site('packages/core/tests/a.test.ts', 'sleep'),
+      site('packages/core/tests/a.test.ts', 'sleep', 2),
+      site('packages/core/tests/b.test.ts', 'clock-compare'),
+    ], '2026-09-15');
+
+    test('the tree as locked is green', () => {
+      expect(reconcileLock(locked, locked)).toEqual({ unlocked: [], raised: [], stale: [] });
+    });
+
+    test('red: a site in a file the lock does not name', () => {
+      const current = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'), site('packages/core/tests/a.test.ts', 'sleep', 2),
+        site('packages/core/tests/b.test.ts', 'clock-compare'),
+        site('packages/core/tests/c.test.ts', 'test-timeout'),
+      ], '2026-09-16');
+
+      expect(reconcileLock(current, locked).unlocked).toEqual(['packages/core/tests/c.test.ts']);
+    });
+
+    test('red: a count above the locked count, per kind', () => {
+      const current = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'), site('packages/core/tests/a.test.ts', 'sleep', 2),
+        site('packages/core/tests/a.test.ts', 'sleep', 3),
+        site('packages/core/tests/b.test.ts', 'clock-compare'),
+      ], '2026-09-16');
+
+      expect(reconcileLock(current, locked).raised).toEqual(['packages/core/tests/a.test.ts [sleep]: 3 > 2']);
+      expect(reconcileLock(current, locked).unlocked).toEqual([]);
+    });
+
+    test('red: a paid-down count no longer reproduces the lock, so the lock is rewritten', () => {
+      const current = tally([site('packages/core/tests/a.test.ts', 'sleep')], '2026-09-16');
+
+      expect(reconcileLock(current, locked).stale).toEqual([
+        'packages/core/tests/a.test.ts [sleep]: 1 < 2',
+        'packages/core/tests/b.test.ts: no longer holds a site',
+      ]);
+    });
+
+    test('--lock refuses to raise the total and records a pay-down', () => {
+      const path = join(scratchDir('test-clocks-lock'), 'test-clocks.lock.json');
+      writeShrinkingLock(locked, path);
+      expect(readLock(path).total).toBe(3);
+
+      const raised = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'), site('packages/core/tests/a.test.ts', 'sleep', 2),
+        site('packages/core/tests/b.test.ts', 'clock-compare'), site('packages/core/tests/b.test.ts', 'sleep'),
+      ], '2026-09-16');
+
+      expect(() => writeShrinkingLock(raised, path)).toThrow(/refusing to raise the lock from 3 to 4/u);
+      expect(readLock(path).total).toBe(3);
+
+      const paidDown = tally([site('packages/core/tests/a.test.ts', 'sleep')], '2026-09-16');
+      writeShrinkingLock(paidDown, path);
+      expect(readLock(path)).toEqual(paidDown);
+    });
+
+    test('a moved file is re-keyed on the path half with its counts byte-identical', () => {
+      const moved = tally([
+        site('packages/core/tests/moved/a.test.ts', 'sleep'), site('packages/core/tests/moved/a.test.ts', 'sleep', 2),
+        site('packages/core/tests/b.test.ts', 'clock-compare'),
+      ], '2026-09-16');
+
+      expect(moved.files['packages/core/tests/moved/a.test.ts']).toEqual(locked.files['packages/core/tests/a.test.ts']);
+      expect(moved.total).toBe(locked.total);
+    });
+
+    test('the live lock reproduces the tree', () => {
+      const current = tally(auditCorpus(readTests()), '2026-09-16');
+
+      expect(reconcileLock(current, readLock())).toEqual({ unlocked: [], raised: [], stale: [] });
+    });
   });
 
   test('the live corpus is the one sources.ts enumerates, and it is not empty', () => {
