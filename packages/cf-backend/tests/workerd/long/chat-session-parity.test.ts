@@ -14,7 +14,13 @@
  *
  * The record is logged on every run as one line prefixed
  * `chat-session-parity snapshot` — that line, on the pre-track tree, is how
- * the fixture was recorded.
+ * the fixture was recorded. Re-recorded 2026-09-16 for three changes that
+ * MEAN to change the record, each read field by field against the previous
+ * fixture (/tmp/parity.diff, 58 changed lines): `tool_call_end.durationMs`
+ * is back on every tool row (the switch had dropped it); turn THREE, cut
+ * before its first token, writes no assistant row, so FOUR-TOOL's parent is
+ * the operator's row; and no `error: true` frame follows a Stop. Every other
+ * line of the diff is the opaque-id renumbering those two removals cause.
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';

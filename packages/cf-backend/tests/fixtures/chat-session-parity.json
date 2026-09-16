@@ -444,23 +444,8 @@
         }
       },
       {
-        "id": "<uuid#8>",
-        "parentId": "input-PARITY-THREE",
-        "role": "assistant",
-        "content": {
-          "id": "<uuid#8>",
-          "role": "assistant",
-          "parts": [
-            {
-              "type": "text",
-              "text": ""
-            }
-          ]
-        }
-      },
-      {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "<uuid#8>",
+        "parentId": "input-PARITY-THREE",
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -669,7 +654,7 @@
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#8>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
@@ -678,7 +663,7 @@
           "userMessage": "PARITY-THREE",
           "turn": {
             "turnId": "input-PARITY-THREE",
-            "messageId": "<uuid#8>",
+            "messageId": "<uuid#9>",
             "kind": "user",
             "text": "PARITY-THREE",
             "metadata": {
@@ -691,7 +676,7 @@
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#8>",
         "type": "run_end",
         "payload": {
           "type": "run_end",
@@ -738,9 +723,10 @@
             "path": "probe-fixture.txt"
           },
           "result": {
-            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
           },
-          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "durationMs": "<clock>",
           "eventIndex": 5,
           "timestamp": "<clock>"
         }
@@ -776,7 +762,7 @@
                   "toolName": "file",
                   "output": {
                     "type": "error-text",
-                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
                   }
                 }
               ]
@@ -930,23 +916,8 @@
         }
       },
       {
-        "id": "<uuid#8>",
-        "parentId": "input-PARITY-THREE",
-        "role": "assistant",
-        "content": {
-          "id": "<uuid#8>",
-          "role": "assistant",
-          "parts": [
-            {
-              "type": "text",
-              "text": ""
-            }
-          ]
-        }
-      },
-      {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "<uuid#8>",
+        "parentId": "input-PARITY-THREE",
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -1217,7 +1188,7 @@
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#8>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
@@ -1226,7 +1197,7 @@
           "userMessage": "PARITY-THREE",
           "turn": {
             "turnId": "input-PARITY-THREE",
-            "messageId": "<uuid#8>",
+            "messageId": "<uuid#9>",
             "kind": "user",
             "text": "PARITY-THREE",
             "metadata": {
@@ -1239,7 +1210,7 @@
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#8>",
         "type": "run_end",
         "payload": {
           "type": "run_end",
@@ -1286,9 +1257,10 @@
             "path": "probe-fixture.txt"
           },
           "result": {
-            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
           },
-          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "durationMs": "<clock>",
           "eventIndex": 5,
           "timestamp": "<clock>"
         }
@@ -1324,7 +1296,7 @@
                   "toolName": "file",
                   "output": {
                     "type": "error-text",
-                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
                   }
                 }
               ]
@@ -1667,7 +1639,7 @@
         "done": false,
         "body": {
           "type": "start",
-          "messageId": "<uuid#8>"
+          "messageId": "<uuid#9>"
         }
       },
       {
@@ -1679,14 +1651,6 @@
           "type": "abort",
           "reason": "The operation was aborted"
         }
-      },
-      {
-        "socket": "A",
-        "type": "cf_agent_use_chat_response",
-        "id": "PARITY-THREE",
-        "done": false,
-        "error": true,
-        "body": "The turn was interrupted before it finished."
       },
       {
         "socket": "A",
@@ -1758,7 +1722,7 @@
         "body": {
           "type": "tool-output-error",
           "toolCallId": "call_parity_1",
-          "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+          "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
         }
       },
       {
@@ -2085,7 +2049,7 @@
         "PARITY-FOUR-TOOL"
       ],
       "toolResults": [
-        "{\"reason\":\"missing\",\"error\":\"ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.\"}"
+        "{\"reason\":\"missing\",\"error\":\"ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.\"}"
       ],
       "roles": [
         "system",
@@ -2114,7 +2078,7 @@
         "helloPARITY-FOUR-STEER"
       ],
       "toolResults": [
-        "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+        "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
       ],
       "roles": [
         "system",
@@ -2144,7 +2108,7 @@
         "PARITY-FIVE"
       ],
       "toolResults": [
-        "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+        "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
       ],
       "roles": [
         "system",
