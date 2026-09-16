@@ -309,11 +309,11 @@ describe('the workspace plane mount table', () => {
 	});
 
 	test('standardMounts gate per environment kind', async () => {
-		const laptopFiles = fakeTree({ '/home/dev/a.txt': 'x' });
+		const deviceFiles = fakeTree({ '/home/dev/a.txt': 'x' });
 		const sandboxFiles = fakeTree({ '/workspace/b.txt': 'y' });
 
 		const mounts = standardMounts((name) => {
-			if (name === "device") return { files: laptopFiles, isAvailable: () => false };
+			if (name === "device") return { files: deviceFiles, isAvailable: () => false };
 
 			if (name === "sandbox") return { files: sandboxFiles, isAvailable: () => false };
 

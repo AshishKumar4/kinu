@@ -275,7 +275,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     return entries.filter((e) => e.name.toLowerCase().includes(needle));
   }, [entries, filter]);
 
-  const laptopLabel = executors.find((e) => e.name === "device")?.label;
+  const deviceLabel = executors.find((e) => e.name === "device")?.label;
 
   const badgeFor = useCallback((entryName: string): string | null => {
     if (!atRoot) return null;
@@ -283,8 +283,8 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
     if (!executor || !mounts.some((m) => m.name === executor && m.live)) return null;
 
-    return executor === "device" ? laptopLabel ?? executorLabel("device") : executorLabel(executor);
-  }, [atRoot, laptopLabel, mounts]);
+    return executor === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(executor);
+  }, [atRoot, deviceLabel, mounts]);
 
   const open = useCallback((entry: DirEntry) => {
     const full = joinDir(path, entry.name);
@@ -507,7 +507,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 <PlugIcon size={12} className="shrink-0" />
                 <span>{mountName}</span>
                 <span data-mount-badge className="p-t-status px-1.5 py-px rounded-full border p-border border-dashed">
-                  {m.name === "device" ? laptopLabel ?? executorLabel("device") : executorLabel(m.name)}
+                  {m.name === "device" ? deviceLabel ?? executorLabel("device") : executorLabel(m.name)}
                 </span>
                 <span className="p-text-4 truncate">— {m.reason ?? "not available"}</span>
                 {m.name === "device" && (

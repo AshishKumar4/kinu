@@ -49,7 +49,7 @@ const roster = <T>(items: T[]) => ({ items, total: items.length });
 
 const activeSandbox: PromptExecutorInfo = { name: 'sandbox', available: true, configured: true, active: true, status: 'active' };
 
-const connectedLaptop: PromptExecutorInfo = { name: 'device', available: true, configured: true, active: true, status: 'active' };
+const connectedDevice: PromptExecutorInfo = { name: 'device', available: true, configured: true, active: true, status: 'active' };
 
 const workspace: PromptExecutorInfo = { name: 'workspace', available: true, configured: true, active: true, status: 'active' };
 
@@ -160,7 +160,7 @@ function messageText(m: ModelMessage): string {
 describe('byte-stable system prefix', () => {
   test('two consecutive builds with unchanged state are byte-identical', () => {
     const { rt } = createTestRuntime();
-    const opts = { backend: 'cf' as const, executors: [workspace, idleSandbox, connectedLaptop] };
+    const opts = { backend: 'cf' as const, executors: [workspace, idleSandbox, connectedDevice] };
     expect(buildSystemPromptSync(rt, opts)).toBe(buildSystemPromptSync(rt, opts));
   });
 
@@ -228,7 +228,7 @@ describe('byte-stable system prefix', () => {
       backend: 'cf' as const,
       soulOverride: 'You are Kinu.',
       availableTools: [...BUILTIN_TOOLS],
-      executors: [workspace, idleSandbox, connectedLaptop],
+      executors: [workspace, idleSandbox, connectedDevice],
       workMode: 'build' as const,
       model: { id: 'claude-sonnet-4-7', provider: 'anthropic' },
       currentDate: '2026-01-01',
@@ -258,7 +258,7 @@ describe('renderDynamicContextBlock', () => {
     const text = renderDynamicContextBlock({
       factsBlock: '- user.tz = Europe/Berlin',
       memoryTail: '### Lesson: verify before claiming',
-      executors: [connectedLaptop, idleSandbox, workspace],
+      executors: [connectedDevice, idleSandbox, workspace],
     });
 
     expect(text).not.toBeNull();
@@ -309,7 +309,7 @@ describe('renderDynamicContextBlock', () => {
     const text = renderDynamicContextBlock({
       executors: [
         { ...workspace, resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 } },
-        connectedLaptop,
+        connectedDevice,
       ],
     })!;
 
@@ -391,7 +391,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('executorAvailabilityLabel mirrors the lifecycle states', () => {
-    expect(executorAvailabilityLabel(connectedLaptop)).toBe('connected');
+    expect(executorAvailabilityLabel(connectedDevice)).toBe('connected');
     expect(executorAvailabilityLabel(activeSandbox)).toBe('active');
     expect(executorAvailabilityLabel(idleSandbox)).toBe('ready on demand');
     expect(executorAvailabilityLabel({ name: 'nimbus' })).toBe('available');
@@ -425,7 +425,7 @@ describe('renderDynamicContextBlock', () => {
   test('a sandboxed device says what a command gets: the home, the GPU, the roots', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed',
           capability: 'sandboxed',
@@ -451,7 +451,7 @@ describe('renderDynamicContextBlock', () => {
   test('a device that cannot sandbox says so, with the reason and no shell', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed',
           capability: 'files_only',
@@ -476,7 +476,7 @@ describe('renderDynamicContextBlock', () => {
     // helper the refusal does, so the two never disagree.
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed',
           capability: 'files_only',
@@ -496,7 +496,7 @@ describe('renderDynamicContextBlock', () => {
   test('a device with the sandbox switched off says the agent runs as the owner', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'raw',
           capability: 'sandboxed',
@@ -517,7 +517,7 @@ describe('renderDynamicContextBlock', () => {
   test('a machine with no GPU says none, which is measured rather than unknown', () => {
     const text = renderDynamicContextBlock({
       executors: [{
-        ...connectedLaptop,
+        ...connectedDevice,
         sandbox: {
           tier: 'sandboxed', capability: 'sandboxed', reason: null, detail: null, gpu: [],
           agentHome: '/home/ashish/.kinu/agents/notes/home', roots: [],
@@ -531,7 +531,7 @@ describe('renderDynamicContextBlock', () => {
   });
 
   test('an executor with no sandbox block adds nothing to its row', () => {
-    expect(renderDynamicContextBlock({ executors: [connectedLaptop] })!)
+    expect(renderDynamicContextBlock({ executors: [connectedDevice] })!)
       .toEndWith('- device: connected, files at /pc\n</dynamic_context>');
   });
 });
@@ -962,7 +962,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const history: ModelMessage[] = [{ role: 'user', content: 'inspect mounts' }];
     ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, activeSandbox] });
     history.push({ role: 'assistant', content: 'device connected' });
-    const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedLaptop] }).at(-1)?.content);
+    const delta = String(ledger.weave(history, { factsBlock: '- unchanged = yes', executors: [workspace, connectedDevice] }).at(-1)?.content);
 
     expect(delta).toContain('- device: connected, files at /pc');
     expect(delta).toContain('- sandbox: removed from execution status.');
