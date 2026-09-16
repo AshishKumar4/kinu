@@ -27,7 +27,7 @@ const SUBPROCESS_HEAVY = [
 
 function run(files: readonly string[], parallel: number): void {
   const result = Bun.spawnSync(
-    [process.execPath, 'test', `--parallel=${String(parallel)}`, ...files],
+    [process.execPath, 'test', '--timeout=0', `--parallel=${String(parallel)}`, ...files],
     { cwd: REPO_ROOT, stdout: 'inherit', stderr: 'inherit' },
   );
 

@@ -17,8 +17,11 @@ import { release } from './test-scratch-home';
 // this preload and fails without it). FIRST, before any hook: bun reads the
 // default when a hook is registered, so an `afterAll` above this line keeps
 // the 5 s clock (measured 2026-09-15: the release hook below timed out at
-// 5000 ms with this call after it). `gate:test-clocks` pins this line and
-// refuses per-test durations in the corpus.
+// 5000 ms with this call after it). This call reaches the FIRST file of a run
+// only (measured the same day: the second of two files timed out at 5000 ms
+// under it), so every `bun test` invocation in this tree also carries
+// `--timeout=0`, and the ladder rows are pinned to it by `test-clocks.test.ts`.
+// `gate:test-clocks` refuses per-test durations in the corpus.
 setDefaultTimeout(0);
 
 afterAll(release);

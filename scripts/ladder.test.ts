@@ -104,12 +104,12 @@ const AFTER_CI_SUITES = {
  * purpose is that nobody is tempted by `--no-verify`.
  */
 const ROOT_TEST_OMISSIONS = {
-  'packages/devbox': 'bun test packages/devbox/',
-  'packages/test-utils': 'bun test packages/test-utils/',
-  'packages/cf-backend': 'bun test --parallel=4 packages/cf-backend/',
-  'packages/cli-backend': 'bun test --parallel=4 packages/cli-backend/',
+  'packages/devbox': 'bun test --timeout=0 packages/devbox/',
+  'packages/test-utils': 'bun test --timeout=0 packages/test-utils/',
+  'packages/cf-backend': 'bun test --timeout=0 --parallel=4 packages/cf-backend/',
+  'packages/cli-backend': 'bun test --timeout=0 --parallel=4 packages/cli-backend/',
   'packages/cli': 'bun run test:cli',
-  'packages/pc-agent': 'bun test packages/pc-agent/',
+  'packages/pc-agent': 'bun test --timeout=0 packages/pc-agent/',
 } satisfies Record<string, string>;
 
 const omittedGate = (directory: string): string | undefined =>
@@ -775,8 +775,8 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     const atCi = gatesFor('ci');
 
     for (const run of [
-      'bun test --parallel=4 packages/cf-backend/',
-      'bun test --parallel=4 packages/cli-backend/',
+      'bun test --timeout=0 --parallel=4 packages/cf-backend/',
+      'bun test --timeout=0 --parallel=4 packages/cli-backend/',
       'bun run test:cli',
       'bun run test:core',
     ]) {
@@ -784,7 +784,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     }
 
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
-    expect(packageJson).toContain('"test:core": "bun test --parallel=4 packages/core/"');
+    expect(packageJson).toContain('"test:core": "bun test --timeout=0 --parallel=4 packages/core/"');
     // The root script still fans out to every spine package, so `bun run test`
     // stays the most-typed command and `claims()` keeps resolving it whole.
     expect(packageJson).toContain('"test": "bun run test:core && bun run test:spine"');
