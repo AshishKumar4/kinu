@@ -290,6 +290,11 @@ export async function reconcileInterruptedForks(deps: {
    *  `head_split` — the same retraction the roster gets, on the plane the
    *  Timeline and every delegation-cost query read. */
   readonly runEvents?: RunEventLedger;
+  /** The runs a turn loop in THIS activation is driving — a turn it re-opened
+   *  from the ledger continues under the run the dead activation left, so
+   *  that run is open on purpose and is not the wreckage this sweep seals.
+   *  Asked at the sweep, never captured: the loop re-opens at construction. */
+  readonly liveRuns?: () => readonly string[];
   readonly logActivity?: (event: string, detail?: string) => void;
   /** This activation's start, and both sweeps' own bound. Injected for a test that
    *  needs the two sides of it. */
@@ -300,7 +305,7 @@ export async function reconcileInterruptedForks(deps: {
   // it had forked anything, so this cannot sit behind the fork sweep's early
   // return. Both are the same act — writing the terminal row a destroyed frame
   // could not.
-  closeUnterminatedRuns(deps.runEvents, startedAt, deps.logActivity);
+  closeUnterminatedRuns(deps.runEvents, startedAt, new Set(deps.liveRuns?.() ?? []), deps.logActivity);
   const interrupted = deps.journal.markInterrupted({ spawnedBefore: startedAt }, startedAt);
 
   if (interrupted.length > 0) {
@@ -391,12 +396,13 @@ export async function reconcileInterruptedForks(deps: {
 function closeUnterminatedRuns(
   ledger: RunEventLedger | undefined,
   startedBefore: number,
+  liveRuns: ReadonlySet<string>,
   logActivity: ((event: string, detail?: string) => void) | undefined,
 ): void {
   if (!ledger) return;
 
   try {
-    const open = ledger.unterminatedRuns(undefined, startedBefore);
+    const open = ledger.unterminatedRuns(undefined, startedBefore).filter((runId) => !liveRuns.has(runId));
 
     if (open.length === 0) return;
 

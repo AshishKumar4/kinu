@@ -137,11 +137,12 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
     Reflect.deleteProperty(this, 'inboxState');
+    Reflect.deleteProperty(this, 'runEnds');
     Reflect.deleteProperty(this, 'seedStaleDrainEvent');
     Reflect.deleteProperty(this, 'runEventWake');
     Reflect.deleteProperty(this, 'parityRows');
     Reflect.deleteProperty(this, 'wakeRows');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'inboxState', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows']);
   }
 
   /** The wake proof's hold on the SETTLE WINDOW: a turn-end extension is run
@@ -262,6 +263,19 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** Whether the inbox reads a turn in flight — the public `busy` getter the
    *  busy route itself consults, so a probe sees the admission the same way
    *  `routeBusyChat` does. */
+  /** Every `run_end` the run ledger holds, in write order with its reason: how
+   *  many times each run was closed and by what. A run the loop continues
+   *  after a reset closes exactly once, by the loop. */
+  async runEnds(): Promise<Array<{ runId: string; reason: string }>> {
+    return this.actorState.storage.sql
+      .exec(`SELECT run_id, payload FROM run_events WHERE type = 'run_end' ORDER BY ts, rowid`)
+      .toArray()
+      .map((row) => ({
+        runId: String(row.run_id),
+        reason: v.parse(v.object({ reason: v.string() }), JSON.parse(String(row.payload))).reason,
+      }));
+  }
+
   async inboxState(): Promise<{ busy: boolean }> {
     return { busy: this.orch.inbox.busy };
   }
@@ -484,7 +498,7 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp'>
-  & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
+  & Pick<ObservedOrchestrator, 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'inboxState' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'>;
 
 /** How long the wake proof's command sleeps: past the interactive detach
  *  window (30 s), so the call detaches and the job settles out of turn. */
@@ -852,7 +866,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       if (heldCalls.length !== 1) throw new Error('queued requests ran before the held genesis response was released');
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
 
-      await awaitFactsCompressed(recording, { chat: 2, peer: 3, signal: 3, yield: 1, attach: 2 }[mode]);
+      // Turns, not sends: the held genesis, then ONE user-origin rerun of the
+      // sends it could not land. A peer event that arrived mid-genesis rides
+      // that rerun's first step rather than queueing a turn behind it; a
+      // signal's own programmatic turn is the third.
+      await awaitFactsCompressed(recording, { chat: 2, peer: 2, signal: 3, yield: 1, attach: 2 }[mode]);
       await awaitQuiet(recording);
 
       return await this.httpCalls();
@@ -1142,8 +1160,9 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
   /** The join: release the held model call and wait on the queued turn's own
    *  completion evidence, then return the wire log, the two durable ledgers —
    *  the pending-steer reservations and the file rows any attachment left
-   *  beside them — and the transcript the drain wrote the landed sends into. */
-  async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: SocketHistory }> {
+   *  beside them — the transcript the drain wrote the landed sends into, and
+   *  every run close the ledger holds. */
+  async completeQueuedConversation(prepared: PreparedConversation): Promise<{ http: HttpCall[]; steers: PendingSteer[]; steerFiles: PendingSteerFile[]; transcript: SocketHistory; runEnds: Array<{ runId: string; reason: string }> }> {
     const target: QueueTarget = await this.queueTarget(prepared.workspace);
 
     const recording = createRecordingLogger();
@@ -1151,12 +1170,15 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
 
     try {
       await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
-      await awaitFactsCompressed(recording, 2); // B's recovered turn + C's own turn
+      // ONE turn: the re-opened genesis turn, with B and C landed at its first
+      // step — the step boundary both were waiting for when the reset came.
+      await awaitFactsCompressed(recording, 1);
       await awaitQuiet(recording);
 
       return {
         http: await this.httpCalls(), steers: await target.pendingSteers(), steerFiles: await target.pendingSteerFileRows(),
         transcript: await this.socketHistory(target, prepared.workspace),
+        runEnds: await target.runEnds(),
       };
     } finally {
       restore();
