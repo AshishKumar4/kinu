@@ -4,8 +4,8 @@
 tools. Each is a standing choice, so a longer list reduces selection accuracy.
 `buildBuiltinTools` builds one set for both backends. Only `execute_tools`,
 `run`, `file`, `memory`, and `tasks` are unconditional. The rest need wired
-deps. Subordinates get `report` and no `peers`, so answering an inbound agent
-message event — `msg` with `event_id` — is off their surface. Files use `file`
+deps. Subordinates get `report` and no `peers`. Answering an inbound agent
+message event (`msg` with `event_id`) is off their surface. Files use `file`
 or `workspace.*`. Crafted tools use `tools.<name>(args)`.
 
 ## Top-level tools
@@ -40,7 +40,7 @@ execute_tools: { native: true, codemode: null }  // native only; it IS the sandb
 | --- | --- |
 | `BuiltinToolName` (a derived type) | `BUILTIN_TOOL_SPECS` / `BUILTIN_TOOL_DESCRIPTIONS` cannot compile without an entry for a newly-native capability, and `BUILTIN_TOOLS` cannot list one the declaration does not call native |
 | every `*-codemode.ts` factory | takes its provider `name` straight from the table, so a namespace cannot exist for a capability the table gives none, and cannot be spelled differently. Deleting `report`'s namespace from the table makes `report-codemode.ts` fail to compile |
-| `explainNativeToolReferenceError` | tells the model where the capability actually is when it reaches for a native tool name inside the sandbox. It reads the declaration for all eight rather than hardcoding one name, so no capability is reported unreachable from inside execute_tools when it is not |
+| `explainNativeToolReferenceError` | tells the model where the capability sits when it reaches for a native tool name inside the sandbox. It reads the declaration for all eight rather than hardcoding one name, so no capability is reported unreachable from inside execute_tools when it is not |
 | `getToolDescriptions` (cf) | reports it to the Tools panel instead of guessing `nativeNames.has(name) ? 'native' : 'codemode'` |
 
 Reach says what a surface exposes. Deps say what an actor gets. The UI receives
@@ -68,12 +68,12 @@ Plan is enforced in core, not inferred from command text or a model's promise.
 declare `planAllowed`; mixed-action dispatchers check their parsed action contract.
 Unclassified operations are unavailable in Plan. Build keeps the existing capabilities.
 
-Native `file` read/list/stat/search and declared provider reads remain usable;
-write/edit, process/package/port operations, releases and authored slate execution
-require Build. Slate list/history are inspection; commit/fork/restore/preview/call
+Native `file` read/list/stat/search and declared provider reads remain usable.
+Write/edit, process/package/port operations, releases and authored slate execution
+require Build. Slate list/history are inspection. Commit/fork/restore/preview/call
 are not. Existing Build previews retain their independently captured authority.
 Research memory, task/state records, evidence/reports and `submit_plan` remain
-available. Temporary research children inherit Plan; persistent hire/dismiss and
+available. Temporary research children inherit Plan. Persistent hire/dismiss and
 search configurations that measure, publish or apply project changes require Build.
 
 Hosted `execute_tools` retains isolated analysis through WorkerLoader, with only
@@ -87,7 +87,7 @@ pretends to make native code read-only. Plan uses the standard guarded inference
 loop rather than evaluating a promoted authored scaffold or its initializer.
 
 Mode belongs to an invocation. Nested calls cannot upgrade Plan. New authorized
-turns and durable jobs enter with their own admitted/recorded mode, so a queued
+turns and durable jobs enter with their own admitted/recorded mode. A queued
 Build turn is not trapped in an earlier Plan callback, and delayed Plan work does
 not borrow a later Build turn's authority. Role-imposed Plan is captured before
 terminal effects and suppresses automatic project-changing improvement lanes.
@@ -96,7 +96,7 @@ Plan adds no second approval queue and no new persisted format.
 ## file: the file plane
 
 `FILE_TOOL_ACTIONS` names `read`, `write`, `edit`, `list`, `stat`, and `search`. `file`, workspace
-`run`, and `workspace.*` address `rt.storage.vfs`: on hosted, the actor DO own
+`run`, and `workspace.*` address `rt.storage.vfs`: on hosted, the actor DO owns its
 Nimbus workspace; on CLI, the working directory when set, otherwise its in-SQLite tree. Containers
 and devices keep separate files under `sandbox.*` and `laptop.*`.
 
@@ -170,7 +170,7 @@ Only measured search needs `objective`.
 
 `fork` is gone. Its 2-6 caller-written briefs became measured search candidates.
 The five-action picklist rejects it. MCTS stays registered in
-`strategy/mcts.ts` but has no model-facing route. The durable search store and
+`core/src/mcts/engine.ts` but has no model-facing route. The durable search store and
 eval suites call it. See [MCTS.md](./MCTS.md).
 
 Which of the five an actor holds is structural, decided by the deps its backend
@@ -179,13 +179,13 @@ prompt `## Delegation` section, and the `agents.*` sandbox namespace:
 
 | Action | The deps that put it on the surface |
 |---|---|
-| `swarm` | `swarm` — a model to expand with and a workspace to measure in |
+| `swarm` | `swarm`: a model to expand with and a workspace to measure in |
 | `hire`, `msg`, `list` | `team` or `peers` |
 | `dismiss` | `team` |
 
 `lifetime` is gated one level finer, on `team.temporary`. With no port to run a
 task hire on, the field that would ask for one is in neither the JSON Schema nor
-the sandbox declaration, so its absence is structural rather than a refusal at
+the sandbox declaration. Its absence is structural rather than a refusal at
 call time. `event_id` is gated the same way on `peers`.
 
 `hire`, `msg`, and `list` use a target name:
@@ -218,9 +218,9 @@ Normal activation still recovers work that the actor owes.
 ### Fields and replay
 
 `AGENTS_ACTION_FIELDS`, `v.strictObject`, and `parseAgentsToolInput` enforce
-the native and codemode field contract. It is one parse in two places: the
+the native and codemode field contract. It is one parse in two places. The
 native tool's `execute` parses the model's input, and every `agents.*` member
-parses the object the script passed after writing `action` itself, so the member
+parses the object the script passed after writing `action` itself. The member
 called decides the action. Both then reach `dispatchAgentsAction`. An unknown
 field fails and names the field meant (the `agents-tool.ts` refusal strings
 carry the exact quote). A field another action reads fails and names the action
@@ -301,7 +301,7 @@ in-process through `createNodeExecuteToolFactory`. Both bind these namespaces.
 
 ### Slates
 
-A slate is an authored project under `/home/user/slates/<id>/`. Its `package.json` names a TypeScript Worker module in `main` and declares capabilities in the strict `slate.bindings` field. The default export handles `fetch(request, env)`; introduced capabilities are `env.NAME.member(...args)`. Write files through the ordinary file plane, then use `workspace.slate({op:'preview',id})` to boot a live preview. `call` POSTs a JSON argument array to a named route. `commit` freezes source, `history` reads versions, `fork` copies a version into a new slate, and `restore` restores a version's tree. Running previews are isolate-lifetime processes, not durable records. These operations stay in the existing workspace codemode namespace; the native surface remains eight tools.
+A slate is an authored project under `/home/user/slates/<id>/`. Its `package.json` names a TypeScript Worker module in `main` and declares capabilities in the strict `slate.bindings` field. The default export handles `fetch(request, env)`. Introduced capabilities are `env.NAME.member(...args)`. Write files through the ordinary file plane, then use `workspace.slate({op:'preview',id})` to boot a live preview. `call` POSTs a JSON argument array to a named route. `commit` freezes source, `history` reads versions, `fork` copies a version into a new slate, and `restore` restores a version's tree. Running previews are isolate-lifetime processes, not durable records. These operations stay in the existing workspace codemode namespace. The native surface remains eight…
 
 Three different things in this document are spelled `fork`. This one is a
 `workspace.slate` op: it takes a committed `version` and copies its tree into a

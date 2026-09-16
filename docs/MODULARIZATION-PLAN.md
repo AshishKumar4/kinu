@@ -13,11 +13,11 @@ module's interface lives. A module is deep when a caller gets a lot of
 behaviour for a small interface. The deletion test deletes the seam and asks
 where the complexity goes. It either vanishes as a pass-through or reappears
 across N callers.
-AGENTS.md at `ed67d0126` names neither test (`grep -n "deep module\|layering\|worker
-internals" AGENTS.md docs/ARCHITECTURE.md docs/EXTENSIBILITY.md` finds nothing).
+AGENTS.md at `ed67d0126` names neither test. `grep -n "deep module\|layering\|worker
+internals" AGENTS.md docs/ARCHITECTURE.md docs/EXTENSIBILITY.md` finds nothing.
 The plan applies these written rules instead: "Shared core with abstract
 interfaces" (AGENTS.md:7), "Platform-neutral policy lives in `packages/core`"
-(docs/ARCHITECTURE.md:6), "`AgentRuntime` and `BackendHost` … are the whole
+(docs/ARCHITECTURE.md:6), "`AgentRuntime` and `BackendHost` ... are the whole
 contract" (docs/ARCHITECTURE.md:485-486), "STATE THE REASON OR SHARE THE
 CONSTANT" (scripts/policy-drift.ts:59), and "share it, or say where it says
 why not" (scripts/capability-parity.ts:18).
@@ -35,9 +35,9 @@ why not" (scripts/capability-parity.ts:18).
 
 `scripts/wired.ts` prints only unwired symbols. The per-seam symbol counts
 below come from its exported graph (`buildGraph`, `findEntrypoints`,
-`measureReach` over `readMatching(isReacher)`): each import a module
-references, resolved to its declaring file through re-exports the way
-`declarationSite` does, counted when that file sits in another package. That
+`measureReach` over `readMatching(isReacher)`). Each import a module
+references resolves to its declaring file through re-exports the way
+`declarationSite` does. It counts when that file sits in another package. That
 is a one-off script. The recipe above is the reproduction.
 
 ## 1. Map
@@ -60,7 +60,7 @@ is a one-off script. The recipe above is the reproduction.
 (`layergate/layers.ts:1532`, `tools/builtins.ts:445`). Third-party imports are
 under-declared everywhere. `core/src` imports `ai` in 76 files and `valibot` in
 154 and declares neither (`packages/core/package.json:13-18`; the root
-`package.json:127,130` carries both; `bunfig.toml` links hoisted). A manifest
+`package.json:127,130` holds both; `bunfig.toml` links hoisted). A manifest
 here describes little. The gates in §1.5 prove a seam.
 
 ### 1.2 What crosses each seam
@@ -81,15 +81,15 @@ Production files only. A symbol counts when the importer references it.
 | `cf-backend` → `agent-utils` | 2 | 3 | 2 |
 | `cli-backend` → `agent-utils` | 1 | 2 | 2 |
 
-Most imported on the `cf-backend` → `core` seam are `obs/error.ts` (8 symbols, 89
-importers), `obs/log.ts` (9, 64) and `utils/json.ts` (8, 37). Widest is
+Most imported on the `cf-backend` to `core` seam are `obs/error.ts` (8 symbols, 89
+importers), `obs/log.ts` (9, 64), and `utils/json.ts` (8, 37). Widest is
 `execution/device-tunnel.ts` (22 symbols, 7 importers). The whole
-`core` → `agent-utils` seam is eleven names. Four are abort and path helpers
+`core` to `agent-utils` seam is eleven names. Four are abort and path helpers,
 and three are FTS query helpers. The rest are `chunkMarkdown`,
 `initMemoryChunkTables`, and the types `SqlExecutor`, `SqlValue`. Inside
 `core/src`, `obs/` (6 files, 1,353 lines) imports no other core directory, and
 32 directories import it. `providers/` (23 files, 3,607 lines) imports only
-`obs`, `utils`, `credentials`, `prompts` and the root. `checkpoints/`
+`obs`, `utils`, `credentials`, `prompts`, and the root. `checkpoints/`
 (318 lines) imports none.
 
 ### 1.3 Cycles
@@ -119,10 +119,10 @@ One cycle, declared and dev-only. `core` lists `@kinu.run/test-utils` under
    `node:async_hooks` names. The aliases sit at `vite.config.ts:40-52` and
    `gallery.vite.config.ts:27-28`. The recorded failure is the app "blanking …
    before React mounts" (`:35-36`). Core declares no `sideEffects`.
-3. The UI mirrors backend vocabulary by hand. `cf-backend/src/lib/protocol.ts:171-256`
-   redeclares `BackgroundJob` ("Mirrors core BackgroundJob"), `ReleaseStatus`
+3. The UI mirrors backend vocabulary by hand. `packages/core/src/protocol.ts:171-256`
+   declares `BackgroundJob` ("Mirrors core BackgroundJob"), `ReleaseStatus`
    (11 members), `ReleaseSource`, `ReleaseChange`, `ReleaseCheck`,
-   `ReleaseApproval`, `ReleaseDeployment` and `ReleaseBoard`, which core
+   `ReleaseApproval`, `ReleaseDeployment`, and `ReleaseBoard`, which core
    exports from `release/types.ts:1-93` and `jobs/store.ts:24`. Seven client
    files consume the mirror. No gate compares the two. `policy-drift` reads
    numeric constants (`scripts/policy-drift.ts:83`). `duplication` fingerprints
@@ -206,41 +206,41 @@ profiles, obs, safety, memory, jobs, release, checkpoints. After the stages it
 also keeps the memory and craft stores, the abort and path helpers, and the
 compaction ladder and codec. The parity lock names 100 adapter modules that
 "would compile in a shared package" (`capability-parity.ts:13-15`). That queue
-runs the same way, into core. This plan does not schedule it.
+runs the same way, into core. This plan never schedules it.
 
 ### 2.3 The seam to add: `@kinu.run/core/wire`
 
 It is a subpath export beside `./obs` and `./workspace`
-(`packages/core/package.json:7-12`). A package would add a manifest and no
+(`packages/core/package.json:7-12`). A package adds a manifest and no
 guarantee. The client and the worker share `cf-backend/package.json`, so no
-manifest can say "the client depends only on wire". A gate over the subpath's
-closure can.
+manifest says "the client depends only on wire". A gate over the subpath's
+closure does.
 
 - It owns the vocabulary a client renders: constants, valibot schemas, pure
   functions over plain data. Measured, the client takes 103 values from 43
   files. The per-directory counts are `read-models` 14, root 14, `utils` 10,
   `obs` 8, `profiles` 8, `tools` 8, `execution` 7, `advisor` 6, `events` 4, and
-  fourteen directories with 1-3.
+  fourteen directories with 1 to 3.
 - It hides which core modules reach `node:`, `@nimbus-sh/*`, `ai`,
   `@ai-sdk/*`, `acorn`, `cloudflare:`. Today a comment and five stubs hold that
   policy (fact 2).
-- Callers no longer know whether a symbol's declaring module is safe to
+- Callers never learn whether a symbol's declaring module is safe to
   load. They import `@kinu.run/core/wire` and `@kinu.run/core/obs`, never the
   barrel.
 - Smallest honest API: the 103 values plus the types the client imports,
-  re-exported by name from their declaring files; types cost nothing at
-  runtime. 34 of the 43 declaring files already have a browser-safe value
+  re-exported by name from their declaring files. Types cost nothing at
+  runtime. 34 of the 43 declaring files already hold a browser-safe value
   closure. Nine do not. Five reach `node:crypto` through
   `safety/argument-digest.ts:15`: `profiles/catalog.ts`, `advisor/review.ts`,
-  `strategy/swarm.ts`, `release/approval-digest.ts` and `chat.ts`.
+  `strategy/swarm.ts`, `release/approval-digest.ts`, and `chat.ts`.
   `events/hub/visibility.ts:24` imports it itself. Three reach `ai` through
-  `prompts/structured.ts`: `advisor/review.ts`, `steer-branch.ts` and
+  `prompts/structured.ts`: `advisor/review.ts`, `steer-branch.ts`, and
   `mcts/takes.ts`. `chat.ts` and `llm.ts` import `ai` and `@ai-sdk/*`
   themselves. Stage 3 moves the vocabulary out of those nine files.
 - Gate: `gate:wire-closure`, a push-tier script over `scripts/sources.ts`
   and the resolver in `scripts/wired.ts`. It fails naming the first module in
   `core/src/wire.ts`'s value closure whose specifier starts with one of the six
-  prefixes above. It fails when the three browser mounts' value closure contains
+  prefixes above. It fails when the three browser mounts' value closure holds
   `core/src/index.ts`. It prints both closure sizes on its green path, and it is
   proved red once by pointing it at the barrel.
 
@@ -250,14 +250,14 @@ is the gate.
 ### 2.4 Two packages to fold into core
 
 `agent-utils` holds 15 files and 1,013 lines. Its consumers are `core` (11
-files), `cf-backend` (2) and `cli-backend` (1), and each depends on core. Its
+files), `cf-backend` (2), and `cli-backend` (1), and each depends on core. Its
 two written reasons for existing name a consumer that does not exist (fact 8).
 `wired` lists seven of its exports as unreached. The memory subsystem is
 split across two packages: the FTS5 store and chunker below, `FactsStore`,
-`VectorStore` and `hybridSearch` above (`core/src/memory/`).
+`VectorStore`, and `hybridSearch` above (`core/src/memory/`).
 
 `compaction` holds 8 files and 1,795 lines, all Kinu policy: the codec, the
-extension factory, the stores, the summarizer, the manifest and a layergate
+extension factory, the stores, the summarizer, the manifest, and a layergate
 slice. The ladder is the dependency `@better-compact/core`
 (`compaction/package.json:11`, `src/index.ts:14`; `docs/ARCHITECTURE.md:230-231`
 still names a `compaction/src/engine/` that is not there). The package edge
@@ -270,10 +270,10 @@ symbols each.
 
 Rules every stage follows:
 
-- A stage merges alone, in any order. No stage leaves a shim, an alias or a
+- A stage merges alone, in any order. No stage leaves a shim, an alias, or a
   re-export. A moved symbol is imported from its new home at every call site.
-- Re-lock rule for `wired`, `dead-code` and `capability-parity`: a stage may
-  run `--lock` only when every `added` key is a `stale` key under the path
+- Re-lock rule for `wired`, `dead-code`, and `capability-parity`: a stage runs
+  `--lock` only when every `added` key is a `stale` key under the path
   rename. A `stale` key with no counterpart is resolved debt and is recorded.
   The key count never grows. Any other `added` key blocks the stage.
 - Compatibility runs both backends by command. The commands are:
@@ -289,33 +289,33 @@ Rules every stage follows:
 ### Stage 1: `agent-utils` into `core`
 
 Files that move (15 under `packages/agent-utils/src`): `core/utils.ts` (the
-abort helpers and `normalizePath`) → `core/src/utils/`; `types.ts` →
+abort helpers and `normalizePath`) to `core/src/utils/`; `types.ts` to
 `core/src/types/primitives.ts`, which already forwards `SqlExecutor` and
-`SqlValue` (`primitives.ts:22`); `memory/{chunker,query,store}.ts` →
-`core/src/memory/`; `stores/craft.ts` and `codemode/builder.ts` →
-`core/src/craft/`; `vfs/addressing.ts` → into `core/src/vfs/errno.ts`, its
-only importer; `vfs/types.ts` → `core/src/vfs/`. `vfs/encoding.ts`,
-`vfs/walk.ts` and the three barrels are decided by reach: `wired` names four
+`SqlValue` (`primitives.ts:22`); `memory/{chunker,query,store}.ts` to
+`core/src/memory/`; `stores/craft.ts` and `codemode/builder.ts` to
+`core/src/craft/`; `vfs/addressing.ts` into `core/src/vfs/errno.ts`, its
+only importer; `vfs/types.ts` to `core/src/vfs/`. `vfs/encoding.ts`,
+`vfs/walk.ts`, and the three barrels are decided by reach: `wired` names four
 of their exports unreached, and what nothing reaches is deleted with its
 tests. The five memory suites and `helpers.ts` move to `packages/core/tests`.
 
 Imports that change: 11 core files (`execution/{device-tunnel-executor,nimbus,parent,sandbox}.ts`,
 `memory/conversation-search.ts`, `jobs/background-wrap.ts`,
 `identity/{inline-primitives,workspace-schema}.ts`, `read-models/files.ts`,
-`types/primitives.ts`, `vfs/errno.ts`) go relative;
-`cf-backend/src/memory-sync.ts:15`, `cf-backend/src/runtime.ts:62-63` and
-`cli-backend/src/runtime.ts:52-53` import from `@kinu.run/core`; six tests
+`types/primitives.ts`, `vfs/errno.ts`) go relative.
+`cf-backend/src/memory-sync.ts:15`, `cf-backend/src/runtime.ts:62-63`, and
+`cli-backend/src/runtime.ts:52-53` import from `@kinu.run/core`. Six tests
 (`cf-backend` 2, `cli-backend` 1, `core` 3) follow. Seven core comments that
 explain the old placement (`errno.ts:73-76`, `primitives.ts:17-22`,
 `identity/fork.ts:236`, `identity/schema.ts:72`, `workspace-schema.ts:286`,
 `inline-primitives.ts:80`, `types/agent-runtime.ts:31`) are rewritten.
 
 Configuration that changes: the package's `package.json` and `tsconfig.json`
-go. The dependency leaves the `core`, `cf-backend` and `cli-backend`
-manifests. Root `package.json` `test` (line 19), `check` (line 24) and `knip`
+go. The dependency leaves the `core`, `cf-backend`, and `cli-backend`
+manifests. Root `package.json` `test` (line 19), `check` (line 24), and `knip`
 workspaces change too, plus `scripts/capability-parity.ts:86`, the `bun run
 test` row in `scripts/ladder.ts`,
-`tools/oxlint/anti-slop/rules/no-untyped-console.ts:59`, AGENTS.md:239 and
+`tools/oxlint/anti-slop/rules/no-untyped-console.ts:59`, AGENTS.md:239, and
 `docs/ARCHITECTURE.md:448,459-466`. 51 files outside the package name it
 (`grep -rl agent-utils . --include='*.ts' --include='*.json'
 --include='*.md' --include='*.yml'`, less `node_modules` and the package).
@@ -335,7 +335,7 @@ Compatibility: the nine commands. `bun run test` drops `packages/agent-utils/`.
 
 Files that move (8 under `packages/compaction/src`): `codec.ts`,
 `extension.ts`, `stores.ts`, `summarizer.ts`, `manifest.ts`, `layergate.ts`,
-`layergate-baseline.ts`, `index.ts` → `core/src/compaction/`. The existing
+`layergate-baseline.ts`, `index.ts` to `core/src/compaction/`. The existing
 `core/src/compaction.ts` (the summary prompt) becomes `compaction/prompt.ts`.
 The six `unit-*.test.ts` files and `helpers.ts` move to `packages/core/tests`.
 
@@ -351,7 +351,7 @@ Imports that change: `cf-backend/src/actor-agent.ts:50-54` (6 symbols) and
 
 Configuration that changes: the package's `package.json` and `tsconfig.json`
 go. `@better-compact/core` joins `core/package.json`. `cf-backend` and
-`cli-backend` drop the dependency. Root `test`, `check` and `knip` change too,
+`cli-backend` drop the dependency. Root `test`, `check`, and `knip` change too,
 plus `scripts/capability-parity.ts:86`, `scripts/ladder.ts`,
 `no-untyped-console.ts:60` and `no-elapsed-work-deadline.ts:99-102`, and
 `docs/ARCHITECTURE.md:229-244`. 32 files outside the package name it (the
@@ -375,13 +375,13 @@ Compatibility: the nine commands, plus
 Files that change: new `core/src/wire.ts` exporting the 103 values and the
 client's types by name; `packages/core/package.json` `exports` gains
 `./wire`. The nine declaring files of §2.3 split: each keeps its digest or
-model code and moves its constants, schemas and pure functions to a sibling
+model code and moves its constants, schemas, and pure functions to a sibling
 module the wire index names, and imports them relatively, so no caller of the
 original changes.
 
 Imports that change: the 32 client files that import the barrel by value and
 the 39 that import `core/obs` import `@kinu.run/core/wire` and
-`@kinu.run/core/obs` only. Lines 171-256 of `cf-backend/src/lib/protocol.ts`
+`@kinu.run/core/obs` only. Lines 171-256 of `packages/core/src/protocol.ts`
 are deleted and their seven consumers (`ReleasesSurface.tsx`,
 `WorkSurface.tsx`, `WorkTab.tsx`, `ExplorationSurface.tsx`, `fork-runs.ts`,
 `work-jobs.tsx`, `hooks/use-kinu.ts`) take `BackgroundJob` and the `Release*`

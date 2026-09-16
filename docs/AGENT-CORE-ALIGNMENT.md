@@ -27,14 +27,10 @@ counts are not current acceptance evidence, and no Lean build was performed here
 
 ## Similar names are not equivalence
 
-**Facet.** A Kinu `SubordinateAgent` WAS a Cloudflare Agents SDK Durable Object facet —
-identity, routing, lifecycle and storage provided by `agents` and
-`ctx.facets` — until the one-store cutover replaced it with a logical actor of
+**Facet.** A Kinu `SubordinateAgent` was a Cloudflare Agents SDK Durable Object facet. `agents` and `ctx.facets` supplied its identity, routing, lifecycle, and storage. The one-store cutover replaced it with a logical actor of
 the workspace object (`actor-hosting.ts` header). An agent-core `Facet` has a manifest, operation descriptors,
 contributions, protection domains and lifecycle interfaces
-(`dist/facets-public.d.ts`). The former is a hosting mechanism; it does not thereby
-implement the latter. Nimbus process facets are another hosting mechanism, not
-proof of an agent-core Facet contract either.
+(`packages/agent-core/dist/facets-public.d.ts`). The former is a hosting mechanism. It does not implement the latter. Nimbus process facets are another hosting mechanism. They do not prove an agent-core Facet contract.
 
 **Binding.** Kinu's `slate.bindings` declaration selects existing namespace, MCP,
 read-model or app capabilities. Its introduced `SlateBinding` is a Workers
@@ -57,7 +53,7 @@ device consent and release records have their own owners and recovery rules.
 They are not agent-core `RunCommit`, `TurnLease`, `Receipt` or `AuditRecord` merely
 because they solve related problems. Reuse needs a state-transition and authority
 comparison, including cancellation, replay, ownership and externally visible
-results—not a table matching nouns.
+results, not a table matching nouns.
 
 ## The authority boundary the current slate must preserve
 
@@ -77,7 +73,7 @@ to contain `reason` and `error` fields.
 
 These are implementation obligations regardless of whether the larger agent-core
 architecture is adopted. The existing deferred-approval queue remains the
-side-effect gate; slates introduce no additional approval ladder.
+side-effect gate. Slates introduce no additional approval ladder.
 
 ## The what-if design
 
@@ -90,8 +86,8 @@ use their corresponding records where their actual semantics fit.
 
 Potential benefits are fewer independently maintained capability projections,
 explicit authority provenance, and reusable durable state transitions. Those are
-hypotheses to test, not guarantees that existing security, retry or recovery bugs
-would disappear. Formal properties apply to the model and its assumptions; host
+hypotheses to test. They do not guarantee that existing security, retry or recovery bugs
+would disappear. Formal properties apply to the model and its assumptions. Host
 adapters, process lifetimes, native RPC seals and browser origins need their own
 proofs.
 
@@ -118,7 +114,7 @@ Kinu's hosting adapters. Production CLI-authorized acceptance and signed-preview
 checks must be reported separately from browser-cookie authentication. Staging
 acceptance is deferred by the user's current direction.
 
-For any further adoption, select a concrete existing subsystem, compare its
-observable transitions to the candidate agent-core implementation, exercise the
+For any further adoption, select a concrete existing subsystem. Compare its
+observable transitions to the candidate agent-core implementation. Exercise the
 candidate against those obligations, and decide from that evidence. This document
-records that option; it does not authorize a sequence of rewrites.
+records that option. It does not authorize a sequence of rewrites.

@@ -1,22 +1,16 @@
 # Branch archive: safe branch deletion
 
-`archive/*` tags retain content absent from `main` after a branch is deleted.
-Deleting a load-bearing tag destroys it silently: no test fails, no gate fires,
-and `git gc` collects the blobs.
+`archive/*` tags retain content absent from `main` after I delete a branch. Deleting a load-bearing tag destroys it silently. No test fails. No gate fires. `git gc` collects the blobs.
 
 ## Rule
 
-Never delete a tag under `refs/tags/archive/` until the test reports zero novel
-blobs. A nonzero count is the last home. Delete branches. Keep tags.
+Never delete a tag under `refs/tags/archive/` until the test reports zero novel blobs. A nonzero count is the last home. Delete branches. Keep tags.
 
 ## Tag inventory
 
-There are 205 lightweight tags under `refs/tags/archive/`, counted on 2026-09-08. The first forty are
-inventoried below: nine predate the 2026-08-21 prune wave, which added thirty-one.
-Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
+There are 205 lightweight tags under `refs/tags/archive/`, counted on 2026-09-08. The first forty are inventoried below. Nine predate the 2026-08-21 prune wave, which added thirty-one. Those measurements use `main` at `29f654bd` and `c143c4b6`, respectively.
 
-Blobs `main` lacks are absent from its history. Sole-copy blobs have no other
-ref. Re-measure the sole-copy count after pruning.
+Blobs `main` lacks are absent from its history. Sole-copy blobs have no other ref. Re-measure the sole-copy count after pruning.
 
 | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
 |---|---|---|---|---|
@@ -30,10 +24,7 @@ ref. Re-measure the sole-copy count after pruning.
 | `archive/pre-reroot` | `8e98574c` | 1529 | 5062 | 0 |
 | `archive/stability-audit` | `1a1c9341` | 229 | 843 | 0 |
 
-No tag is safe to delete. Two re-roots (982 commits, then 84, measured
-2026-08-21) left `main` without this pre-launch history. `archive/pre-reroot`
-retains the graph and authorship `git filter-repo --mailmap` rewrote, including
-5,062 blobs. That explains the larger 2026-08-19 readings.
+No tag is safe to delete. Two re-roots (982 commits, then 84, measured 2026-08-21) left `main` without this pre-launch history. `archive/pre-reroot` retains the graph and authorship `git filter-repo --mailmap` rewrote, including 5,062 blobs. That explains the larger 2026-08-19 readings.
 
 | Tag | Pins the tip of |
 |---|---|
@@ -42,19 +33,13 @@ retains the graph and authorship `git filter-repo --mailmap` rewrote, including
 | `archive/stability-audit` | `feat/agent-view-redesign` (branch deleted) |
 | `archive/latency-instrumentation` | `fix/latency-instrumentation` (branch deleted) |
 
-Five tags have no recorded branch name. I rejected `feat/one-filesystem`
-(AGENTS.md § Execution Layer; `packages/cli-backend/tests/mount-plane.test.ts`).
-Delete its branch. Keep its tag.
+Five tags have no recorded branch name. I rejected `feat/one-filesystem` (AGENTS.md § Execution Layer; `packages/cli-backend/tests/mount-plane.test.ts`). Delete its branch. Keep its tag.
 
-`archive/pre-launch-history` reaches 1,149 commits `main` lacks, the
-2026-08-19 base `5dbc0f1b`, and (during the 2026-08-20 prune wave) 60+ deleted
-branch tips. 307 blobs exist nowhere else.
+`archive/pre-launch-history` reaches 1,149 commits `main` lacks, the 2026-08-19 base `5dbc0f1b`, and (during the 2026-08-20 prune wave) 60+ deleted branch tips. 307 blobs exist nowhere else.
 
 ### The 2026-08-21 prune wave
 
-I created and verified each tag before deleting its branch. Tags omit the type
-prefix (`fix/reliability-a1a3` becomes `archive/reliability-a1a3`). Counts use
-`main` at `c143c4b6`; sibling refs make sole copy 0.
+I created and verified each tag before deleting its branch. Tags omit the type prefix (`fix/reliability-a1a3` becomes `archive/reliability-a1a3`). Counts use `main` at `c143c4b6`; sibling refs make sole copy 0.
 
 | Branch (deleted) | Tag | Commit | Commits | Blobs `main` lacks | Sole copy |
 |---|---|---|---|---|---|
@@ -90,26 +75,16 @@ prefix (`fix/reliability-a1a3` becomes `archive/reliability-a1a3`). Counts use
 | `feat/executor-errors` | `archive/executor-errors` | `e2fe40cb` | 1756 | 5638 | 0 |
 | `fix/reliability-a1a3` | `archive/reliability-a1a3` | `2b5d8dfe` | 1093 | 3344 | 0 |
 
-I traced successors in `packages/core/src/strategy/`, `tools/oxlint/anti-slop/`,
-`packages/cf-backend/src/auth/store.ts`, and `scripts/commit-hygiene.ts`.
-Untraced branches wait on an owner ruling.
+I traced successors in `packages/core/src/strategy/`, `tools/oxlint/anti-slop/`, `packages/cf-backend/src/auth/store.ts`, and `scripts/commit-hygiene.ts`. Untraced branches wait on an owner ruling.
 
-`archive/reliability-a1a3` records a 2026-08-10 crash: stale `index.lock`, no
-index, and 272 of 1,179 files at `df014c73`. Its work had landed:
-`packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 and §A3.
+`archive/reliability-a1a3` records a 2026-08-10 crash: stale `index.lock`, no index, and 272 of 1,179 files at `df014c73`. Its work had landed. `packages/cf-backend/src/hooks/use-kinu.ts` cites STABILITY-AUDIT §A1 and §A3.
 
 
 ### The 2026-08-30 credential redaction
 
-A local history scan found two expired access tokens for this deployment in one old
-owner-message record. No remote ref reached that blob. Four local refs did: one branch
-and three archive tags. An isolated `filter-repo` pass replaced only those two token
-strings with a bracketed `REDACTED-*-ACCESS-TOKEN` marker carrying the then-current
-product name. Search the rewritten blobs by that prefix, not by the name.
+A local history scan found two expired access tokens for this deployment in one old owner-message record. No remote ref reached that blob. Four local refs did: one branch and three archive tags. An isolated `filter-repo` pass replaced only those two token strings with a bracketed `REDACTED-*-ACCESS-TOKEN` marker carrying the then-current product name. Search the rewritten blobs by that prefix, not by the name.
 
-The rewrite produced 1,871 old-to-new commit mappings. Every rewritten commit kept
-its parent topology, author, committer, message, and every non-target path. No commit
-was pruned. The branch and `archive/isolation-design` tag remain on one shared tip.
+The rewrite produced 1,871 old-to-new commit mappings. Every rewritten commit kept its parent topology, author, committer, message, and every non-target path. No commit was pruned. The branch and `archive/isolation-design` tag remain on one shared tip.
 
 | Ref | Old tip | Redacted tip | Commits | Blobs `main` lacks | Sole copy |
 |---|---|---|---:|---:|---:|
@@ -118,37 +93,19 @@ was pruned. The branch and `archive/isolation-design` tag remain on one shared t
 | `archive/settle-mcts` | `dd81adcb` | `096fcc65` | 1871 | 5933 | 0 |
 | `archive/swarm-depth` | `b19c36f5` | `e703cd98` | 1869 | 5932 | 0 |
 
-Measured 2026-08-30, the repository has 143 `archive/*` tags. The three affected
-redaction tags still carry nonzero novel blobs and have zero sole-copy blobs
-because sibling refs retain the same objects. No tag was deleted.
+Measured 2026-08-30, the repository has 143 `archive/*` tags. The three affected redaction tags still carry nonzero novel blobs and have zero sole-copy blobs because sibling refs retain the same objects. No tag was deleted.
 
 ### The pre-rewrite safety anchor
 
-`save-pre-reword` named one pre-rewrite savepoint branch. Before pruning that
-branch, `archive/save-pre-reword` pinned `b3b41f5c`.
-Against integration at `f7547b3bf`, it retains 51 commits and 2,849 blobs absent
-from integration. Eight blobs have no other ref. The tag is the last
-home for those eight blobs and must not be deleted.
+`save-pre-reword` named one pre-rewrite savepoint branch. Before pruning that branch, `archive/save-pre-reword` pinned `b3b41f5c`. Against integration at `f7547b3bf`, it retains 51 commits and 2,849 blobs absent from integration. Eight blobs have no other ref. The tag is the last home for those eight blobs and must not be deleted.
 
-Reflog expiry and object pruning remain pending until the final all-ref scan
-lands. That scan confirms no credential blob is reachable. It also reconciles
-the restart-era empty-object quarantine.
+Reflog expiry and object pruning remain pending until the final all-ref scan lands. That scan confirms no credential blob is reachable. It also reconciles the restart-era empty-object quarantine.
 
 ### The 2026-08-28 consolidation prune wave
 
-The integration landed on `consolidate/final-history` (`5d98f3973`). The
-gitignored valuables moved to the primary checkout. Every remaining
-worktree was pruned: 102 worktrees removed, 100 branches deleted, each tip
-tagged first. I exported dirty residue per worktree to
-`~/Kinu-backups/worktree-residue/` as a tracked-diff patch plus an
-untracked-files tarball before removal.
+The integration landed on `consolidate/final-history` (`5d98f3973`). The gitignored valuables moved to the primary checkout. Every remaining worktree was pruned: 102 worktrees removed, 100 branches deleted, each tip tagged first. I exported dirty residue per worktree to `~/Kinu-backups/worktree-residue/` as a tracked-diff patch plus an untracked-files tarball before removal.
 
-Novel-object counts against `consolidate/final-history` are dominated by the
-pre-reroot history every old branch carries. The baseline history is short
-after the two re-roots. The decisive column is SOLE COPY, measured with
-the membership counter across all 239 refs on 2026-08-28. 69 of the 102 new
-tags carry zero sole-copy objects. The 33 that do are listed. No tag is safe
-to delete while its count is nonzero. After any tag deletion, re-measure.
+Novel-object counts against `consolidate/final-history` are dominated by the pre-reroot history every old branch carries. The baseline history is short after the two re-roots. The decisive column is SOLE COPY, measured with the membership counter across all 239 refs on 2026-08-28. 69 of the 102 new tags carry zero sole-copy objects. The 33 that do are listed. No tag is safe to delete while its count is nonzero. After any tag deletion, re-measure.
 
 | Tag | Branch (deleted) | Sole copy |
 |---|---|---|
@@ -189,15 +146,7 @@ to delete while its count is nonzero. After any tag deletion, re-measure.
 The full 102-row manifest with head SHAs sits at `~/Kinu-backups/worktree-residue/prune-manifest-20260828.json`.
 ### The 2026-09-05 prune wave
 
-The lanes of the 2026-09-03 to 2026-09-05 quality program landed on `main`
-by cherry-pick. 143 worktrees were removed and 151 branches deleted. A branch
-counted as merged when every commit it carried was on `main` by cherry-pick
-trailer or by patch id. Those branches have no tag, because their content is
-on `main`. The 38 branches below carried commits `main` lacks. Each was tagged,
-and the tag was verified at the tip before the branch went. Twelve worktrees
-held uncommitted residue of child lanes whose parents landed a later form of
-the work. Each diff is at `~/kinu-wip/<worktree>-2026-09-05.patch`, with its
-untracked files beside it.
+The lanes of the 2026-09-03 to 2026-09-05 quality program landed on `main` by cherry-pick. 143 worktrees were removed and 151 branches deleted. A branch counted as merged when every commit it carried was on `main` by cherry-pick trailer or by patch id. Those branches have no tag, because their content is on `main`. The 38 branches below carried commits `main` lacks. Each was tagged. The tag was verified at the tip before the branch went. Twelve worktrees held uncommitted residue of child lanes whose parents landed a later form of the work. Each diff is at `~/kinu-wip/<worktree>-2026-09-05.patch`, with its untracked files beside it.
 
 Counts use `main` at `443f1653c`, measured 2026-09-05. Sole copy counts the
 blobs no other ref reaches, the archive tags of this wave included.
@@ -247,8 +196,7 @@ The manifest with every deleted branch sits at `~/kinu-wip/prune-manifest-2026-0
 
 ### Landing cleanup on 2026-09-08
 
-These tags retain the implementation commits whose changes shipped in `904c22cc4`. Both worktrees were clean before removal.
-Production deployment and browser receipts are retained in the machine-local release evidence archive. Novel and sole-copy blob counts were not measured.
+These tags retain the implementation commits whose changes shipped in `904c22cc4`. Both worktrees were clean before removal. Production deployment and browser receipts are retained in the machine-local release evidence archive. Novel and sole-copy blob counts were not measured.
 
 | Removed branch | Retained tag | Commit |
 |---|---|---|
@@ -257,42 +205,21 @@ Production deployment and browser receipts are retained in the machine-local rel
 
 ### The 2026-09-12 reconciliation
 
-Fifteen branches were reconciled against the integration tip by content, not
-by patch id, and none needed a tag. `main` at `d49410f01`; the doc's own
-blob test (below) was run on every candidate before its branch went.
+Fifteen branches were reconciled against the integration tip by content, not by patch id. None needed a tag. `main` at `d49410f01`. The doc's own blob test (below) ran on every candidate before its branch went.
 
-Landed by a different commit, so the tree already held the behaviour: the
-fork-receiver authority (`fork.ts:386-390`), the vendor-schema gate
-(`c00f8ff73`), the pane-store docs, the PostCSS scroll test, the Work-tab
-click, both `fix/capability-required-shape` commits by patch id,
-`integrate/2026-09-12-v2`, and the whole of
-`eval/trajectory-and-agent-benchmarks` (its pi comparator is byte-identical
-on the tip, its reasoning-effort and session-affinity fixes are present in
-evolved form, and its audit report was deleted on the branch itself). Their
-remaining novel blobs were intermediate revisions of files whose landed
-versions are on `main`.
+Landed by a different commit, so the tree already held the behavior: the fork-receiver authority (`fork.ts:386-390`), the vendor-schema gate (`c00f8ff73`), the pane-store docs, the PostCSS scroll test, the Work-tab click, both `fix/capability-required-shape` commits by patch id, `integrate/2026-09-12-v2`, and the whole of `eval/trajectory-and-agent-benchmarks` (its pi comparator is byte-identical on the tip, its reasoning-effort and session-affinity fixes are present in evolved form, and its audit report was deleted on the branch itself). Their remaining novel blobs were intermediate revisions of files whose landed versions are on `main`.
 
-Rejected by a later decision: the two-browser-rows frame loop, which the
-inspector rewrite deletes.
+Rejected by a later decision: the two-browser-rows frame loop, which the inspector rewrite deletes.
 
-Merged now: `e611638b4` (address-length schema) as `f594a4f1d`, and
-`f429f7b0c` (the 2026-09-09 whole-delta publication cost) as `9d081df3c`,
-which also re-sources the amplification figures the report had withdrawn as
-unsourced.
+Merged now: `e611638b4` (address-length schema) as `f594a4f1d`, and `f429f7b0c` (the 2026-09-09 whole-delta publication cost) as `9d081df3c`. That commit also re-sources the amplification figures the report had withdrawn as unsourced.
 
-Kept: `feat/devbox-durability-next` at `f3a0fcf7f`, the home the decisive
-report names for the 2026-09-08 native lineage. Its six sibling branches held
-zero blobs that branch lacks. `bench/mmap-contract-cost` shared its tip.
+Kept: `feat/devbox-durability-next` at `f3a0fcf7f`, the home the decisive report names for the 2026-09-08 native lineage. Its six sibling branches held zero blobs that branch lacks. `bench/mmap-contract-cost` shared its tip.
 
-Seven worktrees went. Three held residue, saved as
-`~/kinu-wip/<worktree>-2026-09-12.patch` with untracked and ignored files
-beside it.
+Seven worktrees went. Three held residue, saved as `~/kinu-wip/<worktree>-2026-09-12.patch` with untracked and ignored files beside it.
 
 ## Reproduce the test
 
-`git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none
-of the nine tags is a `main` ancestor. Tree and blob SHAs remain comparable.
-
+`git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none of the nine tags is a `main` ancestor. Tree and blob SHAs remain comparable.
 Blobs `main` lacks:
 
 ```sh
@@ -313,14 +240,11 @@ git rev-list --objects "$REF"                 | cut -d' ' -f1 | sort -u > /tmp/r
 comm -23 /tmp/ref.objs /tmp/others.objs \
   | git cat-file --batch-check | awk '$2 == "blob"' | wc -l
 ```
-Use `LC_ALL=C`. Locale sorting breaks `comm`. `--exclude` needs the full
-refname. `--exclude="archive/$REF"` reports 0 sole copies. Measured 2026-08-21,
-the short form reported 0 for all nine. The form above reports the table.
+Use `LC_ALL=C`. Locale sorting breaks `comm`. `--exclude` needs the full refname. `--exclude="archive/$REF"` reports 0 sole copies. Measured 2026-08-21, the short form reported 0 for all nine. The form above reports the table.
 
 ## Archived blobs I rejected
 
-Six blobs are absent from `main`'s history, measured 2026-08-19. Read their
-tag paths with `git cat-file -p <blob>`.
+Six blobs are absent from `main`'s history, measured 2026-08-19. Read their tag paths with `git cat-file -p <blob>`.
 
 | Blob | Tag | Path inside the tag | Verdict |
 |---|---|---|---|
@@ -328,13 +252,9 @@ tag paths with `git cat-file -p <blob>`.
 | `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | 18-finding 2026-04-24 audit. Current source cites its IDs; its `file:line` pointers are stale. |
 | `6a7dec61` `859726b7` `174d731b` `f6f19ee2` | `archive/stability-audit` | `docs/REQUIREMENTS-AUDIT.md`, four revisions | 2026-04-24 tracker contradicting current `workspace` architecture. It cites deleted `docs/EXECUTOR-V2.md` (two `main` commits still touch it) and pre-rewrite SHAs. |
 
-The recovered A4 account is speculative. `core/src/platform-catalog.ts:2042`
-claims a documented 100 s reap without a URL. Its 25-second heartbeat is at
-`cf-backend/src/hooks/use-kinu.ts:1100`. Use `git <sha>:<path>` provenance.
+The recovered A4 account is speculative. `packages/core/src/platform-catalog.ts:2067` claims a documented 100 s reap without a URL. Its 25-second heartbeat is at `packages/cf-backend/src/hooks/use-kinu.ts:1359`. Use `git <sha>:<path>` provenance.
 
-AGENTS.md § Deploy Discipline retains `archive/nimbus-measure`'s 185-252 ms
-Worker startup range. It was measured 2026-08-04 against Cloudflare's 1-second
-startup limit. The tag also holds its 6,254.64 KiB gzip bundle reading.
+AGENTS.md § Deploy Discipline retains `archive/nimbus-measure`'s 185-252 ms Worker startup range. It was measured 2026-08-04 against Cloudflare's 1-second startup limit. The tag also holds its 6,254.64 KiB gzip bundle reading.
 
 The throwaway probe Worker remains tag-only:
 

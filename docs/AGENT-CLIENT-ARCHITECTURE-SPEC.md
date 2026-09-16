@@ -1,7 +1,7 @@
 # Agent client architecture
 
 > Source of truth: `packages/cli/src/agent-client.ts` and the two adapters
-> beside it. Describes shipped behaviour. Re-checked 2026-08-24 at `4fd73892b`.
+> beside it. This page describes shipped behavior. I re-checked it on 2026-08-24 at `4fd73892b`.
 
 ## Backends and contract
 
@@ -13,15 +13,15 @@ Kinu has two agent backends:
 - Local: a `LocalAgentSession` over SQLite and a local runtime
   (`packages/cli-backend/src/local-session.ts`).
 
-One contract covers both: `AgentClient` (`packages/cli/src/agent-client.ts`),
-resolved per target by `createAgentClient`
+One contract covers both: `AgentClient` (`packages/cli/src/agent-client.ts`).
+`createAgentClient` resolves one per target
 (`packages/cli/src/client-factory.ts:32`) into `CloudAgentClient`
 (`packages/cli/src/cloud-agent-client.ts`) or the client `openLocalAgentClient`
 opens (`packages/cli/src/local-agent-client.ts:90`). A cloud turn runs in the
-Durable Object; the CLI keeps no model loop for it. `rejectLocalLlmFlags`
+Durable Object. The CLI keeps no model loop for it. `rejectLocalLlmFlags`
 (`client-factory.ts:65`) refuses `--model`, `--base-url`, `--auth` and
 `--no-auto-evolve` on cloud targets and names the durable command. The web UI
-is the canonical cloud client via `useAgent`/`useAgentChat`
+is the canonical cloud client through `useAgent`/`useAgentChat`
 (`packages/cf-backend/src/hooks/use-kinu.ts:6`, `:11`).
 
 ## State ownership
@@ -76,13 +76,13 @@ Both adapters normalize into one event stream, `AgentClientEvent`: `turn-start`,
 `text-delta`, `tool-call`, `tool-result`, `step-finish`, `turn-end`,
 `evolution`, `background`, `broadcast`, `run-event`, `error`.
 
-Two rules hold it together: every method names a real resource or action; every
+Two rules hold it together. Every method names a real resource or action. Every
 backend-specific surface is a nullable capability object a chat surface asks
 for instead of branching on `mode`.
 
-`inlineAttachmentLimitBytes` caps per-message raw data-URL bytes: storage row
-limit on the cloud, provider request budget locally, an 8x difference, so ask
-for the number.
+`inlineAttachmentLimitBytes` caps per-message raw data-URL bytes. The cloud
+cap follows the storage row limit. The local cap follows the provider request
+budget. The two differ 8x, so read the number before you assume it.
 
 ## Cloud transport and auth
 
@@ -110,11 +110,11 @@ bearer's token hash, resolved by `cliBearerScopes` at consumption
 ticket; the TTL is not the revocation window.
 
 `authenticateCliAgentTicketRequest` (`packages/cf-backend/src/server.ts:199`)
-accepts a ticket only on a websocket upgrade for the scoped agent, verifies it
+accepts a ticket only on a websocket upgrade for the scoped agent. It verifies the ticket
 against `UserDO`, deletes the `ticket` query parameter, then builds the
-identity ownership and `claimOwner()` run on.
+identity. Ownership checks and `claimOwner()` run on that identity.
 
-Frames are the installed `agents/chat` package's own: the client imports
+The frames belong to the installed `agents/chat` package. The client imports
 `CHAT_MESSAGE_TYPES` (`cloud-agent-client.ts:1`), so `USE_CHAT_REQUEST`,
 `USE_CHAT_RESPONSE`, `CHAT_REQUEST_CANCEL`, `STREAM_RESUMING`,
 `STREAM_RESUME_ACK`, `STREAM_RESUME_REQUEST`, `STREAM_RESUME_NONE` and
@@ -125,43 +125,43 @@ pins frames both ways, including stream resume and cancel.
 ## A dropped socket does not drop the turn
 
 The DO persists a chat request when it accepts it and keeps its stream
-resumable, so a dead socket loses the CLI's BINDING to a turn, never the turn.
+resumable. A dead socket loses the CLI binding to a turn. It never loses the turn.
 The client keeps its in-flight turns across the drop, reconnects once, and sends
 `STREAM_RESUME_REQUEST`. The DO answers one of three things, so nothing here
-waits on a clock: `STREAM_RESUMING` (ack it and the stream replays),
-`STREAM_PENDING` (accepted, not streaming yet. A later `STREAM_RESUMING` or
+waits on a clock: `STREAM_RESUMING` (send the ack and the stream replays),
+`STREAM_PENDING` (accepted, not streaming yet; a later `STREAM_RESUMING` or
 `STREAM_RESUME_NONE` follows), or `STREAM_RESUME_NONE` (nothing held, so the
 client acks its own request id, which always answers with a terminal frame).
 
 Two rules make the replay safe. The ack goes out once per socket generation,
-because each ack replays the whole buffer. And `CloudTurnStream`
+because each ack replays the whole buffer. `CloudTurnStream`
 (`packages/cli/src/cloud-turn-stream.ts`) counts the bodies it has applied, so a
-replay that repeats them adds nothing to the answer. The prompt is never
-re-submitted, so a rebind cannot produce a second turn.
+replay that repeats them adds nothing to the answer. The prompt never goes
+out again, so a rebind cannot produce a second turn.
 
-A turn nothing rebound is reported rather than settled as complete: a replayed
-terminal that is the first frame back, or a second drop before the rebind lands,
-ends the turn with `hadError` and says the answer is in the workspace
-transcript.
+A turn with nothing rebound is reported rather than settled as complete. A replayed
+terminal that arrives as the first frame back, or a second drop before the rebind lands,
+ends the turn with `hadError` and points at the workspace
+transcript for the answer.
 
 ## API surface
 
 Chat rides the agent websocket. Every method-shaped call goes through
-`POST /api/cli/workspaces/:name/rpc` with `{ method, args }`, gated by the
-`AGENT_RPC_ACCESS` table (`packages/cf-backend/src/cli/rpc-gate.ts:159`): single
-scope policy for HTTP dispatcher and websocket frame gate; membership is the
+`POST /api/cli/workspaces/:name/rpc` with `{ method, args }`. The
+`AGENT_RPC_ACCESS` table gates both (`packages/cf-backend/src/cli/rpc-gate.ts:159`). It holds one
+scope policy for the HTTP dispatcher and the websocket frame gate. Membership is the
 dispatch allowlist, so off-table names never invoke. Its 125 entries each carry
 `workspace.read`, `workspace.exec`, `interactive` or `never` (counted
 2026-09-05: 83 `interactive`, 39 `workspace.read`, 2 `workspace.exec`,
 1 `never`). `AgentRpcMethodsExist` (`rpc-gate.ts:345`) proves
-every key a real public method at compile time, so renaming breaks the build,
+every key names a real public method at compile time, so a rename breaks the build,
 not a runtime dispatch.
 
-Scoped access tokens are default-deny on routes: `accessTokenDenial`
+Scoped access tokens deny by default on routes. `accessTokenDenial`
 (`cli/routes.ts:406`) admits `GET /me`, the two `workspace.read` reads and the
-connect ticket; everything else refuses with the interactive-session message
-until listed. Current paths live in `packages/cf-backend/src/cli/routes.ts`;
-this file does not repeat that dispatcher.
+connect ticket. Everything else refuses with the interactive-session message
+until listed. Current paths live in `packages/cf-backend/src/cli/routes.ts`.
+That dispatcher is the authority here, so this file does not repeat it.
 
 Per-operation routes for status, tools, messages, model, triggers, jobs,
 memory, timeline, exploration and executors are gone. Dedicated paths survive
@@ -170,26 +170,26 @@ minting.
 
 ## Chat surfaces
 
-`tui/chat-app.tsx` is the only TUI chat app and serves both modes, keying
-drafts and roster entries by mode and workspace name (`chat-app.tsx:547`,
-`:569`). Shared pieces: `tui/messages.tsx` (`MessageList`),
+`tui/chat-app.tsx` is the only TUI chat app. It serves both modes and keeps
+drafts and roster entries per mode and workspace name (`chat-app.tsx:547`,
+`:569`). It shares `tui/messages.tsx` (`MessageList`),
 `tui/streaming-buffer.ts` (`useStreamingBuffer`), `tui/overlays.tsx`,
-`tui/status-bar.tsx`, `tui/format.ts`, `slash-commands.ts`. `chat-loop.ts` is
-the classic readline surface. Neither has a cloud twin.
+`tui/status-bar.tsx`, `packages/core/src/tui/format.ts`, and `slash-commands.ts`. `chat-loop.ts`
+is the classic readline surface. Neither surface has a cloud twin.
 
-Adapters own backend-specific work: session resume and transcript hydration
-locally; Durable Object history hydration and socket reconnect on cloud. Slash
-commands declare needs in a `requires` field resolved against the client
-(`slash-commands.ts:17`, `:52`): `/undo` needs `checkpoints`; `/approval` and
+Each adapter owns its backend-specific work. Local owns session resume and transcript hydration.
+Cloud owns Durable Object history hydration and socket reconnect. Slash
+commands declare their needs in a `requires` field. The client resolves each one
+(`slash-commands.ts:17`, `:52`). `/undo` needs `checkpoints`. `/approval` and
 `/always` need `localControls` (`:43-46`).
 
-Tests pin correctness. `packages/cli/tests/tui.test.tsx` renders real frames
-and asserts user bubbles against assistant markdown, chronological text and
-tool interleaving, an in-place live streaming segment, the steer marker,
+Tests pin the behavior. `packages/cli/tests/tui.test.tsx` renders real frames
+and checks user bubbles against assistant markdown, chronological text and
+tool interleaving. It checks an in-place live streaming segment, the steer marker,
 walk-back overlay order, the device-connect overlay, palette clipping at width
-58 by height 18, status-bar clipping at width 52, and model-picker opening not
-moving the input area. `streaming-buffer.test.ts`, `walkback.test.ts`,
-`undo.test.ts` and `input-state.test.ts` cover buffer, picker, `/undo` and the
+58 by height 18, status-bar clipping at width 52, and model-picker opening that keeps
+the input area in place. `streaming-buffer.test.ts`, `walkback.test.ts`,
+`undo.test.ts` and `input-state.test.ts` cover the buffer, the picker, `/undo` and the
 input machine.
 
 ## Creation and naming
@@ -203,12 +203,12 @@ POST /api/user/workspaces
         -> setSoul(renderSoulMarkdown(...))   (workspace-create.ts:356)
 ```
 
-Naming happens server-side: user-supplied kept as given; otherwise
-`fallbackWorkspaceIdentity` slugs it (`workspace-create.ts:239`) and a display
-name generates once the workspace exists. The CLI runs
+Naming happens server-side. A user-supplied name stays as given. Otherwise
+`fallbackWorkspaceIdentity` slugs one (`workspace-create.ts:239`) and a display
+name is generated once the workspace exists. The CLI runs
 `suggestAgentIdentityFromMission` for local workspaces only
 (`tui/home-app.tsx:265`). The workspace noun replaced the agent noun on this
-path; see [WORKSPACES.md](WORKSPACES.md).
+path. See [WORKSPACES.md](WORKSPACES.md).
 
 ## History projections
 
@@ -223,18 +223,18 @@ Consumers: the web chat pane via `useChatThread`
 (`packages/cli/src/local-inspection.ts:501`).
 
 `actor_messages` is Kinu's plain actor tree (`parent_id`, `core/src/identity/schema.ts`).
-The hosted root's chat lives in the vendor-owned `assistant_messages` table.
+The hosted root chat lives in the vendor-owned `assistant_messages` table.
 `getChatHistoryPage` projects the actor's authoritative rows for display. A row the
 projection drops still counts against the page and can still anchor the cursor,
 so paging never re-delivers a dropped row.
 
-A recorded CLI transcript remains a terminal log, not cloud chat state. `AgentClient`
+A recorded CLI transcript stays a terminal log. It is not cloud chat state. `AgentClient`
 exposes `history()` for the active client's renderable messages
-(`packages/cli/src/agent-client.ts:337`); local clients project their JSONL
+(`packages/cli/src/agent-client.ts:337`). Local clients project their JSONL
 record, and cloud clients page the Durable Object history. `kinu transcripts`
 (`packages/cli/src/commands/transcripts.ts`) lists JSONL records as diagnostics,
-not conversations to reopen. The canonical cloud read is still
-`getChatHistoryPage`; the transcript is a client view, not a second store.
+not conversations to reopen. The canonical cloud read stays
+`getChatHistoryPage`. The transcript is a client view, not a second store.
 
 ## Walk-back fork
 
@@ -245,15 +245,15 @@ fork. The delegation action of that name was deleted: `AGENTS_TOOL_ACTIONS`
 [EXPLORATION.md](EXPLORATION.md).
 
 `/fork [n]` restarts the conversation just before an earlier user message.
-`forkCandidates` builds the picker from rendered user messages; `findForkPivot`
+`forkCandidates` builds the picker from rendered user messages. `findForkPivot`
 locates the pivot in the canonical row list by verbatim text plus occurrence
 counted from the newest (`agent-client.ts:169`, `:186`). Locally the walked-back
 tail moves under an archive conversation id and the workspace continues its one
 durable conversation with the kept prefix (`local-agent-client.ts:471`).
-On cloud, `forkAgent` RPC (`orchestrator.ts:4579`) returns a sibling client for
+On cloud, the `forkAgent` RPC (`orchestrator.ts:4579`) returns a sibling client for
 the new workspace (`cloud-agent-client.ts:490`). Both refuse mid-turn
 (`cloud-agent-client.ts:491`, `local-agent-client.ts:472`). No CLI flag forks a
-recorded terminal transcript; the durable conversation is the only state a fork
+recorded terminal transcript. The durable conversation is the only state a fork
 touches.
 
 ## What is refused
@@ -273,35 +273,22 @@ expect(orchestrator).not.toContain('async cliTurn');
 expect(server).not.toContain('registerWorkspace(agentName');
 ```
 
-No source file names any of them; under `packages` that test is the sole
+No source file names any of them. Under `packages` that test is the sole
 occurrence. The prepare, tool and commit routes, the `/turn` route and the
-matching Durable Object callables exist in no form — no alias, no refusing
+matching Durable Object callables exist in no form: no alias, no refusing
 stub. An unregistered
-workspace answers 404, never created on first touch: creation must go through
+workspace answers 404. It is never created on first touch. Creation goes through
 the explicit create APIs so probes cannot register workspaces
-(`claimOwnedWorkspace`, `user/workspace-ownership.ts:60-66`, via
-`ensureAgentOwnership` at `server.ts:604`). Four more suites guard the rest:
+(`claimOwnedWorkspace`, `user/workspace-ownership.ts:60-66`,
+`server.ts:604` keeps this check on the agent path). Four more suites guard the rest:
 `unit-rpc-gate.test.ts` (scope table), `unit-cli-access-token-routes.test.ts`
 and `unit-cli-control-routes.test.ts` (both transports),
-`unit-turn-pipeline-correctness.test.ts` (turn-pipeline wiring); prefer
-running those over text search. [TESTING.md](TESTING.md) covers the suites.
+`unit-turn-pipeline-correctness.test.ts` (turn-pipeline wiring). Run those
+instead of grepping the tree. [TESTING.md](TESTING.md) covers the suites.
 
-One rule binds any change here: if authenticated production behaviour went
-unexercised, say which part was not verified rather than claiming readiness.
+One rule binds any change here. When authenticated production behavior went
+unexercised, name the unverified part instead of claiming readiness.
 
 ## Rejected designs
 
-These reasons still hold; proposing one proposes a known regression.
-
-| Design | Reason |
-|---|---|
-| Keep `/api/cli/workspaces/:name/turn` as cloud mode | A second agent turn path. |
-| Local prepare, tool and commit calls for cloud workspaces | Breaks the Durable Object turn invariant. |
-| Commit a locally computed answer back to the Durable Object | Synchronization is not a source of truth. |
-| Read cloud history from local JSONL | Hides Durable Object bugs and lets web and TUI diverge. |
-| Permanent fallback from the session store to `actor_messages` | Preserves pre-release data instead of fixing the source. |
-| Auto-register an unknown workspace on first touch | Creates accidental registry rows and bypasses explicit creation. |
-| Trust `userId` in a request body | An auth hole. |
-| Put a CLI bearer token in a websocket URL | Leaks the secret through logs and shell history. |
-| A REST facade per agent RPC | A shallow parallel API surface. |
-| Rewrite the web away from `useAgentChat` | No need. The web is already the canonical cloud client. |
+These reasons still hold. Proposing one proposes a known regression.
