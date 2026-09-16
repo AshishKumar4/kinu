@@ -14,7 +14,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import type { JsonObject } from '@kinu.run/core';
 import {
-  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, startUpdateHub, until, type UpdateHub,
+  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, startUpdateHub, until, type UpdateHub,
 } from './helpers/update-hub';
 
 const repoRoot = resolve(__dirname, '../../..');
@@ -121,14 +121,14 @@ function installedMachine(origin: string, stamp: string | null, config: JsonObje
 
 /** The daemon as the CLI starts it: the installed file under this Bun,
  *  output to the log file the CLI would give it. */
-function startDaemon(home: string) {
+function startDaemon(home: string, extraEnv: Record<string, string> = {}) {
   const logPath = join(home, 'pc-agent.log');
   const logFd = Bun.file(logPath);
 
   const proc = Bun.spawn({
     cmd: [process.execPath, join(home, 'pc-agent.js')],
     cwd: home,
-    env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight') },
+    env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight'), ...extraEnv },
     stdout: logFd,
     stderr: logFd,
     stdin: 'ignore',
@@ -155,7 +155,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('HELLO names the build, the platform and the opt-out state; a current build gets no UPDATE', async () => {
     const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
 
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(socket.hello).toMatchObject({ type: 'HELLO', version: OLD, os: process.platform, arch: process.arch, updateCheck: true });
@@ -169,7 +169,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('a behind build is landed, selftested, started as a successor; the old daemon stays until replaced', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
     const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
 
     // The successor's HELLO names the new build.
@@ -204,10 +204,52 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
   });
 
+  test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
+    // SECURITY-devices C1, the audit's own probe: a fake hub serving a
+    // trojaned tarball whose sha256 the frame names. Before, the daemon
+    // downloaded it, ran its selftest (arbitrary code, as the user) and
+    // started it as the successor. Now the frame is refused before any
+    // byte is fetched, on the signature it does not carry.
+    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), signing: 'none' });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home, await releaseSigningEnv());
+    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    await socket.settle();
+    await until(() => (daemon.log().includes('device.update_ignored reason=malformed_frame detail=no signature') ? true : null), 'the refusal', daemon.log);
+
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
+    expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
+    expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(false);
+    expect(served.sockets).toHaveLength(1);
+  });
+
+  test('a release signed by a key that is not the pinned one is refused the same way', async () => {
+    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), signing: 'foreign' });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home, await releaseSigningEnv());
+    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    await socket.settle();
+    await until(() => (daemon.log().includes('device.update_ignored reason=bad_signature') ? true : null), 'the refusal', daemon.log);
+
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
+    expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
+  });
+
+  test('a daemon on the production pin refuses the test key: the pin is the build\'s, not the environment\'s', async () => {
+    const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startDaemon(home);
+    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    await socket.settle();
+    await until(() => (daemon.log().includes('device.update_ignored reason=bad_signature') ? true : null), 'the refusal', daemon.log);
+
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
+  });
+
   test('a corrupt archive (checksum mismatch) lands nothing; the old daemon keeps the machine', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), corrupt: true });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
 
     await until(() => daemon.log().includes('device.update_failed'), 'the update to fail', daemon.log);
     expect(daemon.log()).toContain(`checksum mismatch for ${PLATFORM_ARTIFACT}`);
@@ -225,7 +267,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const broken = { ...DAEMON_FILES, 'pc-agent.js': 'process.exit(7);\n' };
     const served = hub({ served: NEW, archive: daemonArchive(broken, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
 
     await until(() => daemon.log().includes('device.update_failed'), 'the update to fail', daemon.log);
     expect(daemon.log()).toContain('failed its selftest; the previous build was restored');
@@ -240,7 +282,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('updateCheck: false — HELLO says so, and an UPDATE pushed anyway is refused', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW), pushAlways: true });
     const home = installedMachine(served.origin, OLD, { updateCheck: false });
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
 
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(socket.hello).toMatchObject({ version: OLD, updateCheck: false });
@@ -256,7 +298,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     // version again.
     const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
     const first = await until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(first.hello.version).toBe(OLD);
 
@@ -270,7 +312,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('a hostile frame — an off-origin url, or a checksum that is not one — lands nothing', async () => {
     const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
     const sha256 = 'a'.repeat(64);
 
@@ -286,7 +328,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('a daemon without a stamp sends no version and is left alone', async () => {
     const served = hub({ served: NEW, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, null);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
 
     const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect('version' in socket.hello).toBe(false);
@@ -314,7 +356,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     // SECOND daemon beside the living old one.
     const served = hub({ served: NEW, archive: daemonArchive({ ...NEW_FILES, 'pc-agent.js': DYING_DAEMON }, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
     const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
 
     await until(() => (daemon.log().includes('device.update_rolled_back') ? true : null), 'the rollback', daemon.log);
@@ -353,7 +395,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
   test('a live pidfile means nothing to recover, marker or not', async () => {
     const served = hub({ served: OLD, archive: daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home);
+    const daemon = startDaemon(home, await releaseSigningEnv());
     await until(() => served.sockets[0], 'the HELLO', daemon.log);
     writeFileSync(join(home, 'pc-agent.js.prev'), 'process.exit(9);\n', { mode: 0o700 });
     writeFileSync(join(home, 'pc-agent.update-pending'), `${NEW}\n`, { mode: 0o600 });

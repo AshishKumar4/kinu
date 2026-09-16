@@ -18,7 +18,7 @@ import type { Server } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
-import type { JsonObject } from '@kinu.run/core';
+import { generateReleaseSigningKey, signRelease, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -63,28 +63,46 @@ interface StubOrigin {
   hits: string[];
 }
 
-/** The served side: the version JSON, both artifacts and their checksums.
- *  `corrupt` publishes a checksum that is not the artifact's. */
-function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?: boolean }): StubOrigin {
+/** The key the stub origin signs its manifest with, minted once per process;
+ *  every child CLI pins its public half through the environment, the way a
+ *  machine's own operator would. */
+const signingKey = generateReleaseSigningKey();
+
+/** The served side: the SIGNED version JSON, both artifacts and their
+ *  checksums. `corrupt` publishes an artifact that is not the signed one;
+ *  `signing` withholds the signature or signs with a key of the origin's own
+ *  — the hostile deployment of SECURITY-devices C1. */
+function startOrigin(opts: { platform: Uint8Array; runtime: Uint8Array; corrupt?: boolean; signing?: 'none' | 'foreign' }): StubOrigin {
   const hits: string[] = [];
 
   const files = { [PLATFORM_ARTIFACT]: opts.platform, [RUNTIME_ARTIFACT]: opts.runtime };
+  const digestOf = (artifact: Uint8Array) => createHash('sha256').update(opts.corrupt ? new Uint8Array([1, 2, 3]) : artifact).digest('hex');
+  const checksums = Object.fromEntries(Object.entries(files).map(([name, artifact]) => [name, digestOf(artifact)]));
+
+  const manifest = (async () => {
+    const stamp = { version: SERVED, sha: 'abc', builtAt: 'now' };
+
+    if (opts.signing === 'none') return { ...stamp, checksums };
+    const key = opts.signing === 'foreign' ? await generateReleaseSigningKey() : await signingKey;
+    const signed = await signRelease(SERVED, checksums, key.privateKeyPkcs8Base64);
+
+    return { ...stamp, checksums: signed.checksums, signature: signed.signature };
+  })();
 
   const server = Bun.serve({
     port: 0,
-    fetch(req) {
+    async fetch(req) {
       const { pathname } = new URL(req.url);
       hits.push(pathname);
 
-      if (pathname === '/downloads/kinu-version.json') return Response.json({ version: SERVED, sha: 'abc', builtAt: 'now' });
+      if (pathname === '/downloads/kinu-version.json') return Response.json(await manifest);
       const artifact = Object.entries(files).find(([name]) => name === pathname.replace(/\.sha256$/, ''))?.[1];
 
       if (!artifact) return new Response('not found', { status: 404 });
 
       if (!pathname.endsWith('.sha256')) return new Response(Buffer.from(artifact));
-      const digest = createHash('sha256').update(opts.corrupt ? new Uint8Array([1, 2, 3]) : artifact).digest('hex');
 
-      return new Response(`${digest}  ${pathname.slice('/downloads/'.length, -'.sha256'.length)}\n`);
+      return new Response(`${digestOf(artifact)}  ${pathname.slice('/downloads/'.length, -'.sha256'.length)}\n`);
     },
   });
 
@@ -108,7 +126,7 @@ async function runChild(home: string, script: string): Promise<{ stdout: string;
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
-    env: { ...process.env, KINU_HOME: home },
+    env: { ...process.env, KINU_HOME: home, KINU_RELEASE_SIGNING_PUBLIC_KEY: (await signingKey).publicKeyHex },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -156,10 +174,10 @@ describe('refreshCliTree stages, verifies and swaps', () => {
     expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
     // Nothing staged is left behind: current, prev, and no next-* or download dir.
     expect(cliEntries(home)).toEqual(['current', 'prev']);
-    // Every download was verified against its published checksum.
-    expect(stub.hits).toEqual([
-      PLATFORM_ARTIFACT, `${PLATFORM_ARTIFACT}.sha256`, RUNTIME_ARTIFACT, `${RUNTIME_ARTIFACT}.sha256`,
-    ]);
+    // The signed manifest first, then every artifact it names — verified
+    // against the checksum it SIGNED, so the origin's own .sha256 files are
+    // never asked for.
+    expect(stub.hits).toEqual(['/downloads/kinu-version.json', PLATFORM_ARTIFACT, RUNTIME_ARTIFACT]);
   });
 
   test('a refresh for a build already installed adopts nothing and downloads nothing', async () => {
@@ -192,6 +210,22 @@ describe('refreshCliTree stages, verifies and swaps', () => {
     expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
     expect(cliEntries(home)).toEqual(['current', 'prev']);
     expect(stub.hits.filter((hit) => hit === PLATFORM_ARTIFACT)).toHaveLength(1);
+  });
+
+  test('an unsigned manifest, or one signed by another key, downloads nothing (C1)', async () => {
+    // The hostile deployment: it serves the artifacts, the checksums and the
+    // manifest, and chooses all three. Without Kinu's signature over the
+    // checksums the refresh fetches no artifact at all.
+    for (const signing of ['none', 'foreign'] as const) {
+      const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime, signing });
+      const home = installedHome('1.0.0+old');
+      const before = currentCli(home);
+
+      expect(await refresh(home, stub.origin)).toMatch(/^failed: .*(carries no signature|does not verify)/);
+      expect(currentCli(home)).toBe(before);
+      expect(cliEntries(home)).toEqual(['current']);
+      expect(stub.hits.filter((hit) => hit.startsWith('/downloads/') && hit !== '/downloads/kinu-version.json')).toEqual([]);
+    }
   });
 
   test('a corrupt tarball (checksum mismatch) leaves current byte-identical and nothing staged', async () => {

@@ -1,4 +1,7 @@
-import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, USER_AI_PROXY_PATH, timingSafeEqual, type JsonValue } from '@kinu.run/core';
+import {
+  JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RELEASE_SIGNING_PUBLIC_KEY, USER_AI_PROXY_PATH, timingSafeEqual,
+  type JsonValue,
+} from '@kinu.run/core';
 import type { AuthIdentity } from '../auth/session';
 import {
   AuthError, CLI_APPROVAL_CSRF_COOKIE_NAME, authenticateRequest, isFreshAuthTime, readCookie,
@@ -930,16 +933,54 @@ take_cli_lock() {
   return 1
 }
 
-# Each download is verified against the checksum published beside it. An
+# The release manifest is SIGNED at build with a key this deployment never
+# holds, and the public half is pinned into this launcher: a download is
+# verified against the checksum the signature covers, never against a
+# checksum the origin chooses for itself (a hostile or compromised deploy
+# could otherwise hand every machine bytes to run — SECURITY-devices C1).
+# The manifest is fetched and verified ONCE, before any artifact, and the
+# signed checksums are read from it per artifact. The verification runs on
+# the Bun this launcher already resolved: Ed25519 over WebCrypto.
+RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"
+MANIFEST_URL="\${KINU_ORIGIN}${CLI_VERSION_PATH}"
+verify_release() {
+  manifest="$1"
+  curl -fsSL "$MANIFEST_URL" -o "$manifest" || die "Could not download the release manifest from $MANIFEST_URL."
+  "$KINU_BUN" -e '
+    const [file, publicKeyHex] = process.argv.slice(1);
+    const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
+    const checksums = manifest.checksums, signature = manifest.signature, version = manifest.version;
+    const fail = (why) => { console.error(why); process.exit(1); };
+    if (typeof version !== "string" || typeof signature !== "string" || Object(checksums) !== checksums) fail("the release manifest carries no signature; nothing is downloaded");
+    const lines = Object.entries(checksums).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([p, d]) => p + " " + String(d).toLowerCase());
+    const message = new TextEncoder().encode(["kinu-release-v1", version, ...lines, ""].join("\\n"));
+    const key = Uint8Array.from(publicKeyHex.match(/../g), (pair) => parseInt(pair, 16));
+    const sig = Uint8Array.from(Buffer.from(signature, "base64"));
+    crypto.subtle.importKey("raw", key, { name: "Ed25519" }, false, ["verify"])
+      .then((k) => crypto.subtle.verify("Ed25519", k, sig, message))
+      .then((ok) => { if (!ok) fail("the release signature does not verify against the pinned key; nothing is downloaded"); });
+  ' "$manifest" "$RELEASE_SIGNING_PUBLIC_KEY" || die "The release is not one this launcher trusts."
+}
+signed_checksum() {
+  "$KINU_BUN" -e '
+    const [file, artifact] = process.argv.slice(1);
+    const manifest = JSON.parse(require("fs").readFileSync(file, "utf8"));
+    const digest = manifest.checksums && manifest.checksums[artifact];
+    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/i.test(digest)) { console.error("the signed release names no " + artifact); process.exit(1); }
+    console.log(digest.toLowerCase());
+  ' "$1" "$2"
+}
+# Each download is verified against the SIGNED checksum for its path. An
 # incomplete deploy answers a download path with the SPA shell, and unpacking
 # an HTML page as a tarball is how an install fails without saying why.
 fetch_verified() {
   url="$1"
   into="$2"
+  manifest="$3"
+  artifact="/downloads/\${url##*/downloads/}"
+  expected="$(signed_checksum "$manifest" "$artifact")" || die "The signed release names no $artifact."
+  [ -n "$expected" ] || die "The signed checksum for $url is empty."
   curl -fsSL "$url" -o "$into" || die "Could not download $url."
-  expected="$(curl -fsSL "$url.sha256" | awk '{print $1}')" \
-    || die "Could not download the checksum from $url.sha256."
-  [ -n "$expected" ] || die "The checksum published for $url is empty."
   if command -v sha256sum >/dev/null 2>&1; then
     actual="$(sha256sum "$into" | awk '{print $1}')"
   elif command -v shasum >/dev/null 2>&1; then
@@ -965,8 +1006,9 @@ refresh_cli() {
   tmp="$(mktemp -d)"
   next="$CLI_ROOT/next-$$"
   trap 'rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
-  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz"
-  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz"
+  verify_release "$tmp/kinu-version.json"
+  fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"
+  fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"
   mkdir -p "$tmp/extract"
   tar -xzf "$tmp/cli.tar.gz" -C "$tmp/extract"
   tar -xzf "$tmp/runtime.tar.gz" -C "$tmp/extract"

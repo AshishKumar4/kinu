@@ -26,7 +26,7 @@ import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes';
 import { buildCliInstallCommand } from '@kinu.run/core';
 import { bunResolutionShell } from '@kinu.run/core';
-import { CLI_DIST_PATHS } from '@kinu.run/core';
+import { CLI_DIST_PATHS, RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -99,16 +99,28 @@ function bunStub(version: string, logPath: string): string {
     '#!/bin/sh',
     `printf '%s\\n' "$0" >> "${logPath}"`,
     `if [ "$1" = "--version" ]; then printf '%s\\n' '${version}'; exit 0; fi`,
+    // The launcher verifies the release signature on the Bun it resolved:
+    // that verification is real here, on the Bun running this suite.
+    `if [ "$1" = "-e" ]; then exec "${process.execPath}" "$@"; fi`,
     'if [ "$1" = "run" ]; then printf \'  setup   connect your account\\n\'; exit 0; fi',
     'exit 0',
     '',
   ].join('\n');
 }
 
+/** The key this suite's fake origin signs its release with, minted once per
+ *  process; every launcher run pins its public half through the environment,
+ *  the way a machine's own operator would. */
+const signingKey = await generateReleaseSigningKey();
+
+/** The environment a launcher under test runs with. */
+const RELEASE_ENV = { KINU_RELEASE_SIGNING_PUBLIC_KEY: signingKey.publicKeyHex };
+
 /** The two archives shaped like the published ones: a platform artifact
  *  carrying `kinu/cli.js`, and the shared CPython runtime that unpacks into
- *  the same tree. Each gets the sha256 sidecar the launcher verifies. */
-function makeDistTarballs(home: string): void {
+ *  the same tree. Each gets the sha256 sidecar, and the SIGNED manifest over
+ *  both checksums is what the launcher verifies before it downloads. */
+async function makeDistTarballs(home: string): Promise<void> {
   const stage = join(home, 'stage');
   mkdirSync(join(stage, 'kinu'), { recursive: true });
   writeFileSync(join(stage, 'kinu/cli.js'), 'process.stdout.write("stub\\n");\n');
@@ -129,12 +141,21 @@ function makeDistTarballs(home: string): void {
     const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex');
     writeFileSync(`${tarball}.sha256`, `${digest}  ${name}\n`);
   }
+
+  const artifactOf = (name: string) => (name === 'cli.tar.gz' ? `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz` : '/downloads/kinu-runtime-cpython.tar.gz');
+
+  const checksums = Object.fromEntries(['cli.tar.gz', 'runtime.tar.gz'].map((name) => [
+    artifactOf(name), readFileSync(join(home, `${name}.sha256`), 'utf-8').trim().split(/\s+/)[0] ?? '',
+  ]));
+
+  const signed = await signRelease('1.0.0+test', checksums, signingKey.privateKeyPkcs8Base64);
+  writeFileSync(join(home, 'kinu-version.json'), `${JSON.stringify({ sha: 'test', builtAt: 'now', ...signed })}\n`);
 }
 
 /** A sandbox HOME plus stub curl/bun/ln so the script runs without network
  *  or system side effects. The stub curl "downloads" the launcher, the Bun
  *  installer, and the two published build artifacts. */
-function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
+async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox> {
   const ambientBun = options.ambientBun === undefined ? approvedBun() : options.ambientBun;
   const home = scratchDir('install-test');
   const stubBin = join(home, 'stub-bin');
@@ -172,7 +193,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
 
   writeFileSync(join(home, 'bun-installer.sh'), `${bunInstaller}\n`);
 
-  makeDistTarballs(home);
+  await makeDistTarballs(home);
 
   const curl = [
     '#!/usr/bin/env bash',
@@ -188,6 +209,9 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
     'done',
     'case "$url" in',
     `  *bun.sh/install*) cat "${home}/bun-installer.sh"; exit 0 ;;`,
+    `  *kinu-version.json)`,
+    '    [ -n "$out" ] || exit 1',
+    `    cat "${home}/kinu-version.json" > "$out"; exit 0 ;;`,
     `  *kinu-runtime-cpython.tar.gz.sha256) cat "${home}/runtime.tar.gz.sha256"; exit 0 ;;`,
     '  *kinu-runtime-cpython.tar.gz)',
     '    [ -n "$out" ] || exit 1',
@@ -238,6 +262,7 @@ function runHeadlessInstall(
       KINU_HOME: join(home, '.kinu'),
       PATH: `${stubBin}:/usr/bin:/bin`,
       SHELL: '/bin/bash',
+      ...RELEASE_ENV,
       ...extraEnv,
     },
   });
@@ -271,7 +296,7 @@ function runHeadlessInstall(
 describe('install.sh terminal handling', () => {
   test('headless curl|bash prints setup instructions and exits 0 — never opens /dev/tty', async () => {
     const script = await installScript();
-    const { home, stubBin } = makeSandbox();
+    const { home, stubBin } = await makeSandbox();
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
@@ -291,7 +316,7 @@ describe('install.sh terminal handling', () => {
   // that line is what the user runs.
   test('the canonical install command is one pipeline, and the script says how to activate it', async () => {
     const script = await installScript();
-    const { home, stubBin } = makeSandbox();
+    const { home, stubBin } = await makeSandbox();
     writeFileSync(join(home, 'install.sh'), script);
     const install = buildCliInstallCommand({ origin: ORIGIN, setup: false });
     expect(install).toBe(`curl -fsSL '${ORIGIN}/install.sh' | bash -s -- --no-setup`);
@@ -305,7 +330,7 @@ describe('install.sh terminal handling', () => {
       'printf "BEFORE=%s\\n" "$(command -v kinu)"',
     ].join('\n')], {
       encoding: 'utf8',
-      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
     expect(run.status, run.stderr).toBe(0);
@@ -322,7 +347,7 @@ describe('install.sh terminal handling', () => {
     // The hint is not decoration: running it is what activates the CLI.
     const activated = spawnSync('bash', ['-c', [hint ?? '', 'command -v kinu', 'kinu --help'].join('\n')], {
       encoding: 'utf8',
-      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
     expect(activated.status, activated.stderr).toBe(0);
@@ -343,7 +368,7 @@ describe('install.sh terminal handling', () => {
   // inside the installer, so one paste installs the CLI and pairs the machine.
   test('--connect pairs the machine from inside the installer, before the PATH hint', async () => {
     const script = await installScript();
-    const { home, stubBin } = makeSandbox();
+    const { home, stubBin } = await makeSandbox();
 
     const install = buildCliInstallCommand({
       origin: ORIGIN, setup: false, connect: true, label: "Ashish's Mac",
@@ -354,7 +379,7 @@ describe('install.sh terminal handling', () => {
 
     const run = spawnSync('bash', ['-c', install], {
       encoding: 'utf8',
-      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
+      env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash', ...RELEASE_ENV },
     });
 
     expect(run.status, run.stderr).toBe(0);
@@ -387,7 +412,7 @@ describe('install.sh terminal handling', () => {
 
     if (!python) return; // PTY harness needs python3
     const script = await installScript();
-    const { home, stubBin } = makeSandbox();
+    const { home, stubBin } = await makeSandbox();
     // Hostile stub: setup wrecks the terminal (raw, no echo) and fails.
     writeFileSync(join(home, 'launcher'), [
       '#!/bin/sh',
@@ -491,10 +516,16 @@ describe('the CLI installs as a prebuilt artifact', () => {
     expect(launcher).toContain('Kinu supports arm64 and x86_64.');
   });
 
-  test('every download is checksum-verified, with no way to skip it', async () => {
+  test('every download is checksum-verified against the SIGNED release, with no way to skip it', async () => {
     const launcher = await launcherScript();
-    expect(launcher).toContain('fetch_verified "$TARBALL_URL"');
-    expect(launcher).toContain('fetch_verified "$RUNTIME_URL"');
+    // The manifest's signature is verified against the pinned key before any
+    // artifact is fetched, and each artifact against the checksum it signed —
+    // never against a .sha256 the origin chooses for itself (C1).
+    expect(launcher).toContain('verify_release "$tmp/kinu-version.json"');
+    expect(launcher).toContain('fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz" "$tmp/kinu-version.json"');
+    expect(launcher).toContain('fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz" "$tmp/kinu-version.json"');
+    expect(launcher).toContain(`RELEASE_SIGNING_PUBLIC_KEY="\${KINU_RELEASE_SIGNING_PUBLIC_KEY:-${RELEASE_SIGNING_PUBLIC_KEY}}"`);
+    expect(launcher).not.toContain('curl -fsSL "$url.sha256"');
     expect(launcher).toContain('[ "$actual" = "$expected" ] || die "Checksum mismatch for $url."');
     // The pin override is gone: verification against the published .sha256 is
     // the only path, so no environment variable can turn it off.
@@ -502,10 +533,26 @@ describe('the CLI installs as a prebuilt artifact', () => {
     expect(launcher).not.toContain('KINU_CLI_SHA256');
   });
 
+  test('a release the pinned key did not sign is refused before any artifact lands (C1)', async () => {
+    const script = await installScript();
+    const launcher = await launcherScript();
+    const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
+    // The hostile deployment: the same artifacts and checksums, and a
+    // manifest without Kinu's signature over them.
+    const manifest = v.parse(v.looseObject({ signature: v.string() }), JSON.parse(readFileSync(join(home, 'kinu-version.json'), 'utf-8')));
+    const { signature: _signature, ...unsigned } = manifest;
+    writeFileSync(join(home, 'kinu-version.json'), `${JSON.stringify(unsigned)}\n`);
+
+    const result = await runHeadlessInstall(script, home, stubBin);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.output).toContain('not one this launcher trusts');
+    expect(existsSync(join(home, '.kinu/cli/current/cli.js'))).toBe(false);
+  });
+
   test('a fresh install downloads a build and never runs an installer on the machine', async () => {
     const script = await installScript();
     const launcher = await launcherScript();
-    const { home, stubBin } = makeSandbox({ ambientBun: null, launcher });
+    const { home, stubBin } = await makeSandbox({ ambientBun: null, launcher });
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
@@ -659,7 +706,7 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('an existing compatible Bun is used as it is, and nothing is downloaded', async () => {
     const script = await installScript();
-    const { home, stubBin, managedBun } = makeSandbox({ ambientBun: '1.9.2' });
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.9.2' });
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
@@ -671,7 +718,7 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('a Bun older than the approved one is not accepted, and the approved one is installed once', async () => {
     const script = await installScript();
-    const { home, stubBin, managedBun } = makeSandbox({ ambientBun: '1.1.45' });
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: '1.1.45' });
     const result = await runHeadlessInstall(script, home, stubBin);
 
     expect(result.timedOut).toBe(false);
@@ -685,7 +732,7 @@ describe('Bun runtime resolution is one source of truth', () => {
 
   test('KINU_INSTALL_BUN=0 names the version it needs instead of installing one', async () => {
     const script = await installScript();
-    const { home, stubBin, managedBun } = makeSandbox({ ambientBun: null });
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: null });
     const result = await runHeadlessInstall(script, home, stubBin, { KINU_INSTALL_BUN: '0' });
 
     expect(result.output).toContain(`Bun ${approvedBun()} or newer is required.`);
@@ -697,7 +744,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const script = await installScript();
     const launcher = await launcherScript();
     // A machine with no Bun at all, and the real launcher installed — not a stub.
-    const { home, stubBin, bunLog, managedBun } = makeSandbox({ ambientBun: null, launcher });
+    const { home, stubBin, bunLog, managedBun } = await makeSandbox({ ambientBun: null, launcher });
     const install = await runHeadlessInstall(script, home, stubBin);
 
     expect(install.timedOut).toBe(false);
@@ -714,6 +761,7 @@ describe('Bun runtime resolution is one source of truth', () => {
         KINU_HOME: join(home, '.kinu'),
         PATH: `${stubBin}:/usr/bin:/bin`,
         SHELL: '/bin/bash',
+        ...RELEASE_ENV,
       },
     });
 

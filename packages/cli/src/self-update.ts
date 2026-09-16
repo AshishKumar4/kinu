@@ -14,7 +14,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
-import { CLI_RUNTIME_PATH, cliArtifactPath, isSameBuild } from '@kinu.run/core';
+import {
+  CLI_RUNTIME_PATH, CLI_VERSION_PATH, cliArtifactPath, isSameBuild,
+  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
+} from '@kinu.run/core';
+import * as v from 'valibot';
 import { KinuError, toKinuError, tolerate } from '@kinu.run/core/obs';
 import { AGENT_HOME } from './config';
 
@@ -62,17 +66,39 @@ function platformArtifactPath(): string {
  * for the launcher: an incomplete deploy answers a download path with the SPA
  * shell, and unpacking an HTML page as a tarball fails without saying why.
  */
-async function fetchVerified(origin: string, pathname: string, into: string, fetchImpl: FetchLike): Promise<void> {
+/**
+ * The served build's signed manifest, verified against the pinned key: the
+ * one authority for which bytes are Kinu's. Refused — nothing downloaded —
+ * when the manifest carries no signature, one that does not verify, or one
+ * that does not cover the artifact asked for (SECURITY-devices C1).
+ */
+async function signedRelease(origin: string, served: string, fetchImpl: FetchLike): Promise<SignedRelease> {
+  const res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store' });
+
+  if (!res.ok) throw new KinuError('unavailable', `could not download the release manifest: HTTP ${res.status}`);
+  const parsed = v.safeParse(SignedReleaseSchema, await res.json());
+
+  if (!parsed.success) throw new KinuError('denied', 'the release manifest carries no signature; nothing is downloaded');
+
+  if (!isSameBuild(parsed.output.version, served)) throw new KinuError('io', `the release manifest names ${parsed.output.version}, not the served ${served}`);
+  const publicKey = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? RELEASE_SIGNING_PUBLIC_KEY;
+
+  if (!await verifyRelease(parsed.output, publicKey)) throw new KinuError('denied', 'the release signature does not verify against the pinned key; nothing is downloaded');
+
+  return parsed.output;
+}
+
+/** Download one published artifact and prove it whole against the SIGNED
+ *  checksum — the manifest's, never the origin's own `.sha256` file, which
+ *  the origin chooses. */
+async function fetchVerified(origin: string, pathname: string, into: string, release: SignedRelease, fetchImpl: FetchLike): Promise<void> {
+  const expected = release.checksums[pathname];
+
+  if (expected === undefined) throw new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
   const res = await fetchImpl(`${origin}${pathname}`, { cache: 'no-store' });
 
   if (!res.ok) throw new KinuError('unavailable', `could not download ${pathname}: HTTP ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const checksum = await fetchImpl(`${origin}${pathname}.sha256`, { cache: 'no-store' });
-
-  if (!checksum.ok) throw new KinuError('unavailable', `could not download the checksum for ${pathname}: HTTP ${checksum.status}`);
-  const expected = (await checksum.text()).trim().split(/\s+/)[0] ?? '';
-
-  if (!/^[0-9a-f]{64}$/i.test(expected)) throw new KinuError('io', `the checksum published for ${pathname} is not a sha256`);
   const actual = createHash('sha256').update(bytes).digest('hex');
 
   if (actual !== expected.toLowerCase()) throw new KinuError('io', `checksum mismatch for ${pathname}`);
@@ -101,8 +127,9 @@ function stagedVersion(tree: string): Promise<string> {
 }
 
 /**
- * Stage the served build into `cli/next-<stamp>` and prove it: both archives
- * verified against their checksums, unpacked over one tree, and that tree's
+ * Stage the served build into `cli/next-<stamp>` and prove it: the release
+ * manifest's signature verified against the pinned key, both archives
+ * verified against the checksums it signed, unpacked over one tree, and that tree's
  * `cli.js --version` equal to the stamp the origin published. A failed stage
  * leaves nothing behind but `current`, byte for byte as it was.
  */
@@ -115,8 +142,11 @@ async function stageServedBuild(origin: string, served: string, seams: RefreshSe
   mkdirSync(work, { recursive: true });
 
   try {
-    await fetchVerified(origin, platformArtifactPath(), join(work, 'cli.tar.gz'), fetchImpl);
-    await fetchVerified(origin, CLI_RUNTIME_PATH, join(work, 'runtime.tar.gz'), fetchImpl);
+    // The signed manifest first, before any download: a refused signature
+    // costs one small read and lands nothing.
+    const release = await signedRelease(origin, served, fetchImpl);
+    await fetchVerified(origin, platformArtifactPath(), join(work, 'cli.tar.gz'), release, fetchImpl);
+    await fetchVerified(origin, CLI_RUNTIME_PATH, join(work, 'runtime.tar.gz'), release, fetchImpl);
     mkdirSync(join(work, 'extract'));
     await extractTarball(join(work, 'cli.tar.gz'), join(work, 'extract'));
     await extractTarball(join(work, 'runtime.tar.gz'), join(work, 'extract'));
