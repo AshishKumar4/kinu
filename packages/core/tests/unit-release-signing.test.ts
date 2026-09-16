@@ -5,8 +5,7 @@
  * constant and the daemon's, which ships as plain JavaScript — are one key.
  */
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import * as v from 'valibot';
 import { RELEASE_SIGNING_PUBLIC_KEY, generateReleaseSigningKey, signRelease, verifyRelease } from '../src/http/release-signing';
 
 const CHECKSUMS = { '/downloads/kinu-cli-linux-x64.tar.gz': 'a'.repeat(64), '/downloads/kinu-runtime-cpython.tar.gz': 'b'.repeat(64) };
@@ -38,9 +37,10 @@ test('the message is canonical: the order the checksums arrive in does not chang
 });
 
 test('the daemon pins the same public key core does, and it is a real key', () => {
-  const daemon = readFileSync(join(import.meta.dir, '../../pc-agent/src/update.js'), 'utf-8');
-  const pinned = /const RELEASE_SIGNING_PUBLIC_KEY = '([0-9a-f]{64})';/.exec(daemon)?.[1];
+  // The daemon ships as plain JavaScript and cannot import core; its pin is
+  // read off the module it exports, the surface `kinu connect` installs.
+  const daemon = v.parse(v.object({ RELEASE_SIGNING_PUBLIC_KEY: v.string() }), require('../../pc-agent/src/update.js'));
 
-  expect(pinned).toBe(RELEASE_SIGNING_PUBLIC_KEY);
+  expect(daemon.RELEASE_SIGNING_PUBLIC_KEY).toBe(RELEASE_SIGNING_PUBLIC_KEY);
   expect(RELEASE_SIGNING_PUBLIC_KEY).toMatch(/^[0-9a-f]{64}$/);
 });
