@@ -162,6 +162,38 @@ describe('refreshCliTree stages, verifies and swaps', () => {
     ]);
   });
 
+  test('a refresh for a build already installed adopts nothing and downloads nothing', async () => {
+    // The startup throttle is read-then-fetch-then-write, so two commands
+    // inside one probe window both spawn a refresh. The second must find the
+    // first's work under the lock and stop: a second adopt of the same build
+    // deleted the real previous build and left the freshly landed one as prev.
+    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const home = installedHome('1.0.0+old');
+    const before = currentCli(home);
+
+    expect(await refresh(home, stub.origin)).toBeNull();
+    const downloads = stub.hits.length;
+    expect(await refresh(home, stub.origin)).toBeNull();
+
+    expect(currentCli(home)).toBe(cliSource(SERVED));
+    expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
+    expect(stub.hits).toHaveLength(downloads);
+  });
+
+  test('two refreshes at once take one lock: current is never absent and the build lands once', async () => {
+    const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED), 'package.json': '{}' }), runtime });
+    const home = installedHome('1.0.0+old');
+    const before = currentCli(home);
+
+    const [a, b] = await Promise.all([refresh(home, stub.origin), refresh(home, stub.origin)]);
+
+    expect([a, b]).toEqual([null, null]);
+    expect(currentCli(home)).toBe(cliSource(SERVED));
+    expect(readFileSync(join(home, 'cli', 'prev', 'cli.js'), 'utf-8')).toBe(before);
+    expect(cliEntries(home)).toEqual(['current', 'prev']);
+    expect(stub.hits.filter((hit) => hit === PLATFORM_ARTIFACT)).toHaveLength(1);
+  });
+
   test('a corrupt tarball (checksum mismatch) leaves current byte-identical and nothing staged', async () => {
     const stub = startOrigin({ platform: tarball({ 'cli.js': cliSource(SERVED) }), runtime, corrupt: true });
     const home = installedHome('1.0.0+old');

@@ -908,6 +908,28 @@ die() {
   exit 1
 }
 
+# The one lock every writer of the CLI tree takes — this launcher, 'kinu
+# update' and its detached child — as a directory: mkdir creates it atomically
+# or refuses. The holder's pid is inside, so a lock a dead process left is
+# taken over rather than waited on. Released on every exit, die included.
+CLI_LOCK="$CLI_ROOT/.lock"
+take_cli_lock() {
+  mkdir -p "$CLI_ROOT"
+  attempt=0
+  while [ "$attempt" -lt 2 ]; do
+    if mkdir "$CLI_LOCK" 2>/dev/null; then
+      echo "$$" > "$CLI_LOCK/pid"
+      trap 'rm -rf "$CLI_LOCK"' EXIT
+      return 0
+    fi
+    holder="$(cat "$CLI_LOCK/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then return 1; fi
+    rm -rf "$CLI_LOCK"
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 # Each download is verified against the checksum published beside it. An
 # incomplete deploy answers a download path with the SPA shell, and unpacking
 # an HTML page as a tarball is how an install fails without saying why.
@@ -933,14 +955,16 @@ fetch_verified() {
 # package manager, no registry and no postinstall script runs here.
 #
 # Both unpack over one staging tree beside the installed one, that tree answers
-# --version before anything moves, and then two renames swap it in: an
-# interrupted download or a build that cannot launch leaves the installed CLI
-# as it was. The tree it replaced stays as prev for one launch (see below).
+# --version before anything moves, and then the swap (adopt_tree) puts it in
+# place: an interrupted download or a build that cannot launch leaves the
+# installed CLI as it was. The tree it replaced stays as prev for one launch
+# (see below). The staging directories are removed on every exit, die
+# included — a RETURN trap never fired on one.
 refresh_cli() {
   mkdir -p "$CLI_ROOT"
   tmp="$(mktemp -d)"
   next="$CLI_ROOT/next-$$"
-  trap 'rm -rf "$tmp" "$next"' RETURN
+  trap 'rm -rf "$tmp" "$next" "$CLI_LOCK"' EXIT
   fetch_verified "$TARBALL_URL" "$tmp/cli.tar.gz"
   fetch_verified "$RUNTIME_URL" "$tmp/runtime.tar.gz"
   mkdir -p "$tmp/extract"
@@ -950,9 +974,48 @@ refresh_cli() {
   rm -rf "$next"
   mv "$tmp/extract/kinu" "$next"
   "$KINU_BUN" run "$next/cli.js" --version >/dev/null 2>&1 || die "The downloaded Kinu build does not launch."
-  rm -rf "$CLI_ROOT/prev"
-  [ -d "$CLI_DIR" ] && mv "$CLI_DIR" "$CLI_ROOT/prev"
-  mv "$next" "$CLI_DIR"
+  adopt_tree "$next"
+  rm -rf "$tmp"
+}
+
+# The swap, written so a kill at any line leaves a runnable tree. The
+# last-known-good prev is kept until the new current is in place: prev goes to
+# prev.old, current to prev, the proven tree to current, and only then does
+# prev.old go. Between the second and third lines there is no current — and
+# recover_current below finds the proven next-* on the next launch, or prev.
+adopt_tree() {
+  proven="$1"
+  rm -rf "$CLI_ROOT/prev.old"
+  if [ -d "$CLI_DIR" ]; then
+    [ -d "$CLI_ROOT/prev" ] && mv "$CLI_ROOT/prev" "$CLI_ROOT/prev.old"
+    mv "$CLI_DIR" "$CLI_ROOT/prev"
+  fi
+  mv "$proven" "$CLI_DIR"
+  rm -rf "$CLI_ROOT/prev.old"
+}
+
+# A launch that finds no current recovers one before it downloads anything: a
+# staged next-* that answers --version is the build a killed swap had already
+# proven, and prev is the build that last ran. Answers 1 only when neither is
+# there, which is what makes the download the last resort.
+recover_current() {
+  [ -f "$CLI_DIR/cli.js" ] && return 0
+  for candidate in "$CLI_ROOT"/next-*; do
+    [ -f "$candidate/cli.js" ] || continue
+    if "$KINU_BUN" run "$candidate/cli.js" --version >/dev/null 2>&1; then
+      rm -rf "$CLI_DIR"
+      adopt_tree "$candidate"
+      return 0
+    fi
+    rm -rf "$candidate"
+  done
+  if [ -d "$CLI_ROOT/prev.old" ] && [ ! -d "$CLI_ROOT/prev" ]; then mv "$CLI_ROOT/prev.old" "$CLI_ROOT/prev"; fi
+  if [ -f "$CLI_ROOT/prev/cli.js" ]; then
+    rm -rf "$CLI_DIR"
+    mv "$CLI_ROOT/prev" "$CLI_DIR"
+    return 0
+  fi
+  return 1
 }
 
 # The launch check. A prev tree means the last launch, or a background refresh
@@ -983,10 +1046,18 @@ export PATH
 # 'kinu update' is the CLI's own command: it stages, verifies and swaps its
 # tree the same way, then rewrites this script. The launcher downloads only
 # when asked (the installer) or when there is nothing to run.
-if [ "\${KINU_REFRESH_CLI:-0}" = "1" ] || [ ! -f "$CLI_DIR/cli.js" ]; then
-  refresh_cli
-else
-  check_launch
+# Under the tree's lock: a background refresh in flight lands the same build,
+# so a launcher that cannot take the lock runs what is installed and does no
+# download of its own (a missing current with the lock held is that refresh's
+# own window; it is retried on the next launch).
+if take_cli_lock; then
+  if [ "\${KINU_REFRESH_CLI:-0}" = "1" ] || ! recover_current; then
+    refresh_cli
+  else
+    check_launch
+  fi
+  rm -rf "$CLI_LOCK"
+  trap - EXIT
 fi
 
 cd "$CLI_DIR"

@@ -261,7 +261,7 @@ function describeFailure(err) {
  */
 function createUpdater(opts) {
   const {
-    layout, origin, log, fetchFn = fetch, spawnFn = spawn,
+    layout, origin, log, fetchFn = fetch, spawnFn = spawn, reclaim,
   } = opts;
 
   let pending = false;
@@ -280,10 +280,24 @@ function createUpdater(opts) {
     pending = true;
     child.once('exit', (code) => {
       // The successor is gone before the hub replaced this daemon's socket:
-      // this daemon is still the owner, and the landed files stay for the next
-      // UPDATE. A code of 3 is the successor finding the machine claimed,
-      // which is the one exit this daemon caused.
+      // this daemon is still the daemon, and it owns the outcome. The
+      // successor took the pidfile in its claim, so the file names a dead
+      // process now — re-taken here, or the next `kinu desktop` start finds a
+      // stale claim and starts a second daemon beside this one. The landed
+      // files go back to `.prev`, the build this process runs, so the stamp
+      // beside it and the HELLO agree; the marker goes with them. The next
+      // UPDATE for the same version lands and tries again.
       log(`device.update_successor_exited pid=${child.pid} code=${code}`);
+
+      try {
+        rollBack(layout);
+        clearPendingMarker(layout.deviceHome);
+        reclaim?.();
+        log(`device.update_rolled_back version=${version}`);
+      } catch (err) {
+        log('device.update_rollback_failed', describeFailure(err));
+      }
+
       pending = false;
     });
     child.unref();
