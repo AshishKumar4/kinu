@@ -1001,7 +1001,7 @@
             },
             {
               "type": "text",
-              "text": "echo:helloPARITY-FOUR-STEER",
+              "text": "echo:part-one echo:helloPARITY-FOUR-STEER",
               "state": "done"
             }
           ]

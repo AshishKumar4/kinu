@@ -89,7 +89,7 @@ describe('AssistantMessagesTranscript', () => {
         { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
         { type: 'text', text: 'Files in place. Starting the preview.' },
         { type: 'step-start' },
-        { type: 'text', text: 'pong\n\nhttps://preview.invalid/' },
+        { type: 'text', text: 'pong\n\nhttps://preview.invalid/', state: 'done' },
       ],
     };
 
@@ -106,7 +106,7 @@ describe('AssistantMessagesTranscript', () => {
         { type: 'step-start' },
         { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
         { type: 'step-start' },
-        { type: 'text', text: 'pong\n\nhttps://preview.invalid/' },
+        { type: 'text', text: 'pong\n\nhttps://preview.invalid/', state: 'done' },
       ],
     });
     expect(uiMessageText(rows()[1]!.content)).toBe('pong\n\nhttps://preview.invalid/');
