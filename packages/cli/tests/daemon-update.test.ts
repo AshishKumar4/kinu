@@ -6,10 +6,10 @@
  *
  * Env-dependent paths (KINU_HOME) run in subprocesses like config.test.ts.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
@@ -32,16 +32,68 @@ const NEW_FILES = { ...DAEMON_FILES, 'pc-agent.js': NEW_DAEMON };
 
 const hubs: UpdateHub[] = [];
 
+/** Homes this suite minted, so teardown can re-read the pidfile each one
+ *  holds NOW — the pidfile, not the spawn handle, is what names the process
+ *  currently owning the machine after a handover. */
+const homes: string[] = [];
+
+/** Every home minted, for the suite-end release check below. */
+const mintedHomes: string[] = [];
+
 const daemons: Subprocess[] = [];
 
-/** Daemons this suite did not spawn itself — successors, and the one
- *  `daemonStatus` starts — known by pid only. */
-const successorPids: number[] = [];
+/** Pids known by number only: spawned daemons (the handle does not outlive a
+ *  handover), handover successors read off the pidfile, and the one
+ *  `daemonStatus` starts. Every process this suite caused lands here — a pid
+ *  nothing tracked is the process the scratch release met still writing. */
+const ownedPids: number[] = [];
+
+const alive = (pid: number) => tolerate(() => {
+  process.kill(pid, 0);
+
+  return true;
+}, 'esrch') === true;
+
+async function waitForPidExit(pid: number): Promise<void> {
+  await until(() => !alive(pid) || null, `pid ${pid} to exit`);
+}
+
+afterAll(() => {
+  // Every daemon the suite caused is dead by the time this runs — that is the
+  // ownership this file now proves. The shared scratch release checks its own
+  // removals, but the failure mode it names (a live process still writing
+  // into the tree) is THIS suite's to produce, so the same survive-check runs
+  // on each home here, while the suite can still answer for it.
+  for (const home of mintedHomes) {
+    rmSync(home, { recursive: true, force: true });
+    expect(existsSync(home)).toBe(false);
+  }
+});
 
 afterEach(async () => {
+  // The pidfile AFTER any handover names the daemon actually holding the
+  // machine — which is not the pid the test spawned, and not necessarily the
+  // one it recorded: a successor's own successor only exists in that file.
+  for (const home of homes.splice(0)) {
+    const pidPath = join(home, 'pc-agent.pid');
+
+    if (existsSync(pidPath)) {
+      const pid = Number(readFileSync(pidPath, 'utf-8').trim());
+
+      if (alive(pid)) ownedPids.push(pid);
+    }
+  }
+
   for (const proc of daemons.splice(0)) tolerate(() => proc.kill('SIGTERM'), 'esrch');
 
-  for (const pid of successorPids.splice(0)) tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+  for (const pid of ownedPids.splice(0)) {
+    tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+    // A fired SIGTERM is a request, not a death: the release that follows the
+    // suite removes the tree, and a daemon still exiting then is the live
+    // process that held it. Wait for the exit the signal was meant to cause.
+    await waitForPidExit(pid);
+  }
+
   await Promise.all(hubs.splice(0).map((hub) => hub.close()));
 });
 
@@ -56,6 +108,8 @@ function hub(opts: Parameters<typeof startUpdateHub>[0]): UpdateHub {
  *  device config naming `origin`, and the CLI config. */
 function installedMachine(origin: string, stamp: string | null, config: JsonObject = {}): string {
   const home = scratchDir('daemon-update');
+  homes.push(home);
+  mintedHomes.push(home);
 
   for (const [name, source] of Object.entries(DAEMON_FILES)) writeFileSync(join(home, name), source, { mode: 0o700 });
 
@@ -82,18 +136,13 @@ function startDaemon(home: string) {
   });
 
   daemons.push(proc);
+  ownedPids.push(proc.pid);
 
   return {
     proc,
     log: () => (existsSync(logPath) ? readFileSync(logPath, 'utf-8') : ''),
   };
 }
-
-const alive = (pid: number) => tolerate(() => {
-  process.kill(pid, 0);
-
-  return true;
-}, 'esrch') === true;
 
 const pidfile = (home: string) => Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim());
 
@@ -139,7 +188,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(newPid).not.toBe(oldPid);
     expect(alive(newPid)).toBe(true);
     expect(alive(oldPid)).toBe(false);
-    successorPids.push(newPid);
+    ownedPids.push(newPid);
 
     // What landed: the archive's files, each with its `.prev`, and the stamp.
     expect(installed(home, 'pc-agent.js')).toBe(NEW_DAEMON);
@@ -256,7 +305,7 @@ describe('daemonStatus restarts from .prev after a successor died', () => {
     const status = v.parse(v.object({ daemonPid: v.nullable(v.number()), restoredPreviousBuild: v.boolean() }), JSON.parse(stdout.trim()));
     expect(status.restoredPreviousBuild).toBe(true);
     expect(status.daemonPid).not.toBeNull();
-    successorPids.push(status.daemonPid ?? 0);
+    ownedPids.push(status.daemonPid ?? 0);
 
     // The previous build is back, and its .prev copies are consumed.
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
