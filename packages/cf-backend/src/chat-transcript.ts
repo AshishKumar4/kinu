@@ -81,11 +81,16 @@ export class AssistantMessagesTranscript implements TranscriptStore {
 
     if (streamed === undefined || streamed === null) return { id, role: 'assistant', parts: [{ type: 'text', text }] };
 
+    // The answer rides the streamed message's OWN last text part, text
+    // replaced: that part carries what the client rendered it as (`state`,
+    // and whatever the SDK adds next), and a hand-built part would drop it.
+    const streamedText = streamed.parts.filter((part) => part.type === 'text').at(-1);
+
     return {
       ...streamed,
       parts: [
         ...streamed.parts.filter((part) => part.type !== 'text'),
-        { type: 'text', text },
+        streamedText === undefined ? { type: 'text', text } : { ...streamedText, text },
       ],
     };
   }
