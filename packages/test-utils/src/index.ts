@@ -53,3 +53,5 @@ export * from './hard-tasks/index';
 export * from './parity-normalizer';
 
 export * from './slate-viewer';
+
+export * from './awaited-list';

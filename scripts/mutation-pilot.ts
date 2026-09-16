@@ -481,7 +481,7 @@ function runSuites(paths: readonly string[], deadlineMs: number | undefined): Ru
   const started = Date.now();
 
   const spawned = Bun.spawnSync({
-    cmd: ['bun', 'test', ...paths],
+    cmd: ['bun', 'test', '--timeout=0', ...paths],
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',

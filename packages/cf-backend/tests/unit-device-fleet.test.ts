@@ -173,6 +173,7 @@ describe('two daemons connected at once', () => {
       caller: async () => fleet.workspace,
       agentName: WORKSPACE,
       cliCwd: () => null,
+      now: () => Date.now(),
     });
 
     await expect(transport.rpc('exec', ['make'])).rejects.toMatchObject({ code: 'bad_input' });

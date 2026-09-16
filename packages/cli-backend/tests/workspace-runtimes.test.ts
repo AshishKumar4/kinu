@@ -45,18 +45,6 @@ function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): Wor
 
 const dbPath = () => scratchPath('workspace-runtimes', 'workspace.db');
 
-/**
- * Bun's default per-test timeout is 5s, and provisioning is real work: the first
- * `python3` unpacks CPython 3.13.14 and the first `bash` unpacks bash 5.2.37
- * into this workspace's SQLite filesystem. Measured on this machine, the test
- * that pulls BOTH runs 5.4-6.0s — straddling the default, so it passed alone and
- * failed in a full suite, and the timeout tore the workspace down mid-test so the
- * reported symptom was a bare `127` from `bash --version` rather than the clock.
- * The budget is generous on purpose: a slow unpack is a slow machine, not a
- * regression, and this suite exists to prove the toolchain is THERE.
- */
-const PROVISION_TIMEOUT_MS = 60_000;
-
 describe('workspace runtime provisioning', () => {
   test('python, pip and bash run, and the interpreter is the one the manifest names', async () => {
     const workspace = open(dbPath());
@@ -84,7 +72,7 @@ describe('workspace runtime provisioning', () => {
     const loop = await workspace.shell.exec("bash -c 'for i in 1 2 3; do echo line-$i; done'");
     expect(loop.exitCode).toBe(0);
     expect(loop.stdout).toBe('line-1\nline-2\nline-3\n');
-  }, PROVISION_TIMEOUT_MS);
+  });
 
   test('npm and npx answer without any runtime package, because they need no bytes', async () => {
     const workspace = open(dbPath(), []);
@@ -94,10 +82,7 @@ describe('workspace runtime provisioning', () => {
     // The npm implementation is Nimbus's own and writes into this filesystem.
     expect(await workspace.shell.exec('npm init -y')).toMatchObject({ exitCode: 0 });
     expect(await workspace.vfs.exists('package.json')).toBe(true);
-  // Measured 8.8 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
-  // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
-  // on a finite run, stated with its measurement, not a detector.
-  }, 40_000);
+  });
 
   test('nothing is installed until a provisioned command is invoked', async () => {
     const workspace = open(dbPath());
@@ -109,7 +94,7 @@ describe('workspace runtime provisioning', () => {
     expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
     // Only what was asked for: bash was supplied too and must still be absent.
     expect(await workspace.vfs.exists('/home/user/.nimbus/runtimes/bash')).toBe(false);
-  }, PROVISION_TIMEOUT_MS);
+  });
 
   test('a runtime a previous session installed survives a reopen', async () => {
     const path = dbPath();
@@ -123,7 +108,7 @@ describe('workspace runtime provisioning', () => {
     const python = await reopened.shell.exec('python3 --version');
     expect(python.exitCode).toBe(0);
     expect(python.stdout).toContain('Python 3.13.14');
-  }, PROVISION_TIMEOUT_MS);
+  });
 
   test('with no runtime packages supplied the workspace says so, rather than pretending', async () => {
     const workspace = open(dbPath(), []);

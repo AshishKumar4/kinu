@@ -10,6 +10,7 @@
  * sinks; the plane builds its writers over it on first touch.
  */
 import { analyticsPlane, type AnalyticsDatasetSink, type AnalyticsEnv, type AnalyticsPlane, type AnalyticsStats } from '@kinu.run/core/analytics';
+import { AwaitedList } from '@kinu.run/test-utils';
 
 export interface FleetPoint {
   readonly indexes?: ((ArrayBuffer | string) | null)[];
@@ -19,6 +20,8 @@ export interface FleetPoint {
 
 interface Captured extends FleetPoint {}
 
+
+
 interface FleetPlane {
   readonly agent: { readonly points: Captured[] };
 }
@@ -27,6 +30,7 @@ interface Holder {
   readonly env: AnalyticsEnv;
   readonly plane: AnalyticsPlane;
   readonly points: Captured[];
+  readonly written: AwaitedList<Captured>;
 }
 
 interface EnvWithFleetPlane extends Env {
@@ -35,15 +39,18 @@ interface EnvWithFleetPlane extends Env {
 
 interface FleetSink extends AnalyticsDatasetSink {
   readonly points: Captured[];
+  /** The same points, waitable: a suite awaits the row a detached lane
+   *  writes instead of polling for it. */
+  readonly written: AwaitedList<Captured>;
 }
 
 function fleetSink(): FleetSink {
-  const points: Captured[] = [];
+  const written = new AwaitedList<Captured>();
 
   const sink: FleetSink = {
-    points,
-
-    writeDataPoint: (point?: Captured) => { points.push(point ?? {}); },
+    points: written.items,
+    written,
+    writeDataPoint: (point?: Captured) => { written.push(point ?? {}); },
   };
 
   return sink;
@@ -67,7 +74,7 @@ export function fleetEnvForTest(env: Env): EnvWithFleetPlane {
 
   const planeEnv: AnalyticsEnv = copy;
 
-  copy.__fleetPlaneForTest = { env: planeEnv, plane: analyticsPlane(planeEnv), points: agent.points };
+  copy.__fleetPlaneForTest = { env: planeEnv, plane: analyticsPlane(planeEnv), points: agent.points, written: agent.written };
 
   return copy;
 }
@@ -90,6 +97,13 @@ export function fleetPlaneForTest(env: EnvWithFleetPlane): FleetPlane {
   const holder = holderOf(env);
 
   return { agent: { points: holder.points } };
+}
+
+/** Resolves once the fleet dataset holds a point `holds` accepts: the write
+ *  itself is the signal, so a suite reads the row the plane wrote from a
+ *  detached lane without polling for it. */
+export function fleetPointWritten(env: EnvWithFleetPlane, holds: (points: readonly FleetPoint[]) => boolean): Promise<void> {
+  return holderOf(env).written.until(holds);
 }
 
 /** The real plane's write stats for this env: accepted, refused, skipped. */

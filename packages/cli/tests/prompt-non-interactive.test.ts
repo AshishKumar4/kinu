@@ -69,7 +69,7 @@ describe("setup without any terminal", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Kinu account was not connected");
     expect(result.stdout).toContain("kinu auth --origin https://kinu.example.com");
-  }, 30_000);
+  });
 
   test("full setup prints provider instructions and exits 0 instead of prompting", async () => {
     const result = await runDetachedCli(
@@ -81,7 +81,7 @@ describe("setup without any terminal", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("no interactive terminal");
     expect(result.stdout).toContain("kinu provider connect");
-  }, 30_000);
+  });
 });
 
 describe("TUI without a terminal", () => {

@@ -164,7 +164,7 @@ async function openControl(
     // sibling gate hit by sampling a canvas that existed but was not painted.
     await browserPage.waitForFunction(
       (heading: string) => document.body.innerText.includes(heading),
-      { timeout: 10_000 }, headingFor(tab),
+      {}, headingFor(tab),
     );
   }
 }
@@ -245,7 +245,7 @@ async function openWorkspaceRow(browserPage: Page): Promise<void> {
   // an `uppercase` class — the same reason the assertions below compare in lower
   // case rather than pinning a CSS transform.
   await browserPage.waitForFunction(
-    () => document.body.innerText.toLowerCase().includes('recent runs'), { timeout: 15_000 },
+    () => document.body.innerText.toLowerCase().includes('recent runs'),
   );
 }
 
@@ -272,7 +272,7 @@ async function waitForEnabled(browserPage: Page, label: string): Promise<void> {
   await browserPage.waitForFunction(
     (wanted: string) => [...document.querySelectorAll('button')]
       .some((node) => node.textContent?.trim() === wanted && !node.hasAttribute('disabled')),
-    { timeout: 15_000 }, label,
+    {}, label,
   );
 }
 
@@ -290,7 +290,7 @@ async function confirmControl(
   await waitForEnabled(browserPage, open);
 
   if (!await clickButton(browserPage, open)) throw new Error(`no enabled control labelled ${open}`);
-  await browserPage.waitForSelector('[role="dialog"]', { timeout: 15_000 });
+  await browserPage.waitForSelector('[role="dialog"]');
 
   const shown = await browserPage.evaluate(() =>
     document.querySelector('[role="dialog"]')?.textContent ?? '');
@@ -298,7 +298,7 @@ async function confirmControl(
   await waitForEnabled(browserPage, answer);
 
   if (!await clickButton(browserPage, answer)) throw new Error(`the ${open} dialog offered no ${answer}`);
-  await browserPage.waitForSelector('[role="dialog"]', { hidden: true, timeout: 15_000 });
+  await browserPage.waitForSelector('[role="dialog"]', { hidden: true });
 
   return shown;
 }
@@ -312,8 +312,8 @@ async function removeDisabled(browserPage: Page): Promise<boolean | undefined> {
 
 describe('the control plane in a browser', () => {
   test('an operator sees the fleet counts, not a spinner that never resolves', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, { overview: page(200, OVERVIEW) });
       await openControl(browserPage, origin);
 
@@ -329,14 +329,14 @@ describe('the control plane in a browser', () => {
       expect(text).toContain('2 in 24h');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('a non-operator is told so, and never shown an empty table', async () => {
     // The defect this rules out: the server answers 404 to hide the surface, so
     // a client that mapped 404 to "no rows" would render a convincing,
     // completely wrong, and silent page.
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         users: page(404, { error: 'Not found' }),
         overview: page(404, { error: 'Not found' }),
@@ -348,11 +348,11 @@ describe('the control plane in a browser', () => {
       expect(text).not.toContain('No accounts have been observed yet');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('a stale sign-in is a way back in, not a red box', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         overview: page(403, {
           error: 'This action needs a fresh sign-in. Sign in again, then retry within five minutes.',
@@ -370,11 +370,11 @@ describe('the control plane in a browser', () => {
       expect(href).toContain('/login');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('a deployment with no analytics says which settings are missing', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         metrics: page(200, {
@@ -393,14 +393,14 @@ describe('the control plane in a browser', () => {
       expect(text).toContain('Every other view here is unaffected');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('a read the transport refuses settles to a visible failure, recorded once per attempt, and Refresh retries', async () => {
     // `control()` names HTTP-level failures in its answer; this is the arm
     // UNDER that — `fetch` itself rejecting. The defect ruled out: an
     // unhandled rejection and a spinner that never resolves.
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       const diagnostics = recordDiagnostics(browserPage);
       let serveOk = false;
       let refused = 0;
@@ -428,7 +428,6 @@ describe('the control plane in a browser', () => {
       // The failure is a sentence in the panel, not an eternal spinner.
       await browserPage.waitForFunction(
         () => document.body.innerText.includes('Failed to fetch'),
-        { timeout: 10_000 },
       );
 
       // One classified record per refused attempt — StrictMode re-runs the
@@ -451,17 +450,16 @@ describe('the control plane in a browser', () => {
       await browserPage.click('button[title="Refresh"]');
       await browserPage.waitForFunction(
         () => document.body.innerText.toLowerCase().includes('workspaces\n7'),
-        { timeout: 10_000 },
       );
       // The retry that succeeded records nothing.
       expect(diagnostics).toHaveLength(recordedBeforeRetry);
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('the account list is walkable: the cursor the server issued comes back', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
 
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
@@ -506,11 +504,11 @@ describe('the control plane in a browser', () => {
       expect(walk).toEqual(new Set(['first', `3000\u0000${USER_ID}`]));
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('a workspace drilldown reports a down panel instead of blanking the page', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       const rowsReady = Promise.withResolvers<void>();
 
       const probe = await serveControl(browserPage, {
@@ -548,11 +546,11 @@ describe('the control plane in a browser', () => {
       expect(detailAsk).toContain(`userId=${OTHER_ID}`);
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('removing a workspace stays disabled until the name is retyped', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         users: page(200, { status: 'end', items: [userRow(OTHER_ID, 'owner@example.com', 3_000)] }),
@@ -577,7 +575,7 @@ describe('the control plane in a browser', () => {
       expect(await removeDisabled(browserPage)).toBe(false);
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   /**
    * The four verbs a panel can leave stranded.
@@ -591,8 +589,8 @@ describe('the control plane in a browser', () => {
    * check.
    */
   test('every job and approval control sends its action, bound to the owning account', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
 
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
@@ -634,11 +632,11 @@ describe('the control plane in a browser', () => {
       ]);
       await browserPage.close();
     });
-  }, 180_000);
+  });
 
   test('the two workspace-wide controls also confirm before they act', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
 
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
@@ -661,14 +659,14 @@ describe('the control plane in a browser', () => {
       ]);
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test("250 of one account's workspaces are reachable, page by page", async () => {
     // The defect: the drilldown rendered `detail.workspaces.items` with no walk,
     // so row 201 and later were unreachable while the copy above the table said
     // it had been reconciled against the registry.
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
 
       const rows = Array.from({ length: 250 }, (_, i) => ({
         userId: OTHER_ID, email: 'owner@example.com',
@@ -726,13 +724,13 @@ describe('the control plane in a browser', () => {
       expect(second).toContain('later page of the walk');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('the audit tab shows refusals as clearly as it shows successes', async () => {
     // An audit log that rendered only the successes would hide exactly the rows
     // an operator reads it for.
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         audit: page(200, {
@@ -761,11 +759,11 @@ describe('the control plane in a browser', () => {
       expect(text).toContain('ok');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('incidents are readable at all, which they never were before', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         incidents: page(200, {
@@ -784,11 +782,11 @@ describe('the control plane in a browser', () => {
       expect(text).toContain('alert owed');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 
   test('feedback shows a note-only report without pretending it had a screenshot', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const browserPage = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const browserPage = await newPage();
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         feedback: page(200, {
@@ -818,5 +816,5 @@ describe('the control plane in a browser', () => {
       expect(text).toContain('500.0 KB');
       await browserPage.close();
     });
-  }, 120_000);
+  });
 });

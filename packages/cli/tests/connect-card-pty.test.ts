@@ -50,7 +50,7 @@ describe('the connect card on a real terminal', () => {
       ['shown', 'agent prose reply', true],
     ]);
     expect(run.screen).not.toContain('quirk');
-  }, 60_000);
+  });
 
   test('shows the whole machine and sandbox consequence at eighty columns', () => {
     const run = runTuiInPty(entry, {
@@ -63,7 +63,7 @@ describe('the connect card on a real terminal', () => {
     expect(run.screen).toContain('A workspace you approve runs commands here in a');
     expect(run.screen).toContain('sandbox. Revoke it in Account settings →');
     expect(run.screen).toContain('Devices.');
-  }, 60_000);
+  });
 
   test('centers the connect card in the wide chat lane', () => {
     const run = runTuiInPty(entry, { cols: 160, steps: [{ wait: 'not now', timeout: 15 }] });
@@ -72,5 +72,5 @@ describe('the connect card on a real terminal', () => {
     if (border === undefined) throw new Error('connect card did not paint');
     expect(border.indexOf('╭')).toBe(60);
     expect(border.lastIndexOf('╮')).toBe(127);
-  }, 60_000);
+  });
 });

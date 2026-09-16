@@ -117,6 +117,11 @@ interface Observed {
  */
 declare global {
   interface Window {
+    /** Reports the page has ISSUED: counted synchronously at the fetch call,
+     *  so once the fallback the page renders after its sends is on screen,
+     *  this is every send there was. The absence half of this suite — no
+     *  duplicate — is read against it rather than against a quiet window. */
+    __clientErrorIssued?: number;
     __clientErrorSettled?: number;
   }
 }
@@ -124,6 +129,7 @@ declare global {
 async function watchReportSettlement(page: Page): Promise<void> {
   await page.evaluateOnNewDocument((endpoint: string) => {
     const real = window.fetch.bind(window);
+    window.__clientErrorIssued = 0;
     window.__clientErrorSettled = 0;
     // `Object.assign` carrying `preconnect` forward, exactly as the gallery's own
     // fetch stub does it: `typeof fetch` is a callable WITH that member, so a bare
@@ -133,6 +139,8 @@ async function watchReportSettlement(page: Page): Promise<void> {
       const pending = real(input, init);
 
       if (url.includes(endpoint)) {
+        window.__clientErrorIssued = (window.__clientErrorIssued ?? 0) + 1;
+
         const settled = () => {
           window.__clientErrorSettled = (window.__clientErrorSettled ?? 0) + 1;
         };
@@ -149,7 +157,7 @@ async function serve(
   page: Page,
   stamp: { sha: string },
   answer: () => Answer,
-  sent: Sent[],
+  sent: Reports,
 ): Promise<void> {
   await page.setRequestInterception(true);
   page.on('request', async (request: HTTPRequest) => {
@@ -237,62 +245,48 @@ async function tryAgain(page: Page): Promise<void> {
   });
 }
 
-/**
- * A bounded real pause.
- *
- * EXCEPTION to the no-real-timers rule, and the reason is structural rather than
- * convenience: half of what this suite asserts is that a SECOND report does NOT
- * arrive, and absence has no event to await. The clock that would have to be
- * faked belongs to a real Chromium driven over CDP from another process, where
- * nothing in this file can reach it. So the window is real, short, and stated.
- */
-function pause(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
+/** The POSTs the interceptor saw, and a wait on their count: the request
+ *  event is the signal, so nothing here polls. */
+class Reports {
+  readonly list: Sent[] = [];
 
-  return promise;
-}
+  private readonly waiting: { readonly count: number; readonly resolve: () => void }[] = [];
 
-/** Wait until `count` reports have really left the page. Condition-driven, so a
- *  failure reports what arrived rather than only that time ran out. */
-async function reportsSettled(sent: readonly Sent[], count: number): Promise<void> {
-  const deadline = Date.now() + 15_000;
+  push(report: Sent): void {
+    this.list.push(report);
 
-  while (sent.length < count && Date.now() < deadline) await pause(25);
+    for (const waiter of this.waiting.splice(0)) {
+      if (this.list.length >= waiter.count) waiter.resolve();
+      else this.waiting.push(waiter);
+    }
+  }
 
-  if (sent.length < count) {
-    throw new Error(`only ${String(sent.length)} of ${String(count)} report(s) left the page`);
+  /** Resolves once `count` reports have left the page. */
+  until(count: number): Promise<void> {
+    if (this.list.length >= count) return Promise.resolve();
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.waiting.push({ count, resolve });
+
+    return promise;
   }
 }
 
-/** Wait until every issued report fetch has settled and the count holds still
- *  for a full beat — the page's own settlement counter decides when the
- *  duplicate window is over, not a fixed sleep. Capped at the previous fixed
- *  window so a chattering page fails loudly instead of hanging. */
-async function reportsQuiesced(page: Page, sent: readonly Sent[], budgetMs: number): Promise<void> {
-  const deadline = Date.now() + budgetMs;
-  let lastSettled = -1;
-  let lastSent = -1;
-  let quietSince = -1;
+/**
+ * Every report the page issued has left it, and — unless the endpoint stalls
+ * by design — has settled. Half of what this suite asserts is that a SECOND
+ * report does NOT arrive, and absence has no event of its own; what it has is
+ * the page's count of sends, taken after the fallback those sends precede is
+ * on screen. The interceptor catching up to that count is the end condition,
+ * and the assertion on the list's length is the verdict.
+ */
+async function reportsLanded(page: Page, sent: Reports, answer: Answer): Promise<void> {
+  const issued = await page.evaluate(() => window.__clientErrorIssued ?? 0);
+  await sent.until(issued);
 
-  for (;;) {
-    const settled = await page.evaluate(() => window.__clientErrorSettled ?? 0);
-
-    if (settled === lastSettled && sent.length === lastSent) {
-      if (quietSince === -1) quietSince = Date.now();
-
-      if (Date.now() - quietSince >= 200) return;
-    } else {
-      lastSettled = settled;
-      lastSent = sent.length;
-      quietSince = -1;
-    }
-
-    if (Date.now() >= deadline) {
-      throw new Error(`reports never went quiet: ${sent.length} sent, ${settled} settled within ${budgetMs}ms`);
-    }
-
-    await pause(25);
+  if (answer !== 'stalled') {
+    await page.waitForFunction(
+      (wanted: number) => (window.__clientErrorSettled ?? 0) >= wanted, { polling: 25 }, issued,
+    );
   }
 }
 
@@ -310,9 +304,9 @@ interface Scenario {
  *  per-document, which is the state under test. */
 async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
   {
-    const { browser, origin } = gallery;
-    const page = await browser.newPage();
-    const sent: Sent[] = [];
+    const { newPage, origin } = gallery;
+    const page = await newPage();
+    const sent = new Reports();
     const pageErrors: string[] = [];
     const startupFailures: { path: string; error: string | undefined }[] = [];
     page.on('requestfailed', request => startupFailures.push({ path: new URL(request.url()).pathname, error: request.failure()?.errorText }));
@@ -360,13 +354,12 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
       );
     }
 
-    // The report, awaited as an event. Then a quiet window in which a duplicate
-    // would have arrived: every send this endpoint makes is issued synchronously
-    // from `componentDidCatch`, so a second one is already in flight by the time
-    // the fallback the gate waited for is on screen. The window ends when the
-    // page's own settlement counter holds still, not when a fixed sleep runs out.
-    await reportsSettled(sent, 1);
-    await reportsQuiesced(page, sent, 1_000);
+    // The reports, awaited as events. Every send this endpoint makes is issued
+    // synchronously from `componentDidCatch`, so by the time the fallback the
+    // gate waited for is on screen the page's own count of sends is final; a
+    // duplicate is a count of two, read below, never a window nothing
+    // arrived in.
+    await reportsLanded(page, sent, options.answer);
 
     const seen = await fallback(page);
     const sceneIntact = await page.$('[data-scene-copy]') !== null;
@@ -396,7 +389,7 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     }
 
     return {
-      sent,
+      sent: sent.list,
       pageErrors,
       fallbackVisible: seen.visible,
       fallbackText: seen.text,
@@ -433,7 +426,7 @@ beforeAll(async () => {
     fitted = await drive(gallery, { answer: 'accept', huge: true });
     stalled = await drive(gallery, { answer: 'stalled', retries: 1, navigateAfter: true });
   });
-}, 600_000);
+});
 
 describe('one caught error, one report', () => {
   test('the fault really was caught more than once', () => {

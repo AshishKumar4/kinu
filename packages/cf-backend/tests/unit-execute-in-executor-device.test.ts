@@ -78,6 +78,7 @@ async function orchestratorOnFleet(fleet: Fleet) {
     caller: async () => fleet.workspace,
     agentName: WORKSPACE,
     cliCwd: () => null,
+    now: () => Date.now(),
   });
 
   await transport.refreshStatus();

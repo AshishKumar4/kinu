@@ -241,7 +241,7 @@ describe('reachable history', () => {
     expect(result.findings).toEqual([]);
     expect(result.adjudicated).toBeGreaterThan(0);
     expect(result.stats.objects).toBeGreaterThan(0);
-  }, 120_000);
+  });
 });
 
 test('the current scanner source has no detector-shaped literal of its own', () => {

@@ -89,4 +89,4 @@ test('concurrent explores resolve to their own results', async () => {
     await handle.release();
     await server.stop(true);
   }
-}, 30_000);
+});

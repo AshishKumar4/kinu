@@ -87,6 +87,9 @@ export interface HubDeviceTransportOpts {
   /** Current turn identity for the daemon's pre-mutation shadow-git snapshot
    *  (deduped daemon-side per turn). Null outside turns / when unwired. */
   checkpointMeta?: () => { turnId: string; sessionId: string } | null;
+  /** The status TTL's clock: `Date.now` in production, a clock a test
+   *  advances past the TTL by hand rather than sleeping through it. */
+  now: () => number;
 }
 
 interface StatusRefresh {
@@ -113,7 +116,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
 
     if (!hub) {
       snapshot = DISCONNECTED;
-      checkedAt = Date.now();
+      checkedAt = opts.now();
 
       return { promise: Promise.resolve(snapshot) };
     }
@@ -134,7 +137,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           otherwise: 'unavailable',
         }));
       } finally {
-        checkedAt = Date.now();
+        checkedAt = opts.now();
 
         if (inFlight === owner) inFlight = null;
       }
@@ -159,7 +162,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
      * rejection to lose.
      */
     status: (): DeviceStatus => {
-      if (!inFlight && Date.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
+      if (!inFlight && opts.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
 
       return snapshot;
     },
@@ -174,7 +177,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // told an owner to run `kinu connect` for a machine they may already
         // have linked.
         snapshot = DISCONNECTED;
-        checkedAt = Date.now();
+        checkedAt = opts.now();
         throw new Error(WORKSPACE_HAS_NO_OWNER);
       }
 
@@ -225,7 +228,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         // forward rather than dropped. Overwriting it here would blank the row
         // the moment the agent used the device.
         snapshot = { ...snapshot, connected: true, registered: true };
-        checkedAt = Date.now();
+        checkedAt = opts.now();
 
         return rawResult === undefined
           ? undefined
@@ -233,7 +236,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
       } catch (err) {
         if (isDeviceNotConnectedError(err)) {
           snapshot = { ...snapshot, connected: false };
-          checkedAt = Date.now();
+          checkedAt = opts.now();
         }
 
         // Several machines are live and the call named none. The hub's

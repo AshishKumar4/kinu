@@ -1,0 +1,267 @@
+{
+  "measuredAt": "2026-09-16",
+  "total": 242,
+  "files": {
+    "packages/cf-backend/tests/fixtures/nimbus-capability-websocket-workerd.mjs": {
+      "sleep": 2
+    },
+    "packages/cf-backend/tests/helpers/kv.ts": {
+      "clock-compare": 1
+    },
+    "packages/cf-backend/tests/unit-auth-cloudflare-login.test.ts": {
+      "clock-compare": 1
+    },
+    "packages/cf-backend/tests/unit-auth-security.test.ts": {
+      "clock-compare": 2
+    },
+    "packages/cf-backend/tests/unit-auth-session-revocation.test.ts": {
+      "clock-compare": 3
+    },
+    "packages/cf-backend/tests/unit-auth-store.test.ts": {
+      "clock-compare": 1
+    },
+    "packages/cf-backend/tests/unit-diff.test.ts": {
+      "clock-compare": 2
+    },
+    "packages/cf-backend/tests/unit-install-script.test.ts": {
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/unit-pc-agent-exec.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts": {
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/do-alarm.test.ts": {
+      "clock-compare": 1,
+      "sleep": 2
+    },
+    "packages/cf-backend/tests/workerd/do-eviction-recovery.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/do-init-gate.test.ts": {
+      "clock-compare": 3
+    },
+    "packages/cf-backend/tests/workerd/do-socket-attachment.test.ts": {
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/do-terminal-effect-eviction.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/long/do-retention.test.ts": {
+      "clock-compare": 2,
+      "sleep": 2
+    },
+    "packages/cf-backend/tests/workerd/long/step-cap.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/slate-durability.test.ts": {
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/slate-share-probe.ts": {
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/steer-chain.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cf-backend/tests/workerd/two-turn-probe.ts": {
+      "sleep": 13,
+      "clock-compare": 11
+    },
+    "packages/cf-backend/tests/workerd/worker.ts": {
+      "sleep": 3
+    },
+    "packages/cli-backend/tests/branch-rpc.test.ts": {
+      "sleep": 2
+    },
+    "packages/cli-backend/tests/branch-worker.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/chat-session-parity.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/execute-tools-factory.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/fixtures/echo-mcp-server.mjs": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/local-session.test.ts": {
+      "clock-compare": 7,
+      "sleep": 8
+    },
+    "packages/cli-backend/tests/loop-admission.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/mcp.test.ts": {
+      "clock-compare": 1
+    },
+    "packages/cli-backend/tests/runtime-shell.test.ts": {
+      "sleep": 1,
+      "clock-compare": 3
+    },
+    "packages/cli-backend/tests/terminal-transition.test.ts": {
+      "sleep": 2
+    },
+    "packages/cli-backend/tests/turn-continuation.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cli/tests/acp.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli/tests/behavior.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cli/tests/cloud-agent-client.test.ts": {
+      "clock-compare": 1,
+      "sleep": 2
+    },
+    "packages/cli/tests/daemon-command.test.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cli/tests/daemon-update.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli/tests/device-connect.test.ts": {
+      "clock-compare": 4,
+      "sleep": 10,
+      "test-timeout": 20
+    },
+    "packages/cli/tests/exec-process-lifecycle.test.ts": {
+      "sleep": 2,
+      "clock-compare": 1
+    },
+    "packages/cli/tests/fixtures/pty-connect-card.tsx": {
+      "sleep": 2
+    },
+    "packages/cli/tests/helpers/chat-app-fixture.tsx": {
+      "sleep": 1
+    },
+    "packages/cli/tests/helpers/update-hub.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/cli/tests/local-agent-client.test.ts": {
+      "clock-compare": 3,
+      "sleep": 3
+    },
+    "packages/cli/tests/prompt-non-interactive.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli/tests/streaming-buffer.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli/tests/tui-messages.test.tsx": {
+      "sleep": 2
+    },
+    "packages/cli/tests/tui-product-hubs.test.tsx": {
+      "sleep": 1
+    },
+    "packages/cli/tests/tui-product-onboarding.test.tsx": {
+      "sleep": 2
+    },
+    "packages/cli/tests/tui-product-shell.test.tsx": {
+      "sleep": 3
+    },
+    "packages/cli/tests/tui-product.test.tsx": {
+      "sleep": 2
+    },
+    "packages/cli/tests/tui-theme.test.tsx": {
+      "sleep": 2
+    },
+    "packages/devbox/bench/publication-meter.test.ts": {
+      "sleep": 5
+    },
+    "packages/devbox/tests/decisions.test.ts": {
+      "sleep": 2
+    },
+    "packages/devbox/tests/restore-after-start.test.ts": {
+      "sleep": 1
+    },
+    "packages/devbox/tests/support/devbox-harness.ts": {
+      "sleep": 2
+    },
+    "packages/devbox/tests/support/miniflare-settle.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/pc-agent/tests/daemon.test.js": {
+      "clock-compare": 3,
+      "sleep": 3
+    },
+    "packages/pc-agent/tests/pty-protocol.test.js": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "packages/pc-agent/tests/pty.test.js": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "scripts/app-background-ux.test.ts": {
+      "timeout-option": 3,
+      "sleep": 1,
+      "test-timeout": 9
+    },
+    "scripts/bench.test.ts": {
+      "sleep": 2
+    },
+    "scripts/computed-style.test.ts": {
+      "sleep": 1
+    },
+    "scripts/devbox-e2e.test.ts": {
+      "clock-compare": 1
+    },
+    "scripts/public-pages.test.ts": {
+      "sleep": 4
+    },
+    "tests/evals/cli-driver.ts": {
+      "sleep": 1
+    },
+    "tests/evals/device-session.ts": {
+      "sleep": 3
+    },
+    "tests/evals/device.eval.ts": {
+      "clock-compare": 1,
+      "sleep": 2
+    },
+    "tests/evals/eval-progress.test.ts": {
+      "sleep": 1,
+      "clock-compare": 1
+    },
+    "tests/evals/public-session.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "tests/evals/swarm.eval.ts": {
+      "sleep": 1
+    },
+    "tests/evals/trajectory.eval.ts": {
+      "sleep": 1
+    },
+    "tests/first-run/background-settle.first-run.ts": {
+      "sleep": 1
+    },
+    "tests/first-run/daemon.ts": {
+      "clock-compare": 1,
+      "sleep": 1
+    },
+    "tests/first-run/device-link.first-run.ts": {
+      "clock-compare": 5,
+      "sleep": 7
+    },
+    "tests/first-run/enter-sends.first-run.ts": {
+      "clock-compare": 1,
+      "sleep": 2
+    }
+  }
+}

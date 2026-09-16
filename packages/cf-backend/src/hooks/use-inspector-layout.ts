@@ -108,6 +108,11 @@ export interface InspectorLayout {
   readonly expandVisible: boolean;
   readonly resetToDefault: () => void;
   readonly ready: boolean;
+  /** How many committed layouts have reported to `onLayoutChanged`. Rendered
+   *  onto the panel so a reader can wait for a commit to have been classified
+   *  — the one end condition for "this commit persisted nothing" — instead of
+   *  watching a clock for a write that must never come. */
+  readonly layoutCommits: number;
   readonly panelRef: RefObject<PanelImperativeHandle | null>;
   readonly panelProps: InspectorPanelProps;
   readonly groupProps: InspectorGroupProps;
@@ -158,6 +163,7 @@ export function useInspectorLayout(input: {
   const [collapsed, setCollapsed] = useState(mountDecision?.collapsed ?? false);
   const [widthPx, setWidthPx] = useState(mountDecision?.widthPx ?? INSPECTOR_DEFAULT_PX);
   const [ready, setReady] = useState(false);
+  const [layoutCommits, setLayoutCommits] = useState(0);
   const panelRef = usePanelRef();
 
   // ── Owned state ────────────────────────────────────────────────────────
@@ -294,6 +300,7 @@ export function useInspectorLayout(input: {
 
     const first = !groupMeasuredRef.current;
     groupMeasuredRef.current = true;
+    setLayoutCommits((count) => count + 1);
 
     const share = layout[INSPECTOR_PANEL_ID];
     const collapsedNow = share !== undefined && share <= 0;
@@ -482,6 +489,7 @@ export function useInspectorLayout(input: {
     expandVisible: desktopPanels && collapsed,
     resetToDefault,
     ready,
+    layoutCommits,
     panelRef,
     panelProps,
     groupProps,

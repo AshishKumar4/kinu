@@ -18,5 +18,6 @@ export default defineConfig({
       },
     }),
   ],
-  test: { include: ['tests/workerd/**/*.test.ts'] },
+  // `0` disables Vitest's per-test and per-hook clocks; `gate:test-clocks` pins it.
+  test: { include: ['tests/workerd/**/*.test.ts'], testTimeout: 0, hookTimeout: 0 },
 });

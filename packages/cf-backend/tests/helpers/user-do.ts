@@ -4,6 +4,7 @@
 // `ctx` and `env` — so with the Agent SDK stubbed it runs against an in-memory
 // database. That lets the capability tests exercise the ACTUAL methods that
 // guard the owner's credentials rather than a re-description of them.
+import { AwaitedList } from '@kinu.run/test-utils';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
 import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
@@ -78,6 +79,8 @@ export interface TestUserDO {
    *  ends in `ctx.abort('destroyed')` on the next tick, and an account delete
    *  is only complete once that sentinel has been raised. */
   aborted: string[];
+  /** Resolves once the deferred abort above has been raised: the abort is the signal. */
+  abortRaised: () => Promise<void>;
   /** Socket-revocation pushes the UserDO fanned out, as `workspace:generation`
    *  — how a test reads that a revocation reached the workspaces holding the
    *  sockets, rather than only the row it wrote. */
@@ -369,7 +372,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
-  const aborted: string[] = [];
+  const aborts = new AwaitedList<string>();
+  const aborted = aborts.items;
   const revokedSocketPushes: string[] = [];
   const revokedSessionPushes: string[] = [];
   const capabilityRepushes: string[] = [];
@@ -568,7 +572,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         for (const { name } of tables) db.exec(`DROP TABLE IF EXISTS "${name}"`);
       },
     },
-    abort: (reason: string): void => { aborted.push(reason); },
+    abort: (reason: string): void => { aborts.push(reason); },
     // Tag-filtered, as the platform's is: a hub asking for `device:<id>` gets
     // THAT machine's socket and no other. A tag-blind answer here would hand
     // one machine's tunnel another machine's socket — a flap the real hub
@@ -672,6 +676,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
   return {
     userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
+    abortRaised: () => aborts.until((reasons) => reasons.length > 0),
     revokedSessionPushes, capabilityRepushes,
     pendingConsents: (workspace) => registryFor(workspace).list(),
     resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),

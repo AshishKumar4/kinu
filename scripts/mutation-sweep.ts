@@ -317,7 +317,7 @@ function runSuites(paths: readonly string[], deadlineMs: number | undefined): Ru
   // `timeout: undefined` is how the baseline says it has no bound to derive one from —
   // it is the run that MEASURES the bound every later mutant is held to.
   const spawned = Bun.spawnSync({
-    cmd: ['bun', 'test', ...paths],
+    cmd: ['bun', 'test', '--timeout=0', ...paths],
     cwd: root,
     stdout: 'pipe',
     stderr: 'pipe',

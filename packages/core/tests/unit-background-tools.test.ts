@@ -14,8 +14,29 @@ import { toolExecute } from '@kinu.run/test-utils';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { wrapToolsForBackground } from '../src/jobs/background-wrap';
 import { readSpawnStarted, BACKGROUND_POLICY, invocationBackgroundPolicy, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
+import type { ThresholdSchedule } from '../src/jobs/threshold';
 
-const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** The threshold's timer, fired by hand (D19: time inside the subject is a
+ *  clock the subject is handed), and work that ends when the test releases
+ *  it. "Outran the window" is then an ordering the test states, never a real
+ *  timer racing real work. */
+function handTimer() {
+  let armed: (() => void) | undefined;
+
+  const schedule: ThresholdSchedule = (fire) => {
+    armed = fire;
+
+    return () => { armed = undefined; };
+  };
+
+  return { schedule, fire: () => { armed?.(); } };
+}
+
+function gate() {
+  const { promise, resolve } = Promise.withResolvers<void>();
+
+  return { held: promise, release: resolve };
+}
 
 type TestToolResult = object | string;
 
@@ -26,10 +47,14 @@ interface RunInput { command: string }
 /** A minimal BackgroundJobRunner double — only the two members the wrapper
  *  reads (`thresholdDeps`, `policy`), over a caller-supplied onThreshold so
  *  each test observes exactly when the wrapper crossed. */
-function fakeJobRunner(policy: BackgroundPolicy, onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome) {
+function fakeJobRunner(
+  policy: BackgroundPolicy,
+  onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome,
+  schedule?: ThresholdSchedule,
+) {
   return {
     policy,
-    thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }),
+    thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold, schedule }),
   };
 }
 
@@ -37,7 +62,7 @@ function fakeJobRunner(policy: BackgroundPolicy, onThreshold: (kind: string, pro
  *  spawn (readSpawnStarted) right after "validating" input, then the
  *  exploration itself runs long. Mirrors agents-tool.ts's own call to
  *  readSpawnStarted(toolOptions)?.() before strat.explore(). */
-function fakeForkTool(exploreMs: number, onExplored?: () => void): ToolSet[string] {
+function fakeForkTool(exploration: Promise<void>, onExplored?: () => void): ToolSet[string] {
   return tool({
     description: 'agents',
     inputSchema: jsonSchema<ForkInput>({
@@ -46,7 +71,7 @@ function fakeForkTool(exploreMs: number, onExplored?: () => void): ToolSet[strin
     }),
     execute: async (_input, options) => {
       readSpawnStarted(options)?.();
-      await delay(exploreMs);
+      await exploration;
       onExplored?.();
 
       return { strategy: 'merge', text: 'merged fork answer' };
@@ -54,14 +79,14 @@ function fakeForkTool(exploreMs: number, onExplored?: () => void): ToolSet[strin
   });
 }
 
-function fakeRunTool(ms: number): ToolSet[string] {
+function fakeRunTool(command: Promise<void>): ToolSet[string] {
   return tool({
     description: 'run',
     inputSchema: jsonSchema<RunInput>({
       type: 'object', properties: { command: { type: 'string' } }, required: ['command'],
     }),
     execute: async () => {
-      await delay(ms);
+      await command;
 
       return 'command output';
     },
@@ -99,18 +124,20 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
     expect(jobRunner.policy.wakesAfterTurn).toBe(true);
 
-    const raw: ToolSet = { agents: fakeForkTool(150, () => { explored = true; }) };
+    const exploration = gate();
+    const raw: ToolSet = { agents: fakeForkTool(exploration.held, () => { explored = true; }) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
 
     expect(crossings).toEqual(['agents']);
     // Detached on spawn-confirm: the exploration was still running when the
-    // runner took the work. The timed path would have waited out the 30 s
-    // interactive threshold, long after the 150 ms exploration settled. An
-    // ordering, not a wall-clock bound: scheduler latency under load cannot
-    // move a timer callback ahead of the microtasks the announce resolves.
+    // runner took the work — it is still held here. The timed path would have
+    // waited out the 30 s interactive threshold. An ordering, not a wall-clock
+    // bound: scheduler latency under load cannot move a timer callback ahead
+    // of the microtasks the announce resolves.
     expect(exploringAtDetach).toEqual([true]);
     expect(out).toMatchObject({ background: true, jobId: 'job-fork', kind: 'agents' });
+    exploration.release();
     await Promise.all(detached);
   });
 
@@ -124,6 +151,8 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
+    const timer = handTimer();
+
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
       (kind, promise) => {
@@ -132,13 +161,20 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
         return { detached: true, jobId: 'job-fork-osh' };
       },
+      timer.schedule,
     );
 
     expect(jobRunner.policy.wakesAfterTurn).toBe(false);
 
-    const raw: ToolSet = { agents: fakeForkTool(60) };
+    // The window passes while the exploration is still running, and only
+    // then does the fork answer: the answer arrives on the inline path anyway.
+    const exploration = gate();
+    const raw: ToolSet = { agents: fakeForkTool(exploration.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
+    const pending = executeTool<ForkInput>(wrapped, 'agents')({ action: 'fork', task: 't' });
+    timer.fire();
+    exploration.release();
+    const out = await pending;
 
     expect(crossings).toEqual([]);
     expect(out).toEqual({ strategy: 'merge', text: 'merged fork answer' });
@@ -152,6 +188,8 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
+    const timer = handTimer();
+
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY['one-shot'], detachAfterMs: 10 },
       (kind, promise) => {
@@ -160,13 +198,18 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
         return { detached: true, jobId: 'job-run' };
       },
+      timer.schedule,
     );
 
-    const wrapped = wrapToolsForBackground({ run: fakeRunTool(60) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'serve' });
+    const command = gate();
+    const wrapped = wrapToolsForBackground({ run: fakeRunTool(command.held) }, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
+    const pending = executeTool<RunInput>(wrapped, 'run')({ command: 'serve' });
+    timer.fire();
+    const out = await pending;
 
     expect(crossings).toEqual(['run']);
     expect(out).toMatchObject({ background: true, jobId: 'job-run', kind: 'run' });
+    command.release();
     await Promise.all(detached);
   });
 
@@ -201,6 +244,8 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const crossings: string[] = [];
     const detached: Promise<unknown>[] = [];
 
+    const timer = handTimer();
+
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 20 },
       (kind, promise) => {
@@ -209,16 +254,22 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
 
         return { detached: true, jobId: 'job-run' };
       },
+      timer.schedule,
     );
 
-    const raw: ToolSet = { run: fakeRunTool(80) };
+    const command = gate();
+    const raw: ToolSet = { run: fakeRunTool(command.held) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
-    const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'sleep 1' });
+    const pending = executeTool<RunInput>(wrapped, 'run')({ command: 'sleep 1' });
+    timer.fire();
+    const out = await pending;
 
-    // Crossed via the TIMED race (20ms threshold, 80ms work) — not on any
-    // spawn announcement, because `run` never calls readSpawnStarted.
+    // Crossed via the TIMED race (the window fired while the command was
+    // held) — not on any spawn announcement, because `run` never calls
+    // readSpawnStarted.
     expect(crossings).toEqual(['run']);
     expect(out).toMatchObject({ background: true, jobId: 'job-run', kind: 'run' });
+    command.release();
     await Promise.all(detached);
   });
 
@@ -226,9 +277,11 @@ describe('wrapToolsForBackground — fork is spawn-shaped, run/execute_tools are
     const jobRunner = fakeJobRunner(
       { ...BACKGROUND_POLICY.interactive, detachAfterMs: 1000 },
       () => { throw new Error('must not cross for fast work'); },
+      handTimer().schedule,
     );
 
-    const raw: ToolSet = { run: fakeRunTool(10) };
+    // The window never fires: fast work is work that settles first.
+    const raw: ToolSet = { run: fakeRunTool(Promise.resolve()) };
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool<RunInput>(wrapped, 'run')({ command: 'ls' });
     expect(out).toBe('command output');

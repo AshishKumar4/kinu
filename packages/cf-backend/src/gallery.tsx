@@ -3623,7 +3623,7 @@ function RosterAuthorityFrame() {
           headers: { "content-type": "application/json" },
         }));
       }}>Release stale roster</button>
-      <div data-roster-probe>{roster.entries.map((row) => `${row.name}:${row.displayName}`).join("|")}</div>
+      <div data-roster-probe data-roster-pending={String(roster.pending)}>{roster.entries.map((row) => `${row.name}:${row.displayName}`).join("|")}</div>
     </div>
   );
 }

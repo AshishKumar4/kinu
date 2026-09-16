@@ -50,9 +50,8 @@ async function readCycleElapsed(page: Page): Promise<void> {
 
 describe('the Slate preview frame', () => {
   test('a Slate calls its own preview origin without reaching the host document', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
-      page.setDefaultTimeout(60_000);
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
 
       try {
         await serveSlate(page);
@@ -64,7 +63,7 @@ describe('the Slate preview frame', () => {
         const frame = await frameElement.contentFrame();
 
         if (!frame) throw new Error('the Slate preview did not create an iframe context');
-        await frame.waitForSelector('[data-slate-preview]', { timeout: 30_000 });
+        await frame.waitForSelector('[data-slate-preview]');
         expect(await frame.$eval('[data-slate-preview]', (element) => element.textContent))
           .toBe('served by the slate');
         expect(await frame.evaluate(() => {
@@ -79,12 +78,11 @@ describe('the Slate preview frame', () => {
         await page.close();
       }
     });
-  }, 120_000);
+  });
 
   test('removing the selected Slate returns the work surface to Work', async () => {
-    await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
-      page.setDefaultTimeout(60_000);
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
 
       try {
         await serveSlate(page);
@@ -98,15 +96,15 @@ describe('the Slate preview frame', () => {
         await page.close();
       }
     });
-  }, 120_000);
+  });
 });
 
 /** The two claims a reader checks by looking at the strip and the frame: the
  *  titled previews start at the left edge and lead the fixed surfaces, and the
  *  frame's own chrome is the URL plus the two things you do with a URL. */
 test('preview tabs lead the strip from its left edge and the frame keeps two controls', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
 
     try {
       await serveSlate(page);
@@ -165,12 +163,12 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
       }
     } finally { await page.close(); }
   });
-}, 120_000);
+});
 
 
 test('preview tabs deduplicate live slates, fill the surface and keep plans in Work', async () => {
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
 
     try {
       await serveSlate(page);
@@ -342,4 +340,4 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
       }
     } finally { await page.close(); }
   });
-}, 120_000);
+});

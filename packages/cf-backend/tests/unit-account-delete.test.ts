@@ -20,13 +20,6 @@ function accountTables(db: Database): string[] {
   ).all().map((row) => row.name);
 }
 
-function macrotask(): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, 0);
-
-  return promise;
-}
-
 function count(db: Database, table: string): number {
   return db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table}"`).get()?.n ?? 0;
 }
@@ -65,11 +58,10 @@ describe('deleting the account', () => {
 
     expect(result).toEqual({ ok: true, workspaces: 2 });
     expect([...harness.destroyedWorkspaces].sort()).toEqual(['ws-alpha', 'ws-beta']);
-    // The abort is deferred past the returning call, as the SDK defers it —
-    // onto the timer queue, with no signal to await, so one macrotask turn is
-    // the only way to observe it.
+    // The abort is deferred past the returning call, as the SDK defers it;
+    // the harness raises it as a signal, and that is what is awaited.
     expect(harness.aborted).toEqual([]);
-    await macrotask();
+    await harness.abortRaised();
     expect(harness.aborted).toEqual(['destroyed']);
     expect(accountTables(db)).toEqual([]);
 

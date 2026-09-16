@@ -532,8 +532,8 @@ if (import.meta.main) {
   const evidenceFlag = process.argv.indexOf('--evidence');
   const evidenceDir = evidenceFlag >= 0 ? resolve(process.argv[evidenceFlag + 1] ?? '') : undefined;
 
-  await withGallery(async ({ browser, origin }) => {
-    const page = await browser.newPage();
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
     const result = await filmMovie(page, origin, out, evidenceDir);
     console.log(JSON.stringify(result, null, 2));
     await page.close();

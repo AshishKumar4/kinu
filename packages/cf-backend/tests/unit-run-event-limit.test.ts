@@ -24,7 +24,7 @@ mockAgentsSdk();
 
 // Dynamic on purpose: the route module resolves the Agent SDK at import time, so
 // it may only load AFTER the stub is installed. Same seam as unit-sse-disconnect.
-const { handleRunEventsRequest } = await import('../src/run-events-routes');
+const { handleRunEventsRequest, REAL_SSE_PACING } = await import('../src/run-events-routes');
 
 const SEEDED_EVENTS = 700;
 
@@ -59,9 +59,10 @@ function runEventsEnv() {
 }
 
 async function eventsVia(env: Env, query: string): Promise<{ status: number; count: number }> {
+  // The list route never polls, so the real pacing is never asked for a wait.
   const res = await handleRunEventsRequest(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
-  ), env);
+  ), env, REAL_SSE_PACING);
 
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();

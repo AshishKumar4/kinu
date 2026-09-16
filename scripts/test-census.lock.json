@@ -1,5 +1,5 @@
 {
-  "measured": "29d87a834: 1079 test files, 963 runnable suites, 12643 tests, 35 runners, 84 non-public product members",
+  "measured": "16c1e14a2: 1085 test files, 968 runnable suites, 12689 tests, 35 runners, 85 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -176,6 +176,10 @@
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: a lease whose turn never answered is left open for the sweep to re-ask :: harness bridge to a non-public member",
       "count": 2
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: activation finishes what was answered and re-asks only what was not :: harness bridge to a non-public member",
+      "count": 1
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-durable-terminal-recovery.test.ts :: an empty answer does not count as a reply :: harness bridge to a non-public member",
@@ -787,6 +791,14 @@
     },
     {
       "key": "source_text :: scripts/secret-scan.test.ts :: the current scanner source has no detector-shaped literal of its own :: reads a source file",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/test-clocks.test.ts :: the runner side is pinned: bun and every vitest config run with no per-test clock :: expect(<source text>).toContain",
+      "count": 1
+    },
+    {
+      "key": "source_text :: scripts/test-clocks.test.ts :: the runner side is pinned: bun and every vitest config run with no per-test clock :: reads a source file",
       "count": 1
     },
     {

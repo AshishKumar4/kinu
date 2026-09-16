@@ -34,8 +34,8 @@ describe('plan-demo-film', () => {
   test('a named cue photographs that beat, and the muxed GIF measures what was shot', async () => {
     const dir = scratchDir(`plan-demo-film-test-${String(process.pid)}`);
 
-    await withGallery(async ({ browser, origin }) => {
-      const page = await browser.newPage();
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
 
       try {
         // The cue is resolved off the movie's own published table, so the
@@ -77,7 +77,7 @@ describe('plan-demo-film', () => {
         await page.close();
       }
     });
-  }, 120_000);
+  });
 
   test('the shipped film\'s first frame is fully opaque', () => {
     const film = 'docs/assets/kinu-plan-demo.gif';
@@ -96,6 +96,6 @@ describe('plan-demo-film', () => {
       .toBe(facts.width * facts.height * 4);
     expect(rgba.every((byte, i) => i % 4 !== 3 || byte === 0xff), 'frame 0 has a transparent pixel')
       .toBe(true);
-  }, 60_000);
+  });
 });
 
