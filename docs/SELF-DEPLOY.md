@@ -1,34 +1,18 @@
 # Self-deploy: kinu.run/deploy, `kinu deploy cloudflare`, `kinu deploy local`
 
-Design, decided with the owner on 2026-09-15. Plan only; nothing here is built.
-Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and
-`oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler
-session).
+I decided this design with the owner on 2026-09-15. Plan only; nothing here is built. Research and measurements: `~/kinu-logs/self-deploy/RESEARCH.md` and `oauth-scopes.json` (the 387-scope catalog, read 2026-09-15 with a wrangler session).
 
 ## The promise
 
-A person with a Cloudflare account and no terminal gets their own Kinu in one
-sitting: sign in, answer a few questions with defaults already filled, watch
-it deploy, sign in to it. It then keeps itself current. A person who wants to
-pay nothing runs the same product on their own machine or a server in their
-VPN with one curl. kinu.run never holds anyone's Cloudflare credential.
+A person with a Cloudflare account and no terminal gets their own Kinu in one sitting. They sign in, answer a few questions with defaults already filled, watch it deploy, and sign in to it. It then keeps itself current. A person who wants to pay nothing runs the same product on their own machine or a server in their VPN with one curl. kinu.run never holds anyone's Cloudflare credential.
 
 ## What we take from Cloudflare OS, and where we go further
 
-Cloudflare OS's hosted flow (os.cloudflare.app/deploy) is the right shape: one
-guided page, sign in with Cloudflare, name the instance, deploy, watch. We keep
-that shape. We do better on three things it does not do:
+Cloudflare OS's hosted flow (os.cloudflare.app/deploy) is the right shape. One guided page, sign in with Cloudflare, name the instance, deploy, watch. I keep that shape. I do better on three things it does not do:
 
-- **No build, no repository, no fork.** The Deploy button forks the repo into
-  the user's GitHub and rebuilds there, which makes every user maintain a
-  deployment. We publish a prebuilt release artifact and upload it through the
-  API. Nothing runs on the user's side.
-- **The deployment updates itself.** It holds its own key, checks the release
-  channel, and uploads its next version into its own account. kinu.run never
-  deploys into anyone's account after the first sitting.
-- **One source of truth for what a deployment is.** The release manifest is
-  generated from the same `wrangler.jsonc` that deploys kinu.run, so the
-  self-hosted shape cannot drift from ours.
+- **No build, no repository, no fork.** The Deploy button forks the repo into the user's GitHub and rebuilds there, which makes every user maintain a deployment. I publish a prebuilt release artifact and upload it through the API. Nothing runs on the user's side.
+- **The deployment updates itself.** It holds its own key, checks the release channel, and uploads its next version into its own account. kinu.run never deploys into anyone's account after the first sitting.
+- **One source of truth for what a deployment is.** The release manifest is generated from the same `wrangler.jsonc` that deploys kinu.run, so the self-hosted shape cannot drift from ours.
 
 ## The four surfaces
 
@@ -39,103 +23,44 @@ that shape. We do better on three things it does not do:
 | `kinu deploy local` | The same product under local workerd, installed by `curl kinu.run/install-local.sh`. |
 | The deployment's own **Updates** page | Where a self-hosted Kinu shows its version, the channel, and updates itself. |
 
-One flow lives in `packages/core` (a plan of idempotent steps with typed
-inputs and progress events). The page, the CLI, and the local installer are
-adapters over it.
+One flow lives in `packages/core` (a plan of idempotent steps with typed inputs and progress events). The page, the CLI, and the local installer are adapters over it.
 
 ## The release artifact
 
-Every deploy of kinu.run also publishes, beside the CLI tarballs it already
-publishes under `/downloads/`:
+Every deploy of kinu.run also publishes these, beside the CLI tarballs it already publishes under `/downloads/`:
 
-- `kinu-worker-<version>.tar.gz`: the Worker modules, the static assets with
-  their manifest, and `release.json`.
-- `release.json`: the version stamp (`{version, sha, builtAt}`, the same one
-  `kinu-version.json` carries), the compatibility date and flags, every
-  binding with its kind and the resource it needs (generated from
-  `wrangler.jsonc` at build), the Durable Object classes and migrations, the
-  secrets census (from `scripts/infra-manifest.ts`: prompted, out-of-band, or
-  optional, with the text the prompt shows), and the sha256 of every file.
-- The seed for the runtime cache bucket (the toolchain blobs), published once
-  per Nimbus release and referenced by digest.
+- `kinu-worker-<version>.tar.gz`: the Worker modules, the static assets with their manifest, and `release.json`.
+- `release.json`: the version stamp (`{version, sha, builtAt}`, the same one `kinu-version.json` carries), the compatibility date and flags, every binding with its kind and the resource it needs (generated from `wrangler.jsonc` at build), the Durable Object classes and migrations, the secrets census (from `scripts/infra-manifest.ts`: prompted, out-of-band, or optional, with the text the prompt shows), and the sha256 of every file.
+- The seed for the runtime cache bucket (the toolchain blobs), published once per Nimbus release and referenced by digest.
 
 The flow never reads the repository. It reads `release.json`.
 
 ## The Cloudflare door
 
-1. **Sign in with Cloudflare.** A self-managed OAuth client owned by Kinu,
-   public with PKCE, so a deployment can refresh its own token without a
-   client secret. Scopes: workers scripts, routes, KV, R2, Vectorize, AI, AI
-   Gateway, Secrets Store, Access app, policy and org, DNS write, zone read,
-   account settings read, user details read, offline access. Every one is in
-   the catalog; the first client creation confirms each is selectable.
-2. **Account and plan.** The flow reads the account's plan and R2 billing
-   state. The lean deployment runs on the free plan; R2 needs a payment method
-   on file, and the page links to that one setting. The sandbox needs Workers
-   Paid and is off by default; turning it on shows the plan link. No other
-   subscription is needed.
-3. **Name and address.** Instance name (default: `kinu`), and where it lives:
-   `<name>.<subdomain>.workers.dev` by default, or a zone from the account with
-   a hostname, in which case the flow creates the DNS record and the route.
-4. **Sign-in to your Kinu.** Cloudflare Access with one-time PIN, the way
-   Cloudflare OS does it, on the Zero Trust free tier. The flow creates the
-   Access application and a policy for the owner's email (more emails can be
-   added on the page). Kinu already verifies Access on its control plane; the
-   self-hosted profile verifies it on everything. No OAuth app registrations
-   at Google or GitHub, which is the part non-technical people cannot do.
-5. **Models.** Default model from Workers AI's free tier. Optional keys for
-   OpenAI, Anthropic, and OpenRouter, stored as secrets on the deployment,
-   never at kinu.run. Subscriptions shared from a connected device work the
-   way they do on kinu.run.
-6. **Deploy.** The steps run in a Durable Object on kinu.run that holds the
-   session's access token only for the run, streams progress over the
-   existing WebSocket surface, and wipes the token at the end. Steps, each
-   idempotent so a re-run resumes: create KV, the three R2 buckets, the
-   Vectorize index with the geometry `release.json` states, the AI Gateway,
-   the Access app and policy; seed the runtime cache; upload the Worker
-   version with the bindings and migrations from `release.json`; put the
-   secrets; bind the address; smoke-check `/api/health`; store the refresh
-   token and the deployment record as secrets on the new Worker.
-7. **Done.** The page shows the address, the sign-in email, and the connect
-   command for the user's computer, with the curl already pointing at their
-   instance.
+1. **Sign in with Cloudflare.** A self-managed OAuth client owned by Kinu, public with PKCE, so a deployment can refresh its own token without a client secret. Scopes: workers scripts, routes, KV, R2, Vectorize, AI, AI Gateway, Secrets Store, Access app, policy and org, DNS write, zone read, account settings read, user details read, offline access. Every one is in the catalog. The first client creation confirms each is selectable.
+2. **Account and plan.** The flow reads the account's plan and R2 billing state. The lean deployment runs on the free plan. R2 needs a payment method on file, and the page links to that one setting. The sandbox needs Workers Paid and is off by default. Turning it on shows the plan link. No other subscription is needed.
+3. **Name and address.** Instance name (default: `kinu`), and where it lives: `<name>.<subdomain>.workers.dev` by default, or a zone from the account with a hostname. In that case the flow creates the DNS record and the route.
+4. **Sign-in to your Kinu.** Cloudflare Access with one-time PIN, the way Cloudflare OS does it, on the Zero Trust free tier. The flow creates the Access application and a policy for the owner's email (more emails can be added on the page). Kinu already verifies Access on its control plane. The self-hosted profile verifies it on everything. No OAuth app registrations at Google or GitHub, which is the part non-technical people cannot do.
+5. **Models.** Default model from Workers AI's free tier. Optional keys for OpenAI, Anthropic, and OpenRouter, stored as secrets on the deployment, never at kinu.run. Subscriptions shared from a connected device work the way they do on kinu.run.
+6. **Deploy.** The steps run in a Durable Object on kinu.run that holds the session's access token only for the run. It streams progress over the existing WebSocket surface, and wipes the token at the end. Steps, each idempotent so a re-run resumes: create KV, the three R2 buckets, the Vectorize index with the geometry `release.json` states, the AI Gateway, the Access app and policy. Then seed the runtime cache. Upload the Worker version with the bindings and migrations from `release.json`. Put the secrets. Bind the address. Smoke-check `/api/health`. Store the refresh token and the deployment record as secrets on the new Worker.
+7. **Done.** The page shows the address, the sign-in email, and the connect command for the user's computer, with the curl already pointing at their instance.
 
 ## Updates
 
-The deployment owns its lifecycle. Its Updates page reads the release channel
-from kinu.run (`release.json` for `stable`, later `edge`), shows the current
-and available versions, and updates on a click or, when the owner turns it
-on, on its own schedule. An update is the same upload step run from inside
-the deployment with its own token, followed by the same smoke check, and a
-failed smoke check keeps the previous version active (versions on Workers are
-retained; the flow rolls the deployment pointer back). The daemon and CLI
-self-update work already covers the devices.
+The deployment owns its lifecycle. Its Updates page reads the release channel from kinu.run (`release.json` for `stable`, later `edge`). It shows the current and available versions, and updates on a click or, when the owner turns it on, on its own schedule. An update is the same upload step run from inside the deployment with its own token, followed by the same smoke check. A failed smoke check keeps the previous version active (versions on Workers are retained; the flow rolls the deployment pointer back). The daemon and CLI self-update work already covers the devices.
 
 ## The local door
 
-`curl kinu.run/install-local.sh | bash` lays down, under `~/.kinu/local/`,
-the same release artifact, a pinned workerd binary, a generated workerd
-configuration rendered from `release.json` (Durable Object storage and KV and
-R2 on local disk, assets from the artifact, the runtime cache seed unpacked),
-and a supervisor in the shape of the existing daemon command. No container,
-no cron; the monitor cadence runs from the supervisor. Sign-in is a first-run
-local credential the installer mints and prints. Devices connect through the
-same approval flow as kinu.run. Updates are the CLI's update channel with a
-different artifact name. The local instance serves `http://` on a port the
-installer prints; TLS is the host's concern.
+`curl kinu.run/install-local.sh | bash` lays down, under `~/.kinu/local/`, the same release artifact, a pinned workerd binary, a generated workerd configuration rendered from `release.json` (Durable Object storage and KV and R2 on local disk, assets from the artifact, the runtime cache seed unpacked), and a supervisor in the shape of the existing daemon command. No container, no cron. The monitor cadence runs from the supervisor. Sign-in is a first-run local credential the installer mints and prints. Devices connect through the same approval flow as kinu.run. Updates are the CLI's update channel with a different artifact name. The local instance serves `http://` on a port the installer prints. TLS is the host's concern.
 
 ## Not in this design
 
-The CLI and TUI stay standalone agents with no local server (decided
-2026-09-15). No sandbox on the local door and none by default on the
-Cloudflare door. No user repository and no Workers Builds.
+The CLI and TUI stay standalone agents with no local server (decided 2026-09-15). No sandbox on the local door and none by default on the Cloudflare door. No user repository and no Workers Builds.
 
 ## Order of work
 
-1. Release artifact and `release.json` in the deploy pipeline, with a gate
-   that the manifest's bindings equal `wrangler.jsonc`'s.
-2. The core flow: plan, steps, inputs, progress; provable against a fake API.
-3. The Cloudflare door page and the deploy Durable Object, then the CLI
-   command over the same flow.
+1. Release artifact and `release.json` in the deploy pipeline, with a gate that the manifest's bindings equal `wrangler.jsonc`'s.
+2. The core flow: plan, steps, inputs, progress. Provable against a fake API.
+3. The Cloudflare door page and the deploy Durable Object, then the CLI command over the same flow.
 4. The deployment's Updates page and self-update.
 5. The local door: installer, workerd config renderer, supervisor.
