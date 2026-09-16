@@ -26,7 +26,7 @@ The day-one decision is where it runs.
 | Needs an account | yes | no; account-backed Workers AI is billed to that Cloudflare account |
 
 You can have both. You can move a cloud workspace onto your machine later
-(§7). Shared commands use the same core, but hosting and capability availability differ.
+(§7). The same core serves both, but hosting and capability availability differ.
 
 ## 2. Day one
 
@@ -54,7 +54,7 @@ serves the specs it hosts (`@cf/…` and proxied provider ids), a local key
 serves everything else. Signed out, the local key is all there is.
 
 `--alias jarvis` puts a `jarvis` command on your PATH that means
-`kinu run jarvis`. It is the difference between using this daily and not.
+`kinu run jarvis`. It decides whether you reach for this daily or not.
 
 If anything above misbehaves, run `kinu doctor` before reinstalling. It prints
 where the CLI lives, whether it is on your PATH, which origin it talks to, and
@@ -116,9 +116,9 @@ workspace, a sandbox container, or your connected machine).
 
 A long command is not killed for being long. Nothing deadlines the work itself.
 A live session backgrounds a call still running after 30 seconds. It wakes the
-agent when the call settles. Under `kinu exec` the threshold is 300 seconds,
-because a one-shot process exits after the answer and a handle nobody reads is
-worse than waiting. Nothing inside the container caps a command: a ceiling
+agent when the call settles. Under `kinu exec` the threshold is 300 seconds.
+A one-shot process exits after the answer, and a handle nobody reads is
+worse than waiting. Nothing inside the container caps a command. A ceiling
 there kills work the layer above means to detach.
 
 In the sandbox container, commands run in `/workspace`, the directory that
@@ -163,18 +163,18 @@ kinu actors jarvis     # every agent in this workspace, retired ones included
 ```
 
 `kinu actors` answers one question: a workspace is
-one database, and the agents it hired, the reasoning heads it forked and the
-search nodes it opened all live in it. Dismissed agents are listed and flagged
-rather than dropped, because their transcripts are kept — and `kinu actors
-jarvis <id>` reads what any one of them did without starting it, which is what
+one database, and the agents it hired, the reasoning heads it forked, and the
+search nodes it opened all live in it. Dismissed agents stay listed and flagged
+rather than dropped, because their transcripts are kept. `kinu actors
+jarvis <id>` reads what any one of them did without starting it. That is what
 makes a dismissed agent readable at all.
 
 `kinu spend` covers the whole workspace, not just the chat: judges, fast tier,
-evolution engine, exploration heads, search nodes, compaction, embedder,
-summed over every row the log holds rather than a recent window. It also
+evolution engine, exploration heads, search nodes, compaction, embedder.
+It sums every row the log holds rather than a recent window. It also
 reports what it could NOT account for: calls the provider reported nothing
 for, and calls no catalog could price. "Everything reported" and "92%, with
-the embedder silent" are different facts, and you can tell them apart.
+the embedder silent" are different facts. You can tell them apart.
 
 [kinu.run](https://kinu.run) presents Output (produced results), Work (plans,
 jobs and waiting decisions), Files (workspace files), Releases (deliverables
@@ -185,9 +185,9 @@ items awaiting a decision and opens each one where that decision happens.
 
 Exploration is where I go when the agent tried more than one thing. The
 `agents` tool's `swarm` action grows a configured tree. Tool-using nodes run
-the full agent loop; a declared thought unit is toolless. The preset, context
+the full agent loop. A declared thought unit is toolless. The preset, context,
 and scoring choice determine what runs. A registered verifier supplies measured
-scores; judged searches and unranked ideation remain separate. Hosted actors
+scores. Judged searches and unranked ideation remain separate. Hosted actors
 share canonical project files with credentialed homes and private temporary
 paths. See [EXPLORATION.md](EXPLORATION.md) for the actual combinations.
 
@@ -196,9 +196,9 @@ node's fill, rollouts in its radius, a ring on the settled answer. Measured
 records carry into later searches. [docs/EXPLORATION.md](EXPLORATION.md)
 defines the six axes and presets.
 
-Kinu can author a **slate**: a project with browser JS/JSX/TS/TSX, HTML/CSS and
+Kinu can author a **slate**: a project with browser JS/JSX/TS/TSX, HTML/CSS, and
 Worker-style server routes. The UI can take input and use admitted workspace,
-MCP and execution bindings. Source and versions stay in the workspace; the
+MCP, and execution bindings. Source and versions stay in the workspace. The
 preview process is derived. This is not a host-rendered JSON widget language.
 [LIVE-UI.md](LIVE-UI.md) explains the hosted runtime and its limits;
 [PRODUCT-SPEC.md](PRODUCT-SPEC.md#12-slates-and-authored-applications) records the acceptance boundary.
@@ -217,7 +217,7 @@ Cloud and local exports use the same archive format, but their coverage must
 be distinguished. The cloud export covers every retained actor: child
 actors are logical actors whose rows live in the workspace's one SQLite,
 keyed by `actor_id`. `import` restores an archive as a local workspace. The web backup
-action uses the same declared export boundary; inspect it before deleting data.
+action uses the same declared export boundary. Inspect it before deleting data.
 
 Exporting a cloud workspace needs an interactive session (`kinu auth`). A
 scoped CI token can run tasks but cannot take the database. Export is a live,
