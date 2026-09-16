@@ -15,7 +15,7 @@
  * that asked for it: that rejection is the abort having happened, not a
  * failure of it, and it is recorded and answered as such.
  */
-import { diagnostics } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 
 const ROUTE = /^\/api\/workspaces\/([^/]+)\/eval\/abort\/?$/;
@@ -42,7 +42,7 @@ export async function handleEvalAbortRequest(
   } catch (cause) {
     // The abort ended the activation this call was in flight on; the
     // rejection is its receipt.
-    diagnostics.event('eval.activation_aborted', { workspace, receipt: cause instanceof Error ? cause.message : String(cause) });
+    diagnostics.event('eval.activation_aborted', { workspace, receipt: renderThrownChain({ cause }) });
 
     return Response.json({ aborted: true }, { status: 202 });
   }

@@ -988,6 +988,13 @@
       "decision": "protected"
     },
     {
+      "file": "packages/pc-agent/src/update.js",
+      "kind": "hand-parser",
+      "owner": "parseUpdateFrame",
+      "sourceSha256": "6b399f6c554ffece81688b060cd2dbe7614bed81d84ca7b083482b1b46b29250",
+      "decision": "lexical"
+    },
+    {
       "file": "packages/test-utils/src/hard-tasks/cost-model.ts",
       "kind": "regex-literal",
       "owner": "content",
