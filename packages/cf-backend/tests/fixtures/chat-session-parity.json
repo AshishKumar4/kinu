@@ -21,7 +21,11 @@
               "type": "text",
               "text": "PARITY-ONE"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -55,7 +59,11 @@
               "type": "text",
               "text": "PARITY-TWO"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -78,11 +86,11 @@
         }
       },
       {
-        "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "id": "input-PARITY-TWO-STEER",
         "parentId": "<uuid#2>",
         "role": "user",
         "content": {
-          "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+          "id": "input-PARITY-TWO-STEER",
           "role": "user",
           "parts": [
             {
@@ -104,7 +112,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "parentId": "input-PARITY-TWO-STEER",
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -135,6 +143,16 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-ONE",
+          "turn": {
+            "turnId": "input-PARITY-ONE",
+            "messageId": "<uuid#1>",
+            "kind": "user",
+            "text": "PARITY-ONE",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-ONE"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -157,7 +175,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -167,7 +185,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -179,6 +197,16 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-TWO",
+          "turn": {
+            "turnId": "input-PARITY-TWO",
+            "messageId": "<uuid#2>",
+            "kind": "user",
+            "text": "PARITY-TWO",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-TWO"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -201,7 +229,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -211,7 +239,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -223,6 +251,19 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-TWO-STEER",
+          "turn": {
+            "turnId": "input-PARITY-TWO-STEER",
+            "messageId": "<uuid#3>",
+            "kind": "user",
+            "text": "PARITY-TWO-STEER",
+            "metadata": {
+              "kinuAuthor": "operator",
+              "kinuMode": "build"
+            },
+            "steerIds": [
+              "input-PARITY-TWO-STEER"
+            ]
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -245,7 +286,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
@@ -255,7 +296,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       }
@@ -275,7 +316,11 @@
               "type": "text",
               "text": "PARITY-ONE"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -309,7 +354,11 @@
               "type": "text",
               "text": "PARITY-TWO"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -332,11 +381,11 @@
         }
       },
       {
-        "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "id": "input-PARITY-TWO-STEER",
         "parentId": "<uuid#2>",
         "role": "user",
         "content": {
-          "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+          "id": "input-PARITY-TWO-STEER",
           "role": "user",
           "parts": [
             {
@@ -358,7 +407,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "parentId": "input-PARITY-TWO-STEER",
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -387,12 +436,31 @@
               "type": "text",
               "text": "PARITY-THREE"
             }
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
+        }
+      },
+      {
+        "id": "<uuid#8>",
+        "parentId": "input-PARITY-THREE",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#8>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": ""
+            }
           ]
         }
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "input-PARITY-THREE",
+        "parentId": "<uuid#8>",
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -402,7 +470,11 @@
               "type": "text",
               "text": "PARITY-FOUR-TOOL"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       }
     ],
@@ -412,6 +484,12 @@
         "turnId": "input-PARITY-FOUR-TOOL",
         "mode": "build",
         "text": "PARITY-FOUR-STEER"
+      },
+      {
+        "id": "input-PARITY-FOUR-TOOL",
+        "turnId": "null",
+        "mode": "build",
+        "text": "PARITY-FOUR-TOOL"
       }
     ],
     "pendingSteerFiles": [
@@ -433,6 +511,16 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-ONE",
+          "turn": {
+            "turnId": "input-PARITY-ONE",
+            "messageId": "<uuid#1>",
+            "kind": "user",
+            "text": "PARITY-ONE",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-ONE"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -455,7 +543,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -465,7 +553,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -477,6 +565,16 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-TWO",
+          "turn": {
+            "turnId": "input-PARITY-TWO",
+            "messageId": "<uuid#2>",
+            "kind": "user",
+            "text": "PARITY-TWO",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-TWO"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -499,7 +597,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -509,7 +607,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -521,6 +619,19 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-TWO-STEER",
+          "turn": {
+            "turnId": "input-PARITY-TWO-STEER",
+            "messageId": "<uuid#3>",
+            "kind": "user",
+            "text": "PARITY-TWO-STEER",
+            "metadata": {
+              "kinuAuthor": "operator",
+              "kinuMode": "build"
+            },
+            "steerIds": [
+              "input-PARITY-TWO-STEER"
+            ]
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -543,7 +654,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
@@ -553,46 +664,66 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#8>",
+        "runId": "<run#9>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-THREE",
+          "turn": {
+            "turnId": "input-PARITY-THREE",
+            "messageId": "<uuid#8>",
+            "kind": "user",
+            "text": "PARITY-THREE",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-THREE"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#8>",
+        "runId": "<run#9>",
         "type": "run_end",
         "payload": {
           "type": "run_end",
           "reason": "aborted",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#10>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-FOUR-TOOL",
+          "turn": {
+            "turnId": "input-PARITY-FOUR-TOOL",
+            "messageId": "<uuid#11>",
+            "kind": "user",
+            "text": "PARITY-FOUR-TOOL",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-FOUR-TOOL"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#10>",
         "type": "tool_call_end",
         "payload": {
           "type": "tool_call_end",
@@ -607,16 +738,15 @@
             "path": "probe-fixture.txt"
           },
           "result": {
-            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
           },
-          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
-          "durationMs": "<clock>",
-          "eventIndex": 3,
+          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#10>",
         "type": "step_finish",
         "payload": {
           "type": "step_finish",
@@ -646,13 +776,13 @@
                   "toolName": "file",
                   "output": {
                     "type": "error-text",
-                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
                   }
                 }
               ]
             }
           ],
-          "eventIndex": 4,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       }
@@ -672,7 +802,11 @@
               "type": "text",
               "text": "PARITY-ONE"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -706,7 +840,11 @@
               "type": "text",
               "text": "PARITY-TWO"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -729,11 +867,11 @@
         }
       },
       {
-        "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "id": "input-PARITY-TWO-STEER",
         "parentId": "<uuid#2>",
         "role": "user",
         "content": {
-          "id": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+          "id": "input-PARITY-TWO-STEER",
           "role": "user",
           "parts": [
             {
@@ -755,7 +893,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "programmatic:steer-rerun:input-PARITY-TWO:build:input-PARITY-TWO-STEER",
+        "parentId": "input-PARITY-TWO-STEER",
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -784,12 +922,31 @@
               "type": "text",
               "text": "PARITY-THREE"
             }
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
+        }
+      },
+      {
+        "id": "<uuid#8>",
+        "parentId": "input-PARITY-THREE",
+        "role": "assistant",
+        "content": {
+          "id": "<uuid#8>",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": ""
+            }
           ]
         }
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "input-PARITY-THREE",
+        "parentId": "<uuid#8>",
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -799,37 +956,16 @@
               "type": "text",
               "text": "PARITY-FOUR-TOOL"
             }
-          ]
-        }
-      },
-      {
-        "id": "<uuid#10>",
-        "parentId": "input-PARITY-FOUR-TOOL",
-        "role": "assistant",
-        "content": {
-          "id": "<uuid#10>",
-          "role": "assistant",
-          "parts": [
-            {
-              "type": "step-start"
-            },
-            {
-              "type": "tool-file",
-              "toolCallId": "call_parity_1",
-              "toolName": "file",
-              "state": "output-error",
-              "input": {
-                "action": "read",
-                "path": "probe-fixture.txt"
-              },
-              "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
-            }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
         "id": "input-PARITY-FOUR-STEER",
-        "parentId": "<uuid#10>",
+        "parentId": "input-PARITY-FOUR-TOOL",
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-STEER",
@@ -883,7 +1019,11 @@
               "type": "text",
               "text": "PARITY-FIVE"
             }
-          ]
+          ],
+          "metadata": {
+            "kinuMode": "build",
+            "kinuAuthor": "operator"
+          }
         }
       },
       {
@@ -919,6 +1059,16 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-ONE",
+          "turn": {
+            "turnId": "input-PARITY-ONE",
+            "messageId": "<uuid#1>",
+            "kind": "user",
+            "text": "PARITY-ONE",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-ONE"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -941,7 +1091,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -951,7 +1101,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -963,6 +1113,16 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-TWO",
+          "turn": {
+            "turnId": "input-PARITY-TWO",
+            "messageId": "<uuid#2>",
+            "kind": "user",
+            "text": "PARITY-TWO",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-TWO"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -985,7 +1145,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 4,
           "timestamp": "<clock>"
         }
       },
@@ -995,7 +1155,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -1007,6 +1167,19 @@
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-TWO-STEER",
+          "turn": {
+            "turnId": "input-PARITY-TWO-STEER",
+            "messageId": "<uuid#3>",
+            "kind": "user",
+            "text": "PARITY-TWO-STEER",
+            "metadata": {
+              "kinuAuthor": "operator",
+              "kinuMode": "build"
+            },
+            "steerIds": [
+              "input-PARITY-TWO-STEER"
+            ]
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
@@ -1029,7 +1202,7 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
@@ -1039,46 +1212,66 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 4,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#8>",
+        "runId": "<run#9>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-THREE",
+          "turn": {
+            "turnId": "input-PARITY-THREE",
+            "messageId": "<uuid#8>",
+            "kind": "user",
+            "text": "PARITY-THREE",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-THREE"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#8>",
+        "runId": "<run#9>",
         "type": "run_end",
         "payload": {
           "type": "run_end",
           "reason": "aborted",
-          "eventIndex": 4,
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#10>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-FOUR-TOOL",
+          "turn": {
+            "turnId": "input-PARITY-FOUR-TOOL",
+            "messageId": "<uuid#11>",
+            "kind": "user",
+            "text": "PARITY-FOUR-TOOL",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-FOUR-TOOL"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#10>",
         "type": "tool_call_end",
         "payload": {
           "type": "tool_call_end",
@@ -1093,16 +1286,15 @@
             "path": "probe-fixture.txt"
           },
           "result": {
-            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+            "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
           },
-          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
-          "durationMs": "<clock>",
-          "eventIndex": 3,
+          "error": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.",
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#9>",
+        "runId": "<run#10>",
         "type": "step_finish",
         "payload": {
           "type": "step_finish",
@@ -1132,30 +1324,18 @@
                   "toolName": "file",
                   "output": {
                     "type": "error-text",
-                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+                    "value": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
                   }
                 }
               ]
             }
           ],
-          "eventIndex": 4,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#13>",
-        "type": "run_start",
-        "payload": {
-          "type": "run_start",
-          "agentId": "<uuid#5>",
-          "caused_by": "chat",
-          "userMessage": "PARITY-FOUR-TOOL",
-          "eventIndex": 0,
-          "timestamp": "<clock>"
-        }
-      },
-      {
-        "runId": "<run#13>",
+        "runId": "<run#10>",
         "type": "step_finish",
         "payload": {
           "type": "step_finish",
@@ -1172,44 +1352,44 @@
               ]
             }
           ],
-          "eventIndex": 2,
+          "eventIndex": 11,
+          "timestamp": "<clock>"
+        }
+      },
+      {
+        "runId": "<run#10>",
+        "type": "run_end",
+        "payload": {
+          "type": "run_end",
+          "reason": "completed",
+          "eventIndex": 13,
           "timestamp": "<clock>"
         }
       },
       {
         "runId": "<run#13>",
-        "type": "run_end",
-        "payload": {
-          "type": "run_end",
-          "reason": "completed",
-          "eventIndex": 4,
-          "timestamp": "<clock>"
-        }
-      },
-      {
-        "runId": "<run#9>",
-        "type": "run_end",
-        "payload": {
-          "type": "run_end",
-          "reason": "interrupted",
-          "eventIndex": 5,
-          "timestamp": "<clock>"
-        }
-      },
-      {
-        "runId": "<run#14>",
         "type": "run_start",
         "payload": {
           "type": "run_start",
           "agentId": "<uuid#5>",
           "caused_by": "chat",
           "userMessage": "PARITY-FIVE",
+          "turn": {
+            "turnId": "input-PARITY-FIVE",
+            "messageId": "<uuid#12>",
+            "kind": "user",
+            "text": "PARITY-FIVE",
+            "metadata": {
+              "kinuMode": "build"
+            },
+            "pendingSendId": "input-PARITY-FIVE"
+          },
           "eventIndex": 0,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#14>",
+        "runId": "<run#13>",
         "type": "step_finish",
         "payload": {
           "type": "step_finish",
@@ -1226,17 +1406,17 @@
               ]
             }
           ],
-          "eventIndex": 3,
+          "eventIndex": 5,
           "timestamp": "<clock>"
         }
       },
       {
-        "runId": "<run#14>",
+        "runId": "<run#13>",
         "type": "run_end",
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 5,
+          "eventIndex": 7,
           "timestamp": "<clock>"
         }
       }
@@ -1408,7 +1588,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "start",
@@ -1418,7 +1598,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "start-step"
@@ -1427,7 +1607,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "text-start",
@@ -1437,7 +1617,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "text-delta",
@@ -1448,7 +1628,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "text-end",
@@ -1458,7 +1638,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "finish-step"
@@ -1467,7 +1647,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": false,
         "body": {
           "type": "finish",
@@ -1477,7 +1657,7 @@
       {
         "socket": "A",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#15>",
+        "id": "<uuid#14>",
         "done": true
       },
       {
@@ -1487,8 +1667,26 @@
         "done": false,
         "body": {
           "type": "start",
-          "messageId": "<uuid#16>"
+          "messageId": "<uuid#8>"
         }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-THREE",
+        "done": false,
+        "body": {
+          "type": "abort",
+          "reason": "The operation was aborted"
+        }
+      },
+      {
+        "socket": "A",
+        "type": "cf_agent_use_chat_response",
+        "id": "PARITY-THREE",
+        "done": false,
+        "error": true,
+        "body": "The turn was interrupted before it finished."
       },
       {
         "socket": "A",
@@ -1503,7 +1701,7 @@
         "done": false,
         "body": {
           "type": "start",
-          "messageId": "<uuid#10>"
+          "messageId": "<uuid#11>"
         }
       },
       {
@@ -1560,7 +1758,7 @@
         "body": {
           "type": "tool-output-error",
           "toolCallId": "call_parity_1",
-          "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+          "errorText": "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
         }
       },
       {
@@ -1615,32 +1813,22 @@
       }
     ],
     "syncs": {
-      "cf_agent_chat_messages": 5,
+      "cf_agent_chat_messages": 10,
       "cf_agent_identity": 1,
-      "cf_agent_mcp_servers": 1,
-      "cf_agent_session": 8
+      "cf_agent_mcp_servers": 1
     }
   },
   "framesAfter": {
     "protocol": [
       {
         "socket": "B",
-        "type": "cf_agent_chat_recovering",
+        "type": "cf_agent_stream_resuming",
         "id": "PARITY-FOUR-TOOL"
       },
       {
         "socket": "B",
-        "type": "cf_agent_stream_resume_none"
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
-        "done": false,
-        "continuation": true,
-        "body": {
-          "type": "start"
-        }
+        "type": "cf_agent_stream_resuming",
+        "id": "PARITY-FOUR-TOOL"
       },
       {
         "socket": "B",
@@ -1649,9 +1837,18 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
+        "id": "<uuid#15>",
         "done": false,
-        "continuation": true,
+        "body": {
+          "type": "start",
+          "messageId": "<uuid#11>"
+        }
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_use_chat_response",
+        "id": "<uuid#15>",
+        "done": false,
         "body": {
           "type": "start-step"
         }
@@ -1659,9 +1856,8 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
+        "id": "<uuid#15>",
         "done": false,
-        "continuation": true,
         "body": {
           "type": "text-start",
           "id": "txt-0"
@@ -1670,9 +1866,8 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
+        "id": "<uuid#15>",
         "done": false,
-        "continuation": true,
         "body": {
           "type": "text-delta",
           "id": "txt-0",
@@ -1682,9 +1877,8 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
+        "id": "<uuid#15>",
         "done": false,
-        "continuation": true,
         "body": {
           "type": "text-end",
           "id": "txt-0"
@@ -1693,9 +1887,8 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
+        "id": "<uuid#15>",
         "done": false,
-        "continuation": true,
         "body": {
           "type": "finish-step"
         }
@@ -1703,9 +1896,8 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
+        "id": "<uuid#15>",
         "done": false,
-        "continuation": true,
         "body": {
           "type": "finish",
           "finishReason": "stop"
@@ -1714,14 +1906,8 @@
       {
         "socket": "B",
         "type": "cf_agent_use_chat_response",
-        "id": "<uuid#17>",
-        "done": true,
-        "continuation": true
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_chat_recovering",
-        "id": "PARITY-FOUR-TOOL"
+        "id": "<uuid#15>",
+        "done": true
       },
       {
         "socket": "B",
@@ -1800,10 +1986,9 @@
       }
     ],
     "syncs": {
-      "cf_agent_chat_messages": 3,
+      "cf_agent_chat_messages": 5,
       "cf_agent_identity": 1,
-      "cf_agent_mcp_servers": 1,
-      "cf_agent_session": 4
+      "cf_agent_mcp_servers": 1
     }
   },
   "modelCallsBefore": [
@@ -1900,7 +2085,7 @@
         "PARITY-FOUR-TOOL"
       ],
       "toolResults": [
-        "{\"reason\":\"missing\",\"error\":\"ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.\"}"
+        "{\"reason\":\"missing\",\"error\":\"ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it.\"}"
       ],
       "roles": [
         "system",
@@ -1929,7 +2114,7 @@
         "helloPARITY-FOUR-STEER"
       ],
       "toolResults": [
-        "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+        "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
       ],
       "roles": [
         "system",
@@ -1943,6 +2128,7 @@
         "user",
         "assistant",
         "tool",
+        "assistant",
         "user",
         "user"
       ]
@@ -1954,11 +2140,11 @@
         "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-TWO-STEER",
         "PARITY-THREE",
         "PARITY-FOUR-TOOL",
-        "helloPARITY-FOUR-STEER",
+        "[Attachment note.txt (text/plain, 5 bytes) inlined below]\n\nhelloPARITY-FOUR-STEER",
         "PARITY-FIVE"
       ],
       "toolResults": [
-        "ENOENT: no such file or directory, open 'probe-fixture.txt' \u2014 the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
+        "ENOENT: no such file or directory, open 'probe-fixture.txt' — the `file` tool's path is the agent's own virtual filesystem, NOT the machine or container this agent runs on: a path here is not the machine path of the same name, and this filesystem's roots are: bin, etc, home, opt, tmp, usr, var, context. To reach files that live on a real machine or container, run a shell command there with the `run` tool (choosing the runtime that owns them), or address them through the root that maps to it."
       ],
       "roles": [
         "system",
@@ -1972,6 +2158,7 @@
         "user",
         "assistant",
         "tool",
+        "assistant",
         "user",
         "user",
         "assistant",
