@@ -1,9 +1,6 @@
 # Configuration: `~/.kinu/config.json` and the environment
 
-Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`,
-`kinu provider connect` and `kinu create` write it for you. This page is
-for when you want to read or edit it yourself. The authoritative shape is
-`KinuConfig` in `packages/cli/src/config.ts`.
+Every CLI setting lives in one JSON file. `kinu setup`, `kinu auth`, `kinu provider connect`, and `kinu create` write it for you. This page is for when I want to read or edit it myself. The authoritative shape is `KinuConfig` in `packages/cli/src/config.ts`.
 
 ```
 ~/.kinu/                 mode 0700
@@ -20,9 +17,7 @@ for when you want to read or edit it yourself. The authoritative shape is
   device.json, pc-agent.*   the desktop execution daemon, its script and its log
 ```
 
-`KINU_HOME` moves all of it. The CLI keeps no state anywhere else, so backing
-up this directory backs up everything it knows. Files you name yourself, such as
-an export archive, land where you point them. They are the one exception.
+`KINU_HOME` moves all of it. The CLI keeps no state anywhere else, so backing up this directory backs up everything it knows. Files I name myself, such as an export archive, land where I point them. They are the one exception.
 
 ## Account
 
@@ -33,8 +28,7 @@ an export archive, land where you point them. They are the one exception.
 | `tokenExpiresAt` | ISO date | When that token expires. The CLI refuses it after this and asks you to re-auth. |
 | `user` | `{id, email, displayName?}` | Who the token belongs to. `kinu whoami` prints it. |
 
-`KINU_TOKEN` overrides `accessToken` for CI. Use a scoped token from
-`kinu tokens create`.
+`KINU_TOKEN` overrides `accessToken` for CI. I use a scoped token from `kinu tokens create`.
 
 ## Workspaces
 
@@ -63,27 +57,13 @@ not shadow a built-in command name.
 
 ## Providers
 
-Signed in, `kinu provider connect` sends your key to your Kinu account by
-default. The key is encrypted at rest there, and this machine reaches it
-through the provider proxy without holding a copy. Pass `--local` to keep one
-here instead, for offline use or an endpoint only this machine can see.
+Signed in, `kinu provider connect` sends my key to my Kinu account by default. The key is encrypted at rest there, and this machine reaches it through the provider proxy without holding a copy. I pass `--local` to keep one here instead, for offline use or an endpoint only this machine can see.
 
-Two deliberate exceptions. Codex stays local: the Codex endpoint
-refuses Cloudflare Workers egress, so proxying it would break a credential that
-works today. With no account signed in, there is nowhere else to put a key,
-so it lands here.
+Two deliberate exceptions. Codex stays local. The Codex endpoint refuses Cloudflare Workers egress, so proxying it would break a credential that works today. With no account signed in, there is nowhere else to put a key, so it lands here.
 
-`providers` is therefore the local-override store. Cloud workspaces never read
-it.
+`providers` is therefore the local-override store. Cloud workspaces never read it.
 
-The model spec decides which credential answers a turn. `resolveLLMConfig` gives
-the account every spec the account hosts. `@cf/…` and the provider ids the
-proxy carries go to the proxy even when a local key is present. Every other spec
-falls to the local store, matched on the provider the spec names (`openai/…`,
-`anthropic/…`, `openrouter/…`, `codex/…`, `opencode/…`). A bare model id with no
-provider goes to a stored Codex or OpenAI credential, in that order.
-`providers.openaiCompat.default` catches anything still unmatched. With no
-account session the local store is the only source.
+The model spec decides which credential answers a turn. `resolveLLMConfig` gives the account every spec the account hosts. `@cf/…` and the provider ids the proxy carries go to the proxy even when a local key is present. Every other spec falls to the local store, matched on the provider the spec names (`openai/…`, `anthropic/…`, `openrouter/…`, `codex/…`, `opencode/…`). A bare model id with no provider goes to a stored Codex or OpenAI credential, in that order. `providers.openaiCompat.default` catches anything still unmatched. With no account session the local store is the only source.
 
 | Field | What it is |
 | --- | --- |
@@ -93,8 +73,7 @@ account session the local store is the only source.
 | `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `kinu provider connect codex`. |
 | `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, headers?, extraHeaders?}`. |
 
-The Claude subscription provider stores nothing here. Kinu drives Anthropic's
-official `claude` binary, which owns its own login.
+The Claude subscription provider stores nothing here. Kinu drives Anthropic's official `claude` binary, which owns its own login.
 
 ## MCP servers
 
@@ -106,9 +85,7 @@ official `claude` binary, which owns its own login.
 }
 ```
 
-The standard `mcpServers` shape: `command` (required), `args`, `env`, and
-`timeoutMs` (per-call timeout, default 60s). These are stdio servers connected
-by local workspaces. Cloud workspaces get MCP servers from your account instead.
+The standard `mcpServers` shape: `command` (required), `args`, `env`, and `timeoutMs` (per-call timeout, default 60s). These are stdio servers connected by local workspaces. Cloud workspaces get MCP servers from my account instead.
 
 ## Behaviour
 
@@ -124,7 +101,7 @@ by local workspaces. Cloud workspaces get MCP servers from your account instead.
 
 ## Environment variables
 
-Six apply to every command, and `kinu --help` lists exactly these.
+Six apply to every command. `kinu --help` lists exactly these.
 
 | Variable | What it does |
 | --- | --- |
@@ -135,13 +112,9 @@ Six apply to every command, and `kinu --help` lists exactly these.
 | `KINU_BASE_URL` | LLM API base URL. |
 | `KINU_AUTH` | LLM auth header value. |
 
-`resolveLLMConfig` reads three more as fallbacks, each taken only when its
-`KINU_` counterpart is unset. The three are `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH`,
-and `AI_GATEWAY_MODEL`.
+`resolveLLMConfig` reads three more as fallbacks. Each applies only when its `KINU_` counterpart is unset. The three are `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_AUTH`, and `AI_GATEWAY_MODEL`.
 
-`resolveProviderCredentials` reads the local provider keys from the environment
-before it reads `config.json`. A shell override wins inside the shell that
-sets it.
+`resolveProviderCredentials` reads the local provider keys from the environment before it reads `config.json`. A shell override wins inside the shell that sets it.
 
 | Variable | What it stands in for |
 | --- | --- |
@@ -150,14 +123,8 @@ sets it.
 | `OPENROUTER_API_KEY` | `providers.openrouter.apiKey` |
 | `CODEX_ACCESS_TOKEN` | the access token in `providers.codex` |
 
-Precedence is the same everywhere. An explicit flag beats the environment, and
-the environment beats `config.json`. `KINU_BASE_URL` and `KINU_AUTH` have
-no `config.json` counterpart. A direct endpoint is only ever set by a flag or
-the environment.
+Precedence is the same everywhere. An explicit flag beats the environment, and the environment beats `config.json`. `KINU_BASE_URL` and `KINU_AUTH` have no `config.json` counterpart. I set a direct endpoint only by flag or environment.
 
 ## Editing it by hand
 
-The file is plain JSON. The CLI rewrites it whole on every change, so edit it
-while nothing else is running. It is created `0600` inside a `0700` directory
-because it holds tokens and API keys. If you copy it anywhere, copy those modes
-with it.
+The file is plain JSON. The CLI rewrites it whole on every change, so I edit it while nothing else is running. It is created `0600` inside a `0700` directory because it holds tokens and API keys. If I copy it anywhere, I copy those modes with it.

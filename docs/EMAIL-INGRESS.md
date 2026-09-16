@@ -1,13 +1,6 @@
 # Mission Inbox: email ingress and outbound
 
-Kinu includes email ingress and threaded replies. The channel works only after
-the domain has Email Routing, a verified destination, and a Worker rule.
-Production has not passed that live check. Verified 2026-08-20: the `kinu.run`
-zone holds zero DNS records, and neither Email Routing nor Email Sending is
-onboarded. The binding, the var, and the `email()` handler are all
-present and correct. After setup, mail to `<workspace-name>@EMAIL_DOMAIN` wakes
-the workspace. Its answer returns on the same thread. The same outbound
-path carries changelog, job, and monitoring notifications.
+Kinu includes email ingress and threaded replies. The channel works only after the domain has Email Routing, a verified destination, and a Worker rule. Production has not passed that live check. Verified 2026-08-20: the `kinu.run` zone holds zero DNS records, and neither Email Routing nor Email Sending is onboarded. The binding, the var, and the `email()` handler are all present and correct. After setup, mail to `<workspace-name>@EMAIL_DOMAIN` wakes the workspace. Its answer returns on the same thread. The same outbound path carries changelog, job, and monitoring notifications.
 
 ## Flow
 
@@ -40,16 +33,11 @@ notify    changelog_digest (EvolutionEngine event listener) and background-job
 
 ## Addressing
 
-The local part of the recipient address is the workspace name. Workspace names
-are globally unique Durable Object ids. `scout-a1b2c3@agents.example.com`
-routes to the workspace `scout-a1b2c3` and wakes its agent. `+tag`
-sub-addressing is stripped and case is ignored. A local part that is not a
-plausible workspace slug, or a host that is not `EMAIL_DOMAIN`, is dropped.
+The local part of the recipient address is the workspace name. Workspace names are globally unique Durable Object ids. `scout-a1b2c3@agents.example.com` routes to the workspace `scout-a1b2c3` and wakes its agent. `+tag` sub-addressing is stripped and case is ignored. A local part that is not a plausible workspace slug, or a host that is not `EMAIL_DOMAIN`, is dropped.
 
 ## Trust model (who can drive a turn)
 
-Inbound email is untrusted input. The gate runs inside the agent DO, before any
-event row exists:
+Inbound email is untrusted input. The gate runs inside the agent DO, before any event row exists:
 
 | Sender | Outcome | Event trust |
 | --- | --- | --- |
@@ -59,35 +47,14 @@ event row exists:
 
 Notes:
 
-- Even the owner is capped at `authenticated`, never `owner`. Email sender
-  identity rests on envelope and DMARC checks upstream, which is weaker than an
-  authenticated browser session. The trust lattice then gates tool surface
-  exactly as for webhooks.
-- The allowlist lives in one `email_route` trigger row with `creator_trust:
-  'owner'`. It uses the same trigger registry, trust stamp, and lifecycle as
-  every other ingress. Archiving the workspace pauses the row
-  (`state='paused'`), and deleting it revokes the row (`state='revoked'`).
-  Verified 2026-08-19 in `core/src/events/hub/triggers.ts`.
-- `email_route`'s fork policy is `sever`, so a forked workspace inherits no
-  email route. A fork gets its own address, and the owner re-grants the
-  allowlist deliberately. Fork policy is a separate column from lifecycle
-  state. `copy`, `sever` and `share` are its three values.
-- All senders combined share one inbound rate-limit window of 30 messages per
-  minute per agent (`EMAIL_INBOUND_RATE_PER_MIN`, verified 2026-08-19). A
-  refused window also publishes one internal `email_inbound_rate_limited`
-  event. The agent can report the refusal instead of silently missing mail.
-- Retried deliveries dedupe on `Message-ID`, enforced by a UNIQUE index on
-  `agent_log.dedupe_key`. Mail carrying no `Message-ID` falls back to a hash of
-  from, to, subject and body, bucketed in 5-minute windows. Verified
-  2026-08-19 in `core/src/events/hub/dedupe.ts`.
-- Attachment metadata enters the turn input as `filename`, `content_type` and
-  `size`. Attachment bytes never enter the event log. Verified 2026-08-19
-  in `core/src/events/hub/types.ts` (`EmailAttachmentMeta`).
-- A body larger than the brief budget spills to a workspace path. The woken
-  turn can read the whole message that woke it.
-- RFC 3834 auto-replies and bulk mail are dropped inbound. Kinu auto-replies
-  on-thread, so admitting another machine's vacation responder would loop the
-  two forever.
+- Even the owner is capped at `authenticated`, never `owner`. Email sender identity rests on envelope and DMARC checks upstream, which is weaker than an authenticated browser session. The trust lattice then gates tool surface exactly as for webhooks.
+- The allowlist lives in one `email_route` trigger row with `creator_trust: 'owner'`. It uses the same trigger registry, trust stamp, and lifecycle as every other ingress. Archiving the workspace pauses the row (`state='paused'`), and deleting it revokes the row (`state='revoked'`). Verified 2026-08-19 in `packages/core/src/events/hub/triggers.ts`.
+- `email_route`'s fork policy is `sever`, so a forked workspace inherits no email route. A fork gets its own address, and the owner re-grants the allowlist deliberately. Fork policy is a separate column from lifecycle state. `copy`, `sever` and `share` are its three values.
+- All senders combined share one inbound rate-limit window of 30 messages per minute per agent (`EMAIL_INBOUND_RATE_PER_MIN`, verified 2026-08-19). A refused window also publishes one internal `email_inbound_rate_limited` event. The agent can report the refusal instead of silently missing mail.
+- Retried deliveries dedupe on `Message-ID`, enforced by a UNIQUE index on `agent_log.dedupe_key`. Mail carrying no `Message-ID` falls back to a hash of from, to, subject and body, bucketed in 5-minute windows. Verified 2026-08-19 in `packages/core/src/events/hub/dedupe.ts`.
+- Attachment metadata enters the turn input as `filename`, `content_type` and `size`. Attachment bytes never enter the event log. Verified 2026-08-19 in `packages/core/src/events/hub/types.ts` (`EmailAttachmentMeta`).
+- A body larger than the brief budget spills to a workspace path. The woken turn can read the whole message that woke it.
+- RFC 3834 auto-replies and bulk mail are dropped inbound. Kinu auto-replies on-thread, so admitting another machine's vacation responder would loop the two forever.
 
 ## Operator API
 
@@ -99,54 +66,27 @@ PUT /api/workspaces/<name>/email          (step-up auth: login within 5 minutes)
   { "allow": ["friend@example.com"], "notifications": true }
 ```
 
-Widening who can drive turns by email is a grant. `PUT` takes the same
-step-up rule as webhook trigger creation. Owner notifications default on
-(`email_notifications` agent config). They send only when the platform email
-pieces below exist, and skip quietly otherwise.
+Widening who can drive turns by email is a grant. `PUT` takes the same step-up rule as webhook trigger creation. Owner notifications default on (`email_notifications` agent config). They send only when the platform email pieces below exist, and skip quietly otherwise.
 
 ## One-time owner setup, required before anything works
 
-The code ships inert. Without these steps no mail arrives and outbound sends
-skip quietly. Current config expects `EMAIL_DOMAIN = kinu.run`
-(wrangler.jsonc `vars`). Change it there if you pick a different domain.
+The code ships inert. Without these steps no mail arrives and outbound sends skip quietly. Current config expects `EMAIL_DOMAIN = kinu.run` (wrangler.jsonc `vars`). I change it there if I pick a different domain.
 
-1. Enable Email Routing for the domain (receiving MX records).
-   - Dashboard: zone `kinu.run` → **Email** → **Email Routing** → enable.
-   - CLI alternative: `npx wrangler email routing enable kinu.run` then
-     `npx wrangler email routing dns get kinu.run` to verify records.
+1. Enable Email Routing for the domain (receiving MX records). Dashboard: zone `kinu.run` → **Email** → **Email Routing** → enable. CLI alternative: `npx wrangler email routing enable kinu.run`, then `npx wrangler email routing dns get kinu.run` to verify records.
 2. Onboard the same domain for Email Sending (SPF/DKIM for outbound):
    ```bash
    npx wrangler email sending enable kinu.run
    npx wrangler email sending dns get kinu.run   # verify
    ```
-3. Point the catch-all routing rule at the Worker. It has to be a catch-all,
-   because each agent has its own local part.
-   - Dashboard: **Email Routing → Routing rules → Catch-all address** →
-     action **Send to a Worker** → `kinu`.
-   - CLI alternative: `npx wrangler email routing rules create` (see
-     `npx wrangler email routing rules --help` for the worker action flags).
-4. Deploy. The `send_email` binding and the `EMAIL_DOMAIN` var are already in
-   wrangler.jsonc. This is `bun run deploy` from the repo root.
-5. Verify from your login email: send a message to
-   `<workspace-name>@kinu.run`. The agent's timeline shows an `email` event. A
-   turn runs. A threaded reply lands back in your inbox. Mail from any
-   other address must be dropped.
+3. Point the catch-all routing rule at the Worker. It has to be a catch-all, because each agent has its own local part. Dashboard: **Email Routing → Routing rules → Catch-all address** → action **Send to a Worker** → `kinu`. CLI alternative: `npx wrangler email routing rules create` (see `npx wrangler email routing rules --help` for the worker action flags).
+4. Deploy. The `send_email` binding and the `EMAIL_DOMAIN` var are already in wrangler.jsonc. This is `bun run deploy` from the repo root.
+5. Verify from my login email. I send a message to `<workspace-name>@kinu.run`. The agent's timeline shows an `email` event. A turn runs. A threaded reply lands back in my inbox. Mail from any other address must be dropped.
 
-Staging (`kinu-staging`) has the binding for parity but no `EMAIL_DOMAIN`.
-The Mission Inbox stays off there.
+Staging (`kinu-staging`) has the binding for parity but no `EMAIL_DOMAIN`. The Mission Inbox stays off there.
 
 ## Tests
 
-- `packages/core/tests/unit-events-hub-email.test.ts`: trust/priority
-  derivation, dedupe, rendering, email_thread channels, the drain path, and
-  the CHECK-widening rebuild for live DOs.
-- `packages/cf-backend/tests/unit-email-ingress.test.ts`: addressing, MIME
-  parse + quote stripping, the sender gate (owner / allowlist / dropped /
-  rate limit / duplicate), and Worker routing.
-- `packages/cf-backend/tests/unit-email-outbound.test.ts`: the full inbound →
-  turn → threaded-reply flow at its boundaries, threading headers,
-  failure/retry audit, and owner notifications. The only mock is the send
-  binding.
-- `packages/cf-backend/tests/unit-email-outbox.test.ts`: the write-ahead
-  intent log: idempotency keys, the stable Message-ID, and the reconciliation
-  sweep that re-drives a send left pending by a crash.
+- `packages/core/tests/unit-events-hub-email.test.ts`: trust/priority derivation, dedupe, rendering, email_thread channels, the drain path, and the CHECK-widening rebuild for live DOs.
+- `packages/cf-backend/tests/unit-email-ingress.test.ts`: addressing, MIME parse + quote stripping, the sender gate (owner / allowlist / dropped / rate limit / duplicate), and Worker routing.
+- `packages/cf-backend/tests/unit-email-outbound.test.ts`: the full inbound → turn → threaded-reply flow at its boundaries, threading headers, failure/retry audit, and owner notifications. The only mock is the send binding.
+- `packages/cf-backend/tests/unit-email-outbox.test.ts`: the write-ahead intent log: idempotency keys, the stable Message-ID, and the reconciliation sweep that re-drives a send left pending by a crash.
