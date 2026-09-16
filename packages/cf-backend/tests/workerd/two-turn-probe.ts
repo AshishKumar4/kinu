@@ -966,7 +966,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // closed with a reply.
       for (;;) {
         const rows = await target.wakeRows();
-        const woken = rows.runs.filter((run) => run.userMessage.includes('Background run job'));
+        const woken = rows.runs.filter((run) => run.userMessage.includes('Background shell job'));
 
         if (woken.length > 0 && woken.every((run) => run.reason !== null)) {
           const calls = await this.httpCalls();
