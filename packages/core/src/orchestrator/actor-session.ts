@@ -576,7 +576,19 @@ export class ActorSession {
           case 'done':
             this.messages.push(...this.orchestrator.inbox.replayInto(event.responseMessages));
 
-            if (!text.trim() && event.text.trim()) text = event.text;
+            // THE TURN'S ANSWER, over what it streamed. `text` above is every
+            // delta this session saw — one step's narration after another on a
+            // multi-step turn — while the runner's `done` carries the answer
+            // the turn stopped on and already falls back to the steps and to a
+            // tool synthesis when the model ended without prose. Preferring
+            // the deltas made the durable reply the narration and the answer
+            // concatenated: measured 2026-09-16 on build cba44dcb9, the
+            // `public-failure-recovery` episode's answers to "reply with only
+            // PASS or FAIL" were stored as three narration lines with FAIL run
+            // onto the end of the last. The deltas stay the fallback for a
+            // turn that produced no `done` at all — an interrupt throws past
+            // this arm, and the cut text is what the operator saw.
+            if (event.text.trim()) text = event.text;
             completed = true;
             break;
         }
