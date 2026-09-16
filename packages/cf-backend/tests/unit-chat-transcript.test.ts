@@ -10,7 +10,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
-import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY } from '@kinu.run/core';
+import { STEER_METADATA_KEY, STEER_STEP_METADATA_KEY, uiMessageText } from '@kinu.run/core';
 import { AssistantMessagesTranscript } from '../src/chat-transcript';
 
 function transcript() {
@@ -73,6 +73,43 @@ describe('AssistantMessagesTranscript', () => {
 
     expect(JSON.parse(rows()[1]!.content)).toEqual(streamed);
     expect(JSON.parse(rows()[2]!.content)).toEqual({ id: 'a2', role: 'assistant', parts: [{ type: 'text', text: 'plain' }] });
+  });
+
+  test('a narrated multi-step answer stores the answer, keeping what the turn did', () => {
+    const { store, rows } = transcript();
+    store.appendUser({ id: 'u1', text: 'build the slate' });
+
+    // What a ten-step turn streams: prose before each tool call, then the
+    // answer it stopped on. Every text part here is the client's live view.
+    const streamed = {
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'text', text: "I'll look at the workspace first." },
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'text', text: 'Files in place. Starting the preview.' },
+        { type: 'step-start' },
+        { type: 'text', text: 'pong\n\nhttps://preview.invalid/', state: 'done' },
+      ],
+    };
+
+    const source = (id: string) => id === 'a1' ? streamed : null;
+    store.answersFrom({ answer: source, streamed: source });
+    store.appendAssistant({ id: 'a1', parentId: 'u1', text: 'pong\n\nhttps://preview.invalid/' });
+
+    // The row holds the answer as its one text part — what a reader that
+    // projects the row to text reads — with the tool call and the step
+    // markers it did the work through still on it.
+    expect(JSON.parse(rows()[1]!.content)).toEqual({
+      id: 'a1', role: 'assistant',
+      parts: [
+        { type: 'step-start' },
+        { type: 'tool-file', toolCallId: 'c1', state: 'output-available', input: {}, output: 'x' },
+        { type: 'step-start' },
+        { type: 'text', text: 'pong\n\nhttps://preview.invalid/', state: 'done' },
+      ],
+    });
+    expect(uiMessageText(rows()[1]!.content)).toBe('pong\n\nhttps://preview.invalid/');
   });
 
   test('the restore reads user and assistant text newest first, and the operator check reads authorship', () => {

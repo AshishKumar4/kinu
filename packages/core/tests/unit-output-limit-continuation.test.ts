@@ -126,6 +126,46 @@ describe('output-limit continuation', () => {
     expect(produced.filter((m) => m.role === 'assistant').length).toBe(2);
   });
 
+  test('a narrated multi-step turn answers with its FINAL step, not everything it said', async () => {
+    let looked = 0;
+
+    const tools: ToolSet = {
+      look: tool({
+        description: 'look something up',
+        inputSchema: z.object({}),
+        execute: async () => {
+          looked += 1;
+
+          return 'looked';
+        },
+      }),
+    };
+
+    // Two narrated tool steps, then the answer. Each step's prose is that
+    // step's — streamed live and recorded on its own `step_finish` row — and
+    // the turn's answer is what it said when it stopped.
+    const { model } = scriptedModel([
+      [...text('n1', "I'll look at the workspace first."),
+        { type: 'tool-call', toolCallId: 'tc1', toolName: 'look', input: '{}' }, finish('tool-calls')],
+      [...text('n2', 'Files in place. Starting the preview.'),
+        { type: 'tool-call', toolCallId: 'tc2', toolName: 'look', input: '{}' }, finish('tool-calls')],
+      [...text('a1', 'pong\n\nhttps://preview.invalid/'), finish('stop')],
+    ]);
+
+    const events = await drain(model, tools);
+    const done = events.find((e) => e.type === 'done');
+
+    expect(looked).toBe(2);
+    expect(done?.type === 'done' && done.text).toBe('pong\n\nhttps://preview.invalid/');
+    // The narration is not lost: it reached whoever was watching, as the
+    // deltas of the steps that produced it.
+    expect(events.flatMap((e) => e.type === 'text-delta' ? [e.delta] : [])).toEqual([
+      "I'll look at the workspace first.",
+      'Files in place. Starting the preview.',
+      'pong\n\nhttps://preview.invalid/',
+    ]);
+  });
+
   test('an output limit after a completed tool continues without replaying the call', async () => {
     let executions = 0;
 
