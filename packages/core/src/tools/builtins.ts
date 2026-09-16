@@ -91,7 +91,6 @@ import { attributeCraftedFailure } from '../craft/attribution';
 import { DEFAULT_CONFIG } from '../config';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
-import { connectedDevices, deviceByName } from '../execution/device-status';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
@@ -377,7 +376,6 @@ const RUN_SHELL_ABSENT = 'shell.shell_absent';
 
 const RUN_ESCALATION_REFUSED = 'shell.escalation_refused';
 
-const RUN_NICKNAME_UNKNOWN = 'shell.nickname_unknown';
 
 const RUN_RUNTIME_NO_EXEC = 'shell.runtime_no_exec';
 
@@ -533,46 +531,17 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // stated reason — a REFUSED escalation is as informative as a successful
       // one, since "the runtime was never there" and "the command failed" are
       // different findings that a single failure count would merge.
-      // One runtime field names the machine. `workspace` and `sandbox`
-      // are executor names; anything else is a device nickname off the fleet
-      // snapshot — the same lookup the executor's own per-call resolution
-      // performs, so the refusal vocabulary matches (unknown names the
-      // connected set, an ambiguous omission re-issues the classified ask).
-
-      let nickname: string | undefined;
-      const known = router?.getProvider(runtimeKey);
-
-      if (!known && runtimeKey !== 'workspace' && runtimeKey !== 'sandbox') {
-        const fleet = rt.deviceTransport?.status().devices;
-        const live = connectedDevices(fleet);
-
-        if (fleet !== undefined && deviceByName(fleet, runtimeKey) === null) {
-          const refusal = new KinuError('unavailable',
-            `no connected machine is named "${runtimeKey}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`);
-
-          escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
-          logger.failure(RUN_NICKNAME_UNKNOWN, refusal, { runtime: runtimeKey });
-          throw refusal;
-        }
-
-        // A live fleet entry means the name matched one machine: route below.
-        if (live.length > 0) nickname = runtimeKey;
-      }
-
-      const providerName = nickname !== undefined ? 'device' : runtimeKey;
-      const provider = router?.getProvider(providerName);
+      // One runtime field names the machine. `workspace` and `sandbox` are
+      // executor names; any other value is a device nickname, routed to the
+      // device executor with the name in its call context. THAT executor
+      // resolves the nickname against the fleet and refuses an unknown name
+      // or an ambiguous omission in its own words — the one resolver, not a
+      // second copy of it here.
+      const registered = router?.getProvider(runtimeKey);
+      const nickname = registered === undefined && runtimeKey !== 'sandbox' ? runtimeKey : undefined;
+      const provider = nickname === undefined ? registered : router?.getProvider('device');
 
       if (!provider) {
-        // The fleet moved between the lookup and the route: same name, same outcome.
-        if (nickname !== undefined) {
-          const refusal = new KinuError('unavailable',
-            `no connected machine is named "${runtimeKey}" — the fleet changed since the listing`);
-
-          escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
-          logger.failure(RUN_NICKNAME_UNKNOWN, refusal, { runtime: runtimeKey });
-          throw refusal;
-        }
-
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
         // Caller asked for a runtime that hasn't been provisioned. Do NOT
         // silently fall back to workspace; that confuses the LLM into thinking
@@ -586,8 +555,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         const refusal = new KinuError('unavailable', 'runtime_not_provisioned');
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         throw new KinuError(refusal.code, refusal.message + ': ' + (
-          runtimeKey === 'device'
-            ? 'The "device" runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
+          nickname !== undefined || runtimeKey === 'device'
+            ? 'A machine runtime requires the Kinu PC daemon. Ask the user to install it from the Executors tab.'
             : runtimeKey === 'sandbox'
               ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
               : 'Runtime "' + runtimeKey + '" is not registered.'

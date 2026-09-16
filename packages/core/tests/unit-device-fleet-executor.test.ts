@@ -289,4 +289,27 @@ describe('the shell tool names the machine', () => {
     expect(await run({ command: 'uname', runtime: 'ashish@studio', why: 'their files' })).toBe('ran on dev-studio');
     expect(await run({ command: 'uname', runtime: 'device', why: 'their files' })).toBe('ran on dev-studio');
   });
+
+  test('a nickname before the fleet is described is refused by the executor, never as an unregistered runtime', async () => {
+    // The executor is the one resolver: the tool hands it every non-executor
+    // name, so a nickname the transport cannot match yet gets the executor's
+    // own refusal (the list is not known, retry), not the router's vocabulary.
+    const t = fleetTransport([]);
+
+    const undescribed: DeviceTransport = {
+      ...t, status: () => ({ ...t.status(), devices: undefined }),
+    };
+
+    const { rt } = createTestRuntime();
+    const router = new DefaultExecutionRouter();
+    router.register(createDeviceTunnelExecutor(undescribed));
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: undescribed } });
+    const run = toolExecute<{ command: string; runtime: string; why?: string }, string>(tools.shell);
+
+    const early = run({ command: 'uname', runtime: 'spare box', why: 'their files' });
+    await expect(early).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(early).rejects.toThrow('"spare box" cannot be matched');
+    await expect(early).rejects.not.toThrow('not registered');
+    expect(t.sent).toEqual([]);
+  });
 });
