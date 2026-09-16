@@ -43,6 +43,7 @@
  * activation path resumes from it.
  */
 
+import { REAL_CLOCK } from '@kinu.run/core';
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   HeadCapture, buildHeadToolSet, runHeadInference,
@@ -308,6 +309,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
           const deps: HeadInferenceDeps = {
             actor,
             runId: crypto.randomUUID(),
+            clock: REAL_CLOCK,
             model: seams.resolveModel(spec),
             tools: buildHeadToolSet({
               input, capture, rt: runtime,

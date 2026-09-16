@@ -45,7 +45,7 @@
  * else does.
  */
 
-import type { Clock } from '../types/clock';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import { jsonSchema, tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { HEAD_BUILTIN_TOOLS } from '../heads/types';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
@@ -354,7 +354,7 @@ export interface NodeLoopDeps {
   model: LanguageModel;
   logger: Logger;
   signal?: AbortSignal;
-  clock?: Clock;
+  clock: Clock;
   mission?: MissionScope;
   /** Where each finished step lands WHILE the node still runs. */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
@@ -773,6 +773,7 @@ async function runNodeLoop(
     runId: deps.runId,
     profile: deps.profile,
     dynamic: deps.dynamic,
+    clock: deps.clock,
     model: deps.model,
     tools,
     // The layout the node is TOLD matches the boundary it actually got, and the
@@ -813,8 +814,6 @@ async function runNodeLoop(
   if (deps.reportDelta !== undefined) inference.reportDelta = deps.reportDelta;
 
   if (deps.signal !== undefined) inference.signal = deps.signal;
-
-  if (deps.clock !== undefined) inference.clock = deps.clock;
 
   try {
     const report = await runHeadInference(spec.headInput, inference);
@@ -1040,13 +1039,14 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     dynamic: seat.dynamic,
     model: deps.model,
     logger: deps.logger,
+    // Real time unless the run handed a clock (D19); the node's ledger row
+    // carries whichever it was measured on.
+    clock: deps.clock ?? REAL_CLOCK,
     arbitrate: input.arbitrate,
     reportStep: (seq, step) => { deps.journal.appendStep(input.nodeId, seq, step); },
   };
 
   if (deps.signal !== undefined) loop.signal = deps.signal;
-
-  if (deps.clock !== undefined) loop.clock = deps.clock;
   // The run-level channel, bound to THIS node's id — the same binding
   // `reportStep` above makes for its durable rows.
   const publish = deps.publishHeadStream;

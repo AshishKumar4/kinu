@@ -229,6 +229,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
   const ActionSchema = v.picklist(FILE_TOOL_ACTIONS);
   const PathSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
+  /** How a result names its file: the reference the live table gives it. */
+  const referenceOf = (path: string): string => formatReference(path, deps.roots?.() ?? []);
 
   return async (args: FileToolInput): Promise<JsonValue> => {
     // Declared types, not established ones: the AI SDK leaves
@@ -326,7 +328,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           return failure(vfsFail.reason, vfsFail.error);
         }
 
-        return { ok: true, path, reference: formatReference(path, deps.roots?.() ?? []), bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
+        return { ok: true, path, reference: referenceOf(path), bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
       }
 
       case 'edit': {
@@ -393,7 +395,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         return {
           ok: true,
           path,
-          reference: formatReference(path, deps.roots?.() ?? []),
+          reference: referenceOf(path),
           applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
         };
       }
