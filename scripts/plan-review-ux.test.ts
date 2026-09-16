@@ -341,9 +341,14 @@ beforeAll(async () => {
     mobile: await observeMobile(newPage, origin),
     workspace: await observeWorkspace(newPage, origin),
     lateHeading: await observePromotion(newPage, origin, 'late-heading'),
+    // The settle names the element the assertion reads — the promoted title
+    // in the header. The document's own h1 never carries this highlight (the
+    // split hands it to the header's viewer), and a wait on it timed out on
+    // every run while the assertion below passed on the header: a wait that
+    // could not end on its condition, hidden by the deadline it had.
     annotatedHeading: await observePromotion(
       newPage, origin, 'annotated-heading',
-      '[data-plan-document] h1[data-block-id] .annotation-highlight',
+      '[data-plan-title] .annotation-highlight',
     ),
     settled: await observeSettled(newPage, origin),
   }));
