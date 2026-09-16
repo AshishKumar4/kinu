@@ -93,6 +93,8 @@ export const FIRST_RUN_CASES = [
   'device-link',
   'background-settle',
   'background-wake',
+  'delegation',
+  'agent-tab',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -333,8 +335,36 @@ export const FIRST_RUN_DEFECTS = {
       + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
       + 'run is on the build that carries both.',
   },
+  'delegation': {
+    id: 'delegation',
+    found: 'A lead was asked for a helper that says one word and reports back. The owner saw the '
+      + 'conversation keep gaining "system, to be shown to the agent" cards as delegation ran — '
+      + 'growth with no bound anyone could name.',
+    missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
+      + 'called; the unit proofs drive that tool against fixtures the test author wrote. Nothing '
+      + 'asked the deployed agent to hire and then read back the settle, the relay, and the retire.',
+    provedRedAt: null,
+    redDirection: 'Written before its first live run, so no sha is claimed: the row fails until '
+      + 'the task hire settles with its answer in the call result, the root relays the one word, '
+      + 'the durable hire appears on the roster and leaves it after dismiss, and the conversation '
+      + 'holds at most two system rows. The card ceiling is the half the owner reported unbounded.',
+  },
+  'agent-tab': {
+    id: 'agent-tab',
+    found: 'The "+" tab created the agent and then sat on "Disconnected · Untitled agent" over a '
+      + 'skeleton: the two reads the tab makes on mount, getActorSnapshot and listAgentTasks, '
+      + 'never answered.',
+    missedBecause: 'the workerd proof drives hosted actors through the object and the routing '
+      + 'pin proves the grammar over literals the test writes; nothing opens the actor\'s own '
+      + 'socket path the way the browser does, so a client-built dead facet path stayed invisible.',
+    provedRedAt: null,
+    redDirection: 'Written before its first live run, so no sha is claimed: the owner\'s report '
+      + 'and the client\'s address (the Agents SDK `sub` facet hop, a path shape the transport '
+      + 'refuses as foreign) both point at a socket that never upgrades, after which every RPC on '
+      + 'it can only fail. The row is green only when the actor path upgrades, both mount reads '
+      + 'answer, and one message gets one answer.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
-
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
 export const FIRST_RUN_TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
@@ -441,6 +471,8 @@ const SHORT_SUBJECT = {
   'device-link': 'link',
   'background-settle': 'wake',
   'background-wake': 'bgwake',
+  'delegation': 'deleg',
+  'agent-tab': 'tab',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
