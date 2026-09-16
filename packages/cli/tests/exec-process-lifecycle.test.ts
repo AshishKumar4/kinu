@@ -79,7 +79,9 @@ function modelThatRuns(command: string) {
   const toolCall = {
     id: "call_1",
     type: "function",
-    function: { name: "shell", arguments: JSON.stringify({ command, runtime: "device" }) },
+    // The workspace shell IS the machine's shell in the directory the run
+    // was started in; there is no device runtime in the CLI.
+    function: { name: "shell", arguments: JSON.stringify({ command }) },
   };
 
   const server = Bun.serve({
