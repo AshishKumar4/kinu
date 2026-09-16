@@ -470,10 +470,15 @@ export function lockUpdate(
       continue;
     }
 
-    const recomputed = genesis(table);
+    // The verdict on an EXISTING entry is the DDL's own columns — never the
+    // `genesis` callback. `genesisForNewTable` filters down to the locked
+    // namesakes, so asking it about a table that already has an entry returns
+    // that entry's own list and a widened DDL launders to "unchanged".
+    // `genesis` answers only where to start a table that has none.
+    const now = table.columns;
 
-    if (existing.length === recomputed.length && existing.every((c, i) => c === recomputed[i])) continue;
-    refused.push(`${key}: locked [${existing.join(', ')}], DDL now reads [${recomputed.join(', ')}]`);
+    if (existing.length === now.length && existing.every((c, i) => c === now[i])) continue;
+    refused.push(`${key}: locked [${existing.join(', ')}], DDL now reads [${now.join(', ')}]`);
   }
 
   return {
